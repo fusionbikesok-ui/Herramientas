@@ -9,7 +9,7 @@ import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ARBOL_FUSIONBIKES } from '../../src/catalogo/arbol-fusionbikes.ts';
 import { importarCategoriasCanal } from '../../src/catalogo/categorias-canal.ts';
-import { aplicarD16 } from '../../src/catalogo/infantiles.ts';
+import { aplicarD16, DECISIONES_D16, type DecisionesPersona } from '../../src/catalogo/infantiles.ts';
 import { crearVersion, escribirArbol, mapearCategoria, publicarVersion } from '../../src/catalogo/taxonomia.ts';
 import { crearPool, enTransaccion } from '../../src/db/pool.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
@@ -17,7 +17,7 @@ import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 const PUBLICAR = fileURLToPath(new URL('../../../scripts/catalogo-arbol-publicar.mjs', import.meta.url));
 let base: BaseDePrueba; let app: pg.Pool; let admin: pg.Pool;
 let empresa: string; let woo: string;
-let niños: string; let sinEdad: string; let adultos: string; let ambos: string; let otraCategoria: string;
+let niños: string; let sinEdad: string; let adultos: string; let ambos: string; let sinDecidir: string; let otraCategoria: string;
 
 beforeAll(async () => {
   base = await crearBaseDePrueba();
@@ -65,13 +65,20 @@ beforeEach(async () => {
   sinEdad = await modelo('Bici sin dato', 'BICICLETAS INFANTILES');
   adultos = await modelo('Bici Twitter', 'BICICLETAS INFANTILES', ['Adultos']);
   ambos = await modelo('Bici Venzo Loki', 'BICICLETAS INFANTILES', ['Adultos', 'Niños']);
+  sinDecidir = await modelo('Bici sin decidir', 'BICICLETAS INFANTILES', ['Adultos']);
   otraCategoria = await modelo('Bici Trek', 'BICICLETAS TREK', ['Niños']);
   await modelo('Bici archivada', 'BICICLETAS INFANTILES', [], true);
   await modelo('Bici con publicación archivada', 'BICICLETAS INFANTILES', [], false, true);
 });
 
+// Las decisiones de José, con los ids de este escenario: `adultos` es una de las 5 infantiles y `ambos` la excluida.
+const decisiones = (): DecisionesPersona => ({
+  infantiles: [{ modelo: adultos, titulo: 'Bici Twitter' }],
+  excluidos: [{ modelo: ambos, titulo: 'Bici Venzo Loki', motivo: 'mal categorizada en Woo, no es infantil' }],
+  motivoInfantiles: 'título y rodado dicen infantil; el edad = Adultos de Woo es un error de carga',
+});
 const aplicar = (over: Partial<Parameters<typeof aplicarD16>[1]> = {}) =>
-  enTransaccion(app, (tx) => aplicarD16(tx, { empresa, cuentaWoo: woo, decididoPor: 'jose', dryRun: false, ...over }));
+  enTransaccion(app, (tx) => aplicarD16(tx, { empresa, cuentaWoo: woo, decididoPor: 'jose', dryRun: false, decisiones: decisiones(), ...over }));
 const versiones = async () => (await admin.query<{ numero: number; estado: string }>(
   `SELECT numero, estado FROM catalog.taxonomy_versions WHERE company_id = $1 ORDER BY numero`, [empresa])).rows;
 const facetas = async () => (await admin.query<{ model_id: string; valor: string; origen: string; motivo: string }>(
@@ -81,12 +88,14 @@ const nodoDe1538 = async () => (await admin.query<{ clave: string }>(
     WHERE m.channel_account_id = $1 AND m.id_externo = '1538' AND m.vigente_hasta IS NULL`, [woo])).rows.map((r) => r.clave);
 
 describe('E2-D16-01 qué modelos reciben la faceta', () => {
-  it('sólo los que la edad observada no contradice; los «Adultos» se devuelven para decidir a mano', async () => {
+  it('por regla los que la edad no contradice, por persona los decididos, y ni los excluidos ni los sin decidir', async () => {
     const seco = await aplicar({ dryRun: true });
-    expect(seco.modelosEnLaCategoria).toBe(4);           // el archivado y el de otra categoría no cuentan
-    expect(seco.conFaceta.map((m) => m.modelo).sort()).toEqual([niños, sinEdad].sort());
-    expect(seco.contradictorios.map((m) => m.titulo).sort()).toEqual(['Bici Twitter', 'Bici Venzo Loki']);
-    expect(seco.contradictorios.find((m) => m.modelo === ambos)!.edad).toEqual(['Adultos', 'Niños']);
+    expect(seco.modelosEnLaCategoria).toBe(5);           // el archivado, el de publicación archivada y el de otra categoría no cuentan
+    expect(seco.reglaCategoria.map((m) => m.modelo).sort()).toEqual([niños, sinEdad].sort());
+    expect(seco.persona.map((m) => m.modelo)).toEqual([adultos]);
+    expect(seco.excluidos.map((m) => m.modelo)).toEqual([ambos]);
+    expect(seco.sinDecidir.map((m) => m.modelo)).toEqual([sinDecidir]);   // contradice y nadie lo decidió: no se escribe
+    expect(seco.excluidos[0]!.edad).toEqual(['Adultos', 'Niños']);
     expect(await versiones()).toEqual([{ numero: 1, estado: 'vigente' }]);   // el dry-run no escribe nada
     expect(await facetas()).toEqual([]);
     expect(await nodoDe1538()).toEqual(['infantiles']);
@@ -96,7 +105,7 @@ describe('E2-D16-01 qué modelos reciben la faceta', () => {
 describe('E2-D16-02 aplicar', () => {
   it('deja la versión nueva en borrador con el nodo ARCHIVADO (no borrado ni ausente), 1538 remapeada y la faceta escrita', async () => {
     const r = await aplicar();
-    expect(r.facetasQuedaron).toBe(2);
+    expect(r.facetasQuedaron).toBe(3);
     expect(r.remapeada).toBe(true);
     expect(r.nodosActivos).toBe(ARBOL_FUSIONBIKES.length);
     expect(r.nodosArchivados).toBe(1);
@@ -108,10 +117,15 @@ describe('E2-D16-02 aplicar', () => {
     expect((await admin.query(`SELECT 1 FROM catalog.taxonomy_nodes WHERE clave = 'infantiles'`)).rowCount).toBe(1);
     expect(await nodoDe1538()).toEqual(['bicicletas']);
     const f = await facetas();
-    expect(f.map((x) => x.model_id).sort()).toEqual([niños, sinEdad].sort());
-    expect(f.every((x) => x.valor === 'infantil' && x.origen === 'regla_categoria' && x.motivo.includes('1538'))).toBe(true);
-    // Ninguno de los contradictorios ni el de otra categoría tiene faceta.
-    expect(f.some((x) => [adultos, ambos, otraCategoria].includes(x.model_id))).toBe(false);
+    expect(f.map((x) => x.model_id).sort()).toEqual([niños, sinEdad, adultos].sort());
+    expect(f.every((x) => x.valor === 'infantil')).toBe(true);
+    // El origen es el punto entero de la tabla: la regla de categoría no alcanzaba para saber lo de `adultos`.
+    const origen = (m: string) => f.find((x) => x.model_id === m)!;
+    expect([origen(niños).origen, origen(sinEdad).origen, origen(adultos).origen]).toEqual(['regla_categoria', 'regla_categoria', 'persona']);
+    expect(origen(niños).motivo).toContain('1538');
+    expect(origen(adultos).motivo).toContain('error de carga');
+    // Ni el excluido, ni el sin decidir, ni el de otra categoría tienen faceta.
+    expect(f.some((x) => [ambos, sinDecidir, otraCategoria].includes(x.model_id))).toBe(false);
   });
 
   it('es atómico: si falla la escritura de una faceta no queda NINGÚN cambio (ni versión, ni remapeo, ni facetas)', async () => {
@@ -125,7 +139,30 @@ describe('E2-D16-02 aplicar', () => {
   });
 
   it('una faceta que no deja rastro se detecta por lo que quedó y deshace todo', async () => {
-    await expect(aplicar({ escribir: async () => true })).rejects.toThrow(/quedaron 0 facetas/);
+    await expect(aplicar({ escribir: async () => true })).rejects.toThrow(/quedaron 0 facetas por regla/);
+    expect(await versiones()).toEqual([{ numero: 1, estado: 'vigente' }]);
+    expect(await nodoDe1538()).toEqual(['infantiles']);
+  });
+
+  it('el excluido no recibe la faceta AUNQUE su atributo `edad` pase a decir «Niños»', async () => {
+    await admin.query(`UPDATE catalog.model_attributes SET vigente_hasta = now() WHERE model_id = $1 AND nombre_normalizado = 'edad' AND valor = 'Adultos'`, [ambos]);
+    const r = await aplicar();
+    expect(r.excluidos.map((m) => m.modelo)).toEqual([ambos]);
+    expect(r.excluidos[0]!.edad).toEqual(['Niños']);        // sin la contradicción, la regla de categoría lo habría marcado
+    expect((await facetas()).map((x) => x.model_id)).not.toContain(ambos);
+  });
+
+  it('una decisión sobre un modelo que no está en la categoría, o repetida como infantil y excluido, frena todo', async () => {
+    const d = decisiones();
+    await expect(aplicar({ decisiones: { ...d, infantiles: [...d.infantiles, { modelo: otraCategoria, titulo: 'x' }] } })).rejects.toThrow(/no están en la categoría/);
+    await expect(aplicar({ decisiones: { ...d, excluidos: [{ modelo: adultos, titulo: 'x', motivo: 'm' }] } })).rejects.toThrow(/infantiles y excluidos/);
+    expect(await versiones()).toEqual([{ numero: 1, estado: 'vigente' }]);
+  });
+
+  it('si un excluido ya tenía la faceta de antes, no se sigue en silencio: se deshace todo', async () => {
+    await admin.query(`INSERT INTO catalog.model_facets (company_id, model_id, faceta, valor, origen, motivo, decidido_por)
+      VALUES ($1, $2, 'publico', 'infantil', 'persona', 'cargada a mano antes', 'x')`, [empresa, ambos]);
+    await expect(aplicar()).rejects.toThrow(/quedaron con la faceta/);
     expect(await versiones()).toEqual([{ numero: 1, estado: 'vigente' }]);
     expect(await nodoDe1538()).toEqual(['infantiles']);
   });
@@ -180,5 +217,17 @@ describe('E2-D16-04 publicar la versión nueva', () => {
     const p = publicar(r.version!.id);
     expect(p.status).toBe(1);
     expect(p.stderr).toMatch(/apuntan a nodos ausentes/);
+  });
+});
+
+describe('E2-D16-05 las decisiones de José tal como están en el código', () => {
+  it('son 5 infantiles y 1 excluido, ids válidos y distintos, cada decisión con su razón', () => {
+    const ids = [...DECISIONES_D16.infantiles, ...DECISIONES_D16.excluidos].map((d) => d.modelo);
+    expect(DECISIONES_D16.infantiles).toHaveLength(5);
+    expect(DECISIONES_D16.excluidos).toHaveLength(1);
+    expect(new Set(ids).size).toBe(6);
+    expect(ids.every((i) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(i))).toBe(true);
+    expect(DECISIONES_D16.motivoInfantiles).toMatch(/error de carga/);
+    expect(DECISIONES_D16.excluidos[0]!.motivo).toMatch(/mal categorizada en Woo/);
   });
 });

@@ -877,6 +877,11 @@ Dos cosas que se descubrieron al hacerlo y conviene no re-descubrir:
   «infantil» contra la única evidencia que hay es inventar un hecho, que es justo lo que la tabla
   existe para impedir. Los decide José uno por uno. Reparto verificado en producción: 11 `Niños`,
   8 sin dato, 5 `Adultos`, 1 con los dos.
+- **Deuda: la categoría de Woo de la Venzo R26 Loki está mal** (modelo `01a0bbfe-05bb-78ef-b1c1-c191a987c3c0`,
+  una MTB R26 de 21 velocidades para adulto publicada en `BICICLETAS INFANTILES`). José decidió que NO lleva
+  faceta (queda excluida por id en `infantiles.ts`, no por quedar fuera de un filtro) y hay que corregir la
+  categoría en Woo a mano. Las otras 5 de las 6 sí llevan `publico = infantil` con `origen = 'persona'`: el título
+  dice «Niño/Niña» y el rodado (R16/R20/R24) lo confirma, así que el `edad = Adultos` de Woo es un error de carga.
 
 Los once hallazgos de la revisión independiente se arreglaron ANTES de desplegar (`5a71691`). Los dos
 que importan para quien siga, porque daban resultados falsos sin un solo error:

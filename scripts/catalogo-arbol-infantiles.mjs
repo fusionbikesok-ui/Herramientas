@@ -3,12 +3,12 @@
  * E2 T3 — D16: `BICICLETAS INFANTILES` deja de ser nodo y pasa a la faceta `publico = infantil`.
  *
  * En UNA transacción: crea la versión nueva del árbol en BORRADOR (con el nodo `infantiles` ARCHIVADO, no ausente),
- * remapea la categoría de Woo 1538 a `bicicletas` y escribe la faceta en los modelos que no contradice la edad
- * observada. Si algo falla, no queda nada. NO publica: publicar es `catalogo-arbol-publicar.mjs` con el id de la
+ * remapea la categoría de Woo 1538 a `bicicletas` y escribe la faceta: por regla de categoría en los que no contradice la edad
+ * observada, y por decisión de una persona (lista de ids en `infantiles.ts`) en los que sí. Si algo falla, no queda nada. NO publica: publicar es `catalogo-arbol-publicar.mjs` con el id de la
  * versión que este script informa, y se niega si algún mapeo quedó apuntando a un nodo ausente o archivado.
  * Requiere la migración 0018 (`catalog.model_facets`).
  *
- * Los modelos con edad observada «Adultos» NO reciben la faceta: se listan para que una persona los decida.
+ * Un modelo con edad observada «Adultos» que nadie decidió NO recibe la faceta y se lista (`sinDecidirNoEscritos`).
  * Dry-run por default: informa qué haría y no escribe nada.
  *
  * Uso: node scripts/catalogo-arbol-infantiles.mjs --empresa <uuid> --cuenta <channel_account_id Woo> [--ejecutar]
@@ -59,8 +59,10 @@ try {
     console.log(JSON.stringify({
       dryRun: !opciones.ejecutar,
       modelosEnLaCategoria: r.modelosEnLaCategoria,
-      conFaceta: r.conFaceta.length,
-      contradictoriosSinEscribir: r.contradictorios.map(ver),
+      facetasPorRegla: r.reglaCategoria.length,
+      facetasPorPersona: r.persona.map(ver),
+      excluidos: r.excluidos.map(ver),
+      sinDecidirNoEscritos: r.sinDecidir.map(ver),
       version: r.version, nodosActivos: r.nodosActivos, nodosArchivados: r.nodosArchivados,
       facetasQuedaron: r.facetasQuedaron, categoria1538Remapeada: r.remapeada,
       nota: opciones.ejecutar
