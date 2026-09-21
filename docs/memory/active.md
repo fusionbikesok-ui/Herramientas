@@ -896,6 +896,13 @@ Dos deudas que abrió esta corrida:
   sobre `url_liviana`, 8/8 corrido solo y 156/156 en la corrida completa siguiente. Ajeno a D16. Lo
   peligroso es la FORMA: falla como aserción real, no como base bloqueada, así que no se distingue de
   una regresión. Hay que encontrar por qué es frágil, no re-correrlo hasta que dé verde.
+
+**Ronda 2 de ML (D20–D22) aplicada y verificada en producción el 2026-09-21.** ML con 58 categorías
+mapeadas y 3 sin equivalencia; `MLA459678` y `MLA424974` → `bicicletas` con faceta. Facetas: 25
+`regla_categoria` + 5 `persona`; las 4 Gravity Bling excluidas sin faceta, 0 mapeos colgados,
+`model_categories` en 0. Cobertura medida: de los modelos que sólo están en ML quedan **92 sin ningún
+mapeo** (eran 316); sobre el catálogo entero, **97 de 3.913** no tienen camino al árbol por ningún canal
+(97,5% cubierto). Esos 97 se abren como caso en tarea 6: no se adivinan.
 - **Deuda: la categoría de Woo de la Venzo R26 Loki está mal** (modelo `01a0bbfe-05bb-78ef-b1c1-c191a987c3c0`,
   una MTB R26 de 21 velocidades para adulto publicada en `BICICLETAS INFANTILES`). José decidió que NO lleva
   faceta (queda excluida por id en `infantiles.ts`, no por quedar fuera de un filtro) y hay que corregir la
