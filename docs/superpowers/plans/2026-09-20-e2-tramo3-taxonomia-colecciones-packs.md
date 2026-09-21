@@ -407,3 +407,19 @@ faltaba decidir no era dónde guardarlo, sino qué hace el sistema.
 dry-run que corre José. 6b engancha la clasificación en la ingestión: es el primer cambio del tramo que
 toca el worker de producción, así que se prueba en un contenedor aparte antes de desplegar y va
 DESPUÉS de que 6a esté verificada en producción.
+
+### D26–D27 — lo que NO es un desacuerdo (José, 2026-09-21)
+
+El dry-run estimado de 6a dio 88 modelos sin primaria por desacuerdo contra «algunas decenas» esperadas.
+Desglosados por par de nodos, eran tres cosas mezcladas: ~5 por padre de Woo, ~50 por raíz genérica y
+~33 desacuerdos reales (grasas/lubricantes 11, selladores/cubiertas 4, líquido de frenos/lubricante 3,
+cola suelta). Abrir 88 casos de los que 55 se resuelven igual entierra los 33 que importan.
+
+- **D26 — la regla del más específico se aplica también en la jerarquía DEL CANAL.** Si un producto
+  lleva una categoría y su ancestro en el canal (Woo: FANTTIK ⊃ INFLADORES), se descarta el ancestro
+  ANTES de mapear. La etiqueta padre no dice nada que la hija no diga; cae en otra rama sólo porque
+  nuestro árbol ordena distinto.
+- **D27 — una raíz de nuestro árbol pierde contra un nodo no raíz de otra rama**, y queda como
+  secundaria. «Es un repuesto» contra «es una llave». Sólo aplica a raíces: dos nodos no raíz de ramas
+  distintas siguen siendo desacuerdo y abren caso, haya o no una raíz además. Riesgo aceptado: si la
+  hoja está mal cargada, la raíz no la corrige.
