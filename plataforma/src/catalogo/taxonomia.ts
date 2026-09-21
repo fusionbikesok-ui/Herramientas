@@ -381,36 +381,58 @@ export async function declararSinEquivalencia(
   return true;
 }
 
+export type ResultadoClasificar = 'escrita' | 'igual' | 'respetada';
+
 /**
  * Clasifica un modelo en un nodo. `primaria` es la que usan los informes y E13: hay a lo sumo UNA vigente por
- * modelo (índice único parcial), y si se pide una nueva se cierra la anterior en vez de fallar — reclasificar
- * es una operación legítima; tener dos primarias, no, porque el modelo contaría dos veces por rubro.
+ * modelo (índice único parcial), y si se pide una nueva la anterior deja de ser primaria en vez de fallar —
+ * reclasificar es una operación legítima; tener dos primarias, no, porque el modelo contaría dos veces por rubro.
+ *
+ * Forward-only: cambiar la primaria o promover una secundaria CIERRA la fila (`quitado_en` + `motivo_salida`) y abre
+ * otra. Nunca un UPDATE que pise `primaria`: la historia de qué fue primaria y cuándo tiene que quedar.
+ *
+ * D24: una fila de origen `persona` (primaria O secundaria) no la toca una llamada `mapeo_canal`. Devuelve
+ * `'respetada'` y no escribe nada; no lanza, porque un throw dentro de una corrida en lote aborta el lote entero
+ * por una decisión que era correcta. Si el canal cambió contra la persona, abrir el caso es cosa de quien llama.
+ * El mismo criterio que `asignarMarca`, que no pisa una marca ya asignada.
  */
 export async function clasificarModelo(
   tx: Consultable, empresa: string, modelo: string, nodo: string,
   { primaria = false, origen = 'persona' }: { primaria?: boolean; origen?: 'mapeo_canal' | 'persona' } = {},
-): Promise<void> {
-  if (primaria) {
-    // Una importación (`mapeo_canal`) no degrada una primaria puesta por una PERSONA: si lo hiciera, la
-    // próxima corrida del mapeo desharía en silencio una clasificación que alguien decidió a mano. Es el
-    // mismo criterio que `asignarMarca`, que no pisa una marca ya asignada.
-    await tx.query(
-      `UPDATE catalog.model_categories SET primaria = false
-        WHERE model_id = $1 AND quitado_en IS NULL AND primaria AND node_id <> $2
-          AND ($3 = 'persona' OR origen <> 'persona')`, [modelo, nodo, origen]);
-    const otra = await tx.query<{ node_id: string }>(
-      `SELECT node_id FROM catalog.model_categories
-        WHERE model_id = $1 AND quitado_en IS NULL AND primaria AND node_id <> $2`, [modelo, nodo]);
-    if (otra.rowCount) {
-      throw new Error(`el modelo ${modelo} ya tiene una primaria puesta por una persona (${otra.rows[0]!.node_id}): un mapeo automático no la cambia`);
-    }
+): Promise<ResultadoClasificar> {
+  const vigentes = (await tx.query<{ id: string; node_id: string; primaria: boolean; origen: string }>(
+    `SELECT id, node_id, primaria, origen FROM catalog.model_categories
+      WHERE model_id = $1 AND quitado_en IS NULL`, [modelo])).rows;
+  const enNodo = vigentes.find((v) => v.node_id === nodo);
+  const primariaActual = vigentes.find((v) => v.primaria);
+  if (origen === 'mapeo_canal') {
+    if (enNodo?.origen === 'persona') return 'respetada';
+    if (primaria && primariaActual && primariaActual.node_id !== nodo && primariaActual.origen === 'persona') return 'respetada';
   }
+  if (enNodo && (enNodo.primaria || !primaria)) return 'igual';
+
+  if (primaria && primariaActual && primariaActual.node_id !== nodo) {
+    // La primaria anterior sigue clasificada en su nodo, pero ya no como primaria: se cierra la fila y se abre
+    // la secundaria con el mismo origen.
+    await tx.query(
+      `UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = $2 WHERE id = $1`,
+      [primariaActual.id, 'deja de ser la primaria: otra pasó a serlo']);
+    await tx.query(
+      `INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen)
+       VALUES ($1, $2, $3, false, $4)`, [empresa, modelo, primariaActual.node_id, primariaActual.origen]);
+  }
+  if (enNodo) {
+    // Promover una secundaria a primaria: se cierra la fila vieja y se abre la primaria (deja historia).
+    await tx.query(
+      `UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = $2 WHERE id = $1`,
+      [enNodo.id, 'pasa de secundaria a primaria']);
+  }
+  // Sin ON CONFLICT: todo lo que podía chocar con los índices únicos se cerró arriba. Un choque que aparezca
+  // igual tiene que romper la transacción y verse, no tragarse.
   await tx.query(
     `INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen)
-     VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (model_id, node_id) WHERE quitado_en IS NULL
-       DO UPDATE SET primaria = catalog.model_categories.primaria OR EXCLUDED.primaria`,
-    [empresa, modelo, nodo, primaria, origen]);
+     VALUES ($1, $2, $3, $4, $5)`, [empresa, modelo, nodo, primaria, origen]);
+  return 'escrita';
 }
 
 /** Saca un modelo de un rubro sin borrar que estuvo. */

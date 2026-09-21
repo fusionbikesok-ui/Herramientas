@@ -893,7 +893,9 @@ CREATE TABLE catalog.identity_cases (
                     -- Dos canales afirman valores distintos para el mismo atributo de un modelo (E2 T2). Cuelga de
                     -- la representación que lo introduce; un solo caso abierto por representación agrupa todos sus
                     -- atributos en conflicto. Se revisa, nunca se fusiona sola.
-                    'atributo_divergente')),
+                    'atributo_divergente',
+                    -- Clasificación en el árbol (0019): cuelgan del MODELO, no de una publicación.
+                    'categoria_en_desacuerdo', 'categoria_sin_mapeo', 'categoria_persona_contradicha')),
   prioridad       text NOT NULL DEFAULT 'normal' CHECK (prioridad IN ('baja', 'normal', 'urgente')),
   variant_id      uuid REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
   representation_id uuid REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
@@ -901,9 +903,10 @@ CREATE TABLE catalog.identity_cases (
   abierto_en      timestamptz NOT NULL DEFAULT now(),
   cerrado_en      timestamptz,
   motivo_cierre   text,
+  model_id        uuid REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
   CONSTRAINT identity_cases_cierre_check CHECK ((cerrado_en IS NULL) = (motivo_cierre IS NULL)),
   -- Todo caso apunta a algo concreto: sin objeto no hay nada que revisar.
-  CONSTRAINT identity_cases_objeto_check CHECK (variant_id IS NOT NULL OR representation_id IS NOT NULL)
+  CONSTRAINT identity_cases_objeto_check CHECK (variant_id IS NOT NULL OR representation_id IS NOT NULL OR model_id IS NOT NULL)
 );
 -- Un caso abierto por objeto y tipo. Cerrado, puede volver a abrirse: el problema puede reaparecer.
 CREATE UNIQUE INDEX identity_cases_un_abierto_variante
@@ -914,6 +917,8 @@ CREATE UNIQUE INDEX identity_cases_un_abierto_variante
 CREATE UNIQUE INDEX identity_cases_un_abierto_representacion
   ON catalog.identity_cases (representation_id, tipo, (COALESCE(detalle->>'caso_legado', '')))
   WHERE cerrado_en IS NULL AND representation_id IS NOT NULL;
+CREATE UNIQUE INDEX identity_cases_un_abierto_modelo
+  ON catalog.identity_cases (model_id, tipo) WHERE cerrado_en IS NULL AND model_id IS NOT NULL;
 CREATE INDEX identity_cases_abiertos
   ON catalog.identity_cases (company_id, tipo, prioridad) WHERE cerrado_en IS NULL;
 
@@ -1285,3 +1290,14 @@ CREATE TRIGGER pack_components_valido
   BEFORE INSERT OR UPDATE OF variant_id, pack_variant_id, vigente_hasta ON catalog.pack_components
   FOR EACH ROW WHEN (NEW.vigente_hasta IS NULL) EXECUTE FUNCTION catalog.pack_componente_valido();
 
+CREATE FUNCTION catalog.identity_cases_modelo_misma_empresa() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.model_id IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM catalog.product_models WHERE id = NEW.model_id AND company_id = NEW.company_id) THEN
+    RAISE EXCEPTION 'el modelo % no es de la empresa %', NEW.model_id, NEW.company_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER identity_cases_modelo_misma_empresa BEFORE INSERT OR UPDATE OF model_id, company_id ON catalog.identity_cases
+  FOR EACH ROW EXECUTE FUNCTION catalog.identity_cases_modelo_misma_empresa();

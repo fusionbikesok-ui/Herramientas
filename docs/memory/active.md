@@ -1133,3 +1133,13 @@ D1–D15 en el plan.
 - `ON CONFLICT` pelado en 5 módulos, 9 casos (`aplicar.ts`, `bootstrap.ts`, `copias.ts`, `decisiones.ts`,
   `proyector.ts`), con E2-TAX-08 como guarda de encogimiento. Cada caso necesita que se determine el conflicto
   buscado antes de tocarlo.
+
+**6a (clasificar la foto actual, D23–D25) implementada, sin correr contra producción.** Script
+`scripts/catalogo-clasificar-foto.mjs` (dry-run por defecto) + `clasificacion.ts`. Migración **0019**: los casos
+de taxonomía cuelgan del MODELO (`identity_cases.model_id`, índice único `(model_id, tipo)` abierto), no de una
+publicación: colgarlos de una elegida rompe la idempotencia cuando esa publicación se archiva. Tres tipos:
+`categoria_en_desacuerdo`, `categoria_sin_mapeo` (`detalle.razon` = `sin_categoria` | `categoria_no_mapeada`) y
+`categoria_persona_contradicha` (declarado, todavía nadie lo abre: es de 6b). `clasificarModelo` ya no lanza ante
+una fila `persona`: devuelve `'respetada'`; bajar/promover una primaria cierra la fila con motivo. Pendiente: 6b
+(enganchar en la ingestión, se prueba en contenedor aparte).
+

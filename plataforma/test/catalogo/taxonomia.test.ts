@@ -363,8 +363,9 @@ describe('E2-TAX-04 el modelo en el árbol', () => {
     const claves = await conTx((tx) => escribirArbol(tx, empresa, v, ARBOL));
     await conTx((tx) => clasificarModelo(tx, empresa, m, claves.get('cubiertas')!, { primaria: true, origen: 'persona' }));
     // Si la importación pudiera degradarla, la próxima corrida desharía en silencio una decisión humana.
-    await expect(conTx((tx) => clasificarModelo(tx, empresa, m, claves.get('camaras')!, { primaria: true, origen: 'mapeo_canal' })))
-      .rejects.toThrow(/puesta por una persona/);
+    // D24: no lanza (un throw en una corrida en lote abortaría todo por una decisión correcta): devuelve «respetada».
+    expect(await conTx((tx) => clasificarModelo(tx, empresa, m, claves.get('camaras')!, { primaria: true, origen: 'mapeo_canal' })))
+      .toBe('respetada');
     // Una persona sí puede cambiarla.
     await conTx((tx) => clasificarModelo(tx, empresa, m, claves.get('camaras')!, { primaria: true, origen: 'persona' }));
     const r = await admin.query<{ clave: string }>(
