@@ -384,3 +384,26 @@ en automático. Toda exclusión va por id.
 
 Los 4 Gravity Bling con título idéntico son además, casi seguro, un problema de identidad (E3), no de
 taxonomía: se anota, no se resuelve acá.
+
+### D23–D25 — cómo se clasifica (José, 2026-09-21)
+
+`catalog.model_categories` ya distingue `origen = 'mapeo_canal'` de `'persona'`, con una sola primaria
+vigente por modelo (índice único parcial) y salida forward-only (`quitado_en` + `motivo_salida`). Lo que
+faltaba decidir no era dónde guardarlo, sino qué hace el sistema.
+
+- **D23 — desacuerdo entre canales.** Si Woo y ML ponen un modelo en nodos distintos que no son padre e
+  hijo, **se abre un caso y el modelo queda SIN primaria** hasta que José decida; los dos nodos quedan
+  como secundarios. No gana ningún canal: los dos tienen errores de carga medidos (las 12 grasas en Woo,
+  la Gravity Bling en ML) y elegir uno los convierte en primarias sin que nadie lo decida. Si un nodo es
+  ancestro del otro, gana el más específico sin caso.
+- **D24 — la decisión de una persona manda siempre.** Una clasificación con `origen = 'persona'` nunca la
+  pisa una corrida automática. Si el canal cambia después, se abre un caso: el cambio del canal puede
+  tener razón, y congelar una decisión vieja en silencio es tan malo como pisarla. Es la condición para
+  que la futura interfaz de edición manual sirva.
+- **D25 — lo nuevo se clasifica solo, al leerse del canal**: mapeada → nodo; categoría infantil → faceta;
+  sin mapeo → caso. Nada queda sin clasificar en silencio.
+
+**Tarea 6 se parte en dos por riesgo, no por capa.** 6a clasifica la foto actual con un script de
+dry-run que corre José. 6b engancha la clasificación en la ingestión: es el primer cambio del tramo que
+toca el worker de producción, así que se prueba en un contenedor aparte antes de desplegar y va
+DESPUÉS de que 6a esté verificada en producción.
