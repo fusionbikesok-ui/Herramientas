@@ -851,6 +851,33 @@ una versión pasada se reconstruye entera. Es lo que E12/E13 necesitan para publ
 
 El árbol propio está implementado pero **vacío**: cargarlo es la primera corrida operativa.
 
+**Actualización 2026-09-21 — el árbol ya no está vacío y la edad dejó de ser una rama.** Versión 2
+publicada y vigente (65 nodos, 6 raíces, 0 mapeos colgados), Woo mapeado entero y ML al 80% del
+catálogo. `model_categories` sigue en 0: todavía no se clasificó ningún modelo.
+
+D16 quita el nodo `infantiles` y lo reemplaza por la faceta `publico = infantil`. El motivo dura más
+que la decisión: **una bici infantil de una marca cae en dos ramas al mismo nivel y «el nodo más
+específico» no decide**; la edad es un eje aparte, no una rama del árbol.
+
+La faceta vive en una tabla propia (`catalog.model_facets`, migración 0018) y **no** en
+`model_attributes`, por un hecho verificado en el código: `persistirExtras` (`src/catalogo/aplicar.ts`)
+cierra todo atributo vigente de una publicación que el canal no repitió, **sin mirar el nombre**. Un
+dato derivado por nosotros colgado ahí lo borra la siguiente ingestión, sin error y sin rastro, y
+ninguna columna lo distingue de uno observado. `model_facets` guarda `origen` (`regla_categoria` |
+`persona`) y `motivo`: la distinción entre «lo dedujimos» y «lo dijo el canal» no existía en ninguna
+parte, y sin ella nadie puede auditar un dato inventado.
+
+Dos cosas que se descubrieron al hacerlo y conviene no re-descubrir:
+
+- **`escribirArbol` no archiva lo que no se le pasa**: el nodo simplemente no tiene fila en esa versión.
+  Ausente es indistinguible de un olvido, así que `infantiles` se escribe con `archivado = true`
+  explícito (`NODOS_ARCHIVADOS`). El nodo nunca se borra de `taxonomy_nodes`.
+- **La categoría de Woo contradice al atributo observado en 6 de los 25 modelos** (5 dicen
+  `edad = Adultos`, 1 dice `Adultos` y `Niños` a la vez). Esos 6 NO reciben la faceta: marcar
+  «infantil» contra la única evidencia que hay es inventar un hecho, que es justo lo que la tabla
+  existe para impedir. Los decide José uno por uno. Reparto verificado en producción: 11 `Niños`,
+  8 sin dato, 5 `Adultos`, 1 con los dos.
+
 Los once hallazgos de la revisión independiente se arreglaron ANTES de desplegar (`5a71691`). Los dos
 que importan para quien siga, porque daban resultados falsos sin un solo error:
 
