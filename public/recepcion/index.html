@@ -103,6 +103,7 @@ input[type=file] { display:none; }
 .wc-opt { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.2rem .5rem; align-items:start; padding:.6rem .7rem; font-size:.75rem; cursor:pointer; border-bottom:1px solid var(--border); line-height:1.4; overflow-wrap:anywhere; }
 .wc-opt:last-child { border-bottom:none; }
 .wc-opt:hover { background:var(--blue-bg); }
+.wc-opt[aria-selected="true"] { background:var(--blue-bg); }
 .wc-opt-name { grid-column:1; grid-row:1; min-width:0; overflow-wrap:anywhere; }
 .wc-opt-sku { grid-column:1; grid-row:2; color:var(--gray2); font-size:.6875rem; font-family:monospace; margin-right:6px; }
 .wc-opt-stock { grid-column:2; grid-row:1; color:var(--green); font-size:.6875rem; white-space:nowrap; }
@@ -791,9 +792,10 @@ function renderItems() {
           + (it.aprender_alias ? '<input type="text" class="cell-sub" aria-label="Motivo, si reemplaza una asociación existente" placeholder="Motivo (solo si reemplaza una asociación anterior)" value="' + esc(it.motivo_alias||'') + '" oninput="cambiarMotivoAlias(this,\'' + it.id + '\')" onblur="sincronizarAliasGuardado(\'' + it.id + '\')" style="width:100%;margin-top:4px;padding:4px 6px;font-size:11px;border:1px solid var(--border);border-radius:4px">' : '')
         + '</div>';
     } else {
+      var ddId = 'dd-' + it.id;
       wcCell = '<div class="wc-search-wrap">'
-        + '<input class="wc-search-input" type="text" id="wc-search-' + it.id + '" aria-label="Buscar producto en catálogo WooCommerce" placeholder="Buscar en catálogo..." oninput="buscarWC(this,\'' + it.id + '\')" onfocus="abrirDropdown(this)" onblur="cerrarDropdown(this)">'
-        + '<div class="wc-dropdown" id="dd-' + it.id + '"></div>'
+        + '<input class="wc-search-input" type="text" id="wc-search-' + it.id + '" role="combobox" aria-autocomplete="list" aria-controls="' + ddId + '" aria-expanded="false" aria-activedescendant="" aria-label="Buscar producto en catálogo WooCommerce" placeholder="Buscar en catálogo..." oninput="buscarWC(this,\'' + it.id + '\')" onfocus="abrirDropdown(this)" onblur="cerrarDropdown(this)" onkeydown="navegarBusqueda(event,\'' + it.id + '\')">'
+        + '<div class="wc-dropdown" id="' + ddId + '" role="listbox"></div>'
         + '</div>'
         + '<div style="margin-top:5px;font-size:11px;color:var(--gray2)">Sin match: buscá un producto existente o creá un borrador seguro.</div>'
         + '<button class="btn btn-sm" type="button" style="margin-top:6px" onclick="abrirAltaBorrador(\'' + it.id + '\')">Crear borrador</button>';
@@ -811,9 +813,6 @@ function renderItems() {
       + '<td style="text-align:right;color:var(--gray)">' + (it.precio_unitario != null ? '$'+it.precio_unitario.toFixed(2) : '—') + '</td>'
       + '<td><button class="btn btn-sm btn-red" onclick="quitarItem(\'' + it.id + '\')">×</button></td>';
     tbody.appendChild(tr);
-    var buscador = tr.querySelector('.wc-search-input');
-    var lista = tr.querySelector('.wc-dropdown');
-    if (buscador && lista) { buscador.setAttribute('role','combobox'); buscador.setAttribute('aria-autocomplete','list'); buscador.setAttribute('aria-controls',lista.id); buscador.setAttribute('aria-expanded','false'); lista.setAttribute('role','listbox'); }
   });
 }
 
@@ -1078,6 +1077,10 @@ function toggleRecibido(id) {
 
 // ---- BÚSQUEDA WC ----
 
+function limpiarActivedescendant(inp) {
+  inp.setAttribute('aria-activedescendant', '');
+}
+
 function buscarWC(inp, itemId) {
   var q = normalizar(inp.value);
   var dd = document.getElementById('dd-' + itemId);
@@ -1086,6 +1089,8 @@ function buscarWC(inp, itemId) {
   if (!q || q.length < 2) {
     dd.innerHTML='';
     dd.classList.remove('open');
+    inp.setAttribute('aria-expanded', 'false');
+    limpiarActivedescendant(inp);
     // Cancelar debounce si estaba pendiente
     if (busquedaDebouncers[itemId]) {
       clearTimeout(busquedaDebouncers[itemId]);
@@ -1100,8 +1105,10 @@ function buscarWC(inp, itemId) {
   }
 
   // Mostrar spinner mientras se hace fetch
-  dd.innerHTML='<div class="wc-opt" style="color:var(--gray);pointer-events:none"><span class="spinner" style="margin-right:8px"></span>Buscando...</div>';
+  dd.innerHTML='<div class="wc-opt" role="option" aria-disabled="true" style="color:var(--gray);pointer-events:none"><span class="spinner" style="margin-right:8px"></span>Buscando...</div>';
   dd.classList.add('open');
+  inp.setAttribute('aria-expanded', 'true');
+  limpiarActivedescendant(inp);
 
   // P1.3: generar versión única para esta búsqueda (evitar stale responses)
   var version = (busquedaVersiones[itemId] || 0) + 1;
@@ -1120,29 +1127,42 @@ function buscarWC(inp, itemId) {
 
         var resultados = d.data || [];
         if (!resultados.length) {
-          dd.innerHTML='<div class="wc-opt" style="color:var(--gray2);pointer-events:none">Sin resultados</div>';
+          dd.innerHTML='<div class="wc-opt" role="option" aria-disabled="true" style="color:var(--gray2);pointer-events:none">Sin resultados</div>';
+          // P1.9: Limpiar aria-activedescendant tras repintar
+          limpiarActivedescendant(inp);
           dd.classList.add('open');
+          inp.setAttribute('aria-expanded', 'true');
           return;
         }
 
         // P1.3: los datos (nombre, sku, stock) vienen en la respuesta, pasarlos directamente
-        dd.innerHTML = resultados.map(function(p){
-          // Escapar nombre y sku: backslash PRIMERO, luego comillas (P1.3 reviewer feedback)
-          var nombreEsc = (p.nombre||'').replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-          var skuEsc = (p.sku||'').replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-          return '<div class="wc-opt" data-id-woo="' + p.id_woo + '" data-nombre="' + nombreEsc + '" data-sku="' + skuEsc + '" data-stock="' + (p.stock||0) + '" onmousedown="seleccionarWC(event,\'' + itemId + '\',' + p.id_woo + ',\'' + nombreEsc + '\',\'' + skuEsc + '\',' + (p.stock||0) + ')">'
+        dd.innerHTML = resultados.map(function(p, idx){
+          // Para atributos data-* y JavaScript inline, necesitamos escaping diferente:
+          // - nombreRaw/skuRaw: sin escaping, para data-* (getAttribute NO decodifica backslash)
+          // - nombreEsc/skuEsc: con escaping de backslash y comilla, solo para JS inline de onmousedown
+          var nombreRaw = (p.nombre||'');
+          var skuRaw = (p.sku||'');
+          var nombreEsc = nombreRaw.replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          var skuEsc = skuRaw.replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          var optId = 'dd-' + itemId + '-opt-' + idx;
+          return '<div class="wc-opt" id="' + optId + '" role="option" aria-selected="false" data-id-woo="' + p.id_woo + '" data-nombre="' + esc(nombreRaw) + '" data-sku="' + esc(skuRaw) + '" data-stock="' + (p.stock||0) + '" onmousedown="seleccionarWC(event,\'' + itemId + '\',' + p.id_woo + ',\'' + nombreEsc + '\',\'' + skuEsc + '\',' + (p.stock||0) + ')">'
             + '<span class="wc-opt-name">' + esc(p.nombre) + '</span>'
             + '<span class="wc-opt-sku">' + esc(p.sku||'—') + '</span>'
             + '<span class="wc-opt-stock">' + (p.stock||0) + '</span>'
             + '</div>';
         }).join('');
+        // P1.9: Limpiar aria-activedescendant tras repintar con nuevos resultados
+        limpiarActivedescendant(inp);
         dd.classList.add('open');
+        inp.setAttribute('aria-expanded', 'true');
       })
       .catch(function(err) {
         // P1.3: guard anti-stale en catch también — no pintar error obsoleto
         if (busquedaVersiones[itemId] !== version || normalizar(inp.value) !== q) return;
         // P1.3: usar closure para ref estable a inp, y agregar id al input para selector
-        dd.innerHTML='<div class="wc-opt" style="color:var(--red,#f87171);pointer-events:none">⚠ Error al buscar. <a href="javascript:void(0)" onclick="event.preventDefault(); var inp=document.getElementById(\'wc-search-' + itemId + '\'); if(inp) buscarWC(inp, \'' + itemId + '\');" style="color:inherit;text-decoration:underline">Reintentar</a></div>';
+        dd.innerHTML='<div class="wc-opt" role="option" aria-disabled="true" style="color:var(--red,#f87171)">⚠ Error al buscar. <button type="button" onclick="var inp=document.getElementById(\'wc-search-' + itemId + '\'); if(inp) buscarWC(inp, \'' + itemId + '\');" style="background:none;border:none;color:inherit;text-decoration:underline;cursor:pointer;font-family:inherit;padding:0;margin:0">Reintentar</button></div>';
+        // P1.9: Limpiar aria-activedescendant tras repintar con error
+        limpiarActivedescendant(inp);
         dd.classList.add('open');
       });
   }, 300);
@@ -1161,22 +1181,124 @@ function seleccionarWC(evt, itemId, idWoo, nombre, sku, stock) {
   it.match_estado = 'manual_confirmado';
   it.match_confirmado = true;
   it.match_origen = 'seleccion_manual';
+
+  // Cerrar dropdown y limpiar ARIA activedescendant
+  var inp = document.getElementById('wc-search-' + itemId);
+  var dd = document.getElementById('dd-' + itemId);
+  if (inp) {
+    inp.setAttribute('aria-expanded', 'false');
+    inp.setAttribute('aria-activedescendant', '');
+  }
+  if (dd) {
+    dd.classList.remove('open');
+  }
+
   renderItems();
   actualizarBotones();
   sincronizarAliasGuardado(itemId); // P1.3: si el ítem ya está guardado, persiste el cambio ya mismo
 }
 
-function abrirDropdown(inp) { /* dropdown abre on input */ }
-function navegarBusqueda(evt, itemId) {
-  var dd=document.getElementById('dd-'+itemId); if (!dd) return;
-  var opts=Array.from(dd.querySelectorAll('.wc-opt')); if (!opts.length) return;
-  var actual=opts.indexOf(document.activeElement);
-  if (evt.key==='ArrowDown' || evt.key==='ArrowUp') { evt.preventDefault(); var next=evt.key==='ArrowDown'?Math.min(actual+1,opts.length-1):Math.max(actual-1,0); opts[next].tabIndex=0; opts[next].focus(); }
-  if (evt.key==='Escape') { dd.classList.remove('open'); evt.target.setAttribute('aria-expanded','false'); }
+function abrirDropdown(inp) {
+  // Abrir dropdown si el input tiene texto y hay opciones
+  var dd = document.getElementById(inp.getAttribute('aria-controls'));
+  if (!dd) return;
+  var q = normalizar(inp.value);
+  if (q.length >= 2) {
+    dd.classList.add('open');
+    inp.setAttribute('aria-expanded', 'true');
+  }
 }
+
+function navegarBusqueda(evt, itemId) {
+  var inp = document.getElementById('wc-search-' + itemId);
+  var dd = document.getElementById('dd-' + itemId);
+  if (!dd || !inp) return;
+
+  // Verificar si el evento es de tecla
+  if (!evt.key) return;
+
+  // ArrowDown/ArrowUp: navegar entre opciones
+  if (evt.key === 'ArrowDown' || evt.key === 'ArrowUp') {
+    evt.preventDefault();
+    var opts = Array.from(dd.querySelectorAll('[role="option"]'));
+    // P1.10: Filtrar opciones deshabilitadas (placeholders como "Buscando...", "Sin resultados", "⚠ Error...")
+    opts = opts.filter(function(o) { return o.getAttribute('aria-disabled') !== 'true'; });
+    if (!opts.length) return;
+
+    // Encontrar índice actual desde aria-activedescendant
+    var currentId = inp.getAttribute('aria-activedescendant');
+    var currentIdx = currentId ? opts.findIndex(function(o) { return o.id === currentId; }) : -1;
+
+    // Calcular siguiente índice
+    var nextIdx;
+    if (evt.key === 'ArrowDown') {
+      nextIdx = currentIdx < opts.length - 1 ? currentIdx + 1 : 0; // wrap to start
+    } else {
+      nextIdx = currentIdx > 0 ? currentIdx - 1 : opts.length - 1; // wrap to end
+    }
+
+    // Actualizar aria-activedescendant y aria-selected
+    opts.forEach(function(opt, idx) {
+      opt.setAttribute('aria-selected', idx === nextIdx ? 'true' : 'false');
+    });
+
+    inp.setAttribute('aria-activedescendant', opts[nextIdx].id);
+
+    // Abrir dropdown si no estaba abierto
+    if (!dd.classList.contains('open')) {
+      dd.classList.add('open');
+      inp.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  // Enter: seleccionar opción resaltada
+  if (evt.key === 'Enter') {
+    evt.preventDefault();
+    var currentId = inp.getAttribute('aria-activedescendant');
+    if (!currentId) return;
+
+    var selectedOpt = document.getElementById(currentId);
+    if (!selectedOpt) return;
+
+    // Disparar selección
+    var idWoo = selectedOpt.getAttribute('data-id-woo');
+    var nombre = selectedOpt.getAttribute('data-nombre');
+    var sku = selectedOpt.getAttribute('data-sku');
+    var stock = selectedOpt.getAttribute('data-stock');
+
+    // P1.9: Validar solo idWoo (sku puede ser cadena vacía legítima)
+    // Mismo criterio que en seleccionarWC mousedown: permitir productos sin SKU o sin nombre
+    if (idWoo != null) {
+      // Disparar mousedown para que use el mismo handler que el click
+      var fakeEvt = { preventDefault: function() {} };
+      seleccionarWC(fakeEvt, itemId, parseInt(idWoo, 10), nombre, sku || '', parseInt(stock || '0', 10));
+
+      // Cerrar dropdown y limpiar activedescendant
+      dd.classList.remove('open');
+      inp.setAttribute('aria-expanded', 'false');
+      inp.setAttribute('aria-activedescendant', '');
+    }
+  }
+
+  // Escape: cerrar dropdown
+  if (evt.key === 'Escape') {
+    evt.preventDefault();
+    dd.classList.remove('open');
+    inp.setAttribute('aria-expanded', 'false');
+    inp.setAttribute('aria-activedescendant', '');
+  }
+}
+
 function cerrarDropdown(inp) {
-  var dd = inp.nextElementSibling;
-  if (dd) setTimeout(function(){ dd.classList.remove('open'); }, 150);
+  var ddId = inp.getAttribute('aria-controls');
+  var dd = ddId ? document.getElementById(ddId) : inp.nextElementSibling;
+  if (dd) {
+    setTimeout(function(){
+      dd.classList.remove('open');
+      inp.setAttribute('aria-expanded', 'false');
+      inp.setAttribute('aria-activedescendant', '');
+    }, 150);
+  }
 }
 
 // ---- ACCIONES ----

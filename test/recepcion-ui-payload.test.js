@@ -860,8 +860,8 @@ describe('public/recepcion/index.html — P1.3: búsqueda dinámica sin catálog
       return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
     };
 
-    const inp = { value: 'cas' };
-    const dd = { innerHTML: '', classList: { add() {}, remove() {} } };
+    const inp = { value: 'cas', setAttribute() {}, getAttribute() { return null; }, id: 'wc-search-item1' };
+    const dd = { innerHTML: '', classList: { add() {}, remove() {} }, setAttribute() {} };
     app.document.getElementById = (id) => id.startsWith('dd-') ? dd : inp;
 
     app.buscarWC(inp, 'item1');
@@ -883,8 +883,8 @@ describe('public/recepcion/index.html — P1.3: búsqueda dinámica sin catálog
       });
     };
 
-    const inp = { value: '' };
-    const dd = { innerHTML: '', classList: { add() {}, remove() {} } };
+    const inp = { value: '', setAttribute() {}, getAttribute() { return null; }, id: 'wc-search-item1' };
+    const dd = { innerHTML: '', classList: { add() {}, remove() {} }, setAttribute() {} };
     app.document.getElementById = (id) => id.startsWith('dd-') ? dd : inp;
 
     // Simular varias teclas en rápida sucesión
@@ -922,6 +922,14 @@ describe('public/recepcion/index.html — P1.3: búsqueda dinámica sin catálog
     app.renderItems = () => {};
     app.actualizarBotones = () => {};
     app.sincronizarAliasGuardado = () => {};
+
+    // Mock getElementById para que devuelva elementos con setAttribute
+    app.document.getElementById = (id) => ({
+      setAttribute() {},
+      getAttribute() { return null; },
+      classList: { remove() {} },
+      value: ''
+    });
 
     // P1.3: seleccionarWC recibe los datos como argumentos adicionales (sin depender de catalogo[])
     app.seleccionarWC(evt, 'item1', 10, nombreProducto, skuProducto, stockProducto);
@@ -1054,8 +1062,8 @@ describe('public/recepcion/index.html — P1.3: búsqueda dinámica sin catálog
 
   it('buscarWC: guard anti-stale previene que fetch obsoleto pinte resultados o errores', async () => {
     const app = cargarApp();
-    const inp = { value: 'ca' };
-    const dd = { innerHTML: '', classList: { add() {}, remove() {} } };
+    const inp = { value: 'ca', setAttribute() {}, getAttribute() { return null; }, id: 'wc-search-item1' };
+    const dd = { innerHTML: '', classList: { add() {}, remove() {} }, setAttribute() {} };
     app.document.getElementById = (id) => id.startsWith('dd-') ? dd : inp;
 
     let callOrder = [];
