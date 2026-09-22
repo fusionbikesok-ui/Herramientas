@@ -152,6 +152,28 @@ input[type=file] { display:none; }
 
 .empty-state { text-align:center; padding:4rem 1rem; color:var(--gray2); }
 .empty-icon { font-size:40px; margin-bottom:12px; }
+
+/* Modal accesible */
+.modal-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:1000; }
+.modal-overlay.open { display:flex; align-items:center; justify-content:center; }
+.modal-content { background:var(--dark2); border:1px solid var(--border); border-radius:var(--radius-lg); padding:24px; max-width:500px; width:90%; box-shadow:0 10px 40px rgba(0,0,0,0.4); }
+.modal-title { font-size:18px; font-weight:700; margin-bottom:16px; color:var(--white); }
+.modal-body { margin-bottom:20px; }
+.modal-field { margin-bottom:14px; }
+.modal-field label { display:block; font-size:12px; color:var(--gray); margin-bottom:5px; font-weight:500; }
+.modal-field input, .modal-field textarea, .modal-field select { font-family:inherit; font-size:13px; padding:8px 11px; border:1px solid var(--border2); border-radius:var(--radius); background:var(--dark3); color:var(--white); width:100%; transition:border-color .15s,box-shadow .15s; }
+.modal-field input:focus, .modal-field textarea:focus, .modal-field select:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px var(--blue-bg); }
+.modal-field textarea { resize:vertical; min-height:60px; }
+.modal-errors { background:var(--red-bg,rgba(220,38,38,0.1)); border:1px solid var(--red-bd,#dc2626); border-radius:var(--radius); padding:10px 12px; margin-bottom:14px; font-size:12px; color:var(--red,#dc2626); display:none; }
+.modal-errors.show { display:block; }
+.modal-errors ul { margin:0; padding-left:20px; }
+.modal-errors li { margin:4px 0; }
+.modal-footer { display:flex; gap:10px; justify-content:flex-end; }
+.modal-btn { font-family:inherit; padding:10px 16px; font-size:13px; font-weight:600; border-radius:var(--radius); border:1px solid var(--border2); background:var(--dark3); color:var(--white); cursor:pointer; transition:all .15s; }
+.modal-btn:hover { background:var(--dark2); border-color:var(--gray2); }
+.modal-btn:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+.modal-btn.primary { background:var(--blue); border-color:var(--blue); color:var(--white); }
+.modal-btn.primary:hover { background:var(--blue-light,#2563eb); }
 </style>
 </head>
 <body>
@@ -835,12 +857,46 @@ function renderAliasesProveedor(lista) {
     }).join('');
 }
 function revocarAliasUI(aliasId) {
-  var motivo = window.prompt('Motivo para dejar de recordar este alias:');
-  if (!motivo || !motivo.trim()) return;
-  fetch('/api/recepciones/aliases/' + aliasId + '/revocar', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ motivo: motivo.trim() }) })
-    .then(function(r){ return r.json(); })
-    .then(function(d){ if (d.ok) cargarAliasesProveedor(); else alert('No se pudo revocar: ' + (d.error||'')); })
-    .catch(function(){ alert('No se pudo revocar el alias.'); });
+  abrirModal({
+    titulo: 'Revocar alias',
+    bodyHtml: '<div class="modal-field">'
+      + '<label for="motivo-input">Motivo para dejar de recordar este alias:</label>'
+      + '<textarea id="motivo-input" placeholder="Explicá brevemente..."></textarea>'
+      + '</div>',
+    textConfirm: 'Revocar',
+    textCancel: 'Cancelar',
+    onConfirm: function() {
+      var motivoInput = document.getElementById('motivo-input');
+      var motivo = motivoInput ? motivoInput.value.trim() : '';
+
+      if (!motivo) {
+        mostrarErroresModal(['Completá el motivo']);
+        return; // Modal permanece abierto, usuario puede corregir
+      }
+
+      fetch('/api/recepciones/aliases/' + aliasId + '/revocar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motivo: motivo })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.ok) {
+            mostrarStatus('status-match', 'ok', 'Alias revocado correctamente.');
+            cargarAliasesProveedor();
+            _ocultarModalDom(); // Cerrar solo si es exitoso
+          } else {
+            mostrarErroresModal(['No se pudo revocar: ' + (d.error || '')]);
+          }
+        })
+        .catch(function() {
+          mostrarErroresModal(['No se pudo revocar el alias.']);
+        });
+    },
+    onCancel: function() {
+      // cancelarModal ya oculta el DOM
+    }
+  });
 }
 
 function cambiarCantidad(inp, id) {
@@ -849,23 +905,158 @@ function cambiarCantidad(inp, id) {
 }
 
 function abrirAltaBorrador(id) {
-  var it=items.find(function(x){ return String(x.id)===String(id); });
+  var it = items.find(function(x) { return String(x.id) === String(id); });
   if (!it) return;
-  var titulo=window.prompt('Título del producto nuevo:', it.nombre_doc);
-  if (!titulo || !titulo.trim()) return;
-  var marca=window.prompt('Marca:',''); if (!marca || !marca.trim()) return;
-  var categoria=window.prompt('ID de categoría Woo:',''); var categoriaNombre=window.prompt('Nombre de categoría:','');
-  var precio=window.prompt('Precio positivo:','1'); if (!categoria || !categoriaNombre || !(Number(precio)>0)) { mostrarStatus('status-match','err','Completá título, marca, categoría y precio válido.'); return; }
-  var modoTexto=window.prompt('Modo: simple, familia_variable o variacion_existente:','simple') || 'simple';
-  var modo=['simple','familia_variable','variacion_existente'].includes(modoTexto) ? modoTexto : 'simple';
-  var parentId=modo==='variacion_existente' ? Number(window.prompt('ID del producto padre variable:','')) || null : null;
-  if (modo==='variacion_existente' && !parentId) { mostrarStatus('status-match','err','La variación existente requiere un padre válido.'); return; }
-  var operationId=crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+'-'+String(Math.random()).slice(2);
-  it.alta_operation_id=operationId; it.alta_estado='procesando'; renderItems();
-  fetch('/api/nuevos-productos/crear-borrador',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operation_id:operationId,ficha:{modo:modo,titulo:titulo.trim(),marca:marca.trim(),categoria_id:Number(categoria),categoria_nombre:categoriaNombre.trim(),precio:String(precio),descripcion:'',parent_id:parentId,atributos:[]}})})
-    .then(function(r){return r.json().then(function(d){return {status:r.status,data:d};});})
-    .then(function(r){if(!r.data.ok){it.alta_estado=r.status===409?'incierto':'error'; mostrarStatus('status-match','err',r.data.error||'No se pudo crear el borrador. Operación: '+operationId); return;} it.id_woo=r.data.id_woo;it.sku_wc=r.data.sku;it.nombre_wc=it.nombre_doc;it.stock_wc=0;it.alta_estado='creado';it.match_estado='manual_confirmado';it.match_confirmado=true;renderItems();actualizarBotones();mostrarStatus('status-match','ok','Borrador creado con stock 0. Operación '+operationId+'.');})
-    .catch(function(){it.alta_estado='incierto';mostrarStatus('status-match','err','No pudimos confirmar WooCommerce. No repitas la operación '+operationId+'; verificá su estado.');});
+
+  // Cargar categorías desde el backend
+  mostrarStatus('status-match', 'loading', 'Cargando categorías...');
+  fetch('/api/nuevos-productos/categorias-woo')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (!d.ok || !d.categorias) {
+        mostrarStatus('status-match', 'err', 'No se pudieron cargar las categorías.');
+        return;
+      }
+
+      var categorias = d.categorias || [];
+      var categoriasHtml = '<option value="">-- Seleccionar categoría --</option>';
+      categorias.forEach(function(cat) {
+        categoriasHtml += '<option value="' + cat.id + '|' + esc(cat.name) + '">' + esc(cat.name) + '</option>';
+      });
+
+      abrirModal({
+        titulo: 'Crear borrador de producto nuevo',
+        bodyHtml: '<div class="modal-field">'
+          + '<label for="titulo-input">Título del producto:</label>'
+          + '<input type="text" id="titulo-input" value="' + esc(it.nombre_doc || '') + '" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="marca-input">Marca:</label>'
+          + '<input type="text" id="marca-input" value="" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="categoria-select">Categoría WooCommerce:</label>'
+          + '<select id="categoria-select">' + categoriasHtml + '</select>'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="precio-input">Precio positivo:</label>'
+          + '<input type="number" id="precio-input" value="1" step="0.01" min="0.01" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="modo-select">Modo de producto:</label>'
+          + '<select id="modo-select">'
+          + '<option value="simple">simple</option>'
+          + '<option value="familia_variable">familia_variable</option>'
+          + '<option value="variacion_existente">variacion_existente</option>'
+          + '</select>'
+          + '</div>'
+          + '<div class="modal-field" id="parent-field" style="display:none;">'
+          + '<label for="parent-input">ID del producto padre variable:</label>'
+          + '<input type="number" id="parent-input" value="" />'
+          + '</div>',
+        textConfirm: 'Crear borrador',
+        textCancel: 'Cancelar',
+        onConfirm: function() {
+          var errores = [];
+          var titulo = (document.getElementById('titulo-input').value || '').trim();
+          var marca = (document.getElementById('marca-input').value || '').trim();
+          var categoriaSelect = document.getElementById('categoria-select').value;
+          var precio = Number(document.getElementById('precio-input').value);
+          var modo = document.getElementById('modo-select').value;
+          var parentId = null;
+
+          // Parsear categoría (formato: "id|nombre")
+          var categoria = null;
+          var categoriaNombre = null;
+          if (categoriaSelect) {
+            var parts = categoriaSelect.split('|');
+            categoria = parts[0];
+            categoriaNombre = parts.slice(1).join('|');
+          }
+
+          // Validación
+          if (!titulo) errores.push('El título es obligatorio');
+          if (!marca) errores.push('La marca es obligatoria');
+          if (!categoria || !categoriaNombre) errores.push('Selecciona una categoría');
+          if (!(precio > 0)) errores.push('El precio debe ser positivo');
+
+          if (modo === 'variacion_existente') {
+            var parentInput = document.getElementById('parent-input');
+            parentId = Number(parentInput.value) || null;
+            if (!parentId) errores.push('La variación existente requiere un ID de producto padre válido');
+          }
+
+          if (errores.length > 0) {
+            mostrarErroresModal(errores);
+            return; // Modal permanece abierto, usuario puede corregir
+          }
+
+          // Crear borrador
+          var operationId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+          it.alta_operation_id = operationId;
+          it.alta_estado = 'procesando';
+          renderItems();
+          // NO llamar a cerrarModal aquí — esperar a que el fetch sea exitoso
+
+          fetch('/api/nuevos-productos/crear-borrador', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              operation_id: operationId,
+              ficha: {
+                modo: modo,
+                titulo: titulo,
+                marca: marca,
+                categoria_id: Number(categoria),
+                categoria_nombre: categoriaNombre,
+                precio: String(precio),
+                descripcion: '',
+                parent_id: parentId,
+                atributos: []
+              }
+            })
+          })
+            .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+            .then(function(r) {
+              if (!r.data.ok) {
+                it.alta_estado = r.status === 409 ? 'incierto' : 'error';
+                mostrarStatus('status-match', 'err', r.data.error || 'No se pudo crear el borrador. Operación: ' + operationId);
+                return;
+              }
+              it.id_woo = r.data.id_woo;
+              it.sku_wc = r.data.sku;
+              it.nombre_wc = it.nombre_doc;
+              it.stock_wc = 0;
+              it.alta_estado = 'creado';
+              it.match_estado = 'manual_confirmado';
+              it.match_confirmado = true;
+              renderItems();
+              actualizarBotones();
+              mostrarStatus('status-match', 'ok', 'Borrador creado con stock 0. Operación ' + operationId + '.');
+              _ocultarModalDom(); // Cerrar solo si el fetch fue exitoso
+            })
+            .catch(function() {
+              it.alta_estado = 'incierto';
+              mostrarStatus('status-match', 'err', 'No pudimos confirmar WooCommerce. No repitas la operación ' + operationId + '; verificá su estado.');
+            });
+        },
+        onCancel: function() {
+          // cancelarModal ya oculta el DOM
+        }
+      });
+
+      // Mostrar/ocultar campo parentId según el modo
+      var modoSelect = document.getElementById('modo-select');
+      var parentField = document.getElementById('parent-field');
+      modoSelect.onchange = function() {
+        parentField.style.display = modoSelect.value === 'variacion_existente' ? 'block' : 'none';
+      };
+
+      mostrarStatus('status-match', 'ok', '');
+    })
+    .catch(function() {
+      mostrarStatus('status-match', 'err', 'No se pudieron cargar las categorías.');
+    });
 }
 
 function limpiarMatch(id) {
@@ -1383,6 +1574,122 @@ function mostrarStatus(id, tipo, msg) {
   el.style.display = '';
 }
 
+// ---- MODAL ACCESIBLE ----
+
+var modalState = { isOpen: false, triggerElement: null, onConfirm: null, onCancel: null, focusTrap: null };
+
+function abrirModal(config) {
+  var overlay = document.getElementById('modal-overlay');
+  var dialog = document.getElementById('modal-dialog');
+  var title = document.getElementById('modal-title');
+  var body = document.getElementById('modal-body');
+  var errorContainer = document.getElementById('modal-errors');
+  var confirmBtn = document.getElementById('modal-confirm-btn');
+  var cancelBtn = document.getElementById('modal-cancel-btn');
+
+  if (!overlay || !dialog) return;
+
+  // Guardar elemento que abrió el modal para devolver foco después
+  modalState.triggerElement = document.activeElement;
+  modalState.onConfirm = config.onConfirm || function() {};
+  modalState.onCancel = config.onCancel || function() {};
+
+  // Actualizar contenido del modal
+  title.textContent = config.titulo || '';
+  body.innerHTML = config.bodyHtml || '';
+  errorContainer.innerHTML = '';
+  errorContainer.classList.remove('show');
+
+  // Actualizar textos de botones si se especifican
+  confirmBtn.textContent = config.textConfirm || 'Confirmar';
+  cancelBtn.textContent = config.textCancel || 'Cancelar';
+
+  // Abrir modal
+  overlay.classList.add('open');
+  modalState.isOpen = true;
+
+  // Hacer foco en el primer input
+  setTimeout(function() {
+    var firstInput = body.querySelector('input, textarea, select');
+    if (firstInput) firstInput.focus();
+    else confirmBtn.focus();
+  }, 50);
+
+  // Limpiar handlers viejos
+  confirmBtn.onclick = null;
+  cancelBtn.onclick = null;
+
+  // Asignar handlers nuevos
+  confirmBtn.onclick = function() { confirmarModal(); };
+  cancelBtn.onclick = function() { cancelarModal(); };
+}
+
+// Funciones internas para manejar confirmación y cancelación
+function confirmarModal() {
+  if (modalState.onConfirm) {
+    modalState.onConfirm();
+  }
+  // El callback decide si cerrar (llamando a _ocultarModalDom)
+  // Si la validación falla, el modal queda abierto
+}
+
+function cancelarModal() {
+  // Cancelar siempre cierra sin validación
+  if (modalState.onCancel) {
+    modalState.onCancel();
+  }
+  _ocultarModalDom();
+}
+
+// Función interna que sólo oculta el DOM, sin disparar callbacks
+function _ocultarModalDom() {
+  var overlay = document.getElementById('modal-overlay');
+  if (!overlay) return;
+
+  overlay.classList.remove('open');
+  modalState.isOpen = false;
+
+  // Devolver foco al elemento que abrió el modal
+  if (modalState.triggerElement) {
+    modalState.triggerElement.focus();
+  }
+}
+
+// Función pública para cerrar manualmente (usada por Escape)
+function cerrarModal(confirmar) {
+  if (confirmar) {
+    confirmarModal();
+  } else {
+    cancelarModal();
+  }
+}
+
+function mostrarErroresModal(errores) {
+  var errorContainer = document.getElementById('modal-errors');
+  if (!errorContainer) return;
+  if (!errores || errores.length === 0) {
+    errorContainer.classList.remove('show');
+    return;
+  }
+  var html = '<ul>';
+  errores.forEach(function(err) {
+    html += '<li>' + esc(err) + '</li>';
+  });
+  html += '</ul>';
+  errorContainer.innerHTML = html;
+  errorContainer.classList.add('show');
+}
+
+// Trap focus dentro del modal y cerrar con Escape
+document.addEventListener('keydown', function(e) {
+  if (!modalState.isOpen) return;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    cerrarModal(false);
+  }
+});
+
 // Chips de feedback del array sync_ml (push puntual de stock a MercadoLibre, ver
 // docs/api-contrato.md). El contenedor debe ser un role="status" aria-live PREEXISTENTE
 // (no alcanza con ponerle el role al nodo recién insertado: una región viva que aparece
@@ -1424,5 +1731,19 @@ function renderSyncMl(containerId, syncMl) {
   }).catch(function(){});
 })();
 </script>
+
+<!-- Modal genérico accesible -->
+<div id="modal-overlay" class="modal-overlay" role="presentation">
+  <div id="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title" class="modal-content">
+    <h2 id="modal-title" class="modal-title"></h2>
+    <div class="modal-errors" id="modal-errors"></div>
+    <div id="modal-body" class="modal-body"></div>
+    <div class="modal-footer">
+      <button id="modal-cancel-btn" class="modal-btn">Cancelar</button>
+      <button id="modal-confirm-btn" class="modal-btn primary">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

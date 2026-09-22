@@ -1201,3 +1201,262 @@ describe('public/recepcion/index.html — P1.5: modo "solo documento" no exige m
     expect(status.textContent).toMatch(/solo documento|no se actualizará/i);
   });
 });
+
+describe('public/recepcion/index.html — P1.6: Modales accesibles', () => {
+  it('abrirModal existe y es función', () => {
+    const app = cargarApp();
+    expect(typeof app.abrirModal).toBe('function');
+  });
+
+  it('cerrarModal existe y es función', () => {
+    const app = cargarApp();
+    expect(typeof app.cerrarModal).toBe('function');
+  });
+
+  it('mostrarErroresModal existe y es función', () => {
+    const app = cargarApp();
+    expect(typeof app.mostrarErroresModal).toBe('function');
+  });
+
+  it('revocarAliasUI puede ejecutarse sin window.prompt', () => {
+    const app = cargarApp();
+    // Mock del getElementById para que devuelva elementos con estructura modal
+    const elementos = {};
+    app.document.getElementById = (id) => {
+      if (!elementos[id]) {
+        elementos[id] = {
+          value: '',
+          textContent: '',
+          style: {},
+          disabled: false,
+          dataset: {},
+          innerHTML: '',
+          classList: { add() {}, remove() {}, contains() { return false; } },
+          addEventListener() {},
+          appendChild() {},
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          focus() {},
+        };
+      }
+      return elementos[id];
+    };
+    app.window.prompt = undefined; // Asegurar que prompt no exista
+
+    // Debe ejecutarse sin errores (aunque no haga nada útil sin DOM real)
+    try {
+      // Envolver en un try catch porque la función espera DOM real para inicializar
+      app.revocarAliasUI(999);
+    } catch (e) {
+      // Si falla, es porque algo en el modal explota, no porque use prompt()
+      expect(e.message).not.toContain('prompt');
+    }
+  });
+
+  it('abrirAltaBorrador no usa window.prompt para validación', () => {
+    const app = cargarApp();
+    const elementos = {};
+    const fetchCalls = [];
+
+    app.document.getElementById = (id) => {
+      if (!elementos[id]) {
+        elementos[id] = {
+          value: '',
+          textContent: '',
+          style: {},
+          disabled: false,
+          dataset: {},
+          innerHTML: '',
+          className: '',
+          classList: { add() {}, remove() {}, contains() { return false; } },
+          addEventListener() {},
+          appendChild() {},
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          onchange: null,
+          focus() {},
+        };
+      }
+      return elementos[id];
+    };
+
+    app.fetch = (url) => {
+      fetchCalls.push(url);
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          ok: true,
+          categorias: [{ id: 1, name: 'Cat 1', parent: 0 }]
+        })
+      });
+    };
+
+    app.window.prompt = undefined; // Asegurar que prompt no exista
+    app.items.push({ id: 1, nombre_doc: 'Test Item' });
+
+    try {
+      app.abrirAltaBorrador(1);
+    } catch (e) {
+      // Si falla, es porque algo explota, no porque use prompt()
+      expect(e.message).not.toContain('prompt');
+    }
+  });
+
+  it('modalState existe y se inicializa', () => {
+    const app = cargarApp();
+    expect(app.modalState).toBeDefined();
+    expect(app.modalState.isOpen).toBe(false);
+  });
+
+  // Tests críticos para evitar recursión infinita y POSTs duplicados
+  it('revocarAliasUI con motivo vacío: modal permanece abierto y muestra error', async () => {
+    const app = cargarApp();
+    let mostroError = false;
+    let cerroModal = false;
+
+    const elementos = {};
+    app.document.getElementById = (id) => {
+      if (!elementos[id]) {
+        elementos[id] = {
+          value: '',
+          textContent: '',
+          style: {},
+          disabled: false,
+          dataset: {},
+          innerHTML: '',
+          className: '',
+          classList: {
+            add(cls) {
+              if (cls === 'show') mostroError = true;
+            },
+            remove() {
+              if (mostroError) cerroModal = true;
+            },
+            contains() { return false; },
+          },
+          addEventListener() {},
+          appendChild() {},
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          focus() {},
+        };
+      }
+      return elementos[id];
+    };
+
+    app.modalState.isOpen = true;
+    app.modalState.onConfirm = null;
+    app.modalState.onCancel = null;
+    app.fetch = () => Promise.resolve({ json: () => Promise.resolve({ ok: true }) });
+
+    // Simular: usuario hace click en "Confirmar" pero motivo está vacío
+    app.revocarAliasUI(999);
+
+    // Esperar que abrirModal se ejecute y luego simular el click en Confirmar
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(app.modalState.onConfirm).not.toBeNull();
+    app.modalState.onConfirm();
+
+    // El motivo está vacío: debe mostrar el error y el modal debe seguir abierto
+    // (isOpen sólo se pone en false dentro de _ocultarModalDom, que no debe correr acá).
+    expect(mostroError).toBe(true);
+    expect(cerroModal).toBe(false);
+    expect(app.modalState.isOpen).toBe(true);
+  });
+
+  it('abrirAltaBorrador válido dispara EXACTAMENTE UN fetch de creación (no recursión)', async () => {
+    const app = cargarApp();
+    let fetchCalls = [];
+    let fetchCallsCrearBorrador = 0;
+
+    const elementos = {};
+    app.document.getElementById = (id) => {
+      if (!elementos[id]) {
+        elementos[id] = {
+          value: '',
+          textContent: '',
+          style: {},
+          disabled: false,
+          dataset: {},
+          innerHTML: '',
+          className: '',
+          classList: { add() {}, remove() {}, contains() { return false; } },
+          addEventListener() {},
+          appendChild() {},
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          onchange: null,
+          focus() {},
+        };
+      }
+      // Pre-llenar campos para que pase validación
+      if (id === 'titulo-input') elementos[id].value = 'Test Title';
+      if (id === 'marca-input') elementos[id].value = 'Test Brand';
+      if (id === 'categoria-select') elementos[id].value = '1|Test Category';
+      if (id === 'precio-input') elementos[id].value = '10.50';
+      if (id === 'modo-select') elementos[id].value = 'simple';
+      if (id === 'parent-input') elementos[id].value = '';
+
+      return elementos[id];
+    };
+
+    app.document.createElement = () => ({ value: '', appendChild() {}, querySelector: () => null, setAttribute() {}, style: {} });
+    app.modalState.isOpen = true;
+    app.items.push({ id: 1, nombre_doc: 'Test Item' });
+
+    let recursionDetected = false;
+    app.fetch = (url) => {
+      fetchCalls.push(url);
+      if (String(url).includes('/api/nuevos-productos/categorias-woo')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ ok: true, categorias: [{ id: 1, name: 'Test Category', parent: 0 }] })
+        });
+      }
+      if (String(url).includes('/api/nuevos-productos/crear-borrador')) {
+        fetchCallsCrearBorrador++;
+        if (fetchCallsCrearBorrador > 1) {
+          recursionDetected = true;
+        }
+      }
+      return Promise.resolve({
+        status: 200,
+        json: () => Promise.resolve({
+          ok: true,
+          id_woo: 123,
+          sku: 'TEST-SKU-123'
+        })
+      });
+    };
+
+    app.abrirAltaBorrador(1);
+
+    // Esperar a que abrirModal se execute
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(app.modalState.onConfirm).toBeTruthy();
+    // Simular click en Confirmar
+    try {
+      app.modalState.onConfirm();
+    } catch (e) {
+      if (e instanceof RangeError && e.message.includes('Maximum call stack')) {
+        recursionDetected = true;
+      }
+    }
+
+    // Darle tiempo a la cadena de promesas del fetch para resolver.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Debe haber exactamente UN fetch a crear-borrador, sin recursión.
+    expect(recursionDetected).toBe(false);
+    expect(fetchCallsCrearBorrador).toBe(1);
+  });
+
+  it('_ocultarModalDom existe y es callable', () => {
+    const app = cargarApp();
+    expect(typeof app._ocultarModalDom).toBe('function');
+  });
+
+  it('confirmarModal y cancelarModal existen', () => {
+    const app = cargarApp();
+    expect(typeof app.confirmarModal).toBe('function');
+    expect(typeof app.cancelarModal).toBe('function');
+  });
+});
