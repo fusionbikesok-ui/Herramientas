@@ -2,7 +2,7 @@ import express from 'express';
 import { llamarGemini, parseJsonArrayText } from './gemini.js';
 import { CATEGORIAS_FB, armarPromptBatch } from '../lib/categorias.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { listarCategoriasWoo, crearBorradorWoo } from '../lib/nuevosProductosWoo.js';
+import { listarCategoriasWoo, crearBorradorWoo, conciliarAltaIncierta } from '../lib/nuevosProductosWoo.js';
 
 export function tituloCase(palabra) {
   if (!palabra) return '';
@@ -55,6 +55,18 @@ export function nuevosProductosRouter(geminiKey, db, wooCfg, deps = {}) {
     const row=db.prepare('SELECT operation_id,estado,modo,id_woo,id_padre,sku,error,creado_en,actualizado_en FROM recepcion_altas_woo WHERE operation_id=?').get(req.params.operationId);
     if (!row) return res.status(404).json({ok:false,error:'operación no encontrada'});
     res.json({ok:true,operacion:row,bloqueada:row.estado==='incierto'||row.estado==='procesando'});
+  });
+
+  // P1.6: recupera una alta 'incierto' leyendo Woo. No hace nada si la operación no existe o no
+  // está en 'incierto' (conciliarAltaIncierta ya es idempotente en ese caso).
+  router.post('/operaciones/:operationId/conciliar', async (req, res) => {
+    try {
+      const r = await conciliarAltaIncierta({ db, cfg: wooCfg, operationId: req.params.operationId, fetchWoo: deps.fetchWoo });
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      const status = /no encontrada/.test(e.message) ? 404 : 502;
+      res.status(status).json({ ok: false, error: e.message });
+    }
   });
 
   router.get('/categorias-woo', async (req,res) => { try { res.json({ok:true,categorias:await listarCategoriasWoo(wooCfg,deps)}); } catch(e) { res.status(502).json({ok:false,error:e.message}); } });

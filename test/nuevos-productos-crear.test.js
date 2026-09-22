@@ -1,25 +1,35 @@
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
-import { crearBorradorWoo, validarFichaAlta } from '../lib/nuevosProductosWoo.js';
+import { crearBorradorWoo, validarFichaAlta, hashFichaCanonica, conciliarAltaIncierta } from '../lib/nuevosProductosWoo.js';
+
 const ficha={modo:'simple',titulo:'Casco Nuevo',marca:'Marca',categoria_id:17,categoria_nombre:'CASCOS',precio:'120000',descripcion:'',parent_id:null,atributos:[{nombre:'Color',valor:'Negro'}]};
+
 function db(){
   const d=new Database(':memory:');
   d.exec('CREATE TABLE recepcion_altas_woo (operation_id TEXT PRIMARY KEY,request_hash TEXT,estado TEXT,modo TEXT,id_woo INTEGER,id_padre INTEGER,sku TEXT,respuesta_json TEXT,error TEXT,creado_por TEXT,creado_en TEXT,actualizado_en TEXT)');
   d.exec('CREATE TABLE catalogo_cache (id_woo INTEGER PRIMARY KEY, nombre TEXT, sku TEXT, tipo TEXT, id_padre INTEGER, stock INTEGER, no_contable INTEGER, regular_price TEXT, actualizado_en TEXT)');
   return d;
 }
+
+const CATS = [{ id: 17, name: 'CASCOS', parent: 0 }, { id: 1, name: 'C', parent: 0 }];
+
 // Mock stateful: el SKU solo aparece en las respuestas DESPUÉS del PATCH que lo asigna — como en Woo real.
 // P0.2 exige que la verificación final sea un GET, no la respuesta del PATCH: si el mock siempre
 // devolviera el SKU (incluso antes del PATCH) no distinguiría "confía en el PATCH" de "verifica con GET".
-function fetchWooDraft(calls) {
+// Responde también /products/categories (validación de categoría) y /variations (combinación ya
+// usada), para que crearBorradorWoo pueda llegar hasta el intento de creación real.
+function fetchWooDraft(calls, { id = 44, variaciones = [] } = {}) {
   let skuAsignado = null;
   return async (_c, path, method = 'get', body) => {
     calls.push({ path, method, body });
-    if (method === 'post') return { data: { id: 44, status: 'draft', stock_quantity: 0 } };
-    if (method === 'patch') { skuAsignado = body.sku; return { data: { id: 44, status: 'draft', stock_quantity: 0, sku: skuAsignado } }; }
-    return { data: { id: 44, status: 'draft', stock_quantity: 0, sku: skuAsignado } };
+    if (path.includes('/categories')) return { data: CATS };
+    if (/\/variations(\?|$)/.test(path) && method === 'get') return { data: variaciones };
+    if (method === 'post') return { data: { id, status: 'draft', stock_quantity: 0 } };
+    if (method === 'patch') { skuAsignado = body.sku; return { data: { id, status: 'draft', stock_quantity: 0, sku: skuAsignado } }; }
+    return { data: { id, status: 'draft', stock_quantity: 0, sku: skuAsignado } };
   };
 }
+
 describe('validarFichaAlta — Task 5 Step 1: rechaza atributos repetidos', () => {
   it('rechaza dos atributos con el mismo nombre (case-insensitive)', () => {
     expect(() => validarFichaAlta({ ...ficha, atributos: [{ nombre: 'Color', valor: 'Negro' }, { nombre: 'color', valor: 'Azul' }] }))
@@ -51,6 +61,199 @@ describe('crearBorradorWoo — Task 5 Step 1: padre inexistente/no variable', ()
     await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440012',ficha:f,actor:'j',fetchWoo:fetchWooDraft(calls)}))
       .rejects.toThrow();
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('crearBorradorWoo — P1.6: validaciones contra el estado real de Woo', () => {
+  it('rechaza una categoría cuyo id no existe en Woo', async () => {
+    const x=db();
+    const f={...ficha,categoria_id:999};
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440020',ficha:f,actor:'j',fetchWoo:fetchWooDraft([])}))
+      .rejects.toThrow(/categoría/i);
+  });
+
+  it('rechaza cuando el id de categoría existe pero el nombre no coincide (id y nombre desincronizados)', async () => {
+    const x=db();
+    const f={...ficha,categoria_id:17,categoria_nombre:'OTRA COSA'};
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440021',ficha:f,actor:'j',fetchWoo:fetchWooDraft([])}))
+      .rejects.toThrow(/categoría/i);
+  });
+
+  it('no inserta fila "procesando" cuando la categoría no valida (nada que reconciliar)', async () => {
+    const x=db();
+    const f={...ficha,categoria_id:999};
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440022',ficha:f,actor:'j',fetchWoo:fetchWooDraft([])})).rejects.toThrow();
+    expect(x.prepare('SELECT * FROM recepcion_altas_woo').all()).toHaveLength(0);
+  });
+
+  it('rechaza una combinación de atributos que ya existe en una variación del padre', async () => {
+    const x=db();
+    x.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (9,?,?,?,?,?,?)')
+      .run('Familia', null, 'variable', null, null, 'x');
+    const variaciones = [{ attributes: [{ name: 'Color', option: 'Negro' }] }];
+    const f={...ficha,modo:'variacion_existente',parent_id:9,atributos:[{nombre:'color',valor:'negro'}]}; // mismo valor, otro casing
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440023',ficha:f,actor:'j',fetchWoo:fetchWooDraft([],{variaciones})}))
+      .rejects.toThrow(/combinación/i);
+  });
+
+  it('permite una combinación de atributos distinta a las existentes del padre', async () => {
+    const x=db();
+    x.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (9,?,?,?,?,?,?)')
+      .run('Familia', null, 'variable', null, null, 'x');
+    const variaciones = [{ attributes: [{ name: 'Color', option: 'Negro' }] }];
+    const f={...ficha,modo:'variacion_existente',parent_id:9,atributos:[{nombre:'Color',valor:'Azul'}]};
+    const a = await crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440024',ficha:f,actor:'j',fetchWoo:fetchWooDraft([],{variaciones})});
+    expect(a.sku).toBe('FB-44');
+  });
+});
+
+describe('crearBorradorWoo — P1.6: familia_variable y variacion_existente', () => {
+  it('familia_variable crea el padre variable y una única variación, ambos draft/stock-cero verificados por GET', async () => {
+    const calls=[];
+    const x=db();
+    const f={...ficha,modo:'familia_variable'};
+    const a = await crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440030',ficha:f,actor:'j',fetchWoo:fetchWooDraft(calls)});
+    expect(a.id_padre).toBe(44); // mismo mock id para ambos POST; alcanza para probar que hay 2 POST distintos
+    const posts = calls.filter(c => c.method === 'post');
+    expect(posts).toHaveLength(2); // 1: padre variable. 2: variación.
+    expect(posts[0].path).toBe('/products');
+    expect(posts[1].path).toBe(`/products/${a.id_padre}/variations`);
+  });
+
+  it('variacion_existente NO crea un padre nuevo: un solo POST, directo a /variations del padre dado', async () => {
+    const calls=[];
+    const x=db();
+    x.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (9,?,?,?,?,?,?)')
+      .run('Familia', null, 'variable', null, null, 'x');
+    const f={...ficha,modo:'variacion_existente',parent_id:9};
+    await crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440031',ficha:f,actor:'j',fetchWoo:fetchWooDraft(calls)});
+    const posts = calls.filter(c => c.method === 'post');
+    expect(posts).toHaveLength(1);
+    expect(posts[0].path).toBe('/products/9/variations');
+  });
+});
+
+describe('hashFichaCanonica — P1.7: hash canónico, independiente de orden/casing', () => {
+  it('el mismo contenido con las claves del objeto en otro orden da el mismo hash', () => {
+    const a = { modo:'simple',titulo:'X',marca:'M',categoria_id:1,categoria_nombre:'C',precio:'100',descripcion:'',parent_id:null,atributos:[{nombre:'Color',valor:'Negro'}] };
+    const b = { atributos:[{nombre:'Color',valor:'Negro'}], descripcion:'', parent_id:null, precio:'100', categoria_nombre:'C', categoria_id:1, marca:'M', titulo:'X', modo:'simple' };
+    expect(hashFichaCanonica(a)).toBe(hashFichaCanonica(b));
+  });
+
+  it('atributos en otro orden dan el mismo hash', () => {
+    const a = { ...ficha, atributos: [{nombre:'Color',valor:'Negro'},{nombre:'Talle',valor:'42'}] };
+    const b = { ...ficha, atributos: [{nombre:'Talle',valor:'42'},{nombre:'Color',valor:'Negro'}] };
+    expect(hashFichaCanonica(a)).toBe(hashFichaCanonica(b));
+  });
+
+  it('distinto casing en textos da el mismo hash', () => {
+    const a = { ...ficha, titulo: 'Casco Nuevo', atributos: [{ nombre: 'Color', valor: 'Negro' }] };
+    const b = { ...ficha, titulo: 'CASCO NUEVO', atributos: [{ nombre: 'color', valor: 'negro' }] };
+    expect(hashFichaCanonica(a)).toBe(hashFichaCanonica(b));
+  });
+
+  it('una ficha realmente distinta da un hash distinto', () => {
+    expect(hashFichaCanonica(ficha)).not.toBe(hashFichaCanonica({ ...ficha, precio: '999' }));
+  });
+
+  it('replay con las claves reordenadas y otro casing no dispara llamadas nuevas a Woo', async () => {
+    const calls=[];
+    const x=db();
+    const fetchWoo=fetchWooDraft(calls);
+    const opId='550e8400-e29b-41d4-a716-446655440040';
+    const a=await crearBorradorWoo({db:x,cfg:{},operationId:opId,ficha,actor:'j',fetchWoo});
+    const n=calls.length;
+    const fichaReordenada = { atributos:[{nombre:'color',valor:'negro'}], descripcion:'', parent_id:null, precio:'120000', categoria_nombre:'cascos', categoria_id:17, marca:'Marca', titulo:'Casco Nuevo', modo:'simple' };
+    const b=await crearBorradorWoo({db:x,cfg:{},operationId:opId,ficha:fichaReordenada,actor:'j',fetchWoo});
+    expect(b).toEqual(a);
+    expect(calls.length).toBe(n);
+  });
+});
+
+describe('crearBorradorWoo — P1.6: clasificación fallido vs incierto', () => {
+  it('un error de validación (antes de cualquier llamada remota) es "fallido"', async () => {
+    const x=db();
+    const f={...ficha,precio:'0'};
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440050',ficha:f,actor:'j',fetchWoo:fetchWooDraft([])}))
+      .rejects.toThrow();
+    // No llegó a insertar fila (falla en validarFichaAlta, antes de todo) — nada que reconciliar.
+    expect(x.prepare('SELECT * FROM recepcion_altas_woo').all()).toHaveLength(0);
+  });
+
+  it('modo simple: un timeout en el POST de creación (primera llamada remota) es "incierto", no "fallido"', async () => {
+    const x=db();
+    const fetchWoo = async (_c, path) => {
+      if (path.includes('/categories')) return { data: CATS };
+      const e = new Error('timeout de red');
+      e.code = 'ETIMEDOUT';
+      throw e;
+    };
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440051',ficha,actor:'j',fetchWoo})).rejects.toThrow();
+    const row = x.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?').get('550e8400-e29b-41d4-a716-446655440051');
+    expect(row.estado).toBe('incierto');
+  });
+
+  it('un PATCH de SKU que falla (después del POST exitoso) es "incierto"', async () => {
+    const x=db();
+    const fetchWoo = async (_c, path, method='get') => {
+      if (path.includes('/categories')) return { data: CATS };
+      if (method === 'post') return { data: { id: 44, status: 'draft', stock_quantity: 0 } };
+      if (method === 'get') return { data: { id: 44, status: 'draft', stock_quantity: 0 } };
+      throw new Error('Woo caído: 503');
+    };
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440052',ficha,actor:'j',fetchWoo})).rejects.toThrow();
+    const row = x.prepare('SELECT estado,id_woo FROM recepcion_altas_woo WHERE operation_id=?').get('550e8400-e29b-41d4-a716-446655440052');
+    expect(row.estado).toBe('incierto');
+    expect(row.id_woo).toBe(44); // el id se persiste apenas se conoce, para poder reconciliar después
+  });
+
+  it('un padre inválido (chequeo local, sin red) sigue sin dejar fila que reconciliar', async () => {
+    const x=db();
+    const f={...ficha,modo:'variacion_existente',parent_id:9};
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440053',ficha:f,actor:'j',fetchWoo:fetchWooDraft([])})).rejects.toThrow();
+    expect(x.prepare('SELECT * FROM recepcion_altas_woo').all()).toHaveLength(0);
+  });
+});
+
+describe('conciliarAltaIncierta — P1.6: recuperación de una alta incierta', () => {
+  it('si Woo confirma sku+draft, pasa a "creado" y hace el upsert en catalogo_cache', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-1','h','incierto','simple',44,null,'j',now,now);
+    const fetchWoo = async () => ({ data: { id: 44, status: 'draft', sku: 'FB-44', name: 'Casco' } });
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-1', fetchWoo });
+    expect(r.estado).toBe('creado');
+    expect(x.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?').get('op-1').estado).toBe('creado');
+    expect(x.prepare('SELECT * FROM catalogo_cache WHERE id_woo=44').get()).toBeTruthy();
+  });
+
+  it('si Woo confirma que el producto no existe (404), pasa a "fallido" (libera reintento)', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-2','h','incierto','simple',44,null,'j',now,now);
+    const fetchWoo = async () => { const e = new Error('not found'); e.status = 404; throw e; };
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-2', fetchWoo });
+    expect(r.estado).toBe('fallido');
+  });
+
+  it('sin id_woo conocido, se deja "incierto" explícito (fail-closed: no asume que no se creó)', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-3','h','incierto','simple',null,null,'j',now,now);
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-3', fetchWoo: async () => { throw new Error('no debería llamarse'); } });
+    expect(r.estado).toBe('incierto');
+  });
+
+  it('una operación que no está en "incierto" se devuelve tal cual, sin tocar Woo', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,sku,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run('op-4','h','creado','simple',44,null,'FB-44','j',now,now);
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-4', fetchWoo: async () => { throw new Error('no debería llamarse'); } });
+    expect(r.estado).toBe('creado');
   });
 });
 
@@ -107,6 +310,7 @@ describe('alta Woo fail-closed',()=>{
     // Mock "hostil": el PATCH responde ok pero el GET posterior nunca ve el SKU (nunca llegó a Woo de verdad).
     const fetchWoo = async (_c, path, method='get', body) => {
       calls.push({ path, method, body });
+      if (path.includes('/categories')) return { data: CATS };
       if (method === 'post') return { data: { id: 44, status: 'draft', stock_quantity: 0 } };
       if (method === 'patch') return { data: { id: 44, status: 'draft', stock_quantity: 0, sku: body.sku } };
       return { data: { id: 44, status: 'draft', stock_quantity: 0, sku: null } }; // el GET nunca confirma
@@ -116,5 +320,9 @@ describe('alta Woo fail-closed',()=>{
       .rejects.toThrow(/SKU/);
     // No debe haber quedado nada en catalogo_cache para un alta no confirmada.
     expect(x.prepare('SELECT * FROM catalogo_cache').all()).toHaveLength(0);
+    // Sí quedó la fila de la operación, en 'incierto' (el POST/GET/PATCH ya se dispararon), lista
+    // para conciliarAltaIncierta — no se pierde evidencia del intento.
+    const row = x.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?').get('550e8400-e29b-41d4-a716-446655440002');
+    expect(row.estado).toBe('incierto');
   });
 });

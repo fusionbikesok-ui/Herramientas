@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
-import { armarTitulo, tituloCase, categoriasReales } from '../routes/nuevosProductos.js';
+import express from 'express';
+import request from 'supertest';
+import { armarTitulo, tituloCase, categoriasReales, nuevosProductosRouter } from '../routes/nuevosProductos.js';
 import { armarPromptBatch, CATEGORIAS_FB } from '../lib/categorias.js';
 import { openDb } from '../db/index.js';
 
@@ -77,5 +79,38 @@ describe('armarPromptBatch', () => {
     expect(prompt).toContain(CATEGORIAS_FB[0]); // ej: "BICICLETAS POR MARCA > BICICLETAS TREK"
     // Contradicción conocida y aceptada: si el catálogo real está vacío, Gemini
     // recibe categorías con formato "A > B" pero se le pide elegir nombres planos.
+  });
+});
+
+describe('POST /operaciones/:operationId/conciliar — P1.6', () => {
+  const TEST_DB = './test/tmp-nuevos-productos-conciliar.sqlite';
+  let db, app;
+
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  function armarApp(fetchWoo) {
+    db = openDb(TEST_DB);
+    app = express();
+    app.use(express.json());
+    app.use('/api/nuevos-productos', nuevosProductosRouter('gk', db, {}, { fetchWoo }));
+    return app;
+  }
+
+  it('concilia una alta incierta confirmada por Woo y la deja "creado"', async () => {
+    const a = armarApp(async () => ({ data: { id: 44, status: 'draft', sku: 'FB-44', name: 'Casco' } }));
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?)")
+      .run('op-http-1', 'h', 'incierto', 'simple', 44, 'j', now, now);
+    const res = await request(a).post('/api/nuevos-productos/operaciones/op-http-1/conciliar').send();
+    expect(res.status).toBe(200);
+    expect(res.body.estado).toBe('creado');
+  });
+
+  it('404 si la operación no existe', async () => {
+    const a = armarApp(async () => ({ data: {} }));
+    const res = await request(a).post('/api/nuevos-productos/operaciones/no-existe/conciliar').send();
+    expect(res.status).toBe(404);
   });
 });

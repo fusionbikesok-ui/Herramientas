@@ -714,6 +714,7 @@ describe('P0.2 — integración: alta Woo confirmable sin esperar el sync', () =
     //    upsert en catalogo_cache — sin esto, aplicarStockItem no sabría si es simple o variación.
     let stockWc = 0;
     const fetchWoo = async (_c, path, method = 'get', body) => {
+      if (path.includes('/categories')) return { data: [{ id: 17, name: 'CASCOS', parent: 0 }] };
       if (method === 'post') return { data: { id: 900, status: 'draft', stock_quantity: 0 } };
       if (method === 'patch') {
         if (body?.sku) { /* asignación de SKU */ }
@@ -880,6 +881,7 @@ describe('P0.3 — el servidor nunca confía en un id_woo/estado "creado" que ma
   it('crear-alta: dos llamadas concurrentes sobre el mismo ítem solo crean UNA alta', async () => {
     let posts = 0;
     axios.request.mockImplementation(async (opts) => {
+      if (opts.url.includes('/categories')) return { status: 200, data: [{ id: 1, name: 'C', parent: 0 }] };
       if (opts.method === 'post') { posts++; await new Promise(r => setTimeout(r, 5)); return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0 } }; }
       if (opts.method === 'patch') return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0, sku: 'FB-900' } };
       return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0, sku: 'FB-900' } };
@@ -932,6 +934,7 @@ describe('P0.3 — el servidor nunca confía en un id_woo/estado "creado" que ma
   it('crear-alta: un segundo intento sobre una alta ya "creado" devuelve el resultado conocido, sin volver a crear', async () => {
     let posts = 0;
     axios.request.mockImplementation(async (opts) => {
+      if (opts.url.includes('/categories')) return { status: 200, data: [{ id: 1, name: 'C', parent: 0 }] };
       if (opts.method === 'post') { posts++; return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0 } }; }
       if (opts.method === 'patch') return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0, sku: 'FB-900' } };
       return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0, sku: 'FB-900' } };
@@ -955,6 +958,7 @@ describe('P0.3 — el servidor nunca confía en un id_woo/estado "creado" que ma
 
   it('crear-alta: al confirmar, guarda resuelto_en y ficha_json en el ítem (Task 6 Step 5)', async () => {
     axios.request.mockImplementation(async (opts) => {
+      if (opts.url.includes('/categories')) return { status: 200, data: [{ id: 1, name: 'C', parent: 0 }] };
       if (opts.method === 'post') return { status: 200, data: { id: 901, status: 'draft', stock_quantity: 0 } };
       if (opts.method === 'patch') return { status: 200, data: { id: 901, status: 'draft', stock_quantity: 0, sku: 'FB-901' } };
       return { status: 200, data: { id: 901, status: 'draft', stock_quantity: 0, sku: 'FB-901' } };
