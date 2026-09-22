@@ -347,11 +347,11 @@ export function recepcionesRouter(db, cfg) {
 
     try {
       const result = await crearBorradorWoo({ db, cfg, operationId, ficha: req.body?.ficha, actor: req.user?.username || 'sistema' });
-      db.prepare("UPDATE recepcion_items SET id_woo=?, sku=?, estado_item='creado', error_wc=NULL WHERE id=?")
-        .run(result.id_woo, result.sku, itemId);
+      db.prepare("UPDATE recepcion_items SET id_woo=?, sku=?, estado_item='creado', error_wc=NULL, ficha_json=?, resuelto_en=? WHERE id=?")
+        .run(result.id_woo, result.sku, JSON.stringify(req.body?.ficha || {}), new Date().toISOString(), itemId);
       return res.json({ ok: true, id_woo: result.id_woo, sku: result.sku });
     } catch (e) {
-      const status = /bloqueada|operationId|reutilizado/.test(e.message) ? 409 : /inválido|required|atributos|precio/.test(e.message) ? 400 : 502;
+      const status = /inexistente/.test(e.message) ? 404 : /bloqueada|operationId|reutilizado/.test(e.message) ? 409 : /inválido|required|atributos|precio|padre/.test(e.message) ? 400 : 502;
       return res.status(status).json({ ok: false, error: e.message, operation_id: operationId });
     }
   });

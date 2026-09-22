@@ -952,6 +952,38 @@ describe('P0.3 — el servidor nunca confía en un id_woo/estado "creado" que ma
     expect(r2.body.id_woo).toBe(r1.body.id_woo);
     expect(posts).toBe(1); // no se creó un segundo producto en Woo
   });
+
+  it('crear-alta: al confirmar, guarda resuelto_en y ficha_json en el ítem (Task 6 Step 5)', async () => {
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'post') return { status: 200, data: { id: 901, status: 'draft', stock_quantity: 0 } };
+      if (opts.method === 'patch') return { status: 200, data: { id: 901, status: 'draft', stock_quantity: 0, sku: 'FB-901' } };
+      return { status: 200, data: { id: 901, status: 'draft', stock_quantity: 0, sku: 'FB-901' } };
+    });
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    const itemId = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?)'
+    ).run(recId, 'Producto nuevo', 1, 1, 'x').lastInsertRowid;
+    const ficha = { modo: 'simple', titulo: 'X', marca: 'M', categoria_id: 1, categoria_nombre: 'C', precio: '100', atributos: [{ nombre: 'Color', valor: 'Negro' }] };
+    const r = await request(app).post(`/api/recepciones/${recId}/items/${itemId}/crear-alta`).send({ ficha });
+    expect(r.status).toBe(200);
+    const row = db.prepare('SELECT resuelto_en, ficha_json FROM recepcion_items WHERE id=?').get(itemId);
+    expect(row.resuelto_en).toBeTruthy();
+    expect(JSON.parse(row.ficha_json)).toMatchObject({ titulo: 'X', marca: 'M' });
+  });
+
+  it('crear-alta: un padre inexistente/no variable devuelve 404, no 502', async () => {
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    const itemId = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?)'
+    ).run(recId, 'Producto nuevo', 1, 1, 'x').lastInsertRowid;
+    const ficha = { modo: 'variacion_existente', parent_id: 99999, titulo: 'X', marca: 'M', categoria_id: 1, categoria_nombre: 'C', precio: '100', atributos: [{ nombre: 'Color', valor: 'Negro' }] };
+    const r = await request(app).post(`/api/recepciones/${recId}/items/${itemId}/crear-alta`).send({ ficha });
+    expect(r.status).toBe(404);
+  });
 });
 
 describe('P1 — POST / y /:id/actualizar aprenden alias si el ítem trae aprender:true', () => {

@@ -2,6 +2,7 @@ import express from 'express';
 import { llamarGemini, parseJsonArrayText } from './gemini.js';
 import { CATEGORIAS_FB, armarPromptBatch } from '../lib/categorias.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
+import { listarCategoriasWoo, crearBorradorWoo } from '../lib/nuevosProductosWoo.js';
 
 export function tituloCase(palabra) {
   if (!palabra) return '';
@@ -47,8 +48,17 @@ export async function analizarProductosNuevosBatch(geminiKey, productos, categor
   return parseJsonArrayText(text);
 }
 
-export function nuevosProductosRouter(geminiKey, db) {
+export function nuevosProductosRouter(geminiKey, db, wooCfg, deps = {}) {
   const router = express.Router();
+
+  router.get('/operaciones/:operationId', (req,res) => {
+    const row=db.prepare('SELECT operation_id,estado,modo,id_woo,id_padre,sku,error,creado_en,actualizado_en FROM recepcion_altas_woo WHERE operation_id=?').get(req.params.operationId);
+    if (!row) return res.status(404).json({ok:false,error:'operación no encontrada'});
+    res.json({ok:true,operacion:row,bloqueada:row.estado==='incierto'||row.estado==='procesando'});
+  });
+
+  router.get('/categorias-woo', async (req,res) => { try { res.json({ok:true,categorias:await listarCategoriasWoo(wooCfg,deps)}); } catch(e) { res.status(502).json({ok:false,error:e.message}); } });
+  router.post('/crear-borrador', async (req,res) => { try { const result=await crearBorradorWoo({db,cfg:wooCfg,operationId:req.body?.operation_id,ficha:req.body?.ficha,actor:req.user?.username||'sistema',fetchWoo:deps.fetchWoo}); res.json({ok:true,...result}); } catch(e) { const status=/inexistente/.test(e.message)?404:/bloqueada|operationId|reutilizado/.test(e.message)?409:/inválido|required|atributos|precio|padre/.test(e.message)?400:502; res.status(status).json({ok:false,error:e.message}); } });
 
   router.get('/categorias', (req, res) => {
     try {
