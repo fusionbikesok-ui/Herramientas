@@ -192,7 +192,7 @@ input[type=file] { display:none; }
       <div class="field-row">
         <div class="field" style="flex:2">
           <label>Proveedor / Distribuidor *
-          <input type="text" id="inp-proveedor" placeholder="Ej: Trek Argentina, Shimano, Vigo Bike..." list="proveedores-list" oninput="sincronizarImportador()" onblur="cargarAliasesProveedor()"></label>
+          <input type="text" id="inp-proveedor" placeholder="Ej: Trek Argentina, Shimano, Vigo Bike..." list="proveedores-list" oninput="sincronizarImportador()" onblur="invalidarMatchesPorCambioProveedor();cargarAliasesProveedor()"></label>
           <datalist id="proveedores-list"></datalist>
           <div id="aliases-proveedor" style="margin-top:6px"></div>
         </div>
@@ -329,6 +329,7 @@ var items = [];   // ítems de la recepción actual
 var docs  = [];   // documentos de la recepción actual
 var recepcionGuardadaId = null;
 var soloDocumento = false;
+var proveedorAnterior = null; // P1.2: guardar el proveedor anterior para detectar cambios
 function normalizar(s) { return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim(); }
 
 function toggleSoloDoc() {
@@ -366,6 +367,8 @@ window.onload = function() {
   setupDrop();
   cargarProveedoresRecientes();
   document.getElementById('inp-numero-pedido').addEventListener('input', actualizarAvisoPedido);
+  // P1.2: inicializar proveedorAnterior con el valor actual (vacío al abrir nueva recepción)
+  sincronizarProveedorBase(document.getElementById('inp-proveedor').value.trim());
 
   // Si viene con ?retomar=ID desde la vista de pedidos, auto-cargar el borrador
   var params = new URLSearchParams(window.location.search);
@@ -390,6 +393,48 @@ function sincronizarImportador() {
   var imp = document.getElementById('inp-importador');
   if (!imp.dataset.editadoManual) {
     imp.value = document.getElementById('inp-proveedor').value;
+  }
+}
+
+// P1.2: sincronizar proveedor base (reutilizable en 3 puntos: onload, retomar, confirmar)
+function sincronizarProveedorBase(valor) {
+  document.getElementById('inp-proveedor').value = valor;
+  proveedorAnterior = valor;
+}
+
+// P1.2: detectar cambio de proveedor y invalidar aliases. Se dispara al perder foco (onblur)
+// del input de proveedor. Solo invalida y re-solicita si el proveedor realmente cambió.
+function invalidarMatchesPorCambioProveedor() {
+  var proveedorActual = document.getElementById('inp-proveedor').value.trim();
+
+  // Si no cambió, no hacer nada
+  if (proveedorActual === proveedorAnterior) return;
+
+  // Actualizar el proveedor anterior
+  proveedorAnterior = proveedorActual;
+
+  // Invalidar todos los matches con origen 'alias_proveedor'
+  var invalidados = 0;
+  items.forEach(function(it) {
+    if (it.match_origen === 'alias_proveedor') {
+      it.id_woo = null;
+      it.sku_wc = null;
+      it.nombre_wc = null;
+      it.stock_wc = null;
+      it.match_estado = null;
+      it.match_origen = null;
+      it.match_resultado = null;
+      it.match_confirmado = false;
+      invalidados++;
+    }
+  });
+
+  // Si se invalidaron matches, re-renderizar y volver a pedir matcheo
+  if (invalidados > 0) {
+    renderItems();
+    actualizarBotones();
+    mostrarStatus('status-match', 'loading', 'Recalculando matches con nuevo proveedor...');
+    solicitarMatchesBackend();
   }
 }
 
@@ -1116,7 +1161,8 @@ function confirmarRecepcion() {
           mostrarStatus('status-confirm', (conf.pendientes && conf.pendientes.length) ? 'err' : 'ok', msgOk);
           // Limpiar para nueva recepción
           items = []; docs = []; recepcionGuardadaId = null;
-          document.getElementById('inp-proveedor').value = '';
+          // P1.2: sincronizar proveedor base al resetear
+          sincronizarProveedorBase('');
           var impEl = document.getElementById('inp-importador');
           impEl.value = '';
           impEl.dataset.editadoManual = '';
@@ -1207,7 +1253,8 @@ function retomar(id) {
       var rec = d.data;
 
       // Poblar encabezado
-      document.getElementById('inp-proveedor').value    = rec.proveedor || '';
+      // P1.2: sincronizar proveedor base ANTES de setear importador (que depends del input)
+      sincronizarProveedorBase(rec.proveedor || '');
       document.getElementById('inp-importador').value   = rec.importador || rec.proveedor || '';
       document.getElementById('inp-numero-pedido').value = rec.numero_pedido || '';
       document.getElementById('inp-fecha').value        = rec.fecha || new Date().toISOString().slice(0,10);

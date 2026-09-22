@@ -489,3 +489,349 @@ describe('public/recepcion/index.html — P1.4: estados visuales y confirmar blo
     expect(htmlGenerado).toContain('Razones:');
   });
 });
+
+describe('public/recepcion/index.html — P1.2: cambio de proveedor invalida matches de alias', () => {
+  it('cambiar proveedor invalida matches con origen alias_proveedor y re-solicita matcheo', async () => {
+    const app = cargarApp();
+    let llamadasFetch = [];
+
+    // Mock del input de proveedor
+    let proveedorActual = 'Proveedor A';
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return {
+        value: proveedorActual,
+        dataset: {}
+      };
+      if (id === 'status-match') return { textContent: '', innerHTML: '', className: '', style: { display: '' } };
+      if (id === 'items-section') return { style: {} };
+      if (id === 'items-body') return { innerHTML: '', appendChild() {} };
+      if (id === 'items-count') return { textContent: '' };
+      return {
+        value: '', textContent: '', style: {}, disabled: false, dataset: {},
+        classList: { add() {}, remove() {} },
+        addEventListener() {},
+        appendChild() {}
+      };
+    };
+
+    // Mock createElement para que devuelva elementos con querySelector
+    app.document.createElement = (tag) => {
+      return {
+        innerHTML: '',
+        appendChild() {},
+        setAttribute() {},
+        querySelector() { return null; },
+        id: ''
+      };
+    };
+
+    // Mock fetch para capturar todas las llamadas
+    app.fetch = (url, opts) => {
+      llamadasFetch.push({ url: String(url), opts });
+
+      if (String(url).includes('/api/recepciones/matchear')) {
+        // Después de cambiar a Proveedor B, el alias del Proveedor A ya no aplica
+        // Devolvemos sin_match o un match diferente sin origen de alias
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            ok: true,
+            resultados: [{
+              linea_id: String(app.items[0].id),
+              estado: 'sin_match',
+              auto_aplicable: false,
+              candidato: null,
+              origen: 'ninguno'
+            }]
+          })
+        });
+      }
+      if (String(url).includes('/api/recepciones/aliases')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ ok: true, data: [] })
+        });
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
+    };
+
+    // Inicializar proveedorAnterior como lo hace window.onload
+    app.window.onload();
+
+    // Agregar un ítem con match resuelto por alias
+    app.items.push({
+      id: 1, nombre_doc: 'Producto Test', codigo_proveedor: 'CODE-001',
+      id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto Nuevo',
+      variacion: '', marca: '',
+      recibido: true,
+      match_estado: 'resuelto',
+      match_origen: 'alias_proveedor',
+      match_confirmado: true,
+      cantidad: 1
+    });
+
+    // Simular cambio de proveedor (al perder foco, el handler detecta cambio)
+    // Cambiar el proveedor actual simulando lo que el usuario haría
+    proveedorActual = 'Proveedor B';
+
+    // Llamar a la función que maneja el cambio de proveedor (que implementaremos)
+    // Esta función se dispara en onblur del input
+    app.invalidarMatchesPorCambioProveedor();
+
+    // Esperar a que se procese el matcheo
+    await new Promise(r => setTimeout(r, 50));
+
+    // Verificaciones:
+    // 1. El match de alias debe haber sido invalidado
+    expect(app.items[0].match_origen).not.toBe('alias_proveedor');
+
+    // 2. Se debe haber solicitado matcheo al backend
+    const llamadaMatcheo = llamadasFetch.find(c => String(c.url).includes('/api/recepciones/matchear'));
+    expect(llamadaMatcheo).toBeDefined();
+  });
+
+  it('solo invalida matches con origen alias_proveedor, no otros orígenes', async () => {
+    const app = cargarApp();
+    let proveedorActual = 'Proveedor A';
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return {
+        value: proveedorActual,
+        dataset: {}
+      };
+      if (id === 'status-match') return { textContent: '', innerHTML: '', className: '', style: { display: '' } };
+      if (id === 'items-section') return { style: {} };
+      if (id === 'items-body') return { innerHTML: '', appendChild() {} };
+      if (id === 'items-count') return { textContent: '' };
+      return {
+        value: '', textContent: '', style: {}, disabled: false, dataset: {},
+        classList: { add() {}, remove() {} },
+        addEventListener() {},
+        appendChild() {}
+      };
+    };
+
+    app.document.createElement = (tag) => {
+      return {
+        innerHTML: '',
+        appendChild() {},
+        setAttribute() {},
+        querySelector() { return null; },
+        id: ''
+      };
+    };
+
+    app.fetch = (url) => {
+      if (String(url).includes('/api/recepciones/matchear')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ ok: true, resultados: [] })
+        });
+      }
+      if (String(url).includes('/api/recepciones/aliases')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ ok: true, data: [] })
+        });
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
+    };
+
+    // Inicializar proveedorAnterior
+    app.window.onload();
+
+    // Agregar dos ítems: uno con alias_proveedor, otro con sku_exacto
+    app.items.push({
+      id: 1, nombre_doc: 'Item Alias', codigo_proveedor: 'CODE-001',
+      id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto A',
+      variacion: '', marca: '', recibido: true,
+      match_estado: 'resuelto',
+      match_origen: 'alias_proveedor',
+      match_confirmado: true,
+      cantidad: 1
+    });
+
+    app.items.push({
+      id: 2, nombre_doc: 'Item SKU Exacto', codigo_proveedor: 'SKU-002',
+      id_woo: 200, sku_wc: 'FB-200', nombre_wc: 'Producto B',
+      variacion: '', marca: '', recibido: true,
+      match_estado: 'resuelto',
+      match_origen: 'sku_exacto',
+      match_confirmado: true,
+      cantidad: 1
+    });
+
+    // Cambiar proveedor
+    proveedorActual = 'Proveedor B';
+    app.invalidarMatchesPorCambioProveedor();
+
+    await new Promise(r => setTimeout(r, 50));
+
+    // Verificar: item con alias debe haber perdido su match, el otro debe mantenerlo
+    const item1 = app.items.find(i => i.id === 1);
+    const item2 = app.items.find(i => i.id === 2);
+
+    expect(item1.match_origen).not.toBe('alias_proveedor');
+    expect(item1.id_woo).toBeNull(); // El match fue invalidado
+
+    expect(item2.match_origen).toBe('sku_exacto'); // No se modificó
+    expect(item2.id_woo).toBe(200); // Mantiene su match
+  });
+
+  it('no invalida ni re-solicita si el proveedor no cambió', async () => {
+    const app = cargarApp();
+    let llamadasFetch = [];
+    let proveedorActual = 'Proveedor A';
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return {
+        value: proveedorActual,
+        dataset: {}
+      };
+      if (id === 'status-match') return { textContent: '', innerHTML: '', className: '', style: { display: '' } };
+      if (id === 'items-section') return { style: {} };
+      if (id === 'items-body') return { innerHTML: '', appendChild() {} };
+      if (id === 'items-count') return { textContent: '' };
+      return {
+        value: '', textContent: '', style: {}, disabled: false, dataset: {},
+        classList: { add() {}, remove() {} },
+        addEventListener() {},
+        appendChild() {}
+      };
+    };
+
+    app.document.createElement = (tag) => {
+      return {
+        innerHTML: '',
+        appendChild() {},
+        setAttribute() {},
+        querySelector() { return null; },
+        id: ''
+      };
+    };
+
+    app.fetch = (url) => {
+      llamadasFetch.push(String(url));
+      if (String(url).includes('/api/recepciones/matchear')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ ok: true, resultados: [] })
+        });
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
+    };
+
+    // Inicializar proveedorAnterior
+    app.window.onload();
+
+    app.items.push({
+      id: 1, nombre_doc: 'Item', codigo_proveedor: 'CODE',
+      id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto',
+      variacion: '', marca: '', recibido: true,
+      match_estado: 'resuelto',
+      match_origen: 'alias_proveedor',
+      match_confirmado: true,
+      cantidad: 1
+    });
+
+    const llamadasAntes = llamadasFetch.length;
+
+    // NO cambiar proveedor (mismo valor)
+    app.invalidarMatchesPorCambioProveedor();
+
+    await new Promise(r => setTimeout(r, 50));
+
+    // No debe haber hecho nuevas llamadas
+    const llamadasDespues = llamadasFetch.length;
+    expect(llamadasDespues).toBe(llamadasAntes);
+  });
+
+  it('[BUG FIX] retomar(id) carga proveedor sin invalidar matches por blur trivial', async () => {
+    // Escenario: usuario abre recepcion/index.html?retomar=42, se carga un borrador
+    // con proveedor "Trek Argentina" e ítems ya resueltos por alias_proveedor.
+    // Luego hace blur trivial (click + tab sin cambiar) → no debe invalidar nada.
+    const app = cargarApp();
+    let llamadasFetch = [];
+
+    // Simular cargar un borrador vía fetch (lo que retomar() hace)
+    let proveedorActual = ''; // Comienza vacío
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return {
+        value: proveedorActual,
+        dataset: {}
+      };
+      if (id === 'status-match') return { textContent: '', innerHTML: '', className: '', style: { display: '' } };
+      if (id === 'items-section') return { style: {} };
+      if (id === 'items-body') return { innerHTML: '', appendChild() {} };
+      if (id === 'items-count') return { textContent: '' };
+      if (id === 'inp-importador') return { value: '', dataset: {} };
+      if (id === 'inp-numero-pedido') return { value: '', addEventListener() {} };
+      if (id === 'inp-fecha') return { value: '' };
+      if (id === 'inp-notas') return { value: '' };
+      if (id === 'solo-doc-row') return { setAttribute() {} };
+      if (id === 'aviso-sin-pedido') return { style: {} };
+      if (id === 'docs-area') return { innerHTML: '', appendChild() {} };
+      return {
+        value: '', textContent: '', style: {}, disabled: false, dataset: {},
+        classList: { add() {}, remove() {} },
+        addEventListener() {},
+        appendChild() {}
+      };
+    };
+
+    app.document.createElement = (tag) => {
+      return {
+        innerHTML: '',
+        appendChild() {},
+        setAttribute() {},
+        querySelector() { return null; },
+        id: ''
+      };
+    };
+
+    app.fetch = (url) => {
+      llamadasFetch.push(String(url));
+      if (String(url).includes('/api/recepciones/matchear')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({ ok: true, resultados: [] })
+        });
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
+    };
+
+    // Inicializar como nuevo
+    app.window.onload();
+    expect(app.proveedorAnterior).toBe('');
+
+    // Agregar ítem con match de alias (como si ya estuviera cargado del borrador)
+    app.items.push({
+      id: 1, nombre_doc: 'Producto Trek', codigo_proveedor: 'TREK-001',
+      id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto Trek WC',
+      variacion: '', marca: '', recibido: true,
+      match_estado: 'resuelto',
+      match_origen: 'alias_proveedor',
+      match_confirmado: true,
+      cantidad: 5
+    });
+
+    // Simular lo que retomar() hace: cargar proveedor mediante sincronizarProveedorBase
+    // (que es lo que debería hacer para evitar invalidación falsa)
+    proveedorActual = 'Trek Argentina';
+    app.sincronizarProveedorBase('Trek Argentina');
+
+    // Verificar que proveedorAnterior se actualizó correctamente
+    expect(app.proveedorAnterior).toBe('Trek Argentina');
+
+    const llamadasAntes = llamadasFetch.length;
+
+    // Ahora usuario hace blur sin cambiar nada (click trivial)
+    app.invalidarMatchesPorCambioProveedor();
+
+    await new Promise(r => setTimeout(r, 50));
+
+    // CLAVE: no debe invalidar nada, match debe seguir siendo válido
+    const item = app.items[0];
+    expect(item.id_woo).toBe(100); // Match se mantiene
+    expect(item.match_origen).toBe('alias_proveedor'); // Origen se mantiene
+    expect(item.match_confirmado).toBe(true); // Confirmado se mantiene
+
+    // No debe haber llamadas al backend
+    const llamadasDespues = llamadasFetch.length;
+    expect(llamadasDespues).toBe(llamadasAntes);
+  });
+});
