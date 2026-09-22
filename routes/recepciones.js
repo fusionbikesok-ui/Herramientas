@@ -252,6 +252,25 @@ function opIdSiVerificable(db, it, idWoo) {
   return (alta && alta.id_woo === idWoo) ? opId : null;
 }
 
+// P1: persiste la intención "usar y recordar" marcada por línea al guardar/actualizar una recepción
+// (no solo vía /resolver para recepciones ya guardadas). `it.aprender_alias`/`it.motivo_alias` son los
+// nombres que ya manda el frontend (public/recepcion/index.html, payloadRecepcion()) para el toggle
+// "usar y recordar", desmarcado por defecto; sin id_woo (sin match, o alta de producto nuevo) no hay
+// nada que aprender todavía. Un fallo al aprender el alias (p.ej. motivo requerido para reasignar y no
+// vino) no debe tirar abajo el guardado de la recepción entera — la línea igual queda guardada, solo
+// no se aprendió el alias.
+function aprenderAliasSiCorresponde(db, it, { proveedor, id_woo, recepcion_item_id, actor }) {
+  if (!it?.aprender_alias || !id_woo) return;
+  try {
+    confirmarAlias(db, {
+      proveedor, nombre_doc: it.nombre_doc || it.nombre, codigo_proveedor: it.codigo_proveedor,
+      id_woo, sku: it.sku_wc || it.sku || null, recepcion_item_id, actor, motivo: it.motivo_alias,
+    });
+  } catch (e) {
+    console.error(`no se pudo aprender alias para el ítem de recepción ${recepcion_item_id}: ${e.message}`);
+  }
+}
+
 export function recepcionesRouter(db, cfg) {
   const router = express.Router();
 
@@ -466,10 +485,11 @@ export function recepcionesRouter(db, cfg) {
         // Validar cantidad: debe ser entero positivo
         const cantidad = Math.max(1, parseInt(it.cantidad) || 1);
         const { estado_item, alta_operation_id } = estadoItemAlGuardar(db, it);
-        insItem.run(recId, it.id_woo || null, it.sku || null, it.nombre_doc || it.nombre || '',
+        const itemId = insItem.run(recId, it.id_woo || null, it.sku || null, it.nombre_doc || it.nombre || '',
           it.codigo_proveedor || null, cantidad,
           it.precio_unitario || null, it.stock_previo || null, it.stock_nuevo || null, recibido,
-          estado_item, alta_operation_id, now);
+          estado_item, alta_operation_id, now).lastInsertRowid;
+        aprenderAliasSiCorresponde(db, it, { proveedor, id_woo: it.id_woo || null, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
       }
     });
     saveAll();
@@ -502,15 +522,17 @@ export function recepcionesRouter(db, cfg) {
         const fileUrl = d.file_url ? String(d.file_url).replace(/\.\.\//g, '').replace(/\.\.$/g, '') : null;
         insDoc.run(id, d.tipo || 'otro', d.numero || null, d.nombre_archivo || null, fileUrl, now);
       }
+      const proveedorRec = db.prepare('SELECT proveedor FROM recepciones WHERE id=?').get(id)?.proveedor;
       for (const it of newItems) {
         const recibido = it.recibido === false || it.recibido === 0 ? 0 : 1;
         const cantidad = Math.max(1, parseInt(it.cantidad) || 1);
         const idWooEfectivo = it.id_woo || null;
         const { estado_item, alta_operation_id } = estadoItemAlGuardar(db, { ...it, id_woo: idWooEfectivo });
-        insItem.run(id, idWooEfectivo, it.sku_wc || it.sku || null, it.nombre_doc || it.nombre || '',
+        const itemId = insItem.run(id, idWooEfectivo, it.sku_wc || it.sku || null, it.nombre_doc || it.nombre || '',
           it.codigo_proveedor || null, cantidad,
           it.precio_unitario || null, it.stock_wc ?? null, null, recibido,
-          estado_item, alta_operation_id, now);
+          estado_item, alta_operation_id, now).lastInsertRowid;
+        aprenderAliasSiCorresponde(db, it, { proveedor: proveedorRec, id_woo: idWooEfectivo, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
       }
     });
     updateRec();

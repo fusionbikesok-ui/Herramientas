@@ -953,3 +953,71 @@ describe('P0.3 — el servidor nunca confía en un id_woo/estado "creado" que ma
     expect(posts).toBe(1); // no se creó un segundo producto en Woo
   });
 });
+
+describe('P1 — POST / y /:id/actualizar aprenden alias si el ítem trae aprender:true', () => {
+  const DB = './test/tmp-recep-aliases.sqlite';
+  let db, app;
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+    app = makeApp(db);
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (10,?,?,?,?,?,?)'
+    ).run('Casco', 'CASCO', 'simple', null, 5, 'x');
+  });
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  });
+
+  it('POST / con aprender:true persiste el alias de proveedor', async () => {
+    const res = await request(app).post('/api/recepciones').send({
+      proveedor: 'Bike Group', fecha: '2026-09-22',
+      items: [{ nombre_doc: 'Casco', codigo_proveedor: 'BX-1', id_woo: 10, sku: 'CASCO', cantidad: 1, aprender_alias: true }],
+    });
+    expect(res.body.ok).toBe(true);
+    const alias = db.prepare("SELECT * FROM recepcion_aliases_proveedor WHERE proveedor_norm='bike group' AND codigo_norm='bx 1' AND vigente_hasta IS NULL").get();
+    expect(alias).toBeTruthy();
+    expect(alias.id_woo).toBe(10);
+    expect(alias.recepcion_item_id).toBe(db.prepare('SELECT id FROM recepcion_items WHERE recepcion_id=?').get(res.body.id).id);
+  });
+
+  it('POST / sin aprender (toggle desmarcado, default) no persiste ningún alias', async () => {
+    const res = await request(app).post('/api/recepciones').send({
+      proveedor: 'Bike Group', fecha: '2026-09-22',
+      items: [{ nombre_doc: 'Casco', codigo_proveedor: 'BX-1', id_woo: 10, sku: 'CASCO', cantidad: 1 }],
+    });
+    expect(res.body.ok).toBe(true);
+    expect(db.prepare('SELECT * FROM recepcion_aliases_proveedor').all()).toHaveLength(0);
+  });
+
+  it('un fallo al aprender el alias (motivo requerido para reasignar) no impide guardar la recepción', async () => {
+    // Primero un alias real y vigente para esta clave, apuntando a otro id_woo.
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (11,?,?,?,?,?,?)').run('Casco B', 'CASCO-B', 'simple', null, 5, 'x');
+    db.exec("INSERT INTO recepcion_aliases_proveedor (proveedor_norm,codigo_norm,descripcion_norm,variacion_norm,id_woo,sku,creado_por,vigente_desde) VALUES ('bike group','bx 1','casco','',11,'CASCO-B','j','x')");
+    // El ítem intenta aprender el mismo código pero apuntando a otro id_woo, sin motivo: confirmarAlias tira.
+    const res = await request(app).post('/api/recepciones').send({
+      proveedor: 'Bike Group', fecha: '2026-09-22',
+      items: [{ nombre_doc: 'Casco', codigo_proveedor: 'BX-1', id_woo: 10, sku: 'CASCO', cantidad: 1, aprender_alias: true }],
+    });
+    expect(res.body.ok).toBe(true); // la recepción se guarda igual
+    expect(db.prepare('SELECT * FROM recepcion_items WHERE recepcion_id=?').all(res.body.id)).toHaveLength(1);
+    // El alias original sigue vigente: no se aprendió el reemplazo por falta de motivo.
+    const vigente = db.prepare("SELECT * FROM recepcion_aliases_proveedor WHERE proveedor_norm='bike group' AND codigo_norm='bx 1' AND vigente_hasta IS NULL").get();
+    expect(vigente.id_woo).toBe(11);
+  });
+
+  it('POST /:id/actualizar con aprender:true también persiste el alias', async () => {
+    const create = await request(app).post('/api/recepciones').send({
+      proveedor: 'Bike Group', fecha: '2026-09-22',
+      items: [{ nombre_doc: 'Casco', id_woo: null, cantidad: 1 }], // sin match al guardar
+    });
+    const res = await request(app).post(`/api/recepciones/${create.body.id}/actualizar`).send({
+      items: [{ nombre_doc: 'Casco', codigo_proveedor: 'BX-1', id_woo: 10, sku_wc: 'CASCO', cantidad: 1, aprender_alias: true }],
+    });
+    expect(res.body.ok).toBe(true);
+    const alias = db.prepare("SELECT * FROM recepcion_aliases_proveedor WHERE proveedor_norm='bike group' AND codigo_norm='bx 1' AND vigente_hasta IS NULL").get();
+    expect(alias).toBeTruthy();
+    expect(alias.id_woo).toBe(10);
+  });
+});
