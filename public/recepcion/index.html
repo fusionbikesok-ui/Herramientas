@@ -595,7 +595,15 @@ function solicitarMatchesBackend() {
       if (!it) return;
       it.match_resultado=m;
       it.match_estado=m.estado;
-      if (m.auto_aplicable && m.candidato) { it.id_woo=m.candidato.id_woo; it.sku_wc=m.candidato.sku; it.nombre_wc=m.candidato.nombre; it.stock_wc=m.candidato.stock; it.match_origen=m.origen; }
+      if (m.auto_aplicable && m.candidato) {
+        it.id_woo=m.candidato.id_woo;
+        it.sku_wc=m.candidato.sku;
+        it.nombre_wc=m.candidato.nombre;
+        it.stock_wc=m.candidato.stock;
+        it.match_origen=m.origen;
+        // P1.4 fix: cuando el backend dice que es seguro (auto_aplicable), confiar en eso
+        it.match_confirmado = true;
+      }
     });
     renderItems(); actualizarBotones();
   }).catch(function(){ mostrarStatus('status-extraccion','err','No se pudo resolver el matching; reintentá.'); });
@@ -666,12 +674,62 @@ function renderItems() {
   tbody.innerHTML = '';
   items.forEach(function(it, idx) {
     var tr = document.createElement('tr');
-    var matchBadge = it.match_estado === 'sku_duplicado' ? '<span class="match-badge match-no">⛔ SKU duplicado</span>'
-      : it.match_estado === 'contradiccion' ? '<span class="match-badge match-no">⛔ Contradicción</span>'
-      : it.match_estado === 'revisar' ? '<span class="match-badge" style="color:var(--amber)">⚠ Requiere revisión</span>'
-      : it.match_estado === 'error' ? '<span class="match-badge match-no">⚠ Error recuperable</span>'
-      : it.id_woo ? '<span class="match-badge match-ok">✓ Coincidencia segura</span>'
-      : '<span class="match-badge match-no">Sin candidato</span>';
+
+    // P1.4: Estados visuales claros por ítem
+    // Verde: resuelto (confirmado o alta creada, o match_estado === 'resuelto')
+    // Ámbar: requiere revisión manual (match_estado === 'revisar', o candidato con match_confirmado !== true)
+    // Rojo: sin match, sin candidato
+    // Error: alta fallida/incierta o conflictos en match (sku_duplicado, contradiccion, error)
+    var matchBadge;
+    var razonesExtra = '';
+
+    // Primero: chequeamos errores críticos
+    if (it.alta_estado === 'incierto' || it.alta_estado === 'fallido') {
+      matchBadge = '<span class="match-badge match-no">⚠ Error: alta ' + esc(it.alta_estado) + '</span>';
+    } else if (it.match_estado === 'sku_duplicado') {
+      matchBadge = '<span class="match-badge match-no">⛔ SKU duplicado</span>';
+    } else if (it.match_estado === 'contradiccion') {
+      matchBadge = '<span class="match-badge match-no">⛔ Contradicción</span>';
+    }
+    // Luego: si tiene match (id_woo o alta creada), determinar si está resuelto o requiere revisión
+    else if (it.id_woo && (it.alta_estado === 'creado' || it.match_estado === 'resuelto')) {
+      // Verde: resuelto (alta creada O estado backend 'resuelto')
+      matchBadge = '<span class="match-badge match-ok">✓ Resuelto</span>';
+    } else if (it.id_woo && it.match_estado === 'revisar') {
+      // Ámbar: backend dice que hay que revisar; mostrar razones si existen
+      var razones = (it.match_resultado && it.match_resultado.candidato && it.match_resultado.candidato.razones) ? it.match_resultado.candidato.razones : [];
+      // Las razones son objetos {tipo, resultado, documento?, producto?}
+      // Mapear a texto legible: "tipo: resultado"
+      var razonesTexto = razones.length > 0
+        ? razones.map(function(r){
+            return (r.tipo || '?') + ': ' + (r.resultado || '?');
+          }).join('; ')
+        : 'Revisar candidato';
+      matchBadge = '<span class="match-badge match-warn" title="' + esc(razonesTexto) + '">⚠ Revisar candidato</span>';
+      if (razones.length > 0) {
+        razonesExtra = '<div style="font-size:10px;color:var(--amber);margin-top:3px">Razones: ' +
+          esc(razonesTexto) + '</div>';
+      }
+    } else if (it.id_woo && it.match_confirmado === true) {
+      // Verde: confirmado manualmente (aunque no sea 'resuelto' del backend)
+      matchBadge = '<span class="match-badge match-ok">✓ Confirmado</span>';
+    } else if (it.id_woo) {
+      // Ámbar: tiene candidato pero no está confirmado (debería haber sido tratado por la lógica anterior, pero por seguridad)
+      matchBadge = '<span class="match-badge match-warn">⚠ Confirmar asignación</span>';
+    }
+    // Si llegamos aquí sin matchBadge, no tiene id_woo
+    else if (it.match_estado === 'error') {
+      matchBadge = '<span class="match-badge match-no">⚠ Error recuperable</span>';
+    } else if (!it.id_woo && !it.alta_estado) {
+      // Rojo: sin match y sin alta
+      matchBadge = '<span class="match-badge match-no">Sin candidato</span>';
+    } else if (!it.id_woo) {
+      // Rojo: sin match pero con alta pendiente
+      matchBadge = '<span class="match-badge match-no">Sin match</span>';
+    } else {
+      // Fallback (no debería llegar aquí)
+      matchBadge = '<span class="match-badge">Pendiente</span>';
+    }
     var wcCell;
     if (it.id_woo) {
       // P1.4: la clave completa que se va a aprender — proveedor + código (o descripción+variación) →
@@ -705,7 +763,7 @@ function renderItems() {
     tr.innerHTML = '<td style="color:var(--gray2);font-size:11px">' + (idx+1) + '</td>'
       + '<td>' + (it.codigo_proveedor ? '<span class="cell-code">' + esc(it.codigo_proveedor) + '</span>' : '<span style="color:var(--gray2)">—</span>') + '</td>'
       + '<td><div class="cell-main">' + esc(it.nombre_doc) + (it.variacion ? ' <span style="color:var(--blue);font-weight:400">'+esc(it.variacion)+'</span>' : '') + '</div>'
-        + '<div class="cell-sub">' + matchBadge + (it.marca ? ' · '+esc(it.marca) : '') + '</div></td>'
+        + '<div class="cell-sub">' + matchBadge + (it.marca ? ' · '+esc(it.marca) : '') + razonesExtra + '</div></td>'
       + '<td>' + wcCell + '</td>'
       + '<td style="text-align:center"><input class="qty-input" type="number" aria-label="Cantidad de ' + esc(it.nombre_doc) + '" min="1" value="' + it.cantidad + '" onchange="cambiarCantidad(this,\'' + it.id + '\')" style="width:60px"></td>'
       + '<td style="text-align:center"><button type="button" onclick="toggleRecibido(\'' + it.id + '\')" aria-pressed="' + (!!it.recibido) + '" aria-label="' + (it.recibido ? 'Marcado como recibido, click para desmarcar' : 'No recibido, click para marcar') + '" ' + reciCls + '>' + (it.recibido ? '✅' : '⬜') + '</button></td>'
@@ -882,14 +940,35 @@ function cerrarDropdown(inp) {
 function actualizarBotones() {
   var hayItems = items.length > 0;
   var hayProv  = document.getElementById('inp-proveedor').value.trim().length > 0;
-  var tieneBloqueantes = items.some(function(i){ return i.recibido && !i.id_woo; });
+
+  // P1.4: Un ítem es bloqueante si está recibido pero no está resuelto.
+  // Se considera resuelto si: tiene id_woo Y (match_estado==='resuelto' O esAltaCreada OR estaConfirmado)
+  var tieneBloqueantes = items.some(function(i){
+    if (!i.recibido) return false;
+    if (!i.id_woo) return true; // Sin match y sin alta
+    // Tiene id_woo: chequear si está resuelto por backend, creado, o confirmado manualmente
+    var estaConfirmado = i.match_confirmado === true;
+    var esAltaCreada = i.alta_estado === 'creado';
+    var esResuelto = i.match_estado === 'resuelto'; // Backend aseguró que es seguro
+    return !(esResuelto || esAltaCreada || estaConfirmado); // Bloqueante si NO es resuelto
+  });
+
   var habilitado = hayItems && hayProv && !tieneBloqueantes;
   document.getElementById('btn-borrador').disabled = !(hayItems && hayProv);
   document.getElementById('btn-confirmar').disabled = !habilitado;
   document.getElementById('btn-confirmar-solo').disabled = !habilitado;
-  var recibidos    = items.filter(function(i){ return i.recibido; }).length;
+
+  var recibidos = items.filter(function(i){ return i.recibido; }).length;
+
+  // Conteos independientes y explícitos para mayor claridad
   var conMatchReci = items.filter(function(i){ return i.recibido && i.id_woo; }).length;
-  var sinMatchReci = recibidos - conMatchReci;
+  var sinMatchReci = items.filter(function(i){ return i.recibido && !i.id_woo; }).length;
+
+  // P1.4: Ítems recibidos que requieren revisión manual (match_estado==='revisar' sin confirmación)
+  var requierenRevision = items.filter(function(i){
+    return i.recibido && i.match_estado === 'revisar' && i.match_confirmado !== true;
+  }).length;
+
   var noRecibidos  = items.length - recibidos;
   var msg;
   if (soloDocumento) {
@@ -897,7 +976,8 @@ function actualizarBotones() {
   } else {
     msg = recibidos + ' de ' + items.length + ' marcados como recibidos · '
       + conMatchReci + ' actualizarán stock en WC';
-    if (sinMatchReci) msg += ' · ' + sinMatchReci + ' pendientes: resolvé cada línea antes de confirmar';
+    if (requierenRevision) msg += ' · ⚠ ' + requierenRevision + ' requieren confirmación manual: revisar candidatos antes de confirmar';
+    if (sinMatchReci) msg += ' · ' + sinMatchReci + ' sin match: buscá o creá borrador antes de confirmar';
     if (noRecibidos)  msg += ' · ' + noRecibidos + ' sin recibir';
   }
   document.getElementById('status-confirm').textContent = msg;

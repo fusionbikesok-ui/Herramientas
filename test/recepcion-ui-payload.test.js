@@ -161,3 +161,331 @@ describe('public/recepcion/index.html — P1.4: la clave del alias se muestra co
     expect(htmlGenerado).toContain('Casco MTB');
   });
 });
+
+describe('public/recepcion/index.html — P1.4: estados visuales y confirmar bloqueado', () => {
+  it('un ítem recibido con match automático (sin confirmar) bloquea el botón confirmar', () => {
+    const app = cargarApp();
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'btn-confirmar') return { disabled: false };
+      if (id === 'btn-confirmar-solo') return { disabled: false };
+      if (id === 'status-confirm') return { textContent: '' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+    // Match automático (sin confirmar): id_woo asignado, pero match_confirmado NO es true
+    app.items.push({
+      id: 1, nombre_doc: 'Casco', id_woo: 10, sku_wc: 'FB-10', nombre_wc: 'Casco MTB',
+      recibido: true, match_confirmado: false, match_origen: 'auto_sugerencia',
+      cantidad: 1
+    });
+    const btn1 = { disabled: false };
+    const btn2 = { disabled: false };
+    const btns = { 'btn-confirmar': btn1, 'btn-confirmar-solo': btn2 };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return btns[id] || { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+    app.actualizarBotones();
+    // Debe estar bloqueado por tener un match sin confirmar recibido
+    expect(btn1.disabled).toBe(true);
+    expect(btn2.disabled).toBe(true);
+  });
+
+  it('un ítem recibido con match confirmado manualmente NO bloquea el botón', () => {
+    const app = cargarApp();
+    const btn1 = { disabled: false };
+    const btn2 = { disabled: false };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'btn-confirmar') return btn1;
+      if (id === 'btn-confirmar-solo') return btn2;
+      if (id === 'status-confirm') return { textContent: '' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+    // Match confirmado manualmente
+    app.items.push({
+      id: 2, nombre_doc: 'Rueda', id_woo: 20, sku_wc: 'FB-20', nombre_wc: 'Rueda MTB',
+      recibido: true, match_confirmado: true, match_origen: 'seleccion_manual',
+      cantidad: 2
+    });
+    app.actualizarBotones();
+    // NO debe estar bloqueado, porque el match fue confirmado
+    expect(btn1.disabled).toBe(false);
+    expect(btn2.disabled).toBe(false);
+  });
+
+  it('un ítem recibido con alta creada NO bloquea el botón', () => {
+    const app = cargarApp();
+    const btn1 = { disabled: false };
+    const btn2 = { disabled: false };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'btn-confirmar') return btn1;
+      if (id === 'btn-confirmar-solo') return btn2;
+      if (id === 'status-confirm') return { textContent: '' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+    // Alta creada (estado 'creado')
+    app.items.push({
+      id: 3, nombre_doc: 'Nuevo Producto', id_woo: 30, sku_wc: 'FB-30', nombre_wc: 'Nuevo Producto',
+      recibido: true, alta_estado: 'creado', alta_operation_id: 'op-123',
+      cantidad: 1
+    });
+    app.actualizarBotones();
+    // NO debe estar bloqueado, porque la alta fue creada
+    expect(btn1.disabled).toBe(false);
+    expect(btn2.disabled).toBe(false);
+  });
+
+  it('el mensaje de status incluye advertencia si hay items recibidos que requieren revisión', () => {
+    const app = cargarApp();
+    const status = { textContent: '' };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'status-confirm') return status;
+      if (id === 'btn-confirmar') return { disabled: false };
+      if (id === 'btn-confirmar-solo') return { disabled: false };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+    // Item con match_estado='revisar' (backend dice que necesita revisión) sin confirmar
+    app.items.push({
+      id: 1, nombre_doc: 'Item Dudoso', id_woo: 10, sku_wc: 'FB-10', nombre_wc: 'Item WC',
+      recibido: true, match_confirmado: false, match_estado: 'revisar', match_origen: 'auto_sugerencia',
+      cantidad: 1
+    });
+    app.items.push({
+      id: 2, nombre_doc: 'Item No Recibido', id_woo: null, sku_wc: null, nombre_wc: null,
+      recibido: false,
+      cantidad: 1
+    });
+    app.actualizarBotones();
+    // El mensaje debe reflejar que hay un item que requiere confirmación manual
+    expect(status.textContent).toMatch(/requieren confirmación|revisar/i);
+  });
+
+  it('un ítem recibido sin id_woo sigue bloqueando el botón (sin match y sin alta)', () => {
+    const app = cargarApp();
+    const btn1 = { disabled: false };
+    const btn2 = { disabled: false };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'btn-confirmar') return btn1;
+      if (id === 'btn-confirmar-solo') return btn2;
+      if (id === 'status-confirm') return { textContent: '' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+    // Sin match, sin alta
+    app.items.push({
+      id: 4, nombre_doc: 'Sin Match', id_woo: null,
+      recibido: true,
+      cantidad: 1
+    });
+    app.actualizarBotones();
+    // Debe estar bloqueado (esto ya funciona, pero lo verificamos)
+    expect(btn1.disabled).toBe(true);
+    expect(btn2.disabled).toBe(true);
+  });
+
+  it('renderItems muestra estado VERDE (Resuelto) para ítem con match confirmado o resuelto por backend', () => {
+    const app = cargarApp();
+    let htmlGenerado = '';
+    app.document.getElementById = (id) => {
+      if (id === 'items-body') return { innerHTML: '', appendChild(tr) { htmlGenerado += tr.innerHTML; } };
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'items-count') return { textContent: '' };
+      if (id === 'items-section') return { style: {} };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {} };
+    };
+    app.document.createElement = () => ({ innerHTML: '', appendChild() {}, querySelector: () => null });
+    // Backend dice que es resuelto (match_estado='resuelto' de auto_aplicable)
+    app.items.push({
+      id: 1, nombre_doc: 'Casco', id_woo: 10, sku_wc: 'FB-10', nombre_wc: 'Casco MTB',
+      recibido: true, match_confirmado: true, match_estado: 'resuelto', match_origen: 'sku_exacto',
+      cantidad: 1
+    });
+    app.renderItems();
+    // Debe contener un badge verde (Resuelto o Confirmado)
+    expect(htmlGenerado).toMatch(/Resuelto|Confirmado/);
+    expect(htmlGenerado).toMatch(/match-ok/);
+  });
+
+  it('renderItems muestra estado ÁMBAR (Confirmar asignación) para ítem con match automático sin confirmar', () => {
+    const app = cargarApp();
+    let htmlGenerado = '';
+    app.document.getElementById = (id) => {
+      if (id === 'items-body') return { innerHTML: '', appendChild(tr) { htmlGenerado += tr.innerHTML; } };
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'items-count') return { textContent: '' };
+      if (id === 'items-section') return { style: {} };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {} };
+    };
+    app.document.createElement = () => ({ innerHTML: '', appendChild() {}, querySelector: () => null });
+    app.items.push({
+      id: 2, nombre_doc: 'Rueda', id_woo: 20, sku_wc: 'FB-20', nombre_wc: 'Rueda MTB',
+      recibido: true, match_confirmado: false, match_origen: 'auto_sugerencia',
+      cantidad: 1
+    });
+    app.renderItems();
+    // Debe contener el badge ámbar "Confirmar asignación" o "Revisar candidato"
+    expect(htmlGenerado).toMatch(/Confirmar asignación|Revisar candidato/);
+    expect(htmlGenerado).toMatch(/match-warn/);
+  });
+
+  it('renderItems muestra estado ROJO (Sin candidato) para ítem sin match', () => {
+    const app = cargarApp();
+    let htmlGenerado = '';
+    app.document.getElementById = (id) => {
+      if (id === 'items-body') return { innerHTML: '', appendChild(tr) { htmlGenerado += tr.innerHTML; } };
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'items-count') return { textContent: '' };
+      if (id === 'items-section') return { style: {} };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {} };
+    };
+    app.document.createElement = () => ({ innerHTML: '', appendChild() {}, querySelector: () => null });
+    app.items.push({
+      id: 3, nombre_doc: 'Producto Raro', id_woo: null,
+      recibido: true,
+      cantidad: 1
+    });
+    app.renderItems();
+    // Debe contener el badge rojo "Sin candidato" o "Sin match"
+    expect(htmlGenerado).toMatch(/Sin candidato|Sin match/);
+    expect(htmlGenerado).toMatch(/match-no/);
+  });
+
+  it('renderItems muestra estado ERROR para ítem con alta fallida o incierta', () => {
+    const app = cargarApp();
+    let htmlGenerado = '';
+    app.document.getElementById = (id) => {
+      if (id === 'items-body') return { innerHTML: '', appendChild(tr) { htmlGenerado += tr.innerHTML; } };
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'items-count') return { textContent: '' };
+      if (id === 'items-section') return { style: {} };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {} };
+    };
+    app.document.createElement = () => ({ innerHTML: '', appendChild() {}, querySelector: () => null });
+    app.items.push({
+      id: 4, nombre_doc: 'Alta Fallida', id_woo: null, alta_estado: 'incierto',
+      recibido: true,
+      cantidad: 1
+    });
+    app.renderItems();
+    // Debe contener el badge de error
+    expect(htmlGenerado).toMatch(/Error.*incierto/);
+    expect(htmlGenerado).toMatch(/match-no/);
+  });
+
+  it('CASO REAL P1.4: match automático seguro (match_estado=resuelto) NO bloquea', () => {
+    // Este es el caso más común en producción: backend devuelve estado:'resuelto', auto_aplicable:true
+    // Con el fix en solicitarMatchesBackend, ahora setea match_confirmado=true cuando auto_aplicable
+    const app = cargarApp();
+    const btn1 = { disabled: false };
+    const btn2 = { disabled: false };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'btn-confirmar') return btn1;
+      if (id === 'btn-confirmar-solo') return btn2;
+      if (id === 'status-confirm') return { textContent: '' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+    // Ítem con match_estado='resuelto' (backend lo certificó como seguro)
+    app.items.push({
+      id: 5, nombre_doc: 'Producto Común', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto Woo',
+      recibido: true,
+      match_estado: 'resuelto',
+      match_origen: 'sku_exacto',
+      match_confirmado: true,  // Con el fix, solicitarMatchesBackend seteará esto
+      cantidad: 5
+    });
+    app.actualizarBotones();
+    // NO debe bloquear
+    expect(btn1.disabled).toBe(false);
+    expect(btn2.disabled).toBe(false);
+  });
+
+  it('solicitarMatchesBackend setea match_confirmado=true cuando auto_aplicable es true', async () => {
+    // Reproducer: el fix debe setear match_confirmado cuando auto_aplicable
+    const app = cargarApp();
+    let fetchCalled = false;
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'items-section') return { style: {} };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    app.items.push({
+      id: 6, nombre_doc: 'Test Item', variacion: '', codigo_proveedor: 'TEST-001',
+      marca: 'TestMarca', cantidad: 1
+    });
+
+    // Mock fetch para simular respuesta con auto_aplicable=true
+    const originalFetch = app.fetch;
+    app.fetch = (url) => {
+      if (String(url).includes('/api/recepciones/matchear')) {
+        fetchCalled = true;
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            ok: true,
+            resultados: [{
+              linea_id: String(app.items[0].id),
+              estado: 'resuelto',
+              auto_aplicable: true,
+              candidato: {
+                id_woo: 200,
+                sku: 'FB-200',
+                nombre: 'Test Product',
+                stock: 10,
+                razones: [{ tipo: 'sku', resultado: 'exacto_unico' }]
+              },
+              origen: 'sku_exacto'
+            }]
+          })
+        });
+      }
+      return originalFetch(url);
+    };
+
+    app.solicitarMatchesBackend();
+    // Esperar a que se procese la promesa
+    await new Promise(r => setTimeout(r, 10));
+
+    const item = app.items[0];
+    expect(fetchCalled).toBe(true);
+    expect(item.id_woo).toBe(200);
+    expect(item.match_estado).toBe('resuelto');
+    expect(item.match_confirmado).toBe(true); // Con el fix, debe ser true
+  });
+
+  it('renderItems muestra razones cuando match_estado=revisar con candidato', () => {
+    // Las razones deben mostrarse en tooltip y en subfila
+    const app = cargarApp();
+    let htmlGenerado = '';
+    app.document.getElementById = (id) => {
+      if (id === 'items-body') return { innerHTML: '', appendChild(tr) { htmlGenerado += tr.innerHTML; } };
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'items-count') return { textContent: '' };
+      if (id === 'items-section') return { style: {} };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {} };
+    };
+    app.document.createElement = () => ({ innerHTML: '', appendChild() {}, querySelector: () => null });
+    app.items.push({
+      id: 7, nombre_doc: 'Dudoso', id_woo: 300, sku_wc: 'FB-300', nombre_wc: 'Producto Dudoso',
+      recibido: true, match_estado: 'revisar', match_confirmado: false,
+      match_resultado: {
+        candidato: {
+          id_woo: 300,
+          razones: [
+            { tipo: 'sku', resultado: 'coincide', documento: 'FB-ABC', producto: 'FB-300' },
+            { tipo: 'titulo', resultado: 'similar', documento: 'Dudoso', producto: 'Producto Dudoso' }
+          ]
+        }
+      },
+      cantidad: 1
+    });
+    app.renderItems();
+    // Debe mostrar las razones en formato "tipo: resultado"
+    expect(htmlGenerado).toContain('sku: coincide');
+    expect(htmlGenerado).toContain('titulo: similar');
+    expect(htmlGenerado).toContain('Razones:');
+  });
+});
