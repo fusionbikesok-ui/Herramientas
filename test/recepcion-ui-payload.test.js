@@ -1092,3 +1092,112 @@ describe('public/recepcion/index.html — P1.3: búsqueda dinámica sin catálog
     expect(dd.innerHTML).not.toContain('Error al buscar');
   });
 });
+
+describe('public/recepcion/index.html — P1.5: modo "solo documento" no exige matches resueltos', () => {
+  it('BUG: en modo soloDocumento=true, un ítem recibido sin match NO bloquea el botón', () => {
+    const app = cargarApp();
+    const btn1 = { disabled: false };
+    const btnSolo = { disabled: false };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'btn-confirmar') return btn1;
+      if (id === 'btn-confirmar-solo') return btnSolo;
+      if (id === 'status-confirm') return { textContent: '' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Activar modo "solo documento"
+    app.soloDocumento = true;
+
+    // Agregar un ítem recibido pero sin match (id_woo === null)
+    // En modo solo documento, esto no debería bloquear porque no hay stock a actualizar
+    app.items.push({
+      id: 1, nombre_doc: 'Producto sin Match', id_woo: null, sku_wc: null, nombre_wc: null,
+      recibido: true,
+      cantidad: 1
+    });
+
+    app.actualizarBotones();
+
+    // En modo "solo documento", el botón NO debe estar bloqueado por falta de match
+    // porque el stock no se va a tocar
+    expect(btnSolo.disabled).toBe(false);
+    // El botón normal debería estar oculto (controlado por toggleSoloDoc, no por actualizarBotones)
+    // pero su estado internal sigue siendo relevante para verificar que la lógica es diferente
+    // Para este test, lo importante es que btn-confirmar-solo esté habilitado
+  });
+
+  it('en modo soloDocumento=true con múltiples ítems recibidos sin matches, btn-confirmar-solo debe estar habilitado', () => {
+    const app = cargarApp();
+    const btnSolo = { disabled: false };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor Test' };
+      if (id === 'btn-confirmar-solo') return btnSolo;
+      if (id === 'status-confirm') return { textContent: '' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    app.soloDocumento = true;
+
+    // Agregar varios ítems recibidos sin matches
+    app.items.push(
+      { id: 1, nombre_doc: 'Item 1', id_woo: null, recibido: true, cantidad: 5 },
+      { id: 2, nombre_doc: 'Item 2', id_woo: null, recibido: true, cantidad: 3 },
+      { id: 3, nombre_doc: 'Item 3', id_woo: null, recibido: true, cantidad: 2 }
+    );
+
+    app.actualizarBotones();
+
+    // Debe estar habilitado (hay items, hay proveedor, pero soloDocumento ignora tieneBloqueantes)
+    expect(btnSolo.disabled).toBe(false);
+  });
+
+  it('en modo normal (soloDocumento=false), un ítem recibido sin match sigue bloqueando el botón', () => {
+    const app = cargarApp();
+    const btn1 = { disabled: false };
+    const btnSolo = { disabled: false };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'btn-confirmar') return btn1;
+      if (id === 'btn-confirmar-solo') return btnSolo;
+      if (id === 'status-confirm') return { textContent: '' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Modo normal (soloDocumento = false, que es el default)
+    app.soloDocumento = false;
+
+    // Ítem sin match
+    app.items.push({
+      id: 1, nombre_doc: 'Sin Match', id_woo: null,
+      recibido: true,
+      cantidad: 1
+    });
+
+    app.actualizarBotones();
+
+    // En modo normal, debe estar bloqueado
+    expect(btn1.disabled).toBe(true);
+    expect(btnSolo.disabled).toBe(true);
+  });
+
+  it('en modo soloDocumento=true, el mensaje de status debe mostrar "no se actualizará el stock"', () => {
+    const app = cargarApp();
+    const status = { textContent: '' };
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      if (id === 'status-confirm') return status;
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    app.soloDocumento = true;
+    app.items.push({
+      id: 1, nombre_doc: 'Item', id_woo: null, recibido: true, cantidad: 1
+    });
+
+    app.actualizarBotones();
+
+    // El mensaje debe indicar modo solo documento
+    expect(status.textContent).toMatch(/solo documento|no se actualizará/i);
+  });
+});

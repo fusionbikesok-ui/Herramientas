@@ -1006,10 +1006,14 @@ function actualizarBotones() {
     return !(esResuelto || esAltaCreada || estaConfirmado); // Bloqueante si NO es resuelto
   });
 
-  var habilitado = hayItems && hayProv && !tieneBloqueantes;
+  // P1.5: En modo "solo documento", los matches no importan porque el stock no se actualiza.
+  // Solo exigimos items y proveedor. En modo normal, exigimos que no haya items bloqueantes.
+  var habilitadoNormal = hayItems && hayProv && !tieneBloqueantes;
+  var habilitadoSolo = hayItems && hayProv;
+
   document.getElementById('btn-borrador').disabled = !(hayItems && hayProv);
-  document.getElementById('btn-confirmar').disabled = !habilitado;
-  document.getElementById('btn-confirmar-solo').disabled = !habilitado;
+  document.getElementById('btn-confirmar').disabled = !habilitadoNormal;
+  document.getElementById('btn-confirmar-solo').disabled = soloDocumento ? !habilitadoSolo : !habilitadoNormal;
 
   var recibidos = items.filter(function(i){ return i.recibido; }).length;
 
