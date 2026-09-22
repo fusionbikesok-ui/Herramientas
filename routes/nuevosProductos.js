@@ -58,13 +58,19 @@ export function nuevosProductosRouter(geminiKey, db, wooCfg, deps = {}) {
   });
 
   // P1.6: recupera una alta 'incierto' leyendo Woo. No hace nada si la operación no existe o no
-  // está en 'incierto' (conciliarAltaIncierta ya es idempotente en ese caso).
+  // está en 'incierto' (conciliarAltaIncierta ya es idempotente en ese caso). Body opcional
+  // { decision:'no_se_creo'|'es_este_id', id_woo?, motivo } para la resolución humana explícita
+  // (último recurso, cuando ni el id_woo persistido ni la marca buscable encontraron nada); el
+  // actor sale de la sesión autenticada, nunca del body, para que quede auditado de verdad.
   router.post('/operaciones/:operationId/conciliar', async (req, res) => {
     try {
-      const r = await conciliarAltaIncierta({ db, cfg: wooCfg, operationId: req.params.operationId, fetchWoo: deps.fetchWoo });
+      const resolucionManual = req.body?.decision
+        ? { decision: req.body.decision, id_woo: req.body.id_woo, motivo: req.body.motivo, actor: req.user?.username || 'sistema' }
+        : null;
+      const r = await conciliarAltaIncierta({ db, cfg: wooCfg, operationId: req.params.operationId, fetchWoo: deps.fetchWoo, resolucionManual });
       res.json({ ok: true, ...r });
     } catch (e) {
-      const status = /no encontrada/.test(e.message) ? 404 : 502;
+      const status = /no encontrada/.test(e.message) ? 404 : /obligatorios|inválida|requerido|draft/.test(e.message) ? 400 : 502;
       res.status(status).json({ ok: false, error: e.message });
     }
   });

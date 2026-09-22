@@ -257,6 +257,117 @@ describe('conciliarAltaIncierta — P1.6: recuperación de una alta incierta', (
   });
 });
 
+describe('conciliarAltaIncierta — (a) sin id_woo, se encuentra por marca buscable (sku provisional/meta_data)', () => {
+  it('modo simple: el POST original mandó sku provisional + meta_data; conciliar lo encuentra por sku y completa el SKU final', async () => {
+    const x=db();
+    // Simula un timeout en el POST: crearBorradorWoo nunca llegó a leer el id, así que la fila
+    // quedó 'incierto' sin id_woo. Lo único que Woo SÍ recibió es el POST con el sku provisional.
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-marca-1','h','incierto','simple',null,null,'j',now,now);
+    const skuProv = 'FB-PEND-op-marca-1';
+    let skuActual = skuProv;
+    const calls=[];
+    const fetchWoo = async (_c, path, method='get', body) => {
+      calls.push({ path, method, body });
+      if (method==='get' && path===`/products?sku=${encodeURIComponent(skuProv)}`) return { data: [{ id: 77, status:'draft', sku: skuActual, name:'Casco' }] };
+      if (method==='patch') { skuActual = body.sku; return { data: { id:77, status:'draft', sku: skuActual } }; }
+      return { data: { id: 77, status: 'draft', sku: skuActual, name: 'Casco' } };
+    };
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-marca-1', fetchWoo });
+    expect(r.estado).toBe('creado');
+    expect(r.id_woo).toBe(77);
+    expect(r.sku).toBe('FB-77');
+    expect(x.prepare('SELECT id_woo,sku FROM recepcion_altas_woo WHERE operation_id=?').get('op-marca-1')).toEqual({ id_woo: 77, sku: 'FB-77' });
+    expect(x.prepare('SELECT * FROM catalogo_cache WHERE id_woo=77').get()).toBeTruthy();
+    // Confirma que sí se usó la búsqueda por marca (no un id que ya estuviera guardado).
+    expect(calls.some(c => c.path.includes('sku=FB-PEND-op-marca-1'))).toBe(true);
+  });
+
+  it('variacion_existente: busca por sku provisional entre las variaciones del padre (ya conocido desde la ficha)', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-marca-2','h','incierto','variacion_existente',null,9,'j',now,now);
+    const skuProv = 'FB-PEND-op-marca-2';
+    const fetchWoo = async (_c, path, method='get', body) => {
+      if (method==='get' && path===`/products/9/variations?sku=${encodeURIComponent(skuProv)}`) return { data: [{ id: 88, status:'draft', sku: skuProv }] };
+      if (method==='patch') return { data: { id:88, status:'draft', sku: body.sku } };
+      return { data: { id: 88, status: 'draft', sku: 'FB-88' } };
+    };
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-marca-2', fetchWoo });
+    expect(r.estado).toBe('creado');
+    expect(r.id_woo).toBe(88);
+    expect(r.id_padre).toBe(9);
+  });
+
+  it('sin padre conocido tampoco (timeout en el POST del padre de familia_variable), no hay nada bajo qué buscar: sigue "incierto"', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-marca-3','h','incierto','familia_variable',null,null,'j',now,now);
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-marca-3', fetchWoo: async () => ({ data: [] }) });
+    expect(r.estado).toBe('incierto');
+  });
+});
+
+describe('conciliarAltaIncierta — (b) resolución humana explícita, como último recurso', () => {
+  it('exige actor y motivo', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-h1','h','incierto','simple',null,null,'j',now,now);
+    await expect(conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-h1', fetchWoo: async () => ({ data: {} }), resolucionManual: { decision: 'no_se_creo' } }))
+      .rejects.toThrow(/actor y motivo/);
+  });
+
+  it('"no_se_creo": pasa a fallido con el motivo auditado, sin tocar Woo', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-h2','h','incierto','simple',null,null,'j',now,now);
+    const r = await conciliarAltaIncierta({
+      db: x, cfg: {}, operationId: 'op-h2', fetchWoo: async () => { throw new Error('no debería tocar Woo'); },
+      resolucionManual: { decision: 'no_se_creo', actor: 'joser', motivo: 'revisé Woo a mano, no existe nada con ese título' },
+    });
+    expect(r.estado).toBe('fallido');
+    const row = x.prepare('SELECT estado,error FROM recepcion_altas_woo WHERE operation_id=?').get('op-h2');
+    expect(row.estado).toBe('fallido');
+    expect(row.error).toContain('joser');
+    expect(row.error).toContain('revisé Woo a mano');
+  });
+
+  it('"es_este_id": verifica el id_woo dado contra Woo (no confía ciegamente) y completa el alta si es un draft válido', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-h3','h','incierto','simple',null,null,'j',now,now);
+    const fetchWoo = async (_c, path, method='get', body) => {
+      if (method==='patch') return { data: { id:55, status:'draft', sku: body.sku } };
+      return { data: { id: 55, status: 'draft', sku: 'FB-PEND-otro' } };
+    };
+    const r = await conciliarAltaIncierta({
+      db: x, cfg: {}, operationId: 'op-h3', fetchWoo,
+      resolucionManual: { decision: 'es_este_id', id_woo: 55, actor: 'joser', motivo: 'lo encontré por título en Woo' },
+    });
+    expect(r.estado).toBe('creado');
+    expect(r.sku).toBe('FB-55');
+    expect(x.prepare('SELECT * FROM catalogo_cache WHERE id_woo=55').get()).toBeTruthy();
+  });
+
+  it('"es_este_id": si Woo NO confirma un draft en ese id, rechaza sin dar el alta por buena', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-h4','h','incierto','simple',null,null,'j',now,now);
+    const fetchWoo = async () => ({ data: { id: 55, status: 'publish', sku: 'FB-55' } }); // ya publicado: no es el borrador esperado
+    await expect(conciliarAltaIncierta({
+      db: x, cfg: {}, operationId: 'op-h4', fetchWoo,
+      resolucionManual: { decision: 'es_este_id', id_woo: 55, actor: 'joser', motivo: 'x' },
+    })).rejects.toThrow(/draft/);
+  });
+});
+
 describe('alta Woo fail-closed',()=>{
   it('crea draft con stock cero y no repite replay',async()=>{
     const calls=[];

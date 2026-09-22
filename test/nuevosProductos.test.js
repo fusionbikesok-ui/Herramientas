@@ -113,4 +113,28 @@ describe('POST /operaciones/:operationId/conciliar — P1.6', () => {
     const res = await request(a).post('/api/nuevos-productos/operaciones/no-existe/conciliar').send();
     expect(res.status).toBe(404);
   });
+
+  it('resolución manual "no_se_creo": toma el actor de la sesión, no del body, y audita el motivo', async () => {
+    const a = armarApp(async () => { throw new Error('no debería tocar Woo'); });
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?)")
+      .run('op-http-2', 'h', 'incierto', 'simple', null, 'j', now, now);
+    const res = await request(a)
+      .post('/api/nuevos-productos/operaciones/op-http-2/conciliar')
+      .set('X-Actor-Test', 'ignorado') // el actor real sale de req.user, acá no hay sesión: cae a 'sistema'
+      .send({ decision: 'no_se_creo', motivo: 'revisado a mano, no existe' });
+    expect(res.status).toBe(200);
+    expect(res.body.estado).toBe('fallido');
+    const row = db.prepare('SELECT error FROM recepcion_altas_woo WHERE operation_id=?').get('op-http-2');
+    expect(row.error).toContain('sistema');
+  });
+
+  it('resolución manual sin motivo: 400, no 502', async () => {
+    const a = armarApp(async () => ({ data: {} }));
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?)")
+      .run('op-http-3', 'h', 'incierto', 'simple', null, 'j', now, now);
+    const res = await request(a).post('/api/nuevos-productos/operaciones/op-http-3/conciliar').send({ decision: 'no_se_creo' });
+    expect(res.status).toBe(400);
+  });
 });
