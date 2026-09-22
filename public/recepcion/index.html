@@ -192,8 +192,9 @@ input[type=file] { display:none; }
       <div class="field-row">
         <div class="field" style="flex:2">
           <label>Proveedor / Distribuidor *
-          <input type="text" id="inp-proveedor" placeholder="Ej: Trek Argentina, Shimano, Vigo Bike..." list="proveedores-list" oninput="sincronizarImportador()"></label>
+          <input type="text" id="inp-proveedor" placeholder="Ej: Trek Argentina, Shimano, Vigo Bike..." list="proveedores-list" oninput="sincronizarImportador()" onblur="cargarAliasesProveedor()"></label>
           <datalist id="proveedores-list"></datalist>
+          <div id="aliases-proveedor" style="margin-top:6px"></div>
         </div>
         <div class="field" style="flex:1; min-width:140px">
           <label>Fecha
@@ -603,6 +604,8 @@ function solicitarMatchesBackend() {
 function crearItem(raw) {
   var it = {
     id: Date.now() + Math.random(),
+    db_id: null, // P1.3: id real en recepcion_items — solo lo tienen los ítems de una recepción ya
+                 // guardada (ver retomar()); sin esto no hay forma de llamar a /resolver.
     nombre_doc: raw.nombre || '(sin nombre)',
     variacion: raw.variacion || '',
     cantidad: parseInt(raw.cantidad) || 1,
@@ -614,6 +617,22 @@ function crearItem(raw) {
   };
   it.match_estado = 'pendiente_backend';
   return it;
+}
+
+// P1.3: en una recepción YA guardada, un cambio de match/alias sobre un ítem persistido tiene que ir
+// por /api/recepciones/:id/items/:itemId/resolver (server-side, con su propia validación y el
+// aprendizaje de alias) en vez de esperar al próximo /actualizar completo. Sin db_id (ítem todavía no
+// guardado) o sin recepcionGuardadaId (recepción todavía no guardada) no hay nada que sincronizar
+// todavía — el guardado inicial se encarga.
+function sincronizarAliasGuardado(id) {
+  var it = items.find(function(i){ return String(i.id)===String(id); });
+  if (!it || !it.db_id || !recepcionGuardadaId || !it.id_woo) return;
+  fetch('/api/recepciones/' + recepcionGuardadaId + '/items/' + it.db_id + '/resolver', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id_woo: it.id_woo, aprender: !!it.aprender_alias, motivo: it.motivo_alias || undefined })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (!d.ok) mostrarStatus('status-match', 'err', 'No se guardó el cambio en el servidor: ' + d.error);
+  }).catch(function(){ mostrarStatus('status-match', 'err', 'No se pudo sincronizar el cambio con el servidor.'); });
 }
 
 
@@ -655,16 +674,22 @@ function renderItems() {
       : '<span class="match-badge match-no">Sin candidato</span>';
     var wcCell;
     if (it.id_woo) {
-      var claveAlias = it.codigo_proveedor ? esc(it.codigo_proveedor) : esc(it.nombre_doc||'');
+      // P1.4: la clave completa que se va a aprender — proveedor + código (o descripción+variación) →
+      // producto Woo — para que el usuario vea exactamente qué asociación está creando, no solo un
+      // fragmento. Mismo criterio de clave que claveAlias() en lib/recepcionAliases.js (código si hay,
+      // si no descripción+variación).
+      var proveedorActual = (document.getElementById('inp-proveedor').value || '').trim() || '(sin proveedor)';
+      var claveAlias = it.codigo_proveedor ? esc(it.codigo_proveedor) : (esc(it.nombre_doc||'') + (it.variacion ? ' ' + esc(it.variacion) : ''));
+      var productoAlias = esc(it.nombre_wc || '') + (it.sku_wc ? ' (' + esc(it.sku_wc) + ')' : '');
       wcCell = '<div class="cell-main">' + esc(it.nombre_wc||'') + '</div>'
         + '<div class="cell-sub">SKU: ' + esc(it.sku_wc||'—') + ' · Stock: ' + (it.stock_wc||0) + ' → ' + ((it.stock_wc||0)+it.cantidad) + '</div>'
         + '<button class="btn btn-sm" style="margin-top:5px;font-size:11px;padding:3px 9px;color:var(--gray)" onclick="limpiarMatch(\'' + it.id + '\')">✎ Cambiar</button>'
         + '<div style="margin-top:6px;font-size:11px">'
           + '<label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--gray)">'
             + '<input type="checkbox" ' + (it.aprender_alias ? 'checked' : '') + ' onchange="toggleAprenderAlias(this,\'' + it.id + '\')" style="width:15px;height:15px">'
-            + 'Recordar «' + claveAlias + '» → este producto la próxima vez'
+            + 'Recordar: ' + esc(proveedorActual) + ' «' + claveAlias + '» → ' + productoAlias
           + '</label>'
-          + (it.aprender_alias ? '<input type="text" class="cell-sub" aria-label="Motivo, si reemplaza una asociación existente" placeholder="Motivo (solo si reemplaza una asociación anterior)" value="' + esc(it.motivo_alias||'') + '" oninput="cambiarMotivoAlias(this,\'' + it.id + '\')" style="width:100%;margin-top:4px;padding:4px 6px;font-size:11px;border:1px solid var(--border);border-radius:4px">' : '')
+          + (it.aprender_alias ? '<input type="text" class="cell-sub" aria-label="Motivo, si reemplaza una asociación existente" placeholder="Motivo (solo si reemplaza una asociación anterior)" value="' + esc(it.motivo_alias||'') + '" oninput="cambiarMotivoAlias(this,\'' + it.id + '\')" onblur="sincronizarAliasGuardado(\'' + it.id + '\')" style="width:100%;margin-top:4px;padding:4px 6px;font-size:11px;border:1px solid var(--border);border-radius:4px">' : '')
         + '</div>';
     } else {
       wcCell = '<div class="wc-search-wrap">'
@@ -699,10 +724,46 @@ function toggleAprenderAlias(chk, id) {
   it.aprender_alias = chk.checked;
   if (!chk.checked) it.motivo_alias = null;
   renderItems();
+  // Al desmarcar no hay nada que aprender (motivo_alias ya quedó en null); al marcar sin motivo se
+  // sincroniza igual — confirmarAlias() exige motivo solo si reemplaza un alias vigente distinto, y
+  // el rechazo (si lo hay) se muestra al usuario vía sincronizarAliasGuardado().
+  sincronizarAliasGuardado(id);
 }
 function cambiarMotivoAlias(inp, id) {
   var it = items.find(function(i){ return String(i.id)===String(id); });
   if (it) it.motivo_alias = inp.value || null;
+}
+
+// P1.2: lista/revoca los aliases vigentes del proveedor actual (para que el usuario pueda ver qué
+// se aprendió y deshacerlo si se aprendió mal, sin tener que buscar en la base a mano).
+function cargarAliasesProveedor() {
+  var proveedor = document.getElementById('inp-proveedor').value.trim();
+  var cont = document.getElementById('aliases-proveedor');
+  if (!proveedor) { cont.innerHTML = ''; return; }
+  fetch('/api/recepciones/aliases?proveedor=' + encodeURIComponent(proveedor))
+    .then(function(r){ return r.json(); })
+    .then(function(d){ renderAliasesProveedor(d.ok ? (d.data || []) : []); })
+    .catch(function(){ renderAliasesProveedor([]); });
+}
+function renderAliasesProveedor(lista) {
+  var cont = document.getElementById('aliases-proveedor');
+  if (!lista.length) { cont.innerHTML = ''; return; }
+  cont.innerHTML = '<div style="font-size:11px;color:var(--gray2);margin-bottom:3px">Aliases aprendidos de este proveedor:</div>'
+    + lista.map(function(a){
+      var clave = a.codigo_norm ? a.codigo_norm : (a.descripcion_norm + (a.variacion_norm ? ' ' + a.variacion_norm : ''));
+      return '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray);padding:2px 0">'
+        + '<span>«' + esc(clave) + '» → id_woo ' + a.id_woo + (a.sku ? ' (' + esc(a.sku) + ')' : '') + '</span>'
+        + '<button type="button" class="btn btn-sm" style="padding:1px 7px;font-size:10px" onclick="revocarAliasUI(' + a.id + ')">Olvidar</button>'
+        + '</div>';
+    }).join('');
+}
+function revocarAliasUI(aliasId) {
+  var motivo = window.prompt('Motivo para dejar de recordar este alias:');
+  if (!motivo || !motivo.trim()) return;
+  fetch('/api/recepciones/aliases/' + aliasId + '/revocar', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ motivo: motivo.trim() }) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){ if (d.ok) cargarAliasesProveedor(); else alert('No se pudo revocar: ' + (d.error||'')); })
+    .catch(function(){ alert('No se pudo revocar el alias.'); });
 }
 
 function cambiarCantidad(inp, id) {
@@ -800,6 +861,7 @@ function seleccionarWC(evt, itemId, idWoo) {
   it.match_origen = 'seleccion_manual';
   renderItems();
   actualizarBotones();
+  sincronizarAliasGuardado(itemId); // P1.3: si el ítem ya está guardado, persiste el cambio ya mismo
 }
 
 function abrirDropdown(inp) { /* dropdown abre on input */ }
@@ -1085,6 +1147,7 @@ function retomar(id) {
         var catItem = it.id_woo ? catalogo.find(function(c){ return c.id_woo === it.id_woo; }) : null;
         return {
           id:               Date.now() + Math.random(),
+          db_id:            it.id, // P1.3: id real de recepcion_items — habilita /resolver sobre este ítem
           nombre_doc:       it.nombre_doc,
           codigo_proveedor: it.codigo_proveedor || null,
           cantidad:         it.cantidad,

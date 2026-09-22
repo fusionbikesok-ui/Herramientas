@@ -28,6 +28,7 @@ function cargarApp() {
     console,
     localStorage: { getItem() { return null; }, setItem() {} },
     Api: { installAuth() {} },
+    esc: (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])), // lib/format.js
   };
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox);
@@ -88,5 +89,75 @@ describe('public/recepcion/index.html — payloadRecepcion()', () => {
     app.items.push({ id: 4, nombre_doc: 'Casco', id_woo: null, alta_estado: 'incierto', alta_operation_id: 'op-x', cantidad: 1, recibido: true });
     const it = app.payloadRecepcion().items[0];
     expect(it.estado_item).not.toBe('creado');
+  });
+});
+
+describe('public/recepcion/index.html — P1.3: sincronizarAliasGuardado() usa /resolver sobre ítems ya guardados', () => {
+  it('con db_id + recepcionGuardadaId + id_woo, llama a POST /:id/items/:itemId/resolver con id_woo/aprender/motivo', () => {
+    const app = cargarApp();
+    app.recepcionGuardadaId = 77;
+    const llamadas = [];
+    app.fetch = (url, opts) => { llamadas.push({ url: String(url), opts }); return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); };
+    app.items.push({ id: 'x', db_id: 501, id_woo: 10, aprender_alias: true, motivo_alias: 'discontinuado' });
+    app.sincronizarAliasGuardado('x');
+    expect(llamadas).toHaveLength(1);
+    expect(llamadas[0].url).toBe('/api/recepciones/77/items/501/resolver');
+    const body = JSON.parse(llamadas[0].opts.body);
+    expect(body).toEqual({ id_woo: 10, aprender: true, motivo: 'discontinuado' });
+  });
+
+  it('sin db_id (ítem todavía no guardado) NO llama a la red', () => {
+    const app = cargarApp();
+    app.recepcionGuardadaId = 77;
+    let llamado = false;
+    app.fetch = () => { llamado = true; return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); };
+    app.items.push({ id: 'y', db_id: null, id_woo: 10 });
+    app.sincronizarAliasGuardado('y');
+    expect(llamado).toBe(false);
+  });
+
+  it('sin recepcionGuardadaId (recepción todavía no guardada) NO llama a la red', () => {
+    const app = cargarApp();
+    app.recepcionGuardadaId = null;
+    let llamado = false;
+    app.fetch = () => { llamado = true; return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); };
+    app.items.push({ id: 'z', db_id: 501, id_woo: 10 });
+    app.sincronizarAliasGuardado('z');
+    expect(llamado).toBe(false);
+  });
+
+  it('un rechazo del servidor (ok:false) se muestra al usuario, no se traga en silencio', async () => {
+    const app = cargarApp();
+    app.recepcionGuardadaId = 77;
+    let mensajeMostrado = null;
+    app.mostrarStatus = (id, tipo, msg) => { mensajeMostrado = msg; };
+    app.fetch = () => Promise.resolve({ json: () => Promise.resolve({ ok: false, error: 'motivo requerido para reasignar alias' }) });
+    app.items.push({ id: 'w', db_id: 501, id_woo: 10, aprender_alias: true });
+    app.sincronizarAliasGuardado('w');
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    expect(mensajeMostrado).toMatch(/motivo requerido/);
+  });
+});
+
+describe('public/recepcion/index.html — P1.4: la clave del alias se muestra completa en pantalla', () => {
+  it('renderItems incluye proveedor, código/descripción y producto Woo en el texto del toggle', () => {
+    const app = cargarApp();
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Bike Group' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {}, querySelector: () => null };
+    };
+    app.items.push({ id: 1, nombre_doc: 'Casco', codigo_proveedor: 'BX-1', id_woo: 10, sku_wc: 'FB-10', nombre_wc: 'Casco MTB', cantidad: 1, recibido: true });
+    let htmlGenerado = '';
+    const tbody = { innerHTML: '', appendChild(tr) { htmlGenerado += tr.innerHTML; } };
+    const contadorFalso = { textContent: '' };
+    const seccionFalsa = { style: {} };
+    const idsEsperados = { 'items-section': seccionFalsa, 'items-body': tbody, 'items-count': contadorFalso, 'inp-proveedor': { value: 'Bike Group' } };
+    app.document.getElementById = (id) => idsEsperados[id] || { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {}, querySelector: () => null };
+    app.document.createElement = () => ({ innerHTML: '', appendChild() {}, querySelector: () => null });
+    app.renderItems();
+    expect(htmlGenerado).toContain('Bike Group');
+    expect(htmlGenerado).toContain('BX-1');
+    expect(htmlGenerado).toContain('Casco MTB');
   });
 });
