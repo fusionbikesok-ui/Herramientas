@@ -1005,6 +1005,9 @@ describe('P1 — POST / y /:id/actualizar aprenden alias si el ítem trae aprend
     // El alias original sigue vigente: no se aprendió el reemplazo por falta de motivo.
     const vigente = db.prepare("SELECT * FROM recepcion_aliases_proveedor WHERE proveedor_norm='bike group' AND codigo_norm='bx 1' AND vigente_hasta IS NULL").get();
     expect(vigente.id_woo).toBe(11);
+    // Pero el fallo no se traga en silencio: viaja en la respuesta para que la UI le avise al usuario.
+    expect(res.body.aliases_no_aprendidos).toHaveLength(1);
+    expect(res.body.aliases_no_aprendidos[0].error).toMatch(/motivo/);
   });
 
   it('POST /:id/actualizar con aprender:true también persiste el alias', async () => {

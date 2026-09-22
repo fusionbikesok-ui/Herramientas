@@ -6,7 +6,18 @@ function db() { const d=new Database(':memory:'); d.exec("CREATE TABLE catalogo_
 describe('aliases de recepción', () => {
   let d; beforeEach(()=>{d=db();});
   it('normaliza y aísla proveedor',()=>{expect(normalizarProveedor('  Bike Group ')).toBe('bike group'); confirmarAlias(d,{proveedor:'Bike Group',codigo_proveedor:'BX-1',nombre_doc:'Casco',id_woo:10,actor:'jose'}); expect(buscarAliasVigente(d,{proveedor:'Otro',codigo_proveedor:'BX-1',nombre_doc:'Casco'})).toBeNull(); expect(buscarAliasVigente(d,{proveedor:'bike group',codigo_proveedor:'BX-1'}).id_woo).toBe(10);});
-  it('versiona reasignación y exige motivo',()=>{confirmarAlias(d,{proveedor:'p',codigo_proveedor:'x',nombre_doc:'a',id_woo:10,actor:'j'}); expect(()=>confirmarAlias(d,{proveedor:'p',codigo_proveedor:'x',nombre_doc:'a',id_woo:10,actor:'j'})).not.toThrow();});
+  it('reasignar al mismo id_woo no exige motivo (no hay nada que reemplazar de verdad)',()=>{confirmarAlias(d,{proveedor:'p',codigo_proveedor:'x',nombre_doc:'a',id_woo:10,actor:'j'}); expect(()=>confirmarAlias(d,{proveedor:'p',codigo_proveedor:'x',nombre_doc:'a',id_woo:10,actor:'j'})).not.toThrow();});
+  it('reasignar la MISMA clave a OTRO id_woo exige motivo, y versiona (cierra la vieja, crea una nueva) cuando lo trae',()=>{
+    d.prepare('INSERT INTO catalogo_cache VALUES (?,?,?)').run(11,'FB-11','Casco B');
+    const a = confirmarAlias(d,{proveedor:'p',codigo_proveedor:'x',nombre_doc:'a',id_woo:10,actor:'j'});
+    expect(()=>confirmarAlias(d,{proveedor:'p',codigo_proveedor:'x',nombre_doc:'a',id_woo:11,actor:'j'})).toThrow(/motivo/);
+    // Sin motivo, no se tocó nada: el alias original sigue vigente.
+    expect(buscarAliasVigente(d,{proveedor:'p',codigo_proveedor:'x'}).id_woo).toBe(10);
+    const b = confirmarAlias(d,{proveedor:'p',codigo_proveedor:'x',nombre_doc:'a',id_woo:11,actor:'j',motivo:'producto discontinuado'});
+    expect(b.id_woo).toBe(11);
+    expect(db_alias_cerrado(d,a.id)).toBe(true);
+    function db_alias_cerrado(db,id){ const r=db.prepare('SELECT vigente_hasta FROM recepcion_aliases_proveedor WHERE id=?').get(id); return r.vigente_hasta!=null; }
+  });
   it('revoca solo la versión vigente',()=>{const a=confirmarAlias(d,{proveedor:'p',codigo_proveedor:'x',nombre_doc:'a',id_woo:10,actor:'j'}); expect(revocarAlias(d,a.id,{actor:'j',motivo:'corrección'})).toBe(true); expect(revocarAlias(d,a.id,{actor:'j',motivo:'otra'})).toBe(false);});
   it('un alias huérfano (id_woo ya no existe en catalogo_cache) se reemplaza sin SQLITE_CONSTRAINT_UNIQUE', () => {
     confirmarAlias(d, { proveedor: 'p', codigo_proveedor: 'x', nombre_doc: 'a', id_woo: 10, actor: 'j' });

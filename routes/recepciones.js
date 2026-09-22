@@ -257,17 +257,19 @@ function opIdSiVerificable(db, it, idWoo) {
 // nombres que ya manda el frontend (public/recepcion/index.html, payloadRecepcion()) para el toggle
 // "usar y recordar", desmarcado por defecto; sin id_woo (sin match, o alta de producto nuevo) no hay
 // nada que aprender todavía. Un fallo al aprender el alias (p.ej. motivo requerido para reasignar y no
-// vino) no debe tirar abajo el guardado de la recepción entera — la línea igual queda guardada, solo
-// no se aprendió el alias.
+// vino) no debe tirar abajo el guardado de la recepción entera — la línea igual queda guardada — pero
+// SÍ se devuelve en la respuesta (no se traga en silencio): la UI necesita poder decirle al usuario
+// que su "recordar" no se guardó y por qué, en vez de dejarlo creer que sí se aprendió.
 function aprenderAliasSiCorresponde(db, it, { proveedor, id_woo, recepcion_item_id, actor }) {
-  if (!it?.aprender_alias || !id_woo) return;
+  if (!it?.aprender_alias || !id_woo) return null;
   try {
     confirmarAlias(db, {
       proveedor, nombre_doc: it.nombre_doc || it.nombre, codigo_proveedor: it.codigo_proveedor,
       id_woo, sku: it.sku_wc || it.sku || null, recepcion_item_id, actor, motivo: it.motivo_alias,
     });
+    return null;
   } catch (e) {
-    console.error(`no se pudo aprender alias para el ítem de recepción ${recepcion_item_id}: ${e.message}`);
+    return { recepcion_item_id, nombre_doc: it.nombre_doc || it.nombre, error: e.message };
   }
 }
 
@@ -474,6 +476,7 @@ export function recepcionesRouter(db, cfg) {
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
 
+    const aliasesNoAprendidos = [];
     const saveAll = db.transaction(() => {
       for (const d of documentos) {
         // Sanitizar file_url: rechazar path traversal
@@ -489,12 +492,13 @@ export function recepcionesRouter(db, cfg) {
           it.codigo_proveedor || null, cantidad,
           it.precio_unitario || null, it.stock_previo || null, it.stock_nuevo || null, recibido,
           estado_item, alta_operation_id, now).lastInsertRowid;
-        aprenderAliasSiCorresponde(db, it, { proveedor, id_woo: it.id_woo || null, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
+        const fallo = aprenderAliasSiCorresponde(db, it, { proveedor, id_woo: it.id_woo || null, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
+        if (fallo) aliasesNoAprendidos.push(fallo);
       }
     });
     saveAll();
 
-    res.json({ ok: true, id: recId, pedido_id: pedidoId });
+    res.json({ ok: true, id: recId, pedido_id: pedidoId, aliases_no_aprendidos: aliasesNoAprendidos });
   });
 
   // Re-persiste items/docs de un borrador existente (para cuando el usuario editó post-save)
@@ -507,6 +511,7 @@ export function recepcionesRouter(db, cfg) {
     const { items: newItems = [], documentos: newDocs = [] } = req.body || {};
     const now = new Date().toISOString();
 
+    const aliasesNoAprendidos = [];
     const updateRec = db.transaction(() => {
       db.prepare('DELETE FROM recepcion_items WHERE recepcion_id=?').run(id);
       db.prepare('DELETE FROM recepcion_documentos WHERE recepcion_id=?').run(id);
@@ -532,11 +537,12 @@ export function recepcionesRouter(db, cfg) {
           it.codigo_proveedor || null, cantidad,
           it.precio_unitario || null, it.stock_wc ?? null, null, recibido,
           estado_item, alta_operation_id, now).lastInsertRowid;
-        aprenderAliasSiCorresponde(db, it, { proveedor: proveedorRec, id_woo: idWooEfectivo, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
+        const fallo = aprenderAliasSiCorresponde(db, it, { proveedor: proveedorRec, id_woo: idWooEfectivo, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
+        if (fallo) aliasesNoAprendidos.push(fallo);
       }
     });
     updateRec();
-    res.json({ ok: true, id });
+    res.json({ ok: true, id, aliases_no_aprendidos: aliasesNoAprendidos });
   });
 
   // Confirma una recepción: actualiza stock en WooCommerce ítem a ítem
