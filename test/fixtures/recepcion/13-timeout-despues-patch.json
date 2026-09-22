@@ -1,0 +1,20 @@
+{
+  "caso": "Timeout después del PATCH - simulación para E2E: Woo aplicó pero no respondió, requiere idempotencia",
+  "items": [
+    {
+      "linea_id": "13",
+      "nombre_doc": "Producto con Timeout Después",
+      "codigo_proveedor": "TIMEOUT-AFTER-PATCH",
+      "variacion": "",
+      "cantidad": 3,
+      "marca": "Marca D",
+      "talle": null,
+      "color": null
+    }
+  ],
+  "escenario_e2e": {
+    "descripcion": "El matching resuelve automáticamente. Woo **aplica el PATCH** (actualiza stock) pero su respuesta se pierde por timeout",
+    "mock_woo_comportamiento": "aplica_pero_no_responde",
+    "esperado": "al reintentar, verifica que el PATCH ya se aplicó una sola vez, no lo repite"
+  }
+}

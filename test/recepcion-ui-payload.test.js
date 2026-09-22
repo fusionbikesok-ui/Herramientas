@@ -1403,6 +1403,8 @@ describe('public/recepcion/index.html — P1.6: Modales accesibles', () => {
       if (id === 'precio-input') elementos[id].value = '10.50';
       if (id === 'modo-select') elementos[id].value = 'simple';
       if (id === 'parent-input') elementos[id].value = '';
+      if (id === 'atributo-nombre-input') elementos[id].value = 'Talle';
+      if (id === 'atributo-valor-input') elementos[id].value = 'Único';
 
       return elementos[id];
     };

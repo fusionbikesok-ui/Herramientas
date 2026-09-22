@@ -1,0 +1,10 @@
+{
+  "generado_en": "2026-09-21",
+  "total": 22,
+  "por_recepcion": [
+    { "recepcion_id": 1, "cantidad": 1 },
+    { "recepcion_id": 52, "cantidad": 6 },
+    { "recepcion_id": 53, "cantidad": 11 },
+    { "recepcion_id": 55, "cantidad": 4 }
+  ]
+}

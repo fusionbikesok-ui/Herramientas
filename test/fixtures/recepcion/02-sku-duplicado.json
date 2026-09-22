@@ -1,0 +1,15 @@
+{
+  "caso": "SKU duplicado - el mismo SKU existe en dos productos distintos, requiere revisión manual",
+  "items": [
+    {
+      "linea_id": "2",
+      "nombre_doc": "Zapatilla Trail",
+      "codigo_proveedor": "ZAPA-001",
+      "variacion": "",
+      "cantidad": 3,
+      "marca": "Marca B",
+      "talle": null,
+      "color": null
+    }
+  ]
+}

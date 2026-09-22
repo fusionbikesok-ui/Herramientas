@@ -1,0 +1,13 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import Database from 'better-sqlite3';
+import express from 'express';
+import request from 'supertest';
+import { recepcionesRouter } from '../routes/recepciones.js';
+
+function app() { const db=new Database(':memory:'); db.exec("CREATE TABLE catalogo_cache (id_woo INTEGER PRIMARY KEY,id_padre INTEGER,sku TEXT,nombre TEXT,tipo TEXT,stock INTEGER,atributos_json TEXT,marca TEXT); CREATE TABLE recepciones (id INTEGER PRIMARY KEY,proveedor TEXT,estado TEXT,solo_documento INTEGER DEFAULT 0); CREATE TABLE recepcion_items (id INTEGER PRIMARY KEY,recepcion_id INTEGER,id_woo INTEGER,sku TEXT,nombre_doc TEXT,codigo_proveedor TEXT,cantidad INTEGER,estado_item TEXT,error_wc TEXT,resuelto_en TEXT); CREATE TABLE recepcion_aliases_proveedor (id INTEGER PRIMARY KEY AUTOINCREMENT,proveedor_norm TEXT,codigo_norm TEXT,descripcion_norm TEXT,variacion_norm TEXT,id_woo INTEGER,sku TEXT,recepcion_item_id INTEGER,creado_por TEXT,vigente_desde TEXT,vigente_hasta TEXT,motivo_cierre TEXT); CREATE UNIQUE INDEX alias_codigo ON recepcion_aliases_proveedor(proveedor_norm,codigo_norm) WHERE vigente_hasta IS NULL AND codigo_norm<>''; INSERT INTO catalogo_cache VALUES (1,NULL,'SKU-1','Casco Alpha','simple',3,NULL,'Marca'); INSERT INTO recepciones VALUES (1,'Proveedor','borrador',0); INSERT INTO recepcion_items VALUES (7,1,NULL,NULL,'Casco Alpha','SKU-1',2,'sin_match',NULL,NULL);"); const a=express(); a.use(express.json()); a.use('/api/recepciones',recepcionesRouter(db,{url:'https://woo.test',ck:'x',cs:'y'})); return {a,db}; }
+describe('rutas de matching de recepción',()=>{
+  let x; beforeEach(()=>{x=app();});
+  it('devuelve candidatos desde backend sin catálogo en el request',async()=>{const r=await request(x.a).post('/api/recepciones/matchear').send({proveedor:'Proveedor',items:[{linea_id:'local-1',nombre_doc:'Casco Alpha',codigo_proveedor:'SKU-1'}]}); expect(r.status).toBe(200); expect(r.body.resultados[0].auto_aplicable).toBe(true);});
+  it('resuelve y aprende alias solo con confirmación explícita',async()=>{const r=await request(x.a).post('/api/recepciones/1/items/7/resolver').send({id_woo:1,aprender:true,motivo:'etiqueta confirmada'}); expect(r.status).toBe(200); expect(x.db.prepare("SELECT estado_item FROM recepcion_items WHERE id=7").get().estado_item).toBe('pendiente'); expect(x.db.prepare('SELECT count(*) n FROM recepcion_aliases_proveedor').get().n).toBe(1);});
+  it('rechaza entidad no vendible o item inexistente',async()=>{expect((await request(x.a).post('/api/recepciones/1/items/999/resolver').send({id_woo:1})).status).toBe(404); expect((await request(x.a).post('/api/recepciones/1/items/7/resolver').send({id_woo:99})).status).toBe(409);});
+});

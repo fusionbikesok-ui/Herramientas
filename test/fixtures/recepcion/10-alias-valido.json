@@ -1,0 +1,21 @@
+{
+  "caso": "Alias válido - usar un código de proveedor que apunta a un alias vigente",
+  "items": [
+    {
+      "linea_id": "10",
+      "nombre_doc": "Guante de Ciclismo",
+      "codigo_proveedor": "ALIAS-GUANTE-001",
+      "variacion": "",
+      "cantidad": 12,
+      "marca": "Marca A",
+      "talle": null,
+      "color": null
+    }
+  ],
+  "alias_aprendido": {
+    "proveedor": "Proveedor Prueba",
+    "codigo_proveedor": "ALIAS-GUANTE-001",
+    "nombre_doc": "Guante",
+    "id_woo_destino": 5
+  }
+}

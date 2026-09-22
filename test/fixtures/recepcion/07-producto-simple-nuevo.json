@@ -1,0 +1,22 @@
+{
+  "caso": "Producto simple nuevo - crear un borrador de producto simple sin existir en catálogo",
+  "items": [
+    {
+      "linea_id": "7",
+      "nombre_doc": "Luz LED Frontal Roja",
+      "codigo_proveedor": "LUZ-LED-F-ROJA",
+      "variacion": "",
+      "cantidad": 10,
+      "marca": "LED Corp",
+      "talle": null,
+      "color": null
+    }
+  ],
+  "esperado_accion": "crear_borrador_simple",
+  "datos_borrador": {
+    "nombre": "Luz LED Frontal Roja",
+    "sku": "LUZ-LED-F-ROJA",
+    "precio": 450.00,
+    "stock": 10
+  }
+}

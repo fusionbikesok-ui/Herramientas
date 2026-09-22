@@ -1006,6 +1006,14 @@ function abrirAltaBorrador(id) {
           + '<div class="modal-field" id="parent-field" style="display:none;">'
           + '<label for="parent-input">ID del producto padre variable:</label>'
           + '<input type="number" id="parent-input" value="" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="atributo-nombre-input">Atributo (nombre), p. ej. Talle o Color:</label>'
+          + '<input type="text" id="atributo-nombre-input" value="" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="atributo-valor-input">Atributo (valor):</label>'
+          + '<input type="text" id="atributo-valor-input" value="" />'
           + '</div>',
         textConfirm: 'Crear borrador',
         textCancel: 'Cancelar',
@@ -1016,6 +1024,8 @@ function abrirAltaBorrador(id) {
           var categoriaSelect = document.getElementById('categoria-select').value;
           var precio = Number(document.getElementById('precio-input').value);
           var modo = document.getElementById('modo-select').value;
+          var atributoNombre = (document.getElementById('atributo-nombre-input').value || '').trim();
+          var atributoValor = (document.getElementById('atributo-valor-input').value || '').trim();
           var parentId = null;
 
           // Parsear categoría (formato: "id|nombre")
@@ -1032,6 +1042,7 @@ function abrirAltaBorrador(id) {
           if (!marca) errores.push('La marca es obligatoria');
           if (!categoria || !categoriaNombre) errores.push('Selecciona una categoría');
           if (!(precio > 0)) errores.push('El precio debe ser positivo');
+          if (!atributoNombre || !atributoValor) errores.push('El atributo del producto (nombre y valor) es obligatorio');
 
           if (modo === 'variacion_existente') {
             var parentInput = document.getElementById('parent-input');
@@ -1065,7 +1076,7 @@ function abrirAltaBorrador(id) {
                 precio: String(precio),
                 descripcion: '',
                 parent_id: parentId,
-                atributos: []
+                atributos: [{ nombre: atributoNombre, valor: atributoValor }]
               }
             })
           })
@@ -1549,7 +1560,7 @@ function confirmarRecepcion() {
   var pasos = recepcionGuardadaId
     ? fetch('/api/recepciones/' + recepcionGuardadaId + '/actualizar', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ items: payload.items, documentos: payload.documentos })
+        body: JSON.stringify({ items: payload.items, documentos: payload.documentos, solo_documento: payload.solo_documento })
       }).then(function(r){ return r.json(); })
     : fetch('/api/recepciones', {
         method:'POST', headers:{'Content-Type':'application/json'},

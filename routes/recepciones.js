@@ -561,11 +561,14 @@ export function recepcionesRouter(db, cfg) {
     if (!rec) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (rec.estado !== 'borrador') return res.status(400).json({ ok: false, error: 'solo borradores' });
 
-    const { items: newItems = [], documentos: newDocs = [] } = req.body || {};
+    const { items: newItems = [], documentos: newDocs = [], solo_documento } = req.body || {};
     const now = new Date().toISOString();
 
     const aliasesNoAprendidos = [];
     const updateRec = db.transaction(() => {
+      if (solo_documento !== undefined) {
+        db.prepare('UPDATE recepciones SET solo_documento=? WHERE id=?').run(solo_documento ? 1 : 0, id);
+      }
       db.prepare('DELETE FROM recepcion_items WHERE recepcion_id=?').run(id);
       db.prepare('DELETE FROM recepcion_documentos WHERE recepcion_id=?').run(id);
 
