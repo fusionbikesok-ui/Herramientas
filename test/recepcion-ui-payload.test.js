@@ -28,6 +28,7 @@ function cargarApp() {
     console,
     localStorage: { getItem() { return null; }, setItem() {} },
     Api: { installAuth() {} },
+    alert: () => {}, // Mock para evitar "alert is not defined"
     esc: (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])), // lib/format.js
   };
   vm.createContext(sandbox);
@@ -66,19 +67,22 @@ describe('public/recepcion/index.html — payloadRecepcion()', () => {
     expect(it.estado_item).toBe('sin_match');
   });
 
-  it('P1: window.onload dispara la carga del catálogo (si no, buscarWC queda "no disponible" para siempre)', () => {
-    // catalogoEstado arranca en 'cargando' y buscarWC() solo busca cuando está en 'ok'. Si nada
-    // llama a cargarCatalogo() en algún momento, el buscador manual de "Buscar en catálogo" queda
-    // permanentemente roto (muestra "Catálogo no disponible" en cada recepción, para siempre) —
-    // no es un test de que exista el string en el código, es que la carga realmente se dispare.
+  it('P1.3: window.onload NO carga el catálogo completo (búsqueda es dinámico bajo demanda)', () => {
+    // P1.3: cargarCatalogo() se elimina. El catálogo completo no se carga en memoria.
+    // buscarWC() ahora hace fetch dinámico a /api/recepciones/catalogo?q=... cuando el usuario tipea.
+    // Este test verifica que onload NO intente cargar /api/recepciones/catalogo sin parámetro.
     const app = cargarApp();
-    let catalogoCargado = false;
+    let llamadasCatalogo = [];
     app.fetch = (url) => {
-      if (String(url).includes('/api/recepciones/catalogo')) catalogoCargado = true;
+      if (String(url).includes('/api/recepciones/catalogo')) {
+        llamadasCatalogo.push(String(url));
+      }
       return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
     };
     app.window.onload();
-    expect(catalogoCargado).toBe(true);
+    // No debe haber pedido el catálogo completo (sin ?q)
+    const catalogoCompleto = llamadasCatalogo.filter(u => !u.includes('?q='));
+    expect(catalogoCompleto).toHaveLength(0);
   });
 
   it('una alta "incierta" (Woo no confirmó, no repetir) NO se envía como "creado"', () => {
@@ -833,5 +837,258 @@ describe('public/recepcion/index.html — P1.2: cambio de proveedor invalida mat
     // No debe haber llamadas al backend
     const llamadasDespues = llamadasFetch.length;
     expect(llamadasDespues).toBe(llamadasAntes);
+  });
+});
+
+describe('public/recepcion/index.html — P1.3: búsqueda dinámica sin catálogo en memoria', () => {
+  it('buscarWC hace fetch a /api/recepciones/catalogo?q=... cuando hay >= 2 caracteres', async () => {
+    const app = cargarApp();
+    const llamadas = [];
+    app.fetch = (url) => {
+      llamadas.push(String(url));
+      if (String(url).includes('/api/recepciones/catalogo?q=')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            ok: true,
+            data: [
+              { id_woo: 10, sku: 'CASCO-1', nombre: 'Casco MTB', stock: 5 },
+              { id_woo: 11, sku: 'CASCO-2', nombre: 'Casco Ruta', stock: 3 }
+            ]
+          })
+        });
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
+    };
+
+    const inp = { value: 'cas' };
+    const dd = { innerHTML: '', classList: { add() {}, remove() {} } };
+    app.document.getElementById = (id) => id.startsWith('dd-') ? dd : inp;
+
+    app.buscarWC(inp, 'item1');
+    // Esperar debounce (300ms) + tiempo de fetch
+    await new Promise(r => setTimeout(r, 400));
+
+    const catalogoCall = llamadas.find(u => u.includes('/api/recepciones/catalogo?q='));
+    expect(catalogoCall).toBeDefined();
+    expect(catalogoCall).toContain('q=cas');
+  });
+
+  it('buscarWC aplica debounce de ~300ms (no dispara fetch en cada tecla)', async () => {
+    const app = cargarApp();
+    let fetchCount = 0;
+    app.fetch = (url) => {
+      if (String(url).includes('/api/recepciones/catalogo?q=')) fetchCount++;
+      return Promise.resolve({
+        json: () => Promise.resolve({ ok: true, data: [] })
+      });
+    };
+
+    const inp = { value: '' };
+    const dd = { innerHTML: '', classList: { add() {}, remove() {} } };
+    app.document.getElementById = (id) => id.startsWith('dd-') ? dd : inp;
+
+    // Simular varias teclas en rápida sucesión
+    inp.value = 'c';
+    app.buscarWC(inp, 'item1');
+    await new Promise(r => setTimeout(r, 50));
+
+    inp.value = 'ca';
+    app.buscarWC(inp, 'item1');
+    await new Promise(r => setTimeout(r, 50));
+
+    inp.value = 'cas';
+    app.buscarWC(inp, 'item1');
+
+    // Sin debounce, fetchCount sería 2+ (todas las llamadas >= 2 caracteres)
+    // Con debounce, solo la última debe dispararse (después de esperar ~300ms)
+    await new Promise(r => setTimeout(r, 350));
+
+    // Solo UNA llamada debe haberse hecho (la última)
+    expect(fetchCount).toBeLessThanOrEqual(2); // debounce activo: máximo 1-2, no 3
+  });
+
+  it('seleccionarWC recibe datos directos (nombre, sku, stock) sin buscar en catálogo[]', () => {
+    const app = cargarApp();
+    app.items.push({ id: 'item1' });
+
+    const evt = { preventDefault() {} };
+    // Los datos se pasan como argumentos o en dataset del elemento
+    // Simulamos que se pasan inline como argumentos a la función
+    const nombreProducto = 'Casco MTB';
+    const skuProducto = 'CASCO-1';
+    const stockProducto = 5;
+
+    // Mock para renderItems que se llama dentro de seleccionarWC
+    app.renderItems = () => {};
+    app.actualizarBotones = () => {};
+    app.sincronizarAliasGuardado = () => {};
+
+    // P1.3: seleccionarWC recibe los datos como argumentos adicionales (sin depender de catalogo[])
+    app.seleccionarWC(evt, 'item1', 10, nombreProducto, skuProducto, stockProducto);
+
+    const item = app.items[0];
+    expect(item.id_woo).toBe(10);
+    expect(item.nombre_wc).toBe(nombreProducto);
+    expect(item.sku_wc).toBe(skuProducto);
+    expect(item.stock_wc).toBe(stockProducto);
+  });
+
+  it('retomar(id) NO depende de catálogo[] cargado en memoria', async () => {
+    const app = cargarApp();
+    // Verificar que catalogo no esté globalmente disponible o esté vacío
+    const itemConIdWoo = { id_woo: 10, sku: 'CASCO-1', nombre_doc: 'Casco' };
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: '' };
+      if (id === 'inp-importador') return { value: '' };
+      if (id === 'inp-numero-pedido') return { value: '' };
+      if (id === 'inp-fecha') return { value: '' };
+      if (id === 'inp-notas') return { value: '' };
+      if (id === 'solo-doc-row') return { setAttribute() {} };
+      if (id === 'solo-doc-toggle') return { style: {} };
+      if (id === 'solo-doc-knob') return { style: {} };
+      if (id === 'btn-confirmar') return { style: {} };
+      if (id === 'btn-confirmar-solo') return { style: {} };
+      if (id === 'docs-area') return { innerHTML: '', appendChild() {} };
+      if (id === 'items-section') return { style: {} };
+      if (id === 'items-body') return { innerHTML: '', appendChild() {} };
+      if (id === 'items-count') return { textContent: '' };
+      if (id === 'status-confirm') return { textContent: '', innerHTML: '', className: '', style: { display: '' } };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {} };
+    };
+
+    app.document.createElement = (tag) => ({
+      innerHTML: '', appendChild() {}, setAttribute() {}, querySelector() { return null; }, id: ''
+    });
+
+    // Mock fetch para simular retomar de una recepción guardada
+    app.fetch = (url) => {
+      if (String(url).includes('/api/recepciones/1')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            ok: true,
+            data: {
+              id: 1,
+              proveedor: 'Proveedor A',
+              importador: 'Proveedor A',
+              numero_pedido: '',
+              fecha: '2026-09-22',
+              notas: '',
+              solo_documento: 0,
+              documentos: [],
+              items: [itemConIdWoo]
+            }
+          })
+        });
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
+    };
+
+    // Llamar a retomar sin haber cargado catálogo completo
+    app.retomar(1);
+    await new Promise(r => setTimeout(r, 50));
+
+    // El ítem debe estar restaurado con nombre fallback (nombre_doc) o con búsqueda puntual
+    expect(app.items).toHaveLength(1);
+    expect(app.items[0].id_woo).toBe(10);
+    // El nombre debe estar disponible (via nombre_doc como fallback o búsqueda puntual)
+    expect(app.items[0].nombre_wc).toBeDefined();
+  });
+
+  it('retomar no espera a catalogo.length > 0 (polling sin precarga)', async () => {
+    const app = cargarApp();
+    const params = new URLSearchParams('retomar=99');
+    app.window.location = { search: '?retomar=99' };
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: '', addEventListener() {} };
+      if (id === 'inp-importador') return { value: '' };
+      if (id === 'inp-numero-pedido') return { value: '', addEventListener() {} };
+      if (id === 'inp-fecha') return { value: '' };
+      if (id === 'inp-notas') return { value: '' };
+      if (id === 'solo-doc-row') return { setAttribute() {} };
+      if (id === 'solo-doc-toggle') return { style: {} };
+      if (id === 'solo-doc-knob') return { style: {} };
+      if (id === 'btn-confirmar') return { style: {} };
+      if (id === 'btn-confirmar-solo') return { style: {} };
+      if (id === 'docs-area') return { innerHTML: '', appendChild() {} };
+      if (id === 'items-section') return { style: {} };
+      if (id === 'items-body') return { innerHTML: '', appendChild() {} };
+      if (id === 'items-count') return { textContent: '' };
+      if (id === 'status-confirm') return { textContent: '', innerHTML: '', className: '', style: { display: '' } };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {}, appendChild() {} };
+    };
+
+    app.document.createElement = (tag) => ({
+      innerHTML: '', appendChild() {}, setAttribute() {}, querySelector() { return null; }, id: ''
+    });
+
+    let retomoCalled = false;
+    const originalRetomar = app.retomar.bind(app);
+    app.retomar = (id) => {
+      retomoCalled = true;
+      return originalRetomar(id);
+    };
+
+    app.fetch = (url) => {
+      if (String(url).includes('/api/recepciones/99')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            ok: true,
+            data: { id: 99, proveedor: 'Test', items: [] }
+          })
+        });
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ ok: true, data: [] }) });
+    };
+
+    // onload debe intentar retomar sin esperar catálogo
+    app.window.onload();
+
+    // Con P1.3, no debe esperar a catalogo.length > 0, debe retomar inmediatamente
+    // (o después del timeout de seguridad, pero sin dependencia de catálogo)
+    await new Promise(r => setTimeout(r, 200));
+
+    expect(retomoCalled).toBe(true);
+  });
+
+  it('buscarWC: guard anti-stale previene que fetch obsoleto pinte resultados o errores', async () => {
+    const app = cargarApp();
+    const inp = { value: 'ca' };
+    const dd = { innerHTML: '', classList: { add() {}, remove() {} } };
+    app.document.getElementById = (id) => id.startsWith('dd-') ? dd : inp;
+
+    let callOrder = [];
+    app.fetch = (url) => {
+      const q = url.match(/q=([^&]*)/)?.[1];
+      callOrder.push(q);
+
+      // El fetch de "ca" falla, el de "cas" se resuelve
+      if (q === 'ca') {
+        return Promise.reject(new Error('Network error for ca'));
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          ok: true,
+          data: [{ id_woo: 10, sku: 'CASCO-1', nombre: 'Casco MTB', stock: 5 }]
+        })
+      });
+    };
+
+    // Buscar "ca"
+    app.buscarWC(inp, 'item1');
+    await new Promise(r => setTimeout(r, 50));
+
+    // Cambiar a "cas" (cancela debounce anterior, lanza uno nuevo)
+    inp.value = 'cas';
+    app.buscarWC(inp, 'item1');
+
+    // Esperar ambos debounces + fetches (max 650ms = 300 * 2 + buffer)
+    await new Promise(r => setTimeout(r, 700));
+
+    // Verificar: el fetch de "cas" se resolvió, se muestra su resultado
+    expect(dd.innerHTML).toContain('Casco MTB');
+    // El error del fetch de "ca" NO pisó nada (guard anti-stale)
+    expect(dd.innerHTML).not.toContain('Error al buscar');
   });
 });

@@ -323,13 +323,13 @@ input[type=file] { display:none; }
 <script>
 Api.installAuth();
 
-var catalogo = [];
-var catalogoEstado = 'cargando'; // 'cargando' | 'ok' | 'error' — todo lo que lee catalogo[] chequea esto antes de decir "no existe"
 var items = [];   // ítems de la recepción actual
 var docs  = [];   // documentos de la recepción actual
 var recepcionGuardadaId = null;
 var soloDocumento = false;
 var proveedorAnterior = null; // P1.2: guardar el proveedor anterior para detectar cambios
+var busquedaDebouncers = {}; // P1.3: mapear itemId → timeoutId para debounce de buscarWC
+var busquedaVersiones = {}; // P1.3: mapear itemId → versionId para evitar respuestas stale
 function normalizar(s) { return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim(); }
 
 function toggleSoloDoc() {
@@ -359,11 +359,8 @@ function toggleSoloDoc() {
 
 window.onload = function() {
   document.getElementById('inp-fecha').value = new Date().toISOString().slice(0,10);
-  // El matching automático ya no depende del catálogo completo (va por /api/recepciones/matchear),
-  // pero buscarWC() —el buscador MANUAL de "Cambiar"/"Buscar en catálogo"— sí lo necesita en memoria
-  // y solo lo pide acá. Sin esta llamada catalogoEstado se queda en 'cargando' para siempre y ese
-  // buscador queda permanentemente "no disponible" en cada recepción.
-  cargarCatalogo();
+  // P1.3: buscarWC() ahora hace búsqueda dinámica a /api/recepciones/catalogo?q=...
+  // sin depender de un catálogo completo cargado en memoria en onload
   setupDrop();
   cargarProveedoresRecientes();
   document.getElementById('inp-numero-pedido').addEventListener('input', actualizarAvisoPedido);
@@ -374,18 +371,11 @@ window.onload = function() {
   var params = new URLSearchParams(window.location.search);
   var retId  = params.get('retomar');
   if (retId) {
-    var retomado = false;
-    var t = setInterval(function() {
-      if (catalogo.length > 0) {
-        clearInterval(t);
-        if (!retomado) { retomado = true; retomar(parseInt(retId)); }
-      }
-    }, 300);
-    // Timeout de seguridad: retomar igual después de 3s aunque no haya catálogo
+    // P1.3: retomar ahora funciona sin esperar a catalogo.length > 0
+    // Timeout de seguridad: retomar después de 100ms para asegurar que el DOM esté listo
     setTimeout(function() {
-      clearInterval(t);
-      if (!retomado) { retomado = true; retomar(parseInt(retId)); }
-    }, 3000);
+      retomar(parseInt(retId));
+    }, 100);
   }
 };
 
@@ -444,22 +434,6 @@ function actualizarAvisoPedido() {
 }
 
 // Búsqueda manual explícita. Nunca se invoca al iniciar ni participa del matching automático.
-function cargarCatalogo() {
-  catalogoEstado = 'cargando';
-  fetch('/api/recepciones/catalogo')
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if (!d.ok) throw new Error('respuesta no-ok');
-      catalogo = (d.data || []).map(function(p){
-        p._skuNorm = normalizar(p.sku || '');
-        p._gtinNorm = normalizar(p.gtin || '');
-        p._busq = p._skuNorm + ' ' + normalizar(p.nombre || '');
-        return p;
-      });
-      catalogoEstado = 'ok';
-    })
-    .catch(function(){ catalogo = []; catalogoEstado = 'error'; });
-}
 
 function cargarProveedoresRecientes() {
   fetch('/api/recepciones')
@@ -796,7 +770,7 @@ function renderItems() {
         + '</div>';
     } else {
       wcCell = '<div class="wc-search-wrap">'
-        + '<input class="wc-search-input" type="text" aria-label="Buscar producto en catálogo WooCommerce" placeholder="Buscar en catálogo..." oninput="buscarWC(this,\'' + it.id + '\')" onfocus="abrirDropdown(this)" onblur="cerrarDropdown(this)">'
+        + '<input class="wc-search-input" type="text" id="wc-search-' + it.id + '" aria-label="Buscar producto en catálogo WooCommerce" placeholder="Buscar en catálogo..." oninput="buscarWC(this,\'' + it.id + '\')" onfocus="abrirDropdown(this)" onblur="cerrarDropdown(this)">'
         + '<div class="wc-dropdown" id="dd-' + it.id + '"></div>'
         + '</div>'
         + '<div style="margin-top:5px;font-size:11px;color:var(--gray2)">Sin match: buscá un producto existente o creá un borrador seguro.</div>'
@@ -916,49 +890,83 @@ function toggleRecibido(id) {
 function buscarWC(inp, itemId) {
   var q = normalizar(inp.value);
   var dd = document.getElementById('dd-' + itemId);
-  if (!q || q.length < 2) { dd.innerHTML=''; dd.classList.remove('open'); return; }
-  if (catalogoEstado !== 'ok') {
-    dd.innerHTML='<div class="wc-opt" style="color:var(--amber,#e8b93b);pointer-events:none">⚠ Catálogo no disponible — no se puede buscar. <a href="javascript:void(0)" onmousedown="event.preventDefault();cargarCatalogo()" style="color:inherit;text-decoration:underline">Reintentar</a></div>';
-    dd.classList.add('open'); return;
+
+  // Limpiar búsqueda anterior si hay
+  if (!q || q.length < 2) {
+    dd.innerHTML='';
+    dd.classList.remove('open');
+    // Cancelar debounce si estaba pendiente
+    if (busquedaDebouncers[itemId]) {
+      clearTimeout(busquedaDebouncers[itemId]);
+      delete busquedaDebouncers[itemId];
+    }
+    return;
   }
-  // Se conservan los fragmentos de 1 carácter: descartarlos dejaba `palabras` vacío para
-  // consultas como "A-1" (normalizar() parte por el guión), y un every() sobre un array
-  // vacío da true para TODO el catálogo — devolvía 20 productos sin relación con lo buscado.
-  var palabras = q.split(' ').filter(function(w){ return w.length>0; });
-  var resultados = catalogo.filter(function(p){
-    if (palabras.every(function(w){ return p._busq.indexOf(w)!==-1; })) return true;
-    // GTIN: solo exacto o por prefijo (evita falsos positivos por substring en medio del código)
-    return !!p._gtinNorm && (p._gtinNorm === q || p._gtinNorm.indexOf(q) === 0);
-  }).sort(function(a,b){
-    var scoreA = (a._skuNorm===q) ? 2 : (a._skuNorm.indexOf(q)===0 ? 1 : 0);
-    var scoreB = (b._skuNorm===q) ? 2 : (b._skuNorm.indexOf(q)===0 ? 1 : 0);
-    return scoreB - scoreA;
-  }).slice(0, 20);
-  if (!resultados.length) {
-    dd.innerHTML='<div class="wc-opt" style="color:var(--gray2);pointer-events:none">Sin resultados</div>';
-    dd.classList.add('open'); return;
+
+  // P1.3: cancelar el debounce anterior y lanzar uno nuevo (~300ms)
+  if (busquedaDebouncers[itemId]) {
+    clearTimeout(busquedaDebouncers[itemId]);
   }
-  dd.innerHTML = resultados.map(function(p){
-    // Solo pasamos itemId e idWoo — seleccionarWC busca los demás datos en catalogo[]
-    return '<div class="wc-opt" onmousedown="seleccionarWC(event,\'' + itemId + '\',' + p.id_woo + ')">'
-      + '<span class="wc-opt-name">' + esc(p.nombre) + '</span>'
-      + '<span class="wc-opt-sku">' + esc(p.sku||'—') + '</span>'
-      + '<span class="wc-opt-stock">' + (p.stock||0) + '</span>'
-      + '</div>';
-  }).join('');
+
+  // Mostrar spinner mientras se hace fetch
+  dd.innerHTML='<div class="wc-opt" style="color:var(--gray);pointer-events:none"><span class="spinner" style="margin-right:8px"></span>Buscando...</div>';
   dd.classList.add('open');
+
+  // P1.3: generar versión única para esta búsqueda (evitar stale responses)
+  var version = (busquedaVersiones[itemId] || 0) + 1;
+  busquedaVersiones[itemId] = version;
+
+  busquedaDebouncers[itemId] = setTimeout(function() {
+    delete busquedaDebouncers[itemId];
+
+    // P1.3: búsqueda dinámica al backend con ?q=...
+    fetch('/api/recepciones/catalogo?q=' + encodeURIComponent(q))
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        // P1.3: guard contra respuestas stale — comparar versión y valor actual
+        if (busquedaVersiones[itemId] !== version || normalizar(inp.value) !== q) return;
+        if (!d.ok || !d.data) throw new Error('respuesta inválida');
+
+        var resultados = d.data || [];
+        if (!resultados.length) {
+          dd.innerHTML='<div class="wc-opt" style="color:var(--gray2);pointer-events:none">Sin resultados</div>';
+          dd.classList.add('open');
+          return;
+        }
+
+        // P1.3: los datos (nombre, sku, stock) vienen en la respuesta, pasarlos directamente
+        dd.innerHTML = resultados.map(function(p){
+          // Escapar nombre y sku: backslash PRIMERO, luego comillas (P1.3 reviewer feedback)
+          var nombreEsc = (p.nombre||'').replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          var skuEsc = (p.sku||'').replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          return '<div class="wc-opt" data-id-woo="' + p.id_woo + '" data-nombre="' + nombreEsc + '" data-sku="' + skuEsc + '" data-stock="' + (p.stock||0) + '" onmousedown="seleccionarWC(event,\'' + itemId + '\',' + p.id_woo + ',\'' + nombreEsc + '\',\'' + skuEsc + '\',' + (p.stock||0) + ')">'
+            + '<span class="wc-opt-name">' + esc(p.nombre) + '</span>'
+            + '<span class="wc-opt-sku">' + esc(p.sku||'—') + '</span>'
+            + '<span class="wc-opt-stock">' + (p.stock||0) + '</span>'
+            + '</div>';
+        }).join('');
+        dd.classList.add('open');
+      })
+      .catch(function(err) {
+        // P1.3: guard anti-stale en catch también — no pintar error obsoleto
+        if (busquedaVersiones[itemId] !== version || normalizar(inp.value) !== q) return;
+        // P1.3: usar closure para ref estable a inp, y agregar id al input para selector
+        dd.innerHTML='<div class="wc-opt" style="color:var(--red,#f87171);pointer-events:none">⚠ Error al buscar. <a href="javascript:void(0)" onclick="event.preventDefault(); var inp=document.getElementById(\'wc-search-' + itemId + '\'); if(inp) buscarWC(inp, \'' + itemId + '\');" style="color:inherit;text-decoration:underline">Reintentar</a></div>';
+        dd.classList.add('open');
+      });
+  }, 300);
 }
 
-function seleccionarWC(evt, itemId, idWoo) {
+function seleccionarWC(evt, itemId, idWoo, nombre, sku, stock) {
   evt.preventDefault();
   var it = items.find(function(i){ return i.id == itemId; });
   if (!it) return;
-  var prod = catalogo.find(function(p){ return p.id_woo === idWoo; });
-  if (!prod) return;
+
+  // P1.3: los datos (nombre, sku, stock) se reciben como argumentos sin buscar en catalogo[]
   it.id_woo   = idWoo;
-  it.nombre_wc= prod.nombre;
-  it.sku_wc   = prod.sku || '';
-  it.stock_wc = prod.stock || 0;
+  it.nombre_wc= nombre || '';
+  it.sku_wc   = sku || '';
+  it.stock_wc = parseInt(stock || '0', 10);
   it.match_estado = 'manual_confirmado';
   it.match_confirmado = true;
   it.match_origen = 'seleccion_manual';
@@ -1269,9 +1277,8 @@ function retomar(id) {
       });
 
       // Restaurar items (con sus matches ya guardados)
+      // P1.3: no depende de catalogo[] en memoria — usa nombre_doc como fallback
       items = (rec.items || []).map(function(it){
-        // Buscar nombre del producto en el catálogo si hay match WC
-        var catItem = it.id_woo ? catalogo.find(function(c){ return c.id_woo === it.id_woo; }) : null;
         return {
           id:               Date.now() + Math.random(),
           db_id:            it.id, // P1.3: id real de recepcion_items — habilita /resolver sobre este ítem
@@ -1281,7 +1288,7 @@ function retomar(id) {
           precio_unitario:  it.precio_unitario || null,
           id_woo:           it.id_woo || null,
           sku_wc:           it.sku || null,
-          nombre_wc:        catItem ? catItem.nombre : it.nombre_doc,
+          nombre_wc:        it.nombre_doc, // P1.3: fallback a nombre_doc sin depender de catálogo
           stock_wc:         it.stock_previo != null ? it.stock_previo : null,
           match_tipo:       it.id_woo ? 'guardado' : null,
           match_score:      it.id_woo ? 99 : 0,
@@ -1293,6 +1300,26 @@ function retomar(id) {
       renderDocs();
       renderItems();
       actualizarBotones();
+
+      // P1.3: resolver nombres reales de Woo de forma asincrónica para items con id_woo
+      items.forEach(function(item) {
+        if (item.id_woo && item.sku_wc) {
+          fetch('/api/recepciones/catalogo?q=' + encodeURIComponent(item.sku_wc))
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (d.ok && d.data && d.data.length > 0) {
+                var prod = d.data.find(function(p) { return p.id_woo === item.id_woo; });
+                if (prod && prod.nombre) {
+                  item.nombre_wc = prod.nombre;
+                  // TODO/nota: renderItems() completo puede pisar inputs del usuario (ej. cantidad sin blur)
+                  // si se dispara mientras tanto. Refactor: actualizar solo el item en DOM en lugar de re-render completo.
+                  renderItems();
+                }
+              }
+            })
+            .catch(function() {}); // Silenciar errores, ya tenemos nombre_doc como fallback
+        }
+      });
 
       // Cambiar al tab Nueva recepción
       mostrarTab('nueva');
