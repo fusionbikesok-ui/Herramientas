@@ -283,9 +283,62 @@ export function recepcionesRouter(db, cfg) {
     return res.json({ ok:true, resultados: resolverLoteRecepcion(db, proveedor, items) });
   });
 
+  // Normaliza texto (idéntica a normalizar() del frontend public/recepcion/index.html):
+  // 1. minúsculas
+  // 2. NFD descompone acentos (ó → o + diacrítico, ñ → n + combining tilde) y luego se eliminan
+  // 3. Búsqueda "nino" encontrará "Canasta niño", "direccion" encontrará "Dirección", etc.
+  function normalizar(s) {
+    return (s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')  // elimina marcas diacríticas y combining marks
+      .replace(/[^a-z0-9\s]/g, ' ')     // reemplaza caracteres no alfanuméricos con espacio
+      .replace(/\s+/g, ' ')              // collapsa espacios múltiples
+      .trim();
+  }
+
   router.get('/catalogo', (req, res) => {
+    const q = String(req.query.q || '').trim();
+
+    // Si no hay query param, devolver todo el catálogo
+    if (!q) {
+      const rows = db.prepare('SELECT id_woo,sku,nombre,stock FROM catalogo_cache ORDER BY id_woo').all();
+      return res.json({ ok: true, data: rows });
+    }
+
+    // Con query param: filtrar por SKU o nombre (normalizado) y limitar a 20 resultados
     const rows = db.prepare('SELECT id_woo,sku,nombre,stock FROM catalogo_cache ORDER BY id_woo').all();
-    res.json({ ok: true, data: rows });
+    const qNorm = normalizar(q);
+
+    // Filtrar y ordenar por relevancia
+    const filtrados = rows
+      .map(row => ({
+        row,
+        skuNorm: normalizar(row.sku),
+        nombreNorm: normalizar(row.nombre),
+      }))
+      .filter(({ skuNorm, nombreNorm }) => {
+        // Matchea si el texto normalizado contiene el query (como substring)
+        return skuNorm.includes(qNorm) || nombreNorm.includes(qNorm);
+      })
+      .map(({ row, skuNorm, nombreNorm }) => {
+        // Calcular relevancia: match exacto de SKU primero, luego prefijo, luego resto
+        let relevancia = 0;
+        if (skuNorm === qNorm) relevancia = 1000; // exacto SKU
+        else if (skuNorm.startsWith(qNorm)) relevancia = 900; // prefijo SKU
+        else if (nombreNorm.startsWith(qNorm)) relevancia = 800; // prefijo nombre
+        else relevancia = 100; // substring en nombre/SKU
+        return { ...row, relevancia };
+      })
+      .sort((a, b) => {
+        // Ordenar por relevancia descendente, luego por id_woo para consistencia
+        if (b.relevancia !== a.relevancia) return b.relevancia - a.relevancia;
+        return a.id_woo - b.id_woo;
+      })
+      .slice(0, 20)
+      .map(({ id_woo, sku, nombre, stock }) => ({ id_woo, sku, nombre, stock }));
+
+    res.json({ ok: true, data: filtrados });
   });
 
   router.get('/aliases', (req, res) => {

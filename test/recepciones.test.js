@@ -1060,3 +1060,153 @@ describe('P1 — POST / y /:id/actualizar aprenden alias si el ítem trae aprend
     expect(alias.id_woo).toBe(10);
   });
 });
+
+describe('GET /api/recepciones/catalogo — búsqueda con query param', () => {
+  const DB = './test/tmp-recep-catalogo-busqueda.sqlite';
+  let db;
+  let app;
+
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+    app = makeApp(db);
+
+    // Catálogo con productos variados para pruebas
+    const ins = db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,sku,nombre,stock,tipo,actualizado_en) VALUES (?,?,?,?,?,?)'
+    );
+    ins.run(1, 'CASCO-001', 'Casco urbano negro', 5, 'simple', 'x');
+    ins.run(2, 'CASCO-002', 'Casco deportivo rojo', 3, 'simple', 'x');
+    ins.run(3, 'REMERA-M', 'Remera M azul', 10, 'simple', 'x');
+    ins.run(4, 'REMERA-L', 'Remera L blanco', 8, 'simple', 'x');
+    ins.run(5, 'CUBIERTA-26', 'Cubierta 26 pulgadas', 2, 'simple', 'x');
+    ins.run(6, 'CAD-001', 'Cadena velocidad 8 (noname)', 15, 'simple', 'x');
+    ins.run(7, 'ESP-NAR', 'Espejo naranja', 0, 'simple', 'x');
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  });
+
+  it('sin ?q devuelve el catálogo completo (o con límite establecido)', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect(res.body.data.length).toBeGreaterThanOrEqual(7); // al menos los 7 que insertamos
+    expect(res.body.data[0]).toHaveProperty('id_woo');
+    expect(res.body.data[0]).toHaveProperty('sku');
+    expect(res.body.data[0]).toHaveProperty('nombre');
+    expect(res.body.data[0]).toHaveProperty('stock');
+  });
+
+  it('?q=CASCO filtra por SKU case-insensitive', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=CASCO');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.length).toBe(2); // CASCO-001, CASCO-002
+    expect(res.body.data.map(r => r.sku)).toEqual(['CASCO-001', 'CASCO-002']);
+  });
+
+  it('?q=casco filtra por SKU (minúsculas)', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=casco');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBe(2);
+  });
+
+  it('?q=remera filtra por nombre', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=remera');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBe(2); // REMERA-M, REMERA-L
+    expect(res.body.data.map(r => r.sku).sort()).toEqual(['REMERA-L', 'REMERA-M']);
+  });
+
+  it('?q=casco deportivo filtra por nombre parcial', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=casco%20deportivo');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBe(1);
+    expect(res.body.data[0].sku).toBe('CASCO-002');
+  });
+
+  it('?q= (vacío) se comporta como sin q', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('?q=   (solo espacios) se comporta como sin q', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=%20%20%20');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('?q=INEXISTENTE devuelve array vacío sin error', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=XXXX9999');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('?q busca "nino" y encuentra "Canasta niño" (ñ se normaliza a n)', async () => {
+    // Insertar productos con ñ
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,sku,nombre,stock,tipo,actualizado_en) VALUES (?,?,?,?,?,?)'
+    ).run(8, 'CANASTA-NINO', 'Canasta niño', 5, 'simple', 'x');
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,sku,nombre,stock,tipo,actualizado_en) VALUES (?,?,?,?,?,?)'
+    ).run(9, 'MANILLAR-NINO', 'Manillar niño rojo', 3, 'simple', 'x');
+
+    // Buscar sin tilde/ñ debe encontrar ambos
+    const res = await request(app).get('/api/recepciones/catalogo?q=nino');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBe(2);
+    expect(res.body.data.map(r => r.sku).sort()).toEqual(['CANASTA-NINO', 'MANILLAR-NINO']);
+  });
+
+  it('?q busca "direccion" y encuentra "Dirección" (acentos se normalizan)', async () => {
+    // Insertar producto con tilde (accent agudo)
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,sku,nombre,stock,tipo,actualizado_en) VALUES (?,?,?,?,?,?)'
+    ).run(10, 'PLACA-DIR', 'Placa Dirección trasera', 5, 'simple', 'x');
+
+    // Buscar sin tilde debe encontrar
+    const res = await request(app).get('/api/recepciones/catalogo?q=direccion');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBe(1);
+    expect(res.body.data[0].sku).toBe('PLACA-DIR');
+  });
+
+  it('devuelve máximo 20 resultados cuando hay muchos matches', async () => {
+    // Insertar 30 productos que matcheen
+    for (let i = 0; i < 30; i++) {
+      db.prepare(
+        'INSERT INTO catalogo_cache (id_woo,sku,nombre,stock,tipo,actualizado_en) VALUES (?,?,?,?,?,?)'
+      ).run(100 + i, `CASCO-${String(i).padStart(3, '0')}`, 'Casco número X', 1, 'simple', 'x');
+    }
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=casco');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBeLessThanOrEqual(20);
+  });
+
+  it('búsqueda por SKU exacto devuelve ese resultado primero (relevancia)', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=REMERA-M');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.data[0].sku).toBe('REMERA-M');
+  });
+
+  it('respuesta mantiene estructura original: id_woo, sku, nombre, stock', async () => {
+    const res = await request(app).get('/api/recepciones/catalogo?q=casco');
+    expect(res.status).toBe(200);
+    expect(res.body.data.length).toBeGreaterThan(0);
+    const row = res.body.data[0];
+    expect(typeof row.id_woo).toBe('number');
+    expect(typeof row.sku).toBe('string');
+    expect(typeof row.nombre).toBe('string');
+    expect(typeof row.stock).toBe('number');
+    expect(Object.keys(row)).toEqual(['id_woo', 'sku', 'nombre', 'stock']);
+  });
+});

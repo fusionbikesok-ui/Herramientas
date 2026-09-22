@@ -3305,3 +3305,41 @@ responden `410`:
 La única vía de escritura de vínculo o pausa es una operación encolada desde Guardia ML;
 el cron legacy de push fue retirado. La detección periódica queda a cargo del cron de Guardia
 y de `POST /api/guardia-ml/escanear` para Admin.
+
+## Recepciones
+
+### GET /api/recepciones/catalogo
+Devuelve el catálogo de productos para búsqueda en recepciones (soporte a combobox con búsqueda backend).
+
+**Query params:**
+- `?q=<texto>` (opcional): búsqueda case-insensible por SKU o nombre (normalización de acentos y caracteres especiales).
+  - Sin `q`: devuelve todo el catálogo.
+  - Con `q`: filtra por coincidencia en SKU o nombre, devuelve máximo 20 resultados, ordenados por relevancia (exacto de SKU primero, luego prefijo, luego substring).
+  - `?q=` o `?q=   ` (vacío/espacios): se comporta como sin `q`.
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "data": [
+    {
+      "id_woo": <número>,
+      "sku": "<SKU>",
+      "nombre": "<nombre>",
+      "stock": <número>
+    },
+    ...
+  ]
+}
+```
+
+Máximo 20 resultados cuando hay búsqueda (`q` no vacío).
+Todas las columnas retornadas son obligatorias y exactamente éstas (no agregar más campos).
+
+**Comportamiento de la búsqueda:**
+- Normaliza tanto el query como el SKU/nombre del catálogo (minúsculas, descomposición de acentos, eliminación de diacríticos, colapso de espacios).
+- Matchea si el texto normalizado está presente (substring) en SKU o nombre.
+- Relevancia: exacto SKU > prefijo SKU > prefijo nombre > substring cualquiera.
+- En caso de empate de relevancia, ordena por id_woo ascendente.
+
+Fail-open: si la búsqueda no tiene coincidencias, devuelve `{ ok: true, data: [] }` sin error.
