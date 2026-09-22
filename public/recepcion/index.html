@@ -170,13 +170,12 @@ input[type=file] { display:none; }
 
   <div class="page-head">
     <div class="page-eyebrow">Operaciones · Ingreso</div>
-    <div class="page-title">Recepción de <em>Mercadería</em></div>
+    <h1 class="page-title">Recepción de <em>Mercadería</em></h1>
     <div class="page-desc">Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic.</div>
   </div>
 
   <div id="banner-catalogo" role="alert" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--amber-bg,#3a2c0d);border:1px solid var(--amber-bd,#8a6d1a);color:var(--amber,#e8b93b);font-size:13px;align-items:center;gap:10px;flex-wrap:wrap">
     <span>⚠ No se pudo cargar el catálogo de WooCommerce. La búsqueda y el matcheo automático no son confiables ahora mismo: un producto puede existir aunque el buscador diga "Sin resultados".</span>
-    <button type="button" onclick="cargarCatalogo()" style="border:1px solid currentColor;background:transparent;color:inherit;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer">Reintentar</button>
   </div>
 
   <div class="pill-tabs" role="tablist" aria-label="Secciones de recepción de mercadería">
@@ -247,7 +246,7 @@ input[type=file] { display:none; }
 
     <div class="card">
       <div class="card-title">Subir documento para extracción con Gemini</div>
-      <div id="status-extraccion"></div>
+      <div id="status-extraccion" role="status" aria-live="polite"></div>
       <div class="drop-zone" id="drop-zone" role="button" tabindex="0" aria-label="Subir documento: arrastrá un archivo o presioná Enter para elegirlo"
            onclick="document.getElementById('doc-file').click()"
            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('doc-file').click();}">
@@ -257,14 +256,14 @@ input[type=file] { display:none; }
           </svg>
         </div>
         <div class="drop-title">Arrastrá el documento aquí</div>
-        <div class="drop-sub">o hacé click para seleccionar · podés subir múltiples documentos</div>
+        <div class="drop-sub">o hacé click para seleccionar un documento</div>
         <div class="drop-formats">
           <span class="format-pill">JPG</span><span class="format-pill">PNG</span>
           <span class="format-pill">PDF</span><span class="format-pill">CSV</span>
-          <span class="format-pill">XLSX</span>
+          <span class="format-pill">XML</span>
         </div>
       </div>
-      <input type="file" id="doc-file" aria-label="Archivo de documento" accept="image/*,.csv,.pdf,.xlsx" onchange="handleFile(event)">
+      <input type="file" id="doc-file" aria-label="Archivo de documento" accept="image/*,.csv,.pdf,.xml" onchange="handleFile(event)">
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap">
         <button class="btn btn-sm" onclick="agregarItemManual()">+ Agregar ítem manual</button>
       </div>
@@ -274,7 +273,7 @@ input[type=file] { display:none; }
     <div id="items-section" style="display:none">
       <div class="card">
         <div class="card-title">Ítems extraídos <span id="items-count" style="font-size:12px;font-weight:400;color:var(--gray);text-transform:none;letter-spacing:0"></span></div>
-        <div id="status-match"></div>
+        <div id="status-match" role="status" aria-live="polite"></div>
         <div style="overflow-x:auto">
           <table class="items-table" id="items-table">
             <thead>
@@ -299,7 +298,7 @@ input[type=file] { display:none; }
       <button class="btn" id="btn-borrador" onclick="guardarRecepcion('borrador')" disabled>💾 Guardar borrador</button>
       <button class="btn btn-green" id="btn-confirmar" onclick="confirmarRecepcion()" disabled>✓ Registrar y actualizar stock</button>
       <button class="btn" id="btn-confirmar-solo" onclick="confirmarRecepcion()" disabled style="display:none;border-color:var(--amber-bd);color:var(--amber);background:var(--amber-bg);font-weight:600">✓ Registrar sin tocar stock</button>
-      <span id="status-confirm" style="font-size:12px; color:var(--gray); margin-left:4px"></span>
+      <span id="status-confirm" role="status" aria-live="polite" style="font-size:12px; color:var(--gray); margin-left:4px"></span>
     </div>
     <div id="sync-ml-confirm" role="status" aria-live="polite"></div>
 
@@ -329,6 +328,7 @@ var items = [];   // ítems de la recepción actual
 var docs  = [];   // documentos de la recepción actual
 var recepcionGuardadaId = null;
 var soloDocumento = false;
+function normalizar(s) { return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim(); }
 
 function toggleSoloDoc() {
   soloDocumento = !soloDocumento;
@@ -356,8 +356,12 @@ function toggleSoloDoc() {
 }
 
 window.onload = function() {
-  cargarCatalogo();
   document.getElementById('inp-fecha').value = new Date().toISOString().slice(0,10);
+  // El matching automático ya no depende del catálogo completo (va por /api/recepciones/matchear),
+  // pero buscarWC() —el buscador MANUAL de "Cambiar"/"Buscar en catálogo"— sí lo necesita en memoria
+  // y solo lo pide acá. Sin esta llamada catalogoEstado se queda en 'cargando' para siempre y ese
+  // buscador queda permanentemente "no disponible" en cada recepción.
+  cargarCatalogo();
   setupDrop();
   cargarProveedoresRecientes();
   document.getElementById('inp-numero-pedido').addEventListener('input', actualizarAvisoPedido);
@@ -393,29 +397,22 @@ function actualizarAvisoPedido() {
   document.getElementById('aviso-sin-pedido').style.display = val ? 'none' : 'flex';
 }
 
+// Búsqueda manual explícita. Nunca se invoca al iniciar ni participa del matching automático.
 function cargarCatalogo() {
   catalogoEstado = 'cargando';
-  document.getElementById('banner-catalogo').style.display = 'none';
-  fetch('/api/woo/catalogo')
+  fetch('/api/recepciones/catalogo')
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (!d.ok) throw new Error('respuesta no-ok');
       catalogo = (d.data || []).map(function(p){
-        // Precalculados una sola vez (no por keystroke). _busq (sku+nombre) es el texto
-        // libre para el filtro por palabras; _gtinNorm se compara aparte, solo exacto o
-        // por prefijo (un GTIN completo no debe matchear por substring arbitrario).
-        p._skuNorm  = normalizar(p.sku||'');
-        p._gtinNorm = normalizar(p.gtin||'');
-        p._busq     = p._skuNorm + ' ' + normalizar(p.nombre||'');
+        p._skuNorm = normalizar(p.sku || '');
+        p._gtinNorm = normalizar(p.gtin || '');
+        p._busq = p._skuNorm + ' ' + normalizar(p.nombre || '');
         return p;
       });
       catalogoEstado = 'ok';
     })
-    .catch(function(){
-      catalogo = [];
-      catalogoEstado = 'error';
-      document.getElementById('banner-catalogo').style.display = 'flex';
-    });
+    .catch(function(){ catalogo = []; catalogoEstado = 'error'; });
 }
 
 function cargarProveedoresRecientes() {
@@ -540,6 +537,7 @@ function procesarArchivo(file) {
       items.push(crearItem(it));
     });
     renderItems();
+    solicitarMatchesBackend();
     actualizarBotones();
   }
 
@@ -582,6 +580,26 @@ function procesarArchivo(file) {
 
 // ---- ITEMS ----
 
+var matchRequestVersion = 0;
+function solicitarMatchesBackend() {
+  var version = ++matchRequestVersion;
+  var proveedor = document.getElementById('inp-proveedor').value.trim();
+  if (!proveedor || !items.length) return;
+  fetch('/api/recepciones/matchear', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ proveedor: proveedor, items: items.map(function(it){ return { linea_id:String(it.id), nombre_doc:it.nombre_doc, variacion:it.variacion, codigo_proveedor:it.codigo_proveedor, marca:it.marca }; }) })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (version !== matchRequestVersion || !d.ok) return;
+    (d.resultados || []).forEach(function(m){
+      var it=items.find(function(x){ return String(x.id)===String(m.linea_id); });
+      if (!it) return;
+      it.match_resultado=m;
+      it.match_estado=m.estado;
+      if (m.auto_aplicable && m.candidato) { it.id_woo=m.candidato.id_woo; it.sku_wc=m.candidato.sku; it.nombre_wc=m.candidato.nombre; it.stock_wc=m.candidato.stock; it.match_origen=m.origen; }
+    });
+    renderItems(); actualizarBotones();
+  }).catch(function(){ mostrarStatus('status-extraccion','err','No se pudo resolver el matching; reintentá.'); });
+}
+
 function crearItem(raw) {
   var it = {
     id: Date.now() + Math.random(),
@@ -594,54 +612,10 @@ function crearItem(raw) {
     id_woo: null, sku_wc: null, nombre_wc: null, stock_wc: null,
   recibido: true
   };
-  // Intentar match automático
-  var match = matchItem(it);
-  if (match) {
-    it.id_woo   = match.id_woo;
-    it.sku_wc   = match.sku;
-    it.nombre_wc= match.nombre;
-    it.stock_wc = match.stock;
-  }
+  it.match_estado = 'pendiente_backend';
   return it;
 }
 
-function matchItem(it) {
-  if (!catalogo.length) return null;
-  // 1. Por codigo_proveedor vs SKU
-  if (it.codigo_proveedor) {
-    var cod = it.codigo_proveedor.trim().toLowerCase();
-    var porSku = catalogo.find(function(p){ return (p.sku||'').toLowerCase() === cod; });
-    if (porSku) return porSku;
-  }
-  // 2. Fuzzy por nombre
-  return fuzzyMatchItem(it.nombre_doc + (it.variacion ? ' ' + it.variacion : ''));
-}
-
-function normalizar(s) {
-  return (s||'').toLowerCase()
-    .replace(/[áàä]/g,'a').replace(/[éèë]/g,'e').replace(/[íìï]/g,'i')
-    .replace(/[óòö]/g,'o').replace(/[úùü]/g,'u').replace(/ñ/g,'n')
-    .replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
-}
-
-// Talles/tallas cortas que también deben participar en el match aunque tengan 1-2 letras
-var TALLES_SET = new Set(['s','m','l','xl','xs','xxl','xxxl','sm','md','lg','xm']);
-
-function fuzzyMatchItem(nombre) {
-  var palabras = normalizar(nombre).split(' ').filter(function(w){
-    return w.length > 2 || TALLES_SET.has(w);
-  });
-  if (!palabras.length) return null;
-  var mejor = null, mejorScore = 0;
-  for (var i=0; i<catalogo.length; i++) {
-    var p = catalogo[i];
-    var hayNombre = normalizar(p.nombre);
-    var score = 0;
-    palabras.forEach(function(w){ if (hayNombre.indexOf(w) !== -1) score++; });
-    if (score > mejorScore) { mejorScore = score; mejor = p; }
-  }
-  return (mejorScore >= 2) ? mejor : null;
-}
 
 function agregarItemManual() {
   var nombre = prompt('Nombre del producto:');
@@ -673,20 +647,32 @@ function renderItems() {
   tbody.innerHTML = '';
   items.forEach(function(it, idx) {
     var tr = document.createElement('tr');
-    var matchBadge = it.id_woo
-      ? '<span class="match-badge match-ok">✓ Match</span>'
-      : '<span class="match-badge match-no">Sin match</span>';
+    var matchBadge = it.match_estado === 'sku_duplicado' ? '<span class="match-badge match-no">⛔ SKU duplicado</span>'
+      : it.match_estado === 'contradiccion' ? '<span class="match-badge match-no">⛔ Contradicción</span>'
+      : it.match_estado === 'revisar' ? '<span class="match-badge" style="color:var(--amber)">⚠ Requiere revisión</span>'
+      : it.match_estado === 'error' ? '<span class="match-badge match-no">⚠ Error recuperable</span>'
+      : it.id_woo ? '<span class="match-badge match-ok">✓ Coincidencia segura</span>'
+      : '<span class="match-badge match-no">Sin candidato</span>';
     var wcCell;
     if (it.id_woo) {
+      var claveAlias = it.codigo_proveedor ? esc(it.codigo_proveedor) : esc(it.nombre_doc||'');
       wcCell = '<div class="cell-main">' + esc(it.nombre_wc||'') + '</div>'
         + '<div class="cell-sub">SKU: ' + esc(it.sku_wc||'—') + ' · Stock: ' + (it.stock_wc||0) + ' → ' + ((it.stock_wc||0)+it.cantidad) + '</div>'
-        + '<button class="btn btn-sm" style="margin-top:5px;font-size:11px;padding:3px 9px;color:var(--gray)" onclick="limpiarMatch(\'' + it.id + '\')">✎ Cambiar</button>';
+        + '<button class="btn btn-sm" style="margin-top:5px;font-size:11px;padding:3px 9px;color:var(--gray)" onclick="limpiarMatch(\'' + it.id + '\')">✎ Cambiar</button>'
+        + '<div style="margin-top:6px;font-size:11px">'
+          + '<label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--gray)">'
+            + '<input type="checkbox" ' + (it.aprender_alias ? 'checked' : '') + ' onchange="toggleAprenderAlias(this,\'' + it.id + '\')" style="width:15px;height:15px">'
+            + 'Recordar «' + claveAlias + '» → este producto la próxima vez'
+          + '</label>'
+          + (it.aprender_alias ? '<input type="text" class="cell-sub" aria-label="Motivo, si reemplaza una asociación existente" placeholder="Motivo (solo si reemplaza una asociación anterior)" value="' + esc(it.motivo_alias||'') + '" oninput="cambiarMotivoAlias(this,\'' + it.id + '\')" style="width:100%;margin-top:4px;padding:4px 6px;font-size:11px;border:1px solid var(--border);border-radius:4px">' : '')
+        + '</div>';
     } else {
       wcCell = '<div class="wc-search-wrap">'
         + '<input class="wc-search-input" type="text" aria-label="Buscar producto en catálogo WooCommerce" placeholder="Buscar en catálogo..." oninput="buscarWC(this,\'' + it.id + '\')" onfocus="abrirDropdown(this)" onblur="cerrarDropdown(this)">'
         + '<div class="wc-dropdown" id="dd-' + it.id + '"></div>'
         + '</div>'
-        + '<div style="margin-top:5px;font-size:11px;color:var(--gray2)">Sin match: si es producto nuevo, cargalo manualmente y luego vinculalo. Al confirmar queda como <span style="color:var(--orange)">pendiente</span>, no se pierde.</div>';
+        + '<div style="margin-top:5px;font-size:11px;color:var(--gray2)">Sin match: buscá un producto existente o creá un borrador seguro.</div>'
+        + '<button class="btn btn-sm" type="button" style="margin-top:6px" onclick="abrirAltaBorrador(\'' + it.id + '\')">Crear borrador</button>';
     }
     var reciCls = it.recibido
       ? 'style="font-family:inherit;background:none;border:none;padding:0;font-size:20px;cursor:pointer;user-select:none" title="Marcado como recibido — click para desmarcar"'
@@ -701,7 +687,22 @@ function renderItems() {
       + '<td style="text-align:right;color:var(--gray)">' + (it.precio_unitario != null ? '$'+it.precio_unitario.toFixed(2) : '—') + '</td>'
       + '<td><button class="btn btn-sm btn-red" onclick="quitarItem(\'' + it.id + '\')">×</button></td>';
     tbody.appendChild(tr);
+    var buscador = tr.querySelector('.wc-search-input');
+    var lista = tr.querySelector('.wc-dropdown');
+    if (buscador && lista) { buscador.setAttribute('role','combobox'); buscador.setAttribute('aria-autocomplete','list'); buscador.setAttribute('aria-controls',lista.id); buscador.setAttribute('aria-expanded','false'); lista.setAttribute('role','listbox'); }
   });
+}
+
+function toggleAprenderAlias(chk, id) {
+  var it = items.find(function(i){ return String(i.id)===String(id); });
+  if (!it) return;
+  it.aprender_alias = chk.checked;
+  if (!chk.checked) it.motivo_alias = null;
+  renderItems();
+}
+function cambiarMotivoAlias(inp, id) {
+  var it = items.find(function(i){ return String(i.id)===String(id); });
+  if (it) it.motivo_alias = inp.value || null;
 }
 
 function cambiarCantidad(inp, id) {
@@ -709,10 +710,31 @@ function cambiarCantidad(inp, id) {
   if (it) { it.cantidad = parseInt(inp.value) || 1; actualizarBotones(); }
 }
 
+function abrirAltaBorrador(id) {
+  var it=items.find(function(x){ return String(x.id)===String(id); });
+  if (!it) return;
+  var titulo=window.prompt('Título del producto nuevo:', it.nombre_doc);
+  if (!titulo || !titulo.trim()) return;
+  var marca=window.prompt('Marca:',''); if (!marca || !marca.trim()) return;
+  var categoria=window.prompt('ID de categoría Woo:',''); var categoriaNombre=window.prompt('Nombre de categoría:','');
+  var precio=window.prompt('Precio positivo:','1'); if (!categoria || !categoriaNombre || !(Number(precio)>0)) { mostrarStatus('status-match','err','Completá título, marca, categoría y precio válido.'); return; }
+  var modoTexto=window.prompt('Modo: simple, familia_variable o variacion_existente:','simple') || 'simple';
+  var modo=['simple','familia_variable','variacion_existente'].includes(modoTexto) ? modoTexto : 'simple';
+  var parentId=modo==='variacion_existente' ? Number(window.prompt('ID del producto padre variable:','')) || null : null;
+  if (modo==='variacion_existente' && !parentId) { mostrarStatus('status-match','err','La variación existente requiere un padre válido.'); return; }
+  var operationId=crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+'-'+String(Math.random()).slice(2);
+  it.alta_operation_id=operationId; it.alta_estado='procesando'; renderItems();
+  fetch('/api/nuevos-productos/crear-borrador',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operation_id:operationId,ficha:{modo:modo,titulo:titulo.trim(),marca:marca.trim(),categoria_id:Number(categoria),categoria_nombre:categoriaNombre.trim(),precio:String(precio),descripcion:'',parent_id:parentId,atributos:[]}})})
+    .then(function(r){return r.json().then(function(d){return {status:r.status,data:d};});})
+    .then(function(r){if(!r.data.ok){it.alta_estado=r.status===409?'incierto':'error'; mostrarStatus('status-match','err',r.data.error||'No se pudo crear el borrador. Operación: '+operationId); return;} it.id_woo=r.data.id_woo;it.sku_wc=r.data.sku;it.nombre_wc=it.nombre_doc;it.stock_wc=0;it.alta_estado='creado';it.match_estado='manual_confirmado';it.match_confirmado=true;renderItems();actualizarBotones();mostrarStatus('status-match','ok','Borrador creado con stock 0. Operación '+operationId+'.');})
+    .catch(function(){it.alta_estado='incierto';mostrarStatus('status-match','err','No pudimos confirmar WooCommerce. No repitas la operación '+operationId+'; verificá su estado.');});
+}
+
 function limpiarMatch(id) {
   var it = items.find(function(i){ return i.id == id; });
   if (!it) return;
   it.id_woo = null; it.nombre_wc = null; it.sku_wc = null; it.stock_wc = null;
+  it.aprender_alias = false; it.motivo_alias = null;
   renderItems();
   actualizarBotones();
 }
@@ -773,11 +795,21 @@ function seleccionarWC(evt, itemId, idWoo) {
   it.nombre_wc= prod.nombre;
   it.sku_wc   = prod.sku || '';
   it.stock_wc = prod.stock || 0;
+  it.match_estado = 'manual_confirmado';
+  it.match_confirmado = true;
+  it.match_origen = 'seleccion_manual';
   renderItems();
   actualizarBotones();
 }
 
 function abrirDropdown(inp) { /* dropdown abre on input */ }
+function navegarBusqueda(evt, itemId) {
+  var dd=document.getElementById('dd-'+itemId); if (!dd) return;
+  var opts=Array.from(dd.querySelectorAll('.wc-opt')); if (!opts.length) return;
+  var actual=opts.indexOf(document.activeElement);
+  if (evt.key==='ArrowDown' || evt.key==='ArrowUp') { evt.preventDefault(); var next=evt.key==='ArrowDown'?Math.min(actual+1,opts.length-1):Math.max(actual-1,0); opts[next].tabIndex=0; opts[next].focus(); }
+  if (evt.key==='Escape') { dd.classList.remove('open'); evt.target.setAttribute('aria-expanded','false'); }
+}
 function cerrarDropdown(inp) {
   var dd = inp.nextElementSibling;
   if (dd) setTimeout(function(){ dd.classList.remove('open'); }, 150);
@@ -788,8 +820,9 @@ function cerrarDropdown(inp) {
 function actualizarBotones() {
   var hayItems = items.length > 0;
   var hayProv  = document.getElementById('inp-proveedor').value.trim().length > 0;
-  var habilitado = hayItems && hayProv;
-  document.getElementById('btn-borrador').disabled = !habilitado;
+  var tieneBloqueantes = items.some(function(i){ return i.recibido && !i.id_woo; });
+  var habilitado = hayItems && hayProv && !tieneBloqueantes;
+  document.getElementById('btn-borrador').disabled = !(hayItems && hayProv);
   document.getElementById('btn-confirmar').disabled = !habilitado;
   document.getElementById('btn-confirmar-solo').disabled = !habilitado;
   var recibidos    = items.filter(function(i){ return i.recibido; }).length;
@@ -802,7 +835,7 @@ function actualizarBotones() {
   } else {
     msg = recibidos + ' de ' + items.length + ' marcados como recibidos · '
       + conMatchReci + ' actualizarán stock en WC';
-    if (sinMatchReci) msg += ' · ' + sinMatchReci + ' sin match WC';
+    if (sinMatchReci) msg += ' · ' + sinMatchReci + ' pendientes: resolvé cada línea antes de confirmar';
     if (noRecibidos)  msg += ' · ' + noRecibidos + ' sin recibir';
   }
   document.getElementById('status-confirm').textContent = msg;
@@ -830,7 +863,18 @@ function payloadRecepcion() {
         precio_unitario: it.precio_unitario || null,
         stock_previo: it.stock_wc != null ? it.stock_wc : null,
         stock_nuevo: it.id_woo != null ? (it.stock_wc||0) + it.cantidad : null,
-        recibido: it.recibido ? 1 : 0
+        recibido: it.recibido ? 1 : 0,
+        // Un ítem con alta de producto nuevo ya confirmada por Woo (abrirAltaBorrador) tiene que
+        // viajar como 'creado', con su alta_operation_id — si no, el backend lo trata como un match
+        // común: nunca vuelve a verificar la alta contra Woo antes de aplicar stock (P0.3,
+        // verificarAltaCreado) y el primer stock de esa alta se sincroniza a Mercado Libre por error
+        // (la exclusión de P0.3 depende de que llegue como 'creado').
+        estado_item: it.alta_estado === 'creado' ? 'creado' : (it.id_woo ? 'pendiente' : 'sin_match'),
+        alta_operation_id: it.alta_estado === 'creado' ? (it.alta_operation_id || null) : null,
+        match_origen: it.match_origen || null,
+        match_confirmado: it.match_confirmado ? 1 : 0,
+        aprender_alias: it.aprender_alias ? 1 : 0,
+        motivo_alias: it.motivo_alias || null
       };
     })
   };
