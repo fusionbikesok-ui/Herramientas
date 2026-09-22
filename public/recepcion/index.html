@@ -489,10 +489,28 @@ function mostrarTab(t) {
 var TIPOS_LABEL = { factura:'Factura', remito:'Remito', orden_compra:'OC', otro:'Otro' };
 
 function agregarDoc(tipo) {
-  var num = prompt('Número de ' + TIPOS_LABEL[tipo] + ' (opcional):');
-  if (num === null) return;
-  docs.push({ tipo: tipo, numero: num.trim() || null });
-  renderDocs();
+  abrirModal({
+    titulo: 'Agregar ' + (TIPOS_LABEL[tipo] || tipo),
+    bodyHtml: '<div class="modal-field">'
+      + '<label for="doc-num-input">Número (opcional):</label>'
+      + '<input type="text" id="doc-num-input" placeholder="Ej: 00001-00000456" />'
+      + '</div>',
+    textConfirm: 'Agregar',
+    textCancel: 'Cancelar',
+    onConfirm: function() {
+      var numInput = document.getElementById('doc-num-input');
+      var num = numInput ? numInput.value.trim() : '';
+
+      // Número es opcional: no se valida contenido
+
+      docs.push({ tipo: tipo, numero: num || null });
+      renderDocs();
+      _ocultarModalDom();
+    },
+    onCancel: function() {
+      // Cancelar simplemente cierra el modal
+    }
+  });
 }
 
 function quitarDoc(idx) {
@@ -687,12 +705,44 @@ function sincronizarAliasGuardado(id) {
 
 
 function agregarItemManual() {
-  var nombre = prompt('Nombre del producto:');
-  if (!nombre || !nombre.trim()) return;
-  var cant = parseInt(prompt('Cantidad:', '1') || '1');
-  items.push(crearItem({ nombre: nombre.trim(), cantidad: cant || 1 }));
-  renderItems();
-  actualizarBotones();
+  abrirModal({
+    titulo: 'Agregar ítem manual',
+    bodyHtml: '<div class="modal-field">'
+      + '<label for="item-nombre-input">Nombre del producto:</label>'
+      + '<input type="text" id="item-nombre-input" placeholder="Ej: Llanta 27.5 x 2.2" />'
+      + '</div>'
+      + '<div class="modal-field">'
+      + '<label for="item-cantidad-input">Cantidad:</label>'
+      + '<input type="number" id="item-cantidad-input" value="1" min="1" />'
+      + '</div>',
+    textConfirm: 'Agregar',
+    textCancel: 'Cancelar',
+    onConfirm: function() {
+      var nombreInput = document.getElementById('item-nombre-input');
+      var cantidadInput = document.getElementById('item-cantidad-input');
+
+      var nombre = nombreInput ? nombreInput.value.trim() : '';
+      var cantidad = cantidadInput ? parseInt(cantidadInput.value) : 1;
+
+      if (!nombre) {
+        mostrarErroresModal(['El nombre del producto es obligatorio']);
+        return; // Modal permanece abierto
+      }
+
+      if (!cantidad || cantidad < 1) {
+        mostrarErroresModal(['La cantidad debe ser mayor a 0']);
+        return; // Modal permanece abierto
+      }
+
+      items.push(crearItem({ nombre: nombre, cantidad: cantidad }));
+      renderItems();
+      actualizarBotones();
+      _ocultarModalDom();
+    },
+    onCancel: function() {
+      // Cancelar simplemente cierra el modal
+    }
+  });
 }
 
 function quitarItem(id) {
@@ -1849,6 +1899,38 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     e.preventDefault();
     cerrarModal(false);
+    return;
+  }
+
+  // Implementar focus trap para Tab/Shift+Tab
+  if (e.key === 'Tab') {
+    var dialog = document.getElementById('modal-dialog');
+    if (!dialog) return;
+
+    // Obtener todos los elementos focuseables dentro del modal
+    var focusableSelectors = 'input, textarea, select, button:not([disabled])';
+    var focusableElements = Array.from(dialog.querySelectorAll(focusableSelectors))
+      .filter(function(el) {
+        // Excluir elementos ocultos
+        return el.offsetParent !== null || el.type === 'hidden';
+      });
+
+    if (focusableElements.length === 0) return;
+
+    var firstElement = focusableElements[0];
+    var lastElement = focusableElements[focusableElements.length - 1];
+    var activeElement = document.activeElement;
+
+    // Si se presiona Shift+Tab en el primer elemento, ir al último
+    if (e.shiftKey && activeElement === firstElement) {
+      e.preventDefault();
+      lastElement.focus();
+    }
+    // Si se presiona Tab en el último elemento, ir al primero
+    else if (!e.shiftKey && activeElement === lastElement) {
+      e.preventDefault();
+      firstElement.focus();
+    }
   }
 });
 
