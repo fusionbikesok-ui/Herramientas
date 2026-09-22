@@ -1259,7 +1259,13 @@ function payloadRecepcion() {
         // común: nunca vuelve a verificar la alta contra Woo antes de aplicar stock (P0.3,
         // verificarAltaCreado) y el primer stock de esa alta se sincroniza a Mercado Libre por error
         // (la exclusión de P0.3 depende de que llegue como 'creado').
-        estado_item: it.alta_estado === 'creado' ? 'creado' : (it.id_woo ? 'pendiente' : 'sin_match'),
+        // P1.8: Un ítem con match_estado==='revisar' sin confirmar no debe tocar stock
+        // (su id_woo es solo un candidato, no confirmado) — viaja como 'sin_match'.
+        estado_item: it.alta_estado === 'creado'
+          ? 'creado'
+          : (it.id_woo && !(it.match_estado === 'revisar' && it.match_confirmado !== true)
+              ? 'pendiente'
+              : 'sin_match'),
         alta_operation_id: it.alta_estado === 'creado' ? (it.alta_operation_id || null) : null,
         match_origen: it.match_origen || null,
         match_confirmado: it.match_confirmado ? 1 : 0,
@@ -1306,20 +1312,54 @@ function confirmarRecepcion() {
   if (!payload.proveedor) { alert('Ingresá el proveedor.'); return; }
   if (!payload.items.length) { alert('Agregá al menos un ítem.'); return; }
 
+  // P1.8: Desglose de 4 categorías de ítems
   var recibidos = items.filter(function(i){ return i.recibido !== false && i.recibido !== 0; });
-  var conMatch = recibidos.filter(function(i){ return i.id_woo; }).length;
-  var sinMatch = recibidos.filter(function(i){ return !i.id_woo; }).length;
-  if (conMatch === 0 && sinMatch === 0) {
+
+  // Seguros: recibidos con (match_estado==='resuelto' OR match_confirmado===true) sin alta
+  var seguros = recibidos.filter(function(i){
+    return i.id_woo && (i.match_estado === 'resuelto' || i.match_confirmado === true) && i.alta_estado !== 'creado';
+  }).length;
+
+  // Manuales: recibidos con alta_estado==='creado' (estos tocan stock también)
+  var manuales = recibidos.filter(function(i){
+    return i.alta_estado === 'creado';
+  }).length;
+
+  // Pendientes: por construcción, el resto de recibidos que no son Seguros ni Manuales
+  // (esto asegura que la suma siempre sea = recibidos.length, sin depender de filtros complementarios)
+  var pendientes = recibidos.length - seguros - manuales;
+
+  // No recibidos: ítems del documento no marcados como recibidos
+  var noRecibidos = items.filter(function(i){
+    return i.recibido === false || i.recibido === 0;
+  }).length;
+
+  if (recibidos.length === 0) {
     alert('No hay ítems recibidos para procesar. Marcá al menos un ítem como recibido.');
     return;
   }
-  var msg = 'Se actualizará el stock de ' + conMatch + ' producto(s) en WooCommerce.';
-  if (sinMatch > 0) {
-    msg += '\n\n⚠️ ' + sinMatch + ' ítem(s) SIN match quedarán PENDIENTES (sin cargar stock). '
-         + 'Quedan visibles en el Historial para resolver después. ¿Confirmar igual?';
-  } else {
-    msg += ' ¿Confirmar?';
+
+  // Armar mensaje con desglose claro
+  var actualizaran = seguros + manuales;
+  var msg = '';
+  if (actualizaran > 0) {
+    var lineas = [];
+    if (seguros > 0) lineas.push(seguros + ' seguro' + (seguros > 1 ? 's' : '') + ' (match automático)');
+    if (manuales > 0) lineas.push(manuales + ' manual' + (manuales > 1 ? 's' : '') + ' (alta nueva)');
+    msg = lineas.join(' + ') + ' actualizarán stock en WooCommerce.';
   }
+
+  if (pendientes > 0) {
+    if (msg) msg += ' ';
+    msg += pendientes + ' quedará' + (pendientes > 1 ? 'n' : '') + ' pendiente' + (pendientes > 1 ? 's' : '') + ' sin match (visible en Historial para resolver después).';
+  }
+
+  if (noRecibidos > 0) {
+    if (msg) msg += ' ';
+    msg += noRecibidos + ' ítem' + (noRecibidos > 1 ? 's' : '') + ' no recibido' + (noRecibidos > 1 ? 's' : '') + ' no se procesa' + (noRecibidos > 1 ? 'n' : '') + '.';
+  }
+
+  msg += '\n\n¿Confirmar?';
   if (!confirm(msg)) return;
 
   document.getElementById('btn-borrador').disabled  = true;
@@ -1343,7 +1383,7 @@ function confirmarRecepcion() {
   pasos.then(function(d) {
     if (!d.ok) throw new Error(d.error);
     var rid = d.id;
-    mostrarStatus('status-confirm','loading','Actualizando stock en WooCommerce (' + conMatch + ' productos)...');
+    mostrarStatus('status-confirm','loading','Actualizando stock en WooCommerce (' + actualizaran + ' productos)...');
     return fetch('/api/recepciones/' + rid + '/confirmar', { method:'POST' })
       .then(function(r){ return r.json(); })
       .then(function(conf){

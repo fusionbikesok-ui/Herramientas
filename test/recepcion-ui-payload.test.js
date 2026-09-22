@@ -1460,3 +1460,354 @@ describe('public/recepcion/index.html — P1.6: Modales accesibles', () => {
     expect(typeof app.cancelarModal).toBe('function');
   });
 });
+
+describe('public/recepcion/index.html — P1.8: confirmarRecepcion() desglose de 4 categorías', () => {
+  // Helper para capturar el confirm() y extractar el mensaje
+  function capturaConfirmMessage(app, operacion) {
+    let capturedMsg = null;
+    app.confirm = (msg) => {
+      capturedMsg = msg;
+      return true; // Simular que el usuario acepta
+    };
+
+    // Mock alert para evitar errores
+    app.alert = () => {};
+
+    // Mock fetch y el resto de operaciones
+    let fetchCalls = [];
+    app.fetch = (url) => {
+      fetchCalls.push(String(url));
+      return Promise.resolve({
+        json: () => Promise.resolve({ ok: true, id: 123 })
+      });
+    };
+
+    operacion();
+    return capturedMsg;
+  }
+
+  it('desglose: "Seguros" = recibidos con match_estado=resuelto sin alta', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Ítem recibido, con id_woo, match_estado='resuelto' (sin alta_estado)
+    app.items.push({
+      id: 1, nombre_doc: 'Producto Seguro', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto WC',
+      recibido: true, match_estado: 'resuelto', match_confirmado: true, alta_estado: null,
+      cantidad: 1
+    });
+
+    const msg = capturaConfirmMessage(app, () => app.confirmarRecepcion());
+
+    // El mensaje debe mencionar 1 "Seguro" o "automático"
+    expect(msg).toMatch(/1.*seguro|1.*automático|1.*match automático/i);
+  });
+
+  it('desglose: "Manuales" = recibidos con alta_estado=creado', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Ítem recibido con alta_estado='creado' (tiene id_woo del alta)
+    app.items.push({
+      id: 1, nombre_doc: 'Producto Nuevo', id_woo: 101, sku_wc: 'FB-101', nombre_wc: 'Producto Nuevo WC',
+      recibido: true, alta_estado: 'creado', alta_operation_id: 'op-123',
+      cantidad: 1
+    });
+
+    const msg = capturaConfirmMessage(app, () => app.confirmarRecepcion());
+
+    // El mensaje debe mencionar 1 "Manual" o "nueva"
+    expect(msg).toMatch(/1.*manual|1.*nueva|1.*alta nueva/i);
+  });
+
+  it('desglose: "Pendientes" = recibidos sin id_woo', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Ítem recibido sin id_woo (sin match, sin alta)
+    app.items.push({
+      id: 1, nombre_doc: 'Producto Sin Match', id_woo: null, sku_wc: null, nombre_wc: null,
+      recibido: true,
+      cantidad: 1
+    });
+
+    const msg = capturaConfirmMessage(app, () => app.confirmarRecepcion());
+
+    // El mensaje debe mencionar 1 "Pendiente" o "sin match"
+    expect(msg).toMatch(/1.*pendiente|1.*sin match|pendientes sin match/i);
+  });
+
+  it('desglose: "No recibidos" = ítems no marcados como recibidos', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Ítem recibido (para pasar validación)
+    app.items.push({
+      id: 1, nombre_doc: 'Producto Recibido', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto WC',
+      recibido: true, match_estado: 'resuelto', match_confirmado: true,
+      cantidad: 1
+    });
+
+    // Ítem NO recibido
+    app.items.push({
+      id: 2, nombre_doc: 'Producto No Recibido', id_woo: null,
+      recibido: false,
+      cantidad: 1
+    });
+
+    const msg = capturaConfirmMessage(app, () => app.confirmarRecepcion());
+
+    // El mensaje debe mencionar 1 "no recibido" o "no se procesan"
+    expect(msg).toMatch(/1.*no recibido|no se procesan/i);
+  });
+
+  it('desglose completo: 2 Seguros + 1 Manual + 3 Pendientes + 2 No recibidos', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // 2 Seguros
+    app.items.push({
+      id: 1, nombre_doc: 'Seguro 1', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Seg 1',
+      recibido: true, match_estado: 'resuelto', match_confirmado: true, alta_estado: null, cantidad: 1
+    });
+    app.items.push({
+      id: 2, nombre_doc: 'Seguro 2', id_woo: 101, sku_wc: 'FB-101', nombre_wc: 'Seg 2',
+      recibido: true, match_confirmado: true, alta_estado: null, cantidad: 1
+    });
+
+    // 1 Manual
+    app.items.push({
+      id: 3, nombre_doc: 'Manual 1', id_woo: 102, sku_wc: 'FB-102', nombre_wc: 'Manual 1',
+      recibido: true, alta_estado: 'creado', alta_operation_id: 'op-1', cantidad: 1
+    });
+
+    // 3 Pendientes
+    app.items.push({ id: 4, nombre_doc: 'Pendiente 1', id_woo: null, recibido: true, cantidad: 1 });
+    app.items.push({ id: 5, nombre_doc: 'Pendiente 2', id_woo: null, recibido: true, cantidad: 1 });
+    app.items.push({ id: 6, nombre_doc: 'Pendiente 3', id_woo: null, recibido: true, cantidad: 1 });
+
+    // 2 No recibidos
+    app.items.push({ id: 7, nombre_doc: 'No Recibido 1', id_woo: null, recibido: false, cantidad: 1 });
+    app.items.push({ id: 8, nombre_doc: 'No Recibido 2', id_woo: null, recibido: false, cantidad: 1 });
+
+    const msg = capturaConfirmMessage(app, () => app.confirmarRecepcion());
+
+    // Verificar que el mensaje contiene referencias a cada categoría con sus cantidades
+    expect(msg).toMatch(/2.*seguro|2.*automático/i);
+    expect(msg).toMatch(/1.*manual|1.*nueva/i);
+    expect(msg).toMatch(/3.*pendiente|3.*sin match/i);
+    expect(msg).toMatch(/2.*no recibido/i);
+  });
+
+  it('mensaje destaca que Seguros + Manuales actualizarán stock', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    app.items.push({
+      id: 1, nombre_doc: 'Seguro', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Seg',
+      recibido: true, match_estado: 'resuelto', match_confirmado: true, alta_estado: null, cantidad: 1
+    });
+
+    app.items.push({
+      id: 2, nombre_doc: 'Manual', id_woo: 101, sku_wc: 'FB-101', nombre_wc: 'Manual',
+      recibido: true, alta_estado: 'creado', alta_operation_id: 'op-1', cantidad: 1
+    });
+
+    const msg = capturaConfirmMessage(app, () => app.confirmarRecepcion());
+
+    // El mensaje debe aclarar que ambos actualizarán stock
+    expect(msg).toMatch(/actualizar.*stock|stock.*woocommerce/i);
+  });
+
+  it('match_confirmado=true sin match_estado es Seguro (confirmado manualmente)', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Ítem con match_confirmado=true pero sin match_estado específico
+    app.items.push({
+      id: 1, nombre_doc: 'Confirmado Manualmente', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto',
+      recibido: true, match_confirmado: true, alta_estado: null, cantidad: 1
+    });
+
+    const msg = capturaConfirmMessage(app, () => app.confirmarRecepcion());
+
+    // Debe contar como Seguro
+    expect(msg).toMatch(/1.*seguro|1.*confirmado/i);
+  });
+
+  it('un ítem alta_creado con match_estado=resuelto es Manual (no Seguro + Manual separados)', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Ítem que es AMBOS: alta creada Y match_estado=resuelto
+    // Debe contar como Manual (una sola vez)
+    app.items.push({
+      id: 1, nombre_doc: 'Alta+Resuelto', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Producto',
+      recibido: true, alta_estado: 'creado', alta_operation_id: 'op-1', match_estado: 'resuelto', cantidad: 1
+    });
+
+    const msg = capturaConfirmMessage(app, () => app.confirmarRecepcion());
+
+    // Debe contar como 1 Manual, no como 1 Seguro + 1 Manual
+    expect(msg).toMatch(/1.*manual/i);
+    // No debe haber "2 seguro" o similar
+    expect(msg).not.toMatch(/2.*seguro|2.*automático/i);
+  });
+
+  it('CASO CRÍTICO (revisión): ítem con id_woo + match_estado=revisar + match_confirmado=false cae en Pendientes por construcción', () => {
+    const app = cargarApp();
+
+    app.document.getElementById = (id) => {
+      if (id === 'inp-proveedor') return { value: 'Proveedor A' };
+      return { value: '', textContent: '', style: {}, disabled: false, dataset: {}, classList: { add() {}, remove() {} }, addEventListener() {} };
+    };
+
+    // Este es el caso que caía entre grietas: candidato sin confirmar
+    // tiene id_woo pero no es ni Seguro ni Manual ni (antes) Pendiente
+    app.items.push({
+      id: 1, nombre_doc: 'Candidato Sin Confirmar', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Prod',
+      recibido: true, match_estado: 'revisar', match_confirmado: false, alta_estado: null, cantidad: 1
+    });
+
+    // Agregar un Seguro para que haya diversidad
+    app.items.push({
+      id: 2, nombre_doc: 'Seguro', id_woo: 101, sku_wc: 'FB-101', nombre_wc: 'Seg',
+      recibido: true, match_estado: 'resuelto', match_confirmado: true, alta_estado: null, cantidad: 1
+    });
+
+    let capturedMsg = null;
+    app.confirm = (msg) => {
+      capturedMsg = msg;
+      return true;
+    };
+    app.alert = () => {};
+    app.fetch = () => Promise.resolve({ json: () => Promise.resolve({ ok: true, id: 123 }) });
+
+    app.confirmarRecepcion();
+
+    // El mensaje debe existir (no debe fallar silenciosamente)
+    expect(capturedMsg).toBeTruthy();
+
+    // Verificar que el candidato sin confirmar aparece en "Pendientes"
+    // (porque pendientes = recibidos.length - seguros - manuales = 2 - 1 - 0 = 1)
+    expect(capturedMsg).toMatch(/1.*pendiente/i);
+
+    // La suma de categorías debe ser = items.length
+    // 1 Seguro + 1 Pendiente + 0 Manuales + 0 No recibidos = 2 items ✓
+  });
+});
+
+describe('public/recepcion/index.html — P1.8: payloadRecepcion() verifica match_estado=revisar', () => {
+  it('un ítem con match_estado=revisar sin confirmar viaja como "sin_match" no "pendiente"', () => {
+    const app = cargarApp();
+
+    // Caso: ítem con id_woo BUT match_estado='revisar' sin confirmación
+    // (En la práctica este caso no debería llegar a confirmarRecepcion por el bloqueo,
+    // pero podría llegar a payloadRecepcion en otros flujos como guardarRecepcion)
+    app.items.push({
+      id: 1, nombre_doc: 'Dudoso', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Prod WC',
+      recibido: true, match_estado: 'revisar', match_confirmado: false,
+      cantidad: 1
+    });
+
+    const payload = app.payloadRecepcion();
+    const it = payload.items[0];
+
+    // IMPORTANTE: un match sin confirmar NO debe tocarse stock, debe viajar como 'sin_match'
+    // (El fix es: si match_estado==='revisar' && match_confirmado!==true, viaja como sin_match)
+    // Por ahora, verificamos si ya está arreglado o si necesita arreglarse
+    // Si el código ACTUAL lo envía como 'pendiente', es un bug que necesita fix
+    // Si lo envía como 'sin_match', está bien
+
+    // Estado ACTUAL: línea 1262 dice (it.id_woo ? 'pendiente' : 'sin_match')
+    // Esto INCORRECTAMENTE lo enviaría como 'pendiente'
+    // Esperamos que este test falle inicialmente, y el fix lo arregle
+
+    expect(it.estado_item).not.toBe('pendiente');
+    expect(it.estado_item).toBe('sin_match');
+  });
+
+  it('un ítem con match_estado=revisar pero match_confirmado=true viaja como "pendiente"', () => {
+    const app = cargarApp();
+
+    // Si el usuario confirmó manualmente (match_confirmado=true), entonces sí puede tocar stock
+    app.items.push({
+      id: 1, nombre_doc: 'Revisar pero Confirmado', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Prod',
+      recibido: true, match_estado: 'revisar', match_confirmado: true,
+      cantidad: 1
+    });
+
+    const payload = app.payloadRecepcion();
+    const it = payload.items[0];
+
+    // Con confirmación manual explícita, sí puede viajar como pendiente
+    expect(it.estado_item).toBe('pendiente');
+  });
+
+  it('un ítem sin id_woo siempre viaja como "sin_match" (incluso si match_estado=revisar internamente)', () => {
+    const app = cargarApp();
+
+    app.items.push({
+      id: 1, nombre_doc: 'Sin Match en Absoluto', id_woo: null,
+      recibido: true, match_estado: 'revisar',
+      cantidad: 1
+    });
+
+    const payload = app.payloadRecepcion();
+    const it = payload.items[0];
+
+    expect(it.estado_item).toBe('sin_match');
+  });
+
+  it('recibido=false NO afecta cómo se envía estado_item (el estado refleja la realidad del ítem)', () => {
+    const app = cargarApp();
+
+    // Un ítem no recibido con id_woo sigue siendo 'pendiente' en el payload
+    // (aunque en la práctica no se debería procesar)
+    app.items.push({
+      id: 1, nombre_doc: 'No Recibido', id_woo: 100, sku_wc: 'FB-100', nombre_wc: 'Prod',
+      recibido: false, match_estado: 'resuelto', match_confirmado: true,
+      cantidad: 1
+    });
+
+    const payload = app.payloadRecepcion();
+    const it = payload.items[0];
+
+    // El estado_item refleja el atributo del ítem, no si fue recibido
+    expect(it.estado_item).toBe('pendiente');
+    // Pero el recibido field sí lo marca
+    expect(it.recibido).toBe(0);
+  });
+});
