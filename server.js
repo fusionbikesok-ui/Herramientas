@@ -666,7 +666,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
 
   app.use('/api/woo', wooRouter(db, wooCfg));
   app.use('/api/gemini', geminiRouter(geminiKey));
-  app.use('/api/nuevos-productos', nuevosProductosRouter(geminiKey, db));
+  app.use('/api/nuevos-productos', nuevosProductosRouter(geminiKey, db, wooCfg));
   app.use('/api/mapeo', mapeoRouter(db));
   app.use('/api/csv', csvRouter());
   app.use('/api/matcher', matcherRouter(db, syncCfg));
@@ -967,7 +967,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('0 4 * * *', () => {
         try {
           const n = purgarFotosBorradas(app._db);
-          if (n) console.log(`Purgadas ${n} fotos de preparación (borrado_en > 60 días)`);
+          if (n) console.log(`Purgadas ${n} fotos de preparaciones de más de 30 días`);
         } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
       });
 

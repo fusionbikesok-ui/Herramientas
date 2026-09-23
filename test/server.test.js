@@ -113,6 +113,24 @@ describe('server', () => {
     expect(syncEstado.body.ok).toBe(true);
   });
 
+  it('pasa wooCfg real al router de nuevos-productos (crear-borrador debe pegarle a Woo, no recibir cfg undefined)', async () => {
+    const wooCfg = { url: 'https://wooCfg-wiring-test.invalid', consumerKey: 'ck', consumerSecret: 'cs' };
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+
+    const res = await agent.post('/api/nuevos-productos/crear-borrador').send({
+      operation_id: '11111111-1111-4111-8111-111111111111',
+      ficha: { modo: 'simple', titulo: 't', marca: 'm', precio: 1, categoria_id: 1, categoria_nombre: 'c' },
+    });
+
+    // Si server.js no pasara wooCfg al router, cfg llegaría undefined a wooFetch y el
+    // fallo sería inmediato leyendo `cfg.url` de undefined, sin mencionar nuestro host.
+    // Con wooCfg bien pasado, el intento de red real falla resolviendo ese host propio.
+    expect(res.body.error).toMatch(/woocfg-wiring-test\.invalid/i);
+    expect(res.body.error).not.toMatch(/Cannot read propert(y|ies) of undefined/);
+  });
+
   it('GET /api/ml/token-estado: accesible por cualquier autenticado, fail-closed sin token', async () => {
     const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
