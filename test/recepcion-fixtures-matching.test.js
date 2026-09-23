@@ -44,9 +44,15 @@ function construirCatalogo(db) {
   ins.run(22, 'Zapatilla Base', 'ZAPA-BASE-43-NEGRO', 'variation', 200, 8, 'Marca B', attrsWc('43', 'Negro'), now);
   // 10/11: alias válido y alias huérfano (ver confirmarAlias abajo)
   ins.run(5, 'Guante de Ciclismo', 'GUANTE-001', 'simple', null, 20, 'Marca A', null, now);
+  // Para el alias huérfano (11): insertar el producto, confirmar el alias mientras existe,
+  // y DESPUÉS borrarlo para simular un producto eliminado (así respeta la validación nueva
+  // que rechaza confirmar un alias sin producto real).
+  ins.run(9999, 'Producto Eliminado', 'X', 'simple', null, 1, 'Marca X', null, now);
 
   confirmarAlias(db, { proveedor: PROVEEDOR, nombre_doc: 'Guante', codigo_proveedor: 'ALIAS-GUANTE-001', id_woo: 5, sku: 'GUANTE-001', recepcion_item_id: null, actor: 'test' });
   confirmarAlias(db, { proveedor: PROVEEDOR, nombre_doc: 'Producto Eliminado', codigo_proveedor: 'ALIAS-BORRADO-001', id_woo: 9999, sku: 'X', recepcion_item_id: null, actor: 'test' });
+  // Borrar el producto para que el alias quede huérfano (simula un producto eliminado después de la confirmación)
+  db.prepare('DELETE FROM catalogo_cache WHERE id_woo=?').run(9999);
 }
 
 describe('resolverLoteRecepcion contra los 13 fixtures de recepción', () => {
