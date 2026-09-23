@@ -167,13 +167,12 @@ export async function conciliarOperacionIncierta(db, cfg, itemId) {
     db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?').run(stockReal, now, item.id_woo);
     return { estado: 'aplicado', stock_nuevo: stockReal };
   }
-  if (stockReal === item.stock_previo) {
-    db.prepare("UPDATE recepcion_items SET estado_item='error_reintentable', error_wc='conciliado: el PATCH nunca llegó a aplicarse' WHERE id=?")
-      .run(itemId);
-    return { estado: 'error_reintentable' };
-  }
+  // Cualquier otro valor (incluso si coincide con stock_previo por casualidad de una venta intermedia)
+  // es indeterminado: no reintentar a ciegas. El defecto P0.1 prohibía la heurística
+  // "stockReal === stock_previo → error_reintentable" porque el PATCH puede haber llegado y una venta
+  // intermedia igualó el stock al previo: reintentaría de nuevo y duplicaría.
   db.prepare("UPDATE recepcion_items SET estado_item='conflicto_stock', error_wc=? WHERE id=?")
-    .run(`conciliación ambigua: Woo tiene ${stockReal}, ni stock_previo (${item.stock_previo}) ni stock_objetivo (${item.stock_objetivo})`, itemId);
+    .run(`conciliación ambigua: Woo tiene ${stockReal}; se esperaba stock_objetivo=${item.stock_objetivo} pero se lee ${stockReal}. Posible venta intermedia después del PATCH.`, itemId);
   return { estado: 'conflicto_stock' };
 }
 

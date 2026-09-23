@@ -379,7 +379,38 @@ describe('aplicarStockItem — P0.1 máquina de estados durable (aplica exactame
     expect(row.stock_nuevo).toBe(8);
   });
 
-  it('conciliarOperacionIncierta detecta que el PATCH nunca llegó y libera para reintento normal', async () => {
+  it('conciliarOperacionIncierta — venta intermedia que iguala stock_previo debe marcar conflicto_stock, no error_reintentable', async () => {
+    // Escenario: recibís 2 unidades, stock previo es 5, objetivo es 7.
+    // El PATCH de aplicación llega a Woo (5→7), pero antes de la verificación:
+    // — en el medio entra una venta de 2 unidades (7→5)
+    // — la conciliación lee Woo y ve 5, que es igual al stock_previo
+    // — con la lógica antigua (peligrosa), "nunca se aplicó" → error_reintentable
+    // — el reintento suma 2 de nuevo y el stock queda 7 (correcto por casualidad aquí,
+    //   pero el PATCH ya se había aplicado antes).
+    // Con la lógica correcta: stockReal !== stock_objetivo, así que conflicto_stock.
+    let stockWc = 5;
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: stockWc } };
+      // El PATCH se aplica: 5 → 7
+      stockWc = opts.data.stock_quantity;
+      throw new Error('timeout después del PATCH');
+    });
+    const item = nuevoItem(10, 2); // cantidad 2
+    await expect(aplicarStockItem(db, cfg, item)).rejects.toThrow(/incierta/);
+    expect(stockWc).toBe(7); // El PATCH llegó a Woo
+
+    // Ahora una venta intermedia: Woo 7→5
+    stockWc = 5;
+
+    const { conciliarOperacionIncierta } = await import('../routes/recepciones.js');
+    const res = await conciliarOperacionIncierta(db, cfg, item.id);
+    // La lógica correcta ve: stockReal(5) !== stock_objetivo(7) → conflicto_stock
+    expect(res.estado).toBe('conflicto_stock');
+    const row = db.prepare('SELECT estado_item FROM recepcion_items WHERE id=?').get(item.id);
+    expect(row.estado_item).toBe('conflicto_stock');
+  });
+
+  it('conciliarOperacionIncierta con stockReal === stock_previo marca conflicto_stock (no reintentar: el PATCH pudo haber llegado)', async () => {
     axios.request.mockImplementation(async (opts) => {
       if (opts.method === 'get') return { status: 200, data: { stock_quantity: 5 } };
       throw new Error('timeout');
@@ -389,8 +420,11 @@ describe('aplicarStockItem — P0.1 máquina de estados durable (aplica exactame
 
     const { conciliarOperacionIncierta } = await import('../routes/recepciones.js');
     const res = await conciliarOperacionIncierta(db, cfg, item.id);
-    expect(res.estado).toBe('error_reintentable');
-    expect(db.prepare('SELECT estado_item FROM recepcion_items WHERE id=?').get(item.id).estado_item).toBe('error_reintentable');
+    // stockReal (5) === stock_previo (5) es indeterminado: el PATCH pudo haber llegado y una venta
+    // intermedia lo igualó al previo. No es seguro reintentar a ciegas (defecto P0.1 prohibido).
+    // → conflicto_stock queda para conciliación manual.
+    expect(res.estado).toBe('conflicto_stock');
+    expect(db.prepare('SELECT estado_item FROM recepcion_items WHERE id=?').get(item.id).estado_item).toBe('conflicto_stock');
   });
 
   it('dos confirmaciones concurrentes de la misma recepción aplican el stock exactamente una vez', async () => {
