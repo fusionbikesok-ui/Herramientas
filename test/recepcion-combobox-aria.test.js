@@ -2,17 +2,26 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-function cargarApp() {
-  const html = fs.readFileSync(new URL('../public/recepcion/index.html', import.meta.url), 'utf8');
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
-  const src = scripts.reduce((a, b) => (b.length > a.length ? b : a), '');
-  const elFalso = () => ({
+// Elemento DOM de relleno para cualquier id que un test no necesita simular explícitamente.
+// Debe vivir a nivel de módulo: las funciones que lo usan (los mocks de getElementById que cada
+// `it()` define) se declaran FUERA de cargarApp(), así que una versión local a cargarApp() nunca
+// resuelve ahí — quedaba como referencia indefinida y, si esa rama del mock llegaba a ejecutarse,
+// tiraba ReferenceError silenciosamente absorbido por el flujo async de la app bajo prueba,
+// dejando esa rama sin ejercitar de verdad (hallazgo de revisión, ver commit que agrega este comentario).
+function elFalso() {
+  return {
     value: '', textContent: '', style: {}, disabled: false, dataset: {},
     classList: { add() {}, remove() {} },
     addEventListener() {},
     setAttribute() {},
     getAttribute() { return null; }
-  });
+  };
+}
+
+function cargarApp() {
+  const html = fs.readFileSync(new URL('../public/recepcion/index.html', import.meta.url), 'utf8');
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+  const src = scripts.reduce((a, b) => (b.length > a.length ? b : a), '');
   const sandbox = {
     document: {
       getElementById: elFalso, querySelector: () => null, addEventListener() {},

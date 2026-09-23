@@ -37,6 +37,52 @@ describe('validarFichaAlta — Task 5 Step 1: rechaza atributos repetidos', () =
   });
 });
 
+// P1.6 (revisión post-E2E): los atributos son obligatorios SOLO para familia_variable y
+// variacion_existente (Woo los necesita para distinguir variaciones). Un producto 'simple' no
+// tiene variaciones, así que exigirle un atributo era una validación de más que nunca se pudo
+// satisfacer desde el formulario real — bloqueaba TODA alta simple en producción.
+describe('validarFichaAlta — atributos obligatorios solo para familia/variación', () => {
+  it('simple sin atributos: no rechaza (atributos es opcional)', () => {
+    expect(() => validarFichaAlta({ ...ficha, atributos: [] })).not.toThrow();
+  });
+
+  it('simple sin la propiedad atributos siquiera: no rechaza', () => {
+    const { atributos, ...sinAtributos } = ficha;
+    expect(() => validarFichaAlta(sinAtributos)).not.toThrow();
+  });
+
+  it('simple con atributos inválidos (si los manda, se validan igual): rechaza', () => {
+    expect(() => validarFichaAlta({ ...ficha, atributos: [{ nombre: '', valor: 'x' }] })).toThrow(/atributos/);
+  });
+
+  it('familia_variable sin atributos: rechaza', () => {
+    expect(() => validarFichaAlta({ ...ficha, modo: 'familia_variable', atributos: [] })).toThrow(/atributos/);
+  });
+
+  it('variacion_existente sin atributos: rechaza', () => {
+    expect(() => validarFichaAlta({ ...ficha, modo: 'variacion_existente', parent_id: 9, atributos: [] })).toThrow(/atributos/);
+  });
+});
+
+describe('crearBorradorWoo — atributos opcionales en simple, obligatorios en familia/variación', () => {
+  it('crea un producto simple sin atributos de verdad (POST/PATCH/GET reales contra el mock)', async () => {
+    const x = db();
+    const f = { ...ficha, atributos: [] };
+    const r = await crearBorradorWoo({ db: x, cfg: {}, operationId: '550e8400-e29b-41d4-a716-446655440030', ficha: f, actor: 'j', fetchWoo: fetchWooDraft([]) });
+    expect(r.id_woo).toBeTypeOf('number');
+    expect(x.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?').get('550e8400-e29b-41d4-a716-446655440030').estado).toBe('creado');
+  });
+
+  it('rechaza familia_variable sin atributos antes de tocar la red', async () => {
+    const x = db();
+    const calls = [];
+    const f = { ...ficha, modo: 'familia_variable', atributos: [] };
+    await expect(crearBorradorWoo({ db: x, cfg: {}, operationId: '550e8400-e29b-41d4-a716-446655440031', ficha: f, actor: 'j', fetchWoo: fetchWooDraft(calls) }))
+      .rejects.toThrow(/atributos/);
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe('crearBorradorWoo — Task 5 Step 1: padre inexistente/no variable', () => {
   it('rechaza variacion_existente cuyo parent_id no está en catalogo_cache', async () => {
     const x=db();

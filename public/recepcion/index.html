@@ -1008,7 +1008,7 @@ function abrirAltaBorrador(id) {
           + '<input type="number" id="parent-input" value="" />'
           + '</div>'
           + '<div class="modal-field">'
-          + '<label for="atributo-nombre-input">Atributo (nombre), p. ej. Talle o Color:</label>'
+          + '<label for="atributo-nombre-input">Atributo (nombre), p. ej. Talle o Color — obligatorio solo en familia/variación:</label>'
           + '<input type="text" id="atributo-nombre-input" value="" />'
           + '</div>'
           + '<div class="modal-field">'
@@ -1042,7 +1042,11 @@ function abrirAltaBorrador(id) {
           if (!marca) errores.push('La marca es obligatoria');
           if (!categoria || !categoriaNombre) errores.push('Selecciona una categoría');
           if (!(precio > 0)) errores.push('El precio debe ser positivo');
-          if (!atributoNombre || !atributoValor) errores.push('El atributo del producto (nombre y valor) es obligatorio');
+          // El atributo solo es obligatorio para familia/variación (Woo lo necesita para
+          // distinguir variaciones); un producto simple no tiene variaciones.
+          var requiereAtributo = modo === 'familia_variable' || modo === 'variacion_existente';
+          if (requiereAtributo && (!atributoNombre || !atributoValor)) errores.push('El atributo del producto (nombre y valor) es obligatorio para familia/variación');
+          if ((atributoNombre || atributoValor) && (!atributoNombre || !atributoValor)) errores.push('Si cargás un atributo, nombre y valor son obligatorios los dos');
 
           if (modo === 'variacion_existente') {
             var parentInput = document.getElementById('parent-input');
@@ -1076,7 +1080,7 @@ function abrirAltaBorrador(id) {
                 precio: String(precio),
                 descripcion: '',
                 parent_id: parentId,
-                atributos: [{ nombre: atributoNombre, valor: atributoValor }]
+                atributos: atributoNombre && atributoValor ? [{ nombre: atributoNombre, valor: atributoValor }] : []
               }
             })
           })

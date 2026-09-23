@@ -297,18 +297,26 @@ export function recepcionesRouter(db, cfg) {
       .trim();
   }
 
+  // P1.3 (revisión post-E2E): "sin padres variables" — un producto tipo 'variable' es el
+  // contenedor de familia, nunca algo que se recibe/vende directo; ofrecerlo en el combobox de
+  // recepción dejaría match_estado apuntando a un id_woo que Woo rechaza al intentar tocarle stock.
+  const CATALOGO_SIN_PADRES = "(tipo IS NULL OR tipo <> 'variable')";
+
   router.get('/catalogo', (req, res) => {
     const q = String(req.query.q || '').trim();
 
-    // Si no hay query param, devolver todo el catálogo
+    // Si no hay query param, devolver todo el catálogo (sin padres variables)
     if (!q) {
-      const rows = db.prepare('SELECT id_woo,sku,nombre,stock FROM catalogo_cache ORDER BY id_woo').all();
+      const rows = db.prepare(`SELECT id_woo,sku,nombre,stock FROM catalogo_cache WHERE ${CATALOGO_SIN_PADRES} ORDER BY id_woo`).all();
       return res.json({ ok: true, data: rows });
     }
 
-    // Con query param: filtrar por SKU o nombre (normalizado) y limitar a 20 resultados
-    const rows = db.prepare('SELECT id_woo,sku,nombre,stock FROM catalogo_cache ORDER BY id_woo').all();
+    // Con query param: filtrar por SKU, GTIN o nombre (normalizado) y limitar a 20 resultados
+    const rows = db.prepare(`SELECT id_woo,sku,nombre,stock,gtin FROM catalogo_cache WHERE ${CATALOGO_SIN_PADRES} ORDER BY id_woo`).all();
     const qNorm = normalizar(q);
+    // Nombre por tokens: cada palabra de la búsqueda tiene que aparecer en el nombre, en
+    // cualquier orden — "casco negro" tiene que encontrar "Casco MTB Negro Talle M".
+    const qTokens = qNorm.split(' ').filter(Boolean);
 
     // Filtrar y ordenar por relevancia
     const filtrados = rows
@@ -316,18 +324,23 @@ export function recepcionesRouter(db, cfg) {
         row,
         skuNorm: normalizar(row.sku),
         nombreNorm: normalizar(row.nombre),
+        gtinNorm: normalizar(row.gtin),
       }))
-      .filter(({ skuNorm, nombreNorm }) => {
-        // Matchea si el texto normalizado contiene el query (como substring)
-        return skuNorm.includes(qNorm) || nombreNorm.includes(qNorm);
+      .filter(({ skuNorm, nombreNorm, gtinNorm }) => {
+        // SKU/GTIN: substring continuo (son códigos, no frases). Nombre: por tokens.
+        const matchNombre = qTokens.length > 0 && qTokens.every(t => nombreNorm.includes(t));
+        return skuNorm.includes(qNorm) || (gtinNorm && gtinNorm.includes(qNorm)) || matchNombre;
       })
-      .map(({ row, skuNorm, nombreNorm }) => {
-        // Calcular relevancia: match exacto de SKU primero, luego prefijo, luego resto
-        let relevancia = 0;
+      .map(({ row, skuNorm, nombreNorm, gtinNorm }) => {
+        // Calcular relevancia: exacto de SKU primero, luego GTIN exacto, prefijo de SKU,
+        // prefijo de GTIN, prefijo de nombre, y por último el resto (substring/tokens).
+        let relevancia;
         if (skuNorm === qNorm) relevancia = 1000; // exacto SKU
+        else if (gtinNorm === qNorm) relevancia = 950; // exacto GTIN
         else if (skuNorm.startsWith(qNorm)) relevancia = 900; // prefijo SKU
+        else if (gtinNorm.startsWith(qNorm)) relevancia = 850; // prefijo GTIN
         else if (nombreNorm.startsWith(qNorm)) relevancia = 800; // prefijo nombre
-        else relevancia = 100; // substring en nombre/SKU
+        else relevancia = 100; // substring/tokens en nombre, SKU o GTIN
         return { ...row, relevancia };
       })
       .sort((a, b) => {
