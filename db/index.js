@@ -182,6 +182,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('recepcion_altas_woo_linkage_111')").run();
     })();
   }
+  const recepcionErrorHistoricoMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='recepcion_items_error_historico_112'").get();
+  if (!recepcionErrorHistoricoMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '112_recepcion_items_error_historico.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('recepcion_items_error_historico_112')").run();
+    })();
+  }
   // Horarios de despacho: migración independiente para bases que ya alcanzaron user_version=30.
   const horarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_horarios_032'").get();
   if (!horarioMigration) {

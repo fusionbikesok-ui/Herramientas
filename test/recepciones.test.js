@@ -2700,3 +2700,51 @@ describe('Padre perdido en familia_variable — recuperación por SKU provisiona
     expect(row.id_woo).toBeNull();
   });
 });
+
+describe('recepciones — migración 112 (error → error_historico)', () => {
+  it('convierte filas con estado_item=error a error_historico al abrir la BD', () => {
+    const DB = './test/tmp-recep-error-historico.sqlite';
+
+    try {
+      // Paso 1: Abrir BD con openDb (crea esquema + ejecuta migraciones)
+      const db1 = openDb(DB);
+
+      // Inicializar el router para que ejecute la línea de ALTER TABLE solo_documento
+      makeApp(db1);
+
+      // Insertar manualmente una recepción e ítem con estado_item='error' (simulando estado viejo)
+      const recId = db1.prepare(
+        "INSERT INTO recepciones (proveedor,importador,fecha,solo_documento,estado,creado_en) VALUES ('Test','Test','2026-01-01',0,'procesando','x')"
+      ).run().lastInsertRowid;
+      db1.prepare(
+        "INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,creado_en,estado_item,error_wc) VALUES (?,?,?,?,?,?,?,?,?)"
+      ).run(recId, 100, 'TEST-SKU', 'Producto Test', 5, 0, 'x', 'error', 'Simulated old error');
+
+      // Simulación de BD vieja: eliminar la migración 112 de _schema_migrations
+      // (para que vuelva a ejecutarse cuando se reabre la BD)
+      db1.prepare("DELETE FROM _schema_migrations WHERE key='recepcion_items_error_historico_112'").run();
+
+      // Verificar que está en 'error' antes de aplicar migración
+      const antes = db1.prepare('SELECT estado_item FROM recepcion_items WHERE id=1').get();
+      expect(antes.estado_item).toBe('error');
+      db1.close();
+
+      // Paso 2: Abrir BD nuevamente (ejecutará la migración 112)
+      const db2 = openDb(DB);
+
+      // Verificar que está en 'error_historico' después de aplicar migración
+      const despues = db2.prepare('SELECT estado_item, error_wc FROM recepcion_items WHERE id=1').get();
+      expect(despues.estado_item).toBe('error_historico');
+
+      // Verificar que NO está en 'operacion_incierta' (comportamiento viejo que rechazamos)
+      expect(despues.estado_item).not.toBe('operacion_incierta');
+
+      // Verificar que error_wc se conserva como evidencia
+      expect(despues.error_wc).toBe('Simulated old error');
+
+      db2.close();
+    } finally {
+      if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    }
+  });
+});

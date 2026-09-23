@@ -747,13 +747,12 @@ export function recepcionesRouter(db, cfg) {
     backfill();
   }
 
-  // P0.1 (rows ya existentes, no ligado a la creación de la columna): cualquier 'error' que haya quedado
-  // de la implementación previa (GET→PATCH→UPDATE sin verificación) es de historia ambigua — puede
-  // representar un PATCH que sí llegó a aplicarse. Se convierte, conservador, a 'operacion_incierta' para
-  // que se concilie leyendo Woo en vez de reintentarse a ciegas. Se conserva error_wc original como evidencia.
-  // Verificado en data/fusion.sqlite el 2026-09-21: 0 filas en 'error' en producción hoy — este UPDATE es
-  // no-op ahí. Se deja igual (fail-closed) por si otra base o un backup restaurado sí las tiene.
-  db.prepare("UPDATE recepcion_items SET estado_item='operacion_incierta' WHERE estado_item='error'").run();
+  // P0.1 (rows ya existentes): cualquier 'error' que haya quedado de la implementación previa
+  // (GET→PATCH→UPDATE sin verificación) es de historia ambigua. Se convierte a 'error_historico'
+  // (estado terminal de solo lectura) mediante migración 112 en db/index.js, en vez de
+  // 'operacion_incierta', para evitar contaminar la cola de conciliación viva con historia
+  // ambigua. Error_wc se conserva como evidencia. Verificado en data/fusion.sqlite el
+  // 2026-09-21: 0 filas en 'error' en producción hoy.
 
   // P0.2 (recuperación al arrancar): un 'aplicando' huérfano (quedó atrapado si el proceso murió entre el claim
   // y el UPDATE final) necesita salida. Si stock_objetivo es NULL, nunca se llegó a persistir el intento (nunca
