@@ -383,7 +383,7 @@ async function verificarConciliacionStock(page, db, errors) {
     itemId = itemRow.id;
     if (!itemId) throw new Error('itemId no asignado');
   } catch (e) {
-    throw new Error(`Paso 15a FALLÓ al crear recepción/ítem: ${e.message} (recId=${recId}, itemId=${itemId})`);
+    throw new Error(`Paso 15a FALLÓ al crear recepción/ítem: ${e.message} (recId=${recId}, itemId=${itemId})`, { cause: e });
   }
 
   // Forzar estado_item a 'conflicto_stock' para ejercitar resolver-conflicto
@@ -526,7 +526,7 @@ async function verificarSyncMl(page, db, errors) {
     recId1 = idRow1?.id;
     if (!recId1) throw new Error('recId1 no asignado');
   } catch (e) {
-    throw new Error(`Paso 15c FALLÓ al crear recepción 1: ${e.message}`);
+    throw new Error(`Paso 15c FALLÓ al crear recepción 1: ${e.message}`, { cause: e });
   }
 
   const itemId1 = db.prepare(`
