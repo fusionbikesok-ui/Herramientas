@@ -444,6 +444,261 @@ describe('conciliarAltaIncierta — (b) resolución humana explícita, como últ
   });
 });
 
+describe('Bug 1 fix: recuperar padre ANTES de evaluar idWoo', () => {
+  it('familia_variable con id_woo presente pero id_padre null → recupera padre antes de construir path', async () => {
+    const x = db();
+    const operationId = '550e8400-e29b-41d4-a716-446655440060';
+    const now = new Date().toISOString();
+    
+
+    // Simular fila corrupta: id_woo presente pero id_padre null (el PATCH del padre se perdió)
+    x.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,id_padre,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-test', 502, null, 'FB-PEND-' + operationId, 'incierto', 'familia_variable', 'test', now, now);
+
+    let pathsConstructidos = [];
+    const fetchWoo = async (_c, path, method = 'get', body) => {
+      pathsConstructidos.push({ path, method });
+      // Búsqueda del padre por SKU provisional
+      if (method === 'get' && path.includes(`FB-PEND-PADRE-${operationId}`)) {
+        return { data: [{ id: 501 }] };
+      }
+      // GET del padre para verificar sku
+      if (method === 'get' && path === '/products/501') {
+        return { data: { id: 501, status: 'draft', stock_quantity: 0, sku: 'FB-PEND-PADRE-' + operationId } };
+      }
+      // GET de la variación
+      if (method === 'get' && path === `/products/501/variations/502`) {
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: 'FB-502' } };
+      }
+      // PATCH del SKU de la variación
+      if (method === 'patch' && path === `/products/501/variations/502`) {
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: body.sku } };
+      }
+      return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: 'FB-502' } };
+    };
+
+    const result = await conciliarAltaIncierta({ db: x, cfg: {}, operationId, fetchWoo });
+
+    expect(result.estado).toBe('creado');
+    expect(result.id_padre).toBe(501);
+    // Validar que NO se intentó construir un path con /products/null/variations/...
+    expect(pathsConstructidos.some(p => p.path.includes('/products/null'))).toBe(false);
+    // Validar que se recuperó el padre antes de construir el path de variación
+    const paths = pathsConstructidos.map(p => p.path);
+    const indexPadreBuscado = paths.findIndex(p => p.includes(`FB-PEND-PADRE-${operationId}`));
+    const indexVariacionGet = paths.findIndex(p => p.includes(`/products/501/variations/502`));
+    expect(indexPadreBuscado).toBeGreaterThanOrEqual(0);
+    expect(indexVariacionGet).toBeGreaterThanOrEqual(0);
+    expect(indexPadreBuscado).toBeLessThan(indexVariacionGet); // padre buscado ANTES de variación
+  });
+});
+
+describe('Bug 2 fix: múltiples resultados en búsqueda de padre', () => {
+  it('2+ resultados para SKU de padre → trata como no encontrado, no toma el primero a ciegas', async () => {
+    const x = db();
+    const operationId = '550e8400-e29b-41d4-a716-446655440061';
+    const now = new Date().toISOString();
+
+    x.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,id_padre,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-test', null, null, 'FB-PEND-' + operationId, 'incierto', 'familia_variable', 'test', now, now);
+
+    const fetchWoo = async (_c, path, method = 'get') => {
+      // Devolver 2+ resultados para la búsqueda del padre (inconsistencia de datos)
+      if (method === 'get' && path.includes(`FB-PEND-PADRE-${operationId}`)) {
+        return { data: [{ id: 501 }, { id: 502 }] }; // Múltiples resultados
+      }
+      return { data: [] };
+    };
+
+    const result = await conciliarAltaIncierta({ db: x, cfg: {}, operationId, fetchWoo });
+
+    // Debe tratar como no encontrado (no tomar el primero a ciegas)
+    expect(result.estado).toBe('incierto');
+    expect(result.motivo).toMatch(/sin id_woo conocido|no se encontró/i);
+
+    const row = x.prepare('SELECT id_padre FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(row.id_padre).toBeNull(); // No debe haber persistido ninguno
+  });
+});
+
+describe('Decisión de diseño: finalización del SKU del padre', () => {
+  it('crearBorradorWoo familia_variable: aplica PATCH de SKU final al padre después de crearlo', async () => {
+    const calls = [];
+    const x = db();
+    const fetchWoo = async (_c, path, method = 'get', body) => {
+      calls.push({ path, method, body });
+      if (path.includes('/categories')) return { data: CATS };
+      if (method === 'post' && path === '/products') {
+        // Responder a POST del padre
+        return { data: { id: 44, status: 'draft', stock_quantity: 0 } };
+      }
+      if (method === 'post' && path.includes('/variations')) {
+        // Responder a POST de la variación
+        return { data: { id: 45, status: 'draft', stock_quantity: 0 } };
+      }
+      if (method === 'patch' && path === '/products/44') {
+        // PATCH del padre: capturar el SKU
+        return { data: { id: 44, status: 'draft', stock_quantity: 0, sku: body.sku } };
+      }
+      if (method === 'patch' && path.includes('/variations')) {
+        // PATCH de la variación
+        return { data: { id: 45, status: 'draft', stock_quantity: 0, sku: body.sku } };
+      }
+      // GET de verificación
+      if (path.includes('/variations/45')) {
+        return { data: { id: 45, status: 'draft', stock_quantity: 0, sku: 'FB-45' } };
+      }
+      return { data: { id: 44, status: 'draft', stock_quantity: 0, sku: 'FB-44' } };
+    };
+
+    const fichaFamiliar = { ...ficha, modo: 'familia_variable' };
+    await crearBorradorWoo({
+      db: x, cfg: {}, operationId: '550e8400-e29b-41d4-a716-446655440062',
+      ficha: fichaFamiliar, actor: 'j', fetchWoo
+    });
+
+    // Verificar que se aplicó el PATCH del SKU final al padre (FB-44)
+    const patchAlPadre = calls.find(c => c.method === 'patch' && c.path === '/products/44');
+    expect(patchAlPadre).toBeTruthy();
+    expect(patchAlPadre.body.sku).toBe('FB-44');
+  });
+
+  it('conciliarAltaIncierta: finaliza SKU del padre recuperado si aún tiene provisional', async () => {
+    const x = db();
+    const operationId = '550e8400-e29b-41d4-a716-446655440063';
+    const now = new Date().toISOString();
+    
+
+    // Fila incierto: familia_variable sin padre
+    x.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,id_padre,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-test', 502, null, 'FB-PEND-' + operationId, 'incierto', 'familia_variable', 'test', now, now);
+
+    let patchesAplicados = [];
+    const fetchWoo = async (_c, path, method = 'get', body) => {
+      // Búsqueda del padre por SKU
+      if (method === 'get' && path.includes(`FB-PEND-PADRE-${operationId}`)) {
+        return { data: [{ id: 501 }] };
+      }
+      // GET del padre: aún tiene SKU provisional
+      if (method === 'get' && path === '/products/501') {
+        return { data: { id: 501, status: 'draft', stock_quantity: 0, sku: `FB-PEND-PADRE-${operationId}` } };
+      }
+      // PATCH de finalización del padre
+      if (method === 'patch' && path === '/products/501') {
+        patchesAplicados.push(body.sku);
+        return { data: { id: 501, status: 'draft', stock_quantity: 0, sku: body.sku } };
+      }
+      // GET de la variación
+      if (method === 'get' && path === `/products/501/variations/502`) {
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: 'FB-502' } };
+      }
+      // PATCH de la variación
+      if (method === 'patch' && path === `/products/501/variations/502`) {
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: body.sku } };
+      }
+      return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: 'FB-502' } };
+    };
+
+    const result = await conciliarAltaIncierta({ db: x, cfg: {}, operationId, fetchWoo });
+
+    expect(result.estado).toBe('creado');
+    expect(result.id_padre).toBe(501);
+    // Verificar que se aplicó el PATCH de finalización del padre
+    expect(patchesAplicados).toContain('FB-501');
+  });
+});
+
+describe('E2E: timeout POST padre, después conciliación', () => {
+  it('timeout POST padre → incierto, luego conciliar crea solo 1 POST padre (el original perdido) y 1 POST variación', async () => {
+    const x = db();
+    const operationId1 = '550e8400-e29b-41d4-a716-446655440064';
+    
+
+    let llamadas = [];
+    const fetchWooPrimera = async (_c, path, method = 'get', _body) => {
+      llamadas.push({ fase: 'primera', path, method });
+      if (path.includes('/categories')) return { data: CATS };
+      if (method === 'post' && path === '/products') {
+        // Simular timeout: tirar error SIN haber procesado el POST en realidad
+        throw new Error('timeout');
+      }
+      return { data: { id: 44, status: 'draft', stock_quantity: 0 } };
+    };
+
+    // Primera llamada: timeout en POST del padre
+    const fichaFamiliaVar = { ...ficha, modo: 'familia_variable' };
+    await expect(crearBorradorWoo({
+      db: x, cfg: {}, operationId: operationId1,
+      ficha: fichaFamiliaVar, actor: 'j', fetchWoo: fetchWooPrimera
+    })).rejects.toThrow('timeout');
+
+    // Verificar que quedó incierto sin id_padre ni id_woo
+    const rowAntes = x.prepare('SELECT id_padre, id_woo FROM recepcion_altas_woo WHERE operation_id=?').get(operationId1);
+    expect(rowAntes.id_padre).toBeNull();
+    expect(rowAntes.id_woo).toBeNull();
+
+    // Ahora simular que el POST del padre SÍ fue procesado en Woo, aunque el timeout
+    // impidió que crearBorradorWoo leyera la respuesta.
+    let llamadasSegunda = [];
+    let skuPadreActual = `FB-PEND-PADRE-${operationId1}`;
+    let skuVariacionActual = `FB-PEND-${operationId1}`;
+
+    const fetchWooSegunda = async (_c, path, method = 'get', body) => {
+      llamadasSegunda.push({ path, method });
+      const skuProv = `FB-PEND-${operationId1}`;
+      const skuProvPadre = `FB-PEND-PADRE-${operationId1}`;
+
+      // Búsqueda del padre por SKU: lo encuentra porque el POST original SÍ llegó a Woo
+      if (method === 'get' && path === `/products?sku=${encodeURIComponent(skuProvPadre)}`) {
+        return { data: [{ id: 501 }] };
+      }
+      // GET del padre (antes y después de PATCH)
+      if (method === 'get' && path === '/products/501') {
+        return { data: { id: 501, status: 'draft', stock_quantity: 0, sku: skuPadreActual } };
+      }
+      // PATCH del padre (finalización)
+      if (method === 'patch' && path === '/products/501') {
+        skuPadreActual = body.sku;
+        return { data: { id: 501, status: 'draft', stock_quantity: 0, sku: skuPadreActual } };
+      }
+      // Búsqueda de la variación
+      if (method === 'get' && path === `/products/501/variations?sku=${encodeURIComponent(skuProv)}`) {
+        return { data: [{ id: 502 }] };
+      }
+      // GET de la variación (antes de PATCH)
+      if (method === 'get' && path === `/products/501/variations/502`) {
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: skuVariacionActual } };
+      }
+      // PATCH de la variación
+      if (method === 'patch' && path === `/products/501/variations/502`) {
+        skuVariacionActual = body.sku;
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: skuVariacionActual } };
+      }
+      return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: 'FB-502' } };
+    };
+
+    // Segunda llamada: conciliación
+    const resultConciliar = await conciliarAltaIncierta({
+      db: x, cfg: {}, operationId: operationId1, fetchWoo: fetchWooSegunda
+    });
+
+    expect(resultConciliar.estado).toBe('creado');
+    expect(resultConciliar.id_padre).toBe(501);
+    expect(resultConciliar.id_woo).toBe(502);
+
+    // Verificar que NO hubo POST en la conciliación (el padre ya existe en Woo)
+    const postsConciliacion = llamadasSegunda.filter(c => c.method === 'post');
+    expect(postsConciliacion).toHaveLength(0);
+
+    // Verificar que la conciliación hizo búsquedas para recuperar padre e id_woo
+    expect(llamadasSegunda.some(c => c.path.includes(`FB-PEND-PADRE-${operationId1}`))).toBe(true);
+    expect(llamadasSegunda.some(c => c.path.includes(`FB-PEND-${operationId1}`))).toBe(true);
+  });
+});
+
 describe('alta Woo fail-closed',()=>{
   it('crea draft con stock cero y no repite replay',async()=>{
     const calls=[];
