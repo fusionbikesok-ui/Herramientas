@@ -2651,7 +2651,7 @@ describe('Padre perdido en familia_variable — recuperación por SKU provisiona
       }
       // GET de verificación: la variación debe estar en draft
       if (path.includes('/variations/502')) {
-        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: 'FB-502' } };
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: 'FB-502', manage_stock: true } };
       }
       return { data: {} };
     };
