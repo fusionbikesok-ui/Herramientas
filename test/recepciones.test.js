@@ -1244,3 +1244,80 @@ describe('GET /api/recepciones/catalogo — búsqueda con query param', () => {
     expect(Object.keys(row)).toEqual(['id_woo', 'sku', 'nombre', 'stock']);
   });
 });
+
+describe('recepciones — P0.2 recuperación de aplicando huérfano al arrancar', () => {
+  const DB = './test/tmp-recep-p02.sqlite';
+
+  afterEach(() => { if (fs.existsSync(DB)) fs.unlinkSync(DB); });
+
+  it('aplicando sin stock_objetivo (PATCH nunca se mandó) → error_reintentable', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    // Setup: crear recepción e ítem en 'aplicando' sin stock_objetivo (nunca se mandó UPDATE de stock_objetivo)
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'borrador', 'x')"
+    ).run().lastInsertRowid;
+
+    const itemId = db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, operation_id, aplicando_desde, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 10, 'SKU1', 'Item 1', 1, 1, 'aplicando', 'op-uuid-1', new Date().toISOString(), 'x').lastInsertRowid;
+
+    // Verificar que está en 'aplicando' sin stock_objetivo (estado huérfano simulado)
+    let item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
+    expect(item.estado_item).toBe('aplicando');
+    expect(item.stock_objetivo).toBeNull();
+
+    db.close();
+
+    // Reiniciar: cerrar y abrir de nuevo, luego montar el router (dispara recuperación)
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // Verificar que ahora está en 'error_reintentable'
+    item = db2.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
+    expect(item.estado_item).toBe('error_reintentable');
+    expect(item.operation_id).toBeNull(); // limpio operation_id
+
+    db2.close();
+  });
+
+  it('aplicando con stock_objetivo persistido (PATCH posiblemente se mandó) → operacion_incierta', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    // Setup: crear recepción e ítem en 'aplicando' con stock_objetivo persistido (se mandó el UPDATE de línea 89-90)
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'borrador', 'x')"
+    ).run().lastInsertRowid;
+
+    const itemId = db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, operation_id, stock_previo, stock_objetivo, aplicando_desde, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 11, 'SKU2', 'Item 2', 2, 1, 'aplicando', 'op-uuid-2', 5, 7, new Date().toISOString(), 'x').lastInsertRowid;
+
+    // Verificar que está en 'aplicando' con stock_objetivo (estado huérfano con incertidumbre de si llegó el PATCH)
+    let item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
+    expect(item.estado_item).toBe('aplicando');
+    expect(item.stock_objetivo).toBe(7);
+
+    db.close();
+
+    // Reiniciar: cerrar y abrir de nuevo, luego montar el router (dispara recuperación)
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // Verificar que ahora está en 'operacion_incierta' (para que conciliación real lo resuelva)
+    item = db2.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
+    expect(item.estado_item).toBe('operacion_incierta');
+    // stock_objetivo se conserva para que la conciliación real sepa qué comparar contra Woo
+    expect(item.stock_objetivo).toBe(7);
+
+    db2.close();
+  });
+});

@@ -135,9 +135,10 @@ async function aplicarStockItemInterno(db, cfg, item) {
 /**
  * Concilia un ítem en 'operacion_incierta' leyendo el stock real de Woo, sin volver a hacer PATCH:
  * si coincide con el `stock_objetivo` que se persistió antes del intento, aplicó y se marca 'aplicado';
- * si sigue en `stock_previo`, nunca aplicó y se libera para un reintento normal ('error_reintentable'); cualquier otro
- * valor es ambiguo (pudo haber otro movimiento de stock de por medio) y queda 'conflicto_stock' para una
- * persona. Nunca decide con un PATCH: eso sería reintentar a ciegas justo lo que no se sabe si ya pasó.
+ * cualquier otro valor —incluido que siga en `stock_previo`— es ambiguo (el PATCH pudo haber llegado
+ * y un movimiento de stock de por medio, p. ej. una venta, lo haya igualado al previo por casualidad)
+ * y queda 'conflicto_stock' para que lo resuelva una persona. Nunca se reintenta a ciegas asumiendo
+ * "no llegó" solo porque el valor coincide con el previo (defecto P0.1, corregido).
  */
 // TODO(P1, antes de exponer esto por HTTP): hay una ventana entre este chequeo de estado y los
 // UPDATE de abajo (`await wooFetch` de por medio) — dos llamadas concurrentes sobre el mismo ítem
@@ -475,6 +476,29 @@ export function recepcionesRouter(db, cfg) {
   // Verificado en data/fusion.sqlite el 2026-09-21: 0 filas en 'error' en producción hoy — este UPDATE es
   // no-op ahí. Se deja igual (fail-closed) por si otra base o un backup restaurado sí las tiene.
   db.prepare("UPDATE recepcion_items SET estado_item='operacion_incierta' WHERE estado_item='error'").run();
+
+  // P0.2 (recuperación al arrancar): un 'aplicando' huérfano (quedó atrapado si el proceso murió entre el claim
+  // y el UPDATE final) necesita salida. Si stock_objetivo es NULL, nunca se llegó a persistir el intento (nunca
+  // se mandó PATCH) → es seguro pasar a 'error_reintentable'. Si stock_objetivo está persistido, no se sabe si
+  // el PATCH llegó a Woo → pasa a 'operacion_incierta' para que la conciliación real lo resuelva.
+  const huérfanos = db.prepare(
+    "SELECT id, stock_objetivo FROM recepcion_items WHERE estado_item='aplicando'"
+  ).all();
+  if (huérfanos.length > 0) {
+    for (const huerfano of huérfanos) {
+      if (huerfano.stock_objetivo === null) {
+        // Nunca se persistió el intento: seguro pasar a error_reintentable
+        db.prepare(
+          "UPDATE recepcion_items SET estado_item='error_reintentable', operation_id=NULL WHERE id=?"
+        ).run(huerfano.id);
+      } else {
+        // stock_objetivo persistido: no se sabe si el PATCH llegó → operacion_incierta para conciliación real
+        db.prepare(
+          "UPDATE recepcion_items SET estado_item='operacion_incierta' WHERE id=?"
+        ).run(huerfano.id);
+      }
+    }
+  }
 
   // Lista historial de recepciones
   router.get('/', (req, res) => {
