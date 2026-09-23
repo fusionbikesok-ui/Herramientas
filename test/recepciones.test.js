@@ -153,9 +153,9 @@ describe('recepciones — confirmar (esquema actual)', () => {
     ).run(operationId, 'hash-' + Math.random(), 999, 'PROD-CREADO', 'creado', 'simple', 'test', now, now);
 
     // Crear el ítem con estado 'creado' y vinculado a esa alta
-    const itemId = db.prepare(
+    db.prepare(
       'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,alta_operation_id,creado_en) VALUES (?,?,?,?,?,?,?,?,?)'
-    ).run(recId, 999, 'PROD-CREADO', 'Producto Creado', 1, 1, 'creado', operationId, now).lastInsertRowid;
+    ).run(recId, 999, 'PROD-CREADO', 'Producto Creado', 1, 1, 'creado', operationId, now);
 
     // Llamar a /confirmar
     const res = await request(app).post(`/api/recepciones/${recId}/confirmar`).send();
@@ -977,8 +977,9 @@ describe('P0.3 — el servidor nunca confía en un id_woo/estado "creado" que ma
     const res = await request(app).post(`/api/recepciones/${recId}/confirmar`).send();
     expect(res.body.aplicados).toBe(1);
     expect(syncModule.syncSkuPuntual).not.toHaveBeenCalled();
-    // Evidencia explícita de la exclusión, no un silencio indistinguible de "no había nada que hacer".
-    expect(res.body.sync_ml).toEqual([{ sku: 'FB-55', estado: 'excluido_alta', detalle: expect.stringContaining('Mercado Libre') }]);
+    // Evidencia explícita de la exclusión: como la fila vieja no tiene recepcion_item_id,
+    // se reporta con motivo 'excluido_alta_sin_vinculo' (fila vieja sin vínculo).
+    expect(res.body.sync_ml).toEqual([{ sku: 'FB-55', estado: 'excluido_alta_sin_vinculo', detalle: expect.stringContaining('Mercado Libre') }]);
   });
 
   it('si la alta no verifica contra recepcion_altas_woo al confirmar, no aplica stock ni llama a ML', async () => {
@@ -1143,6 +1144,218 @@ describe('P0.3 — el servidor nunca confía en un id_woo/estado "creado" que ma
     expect(altaRow).toBeDefined();
     expect(altaRow.recepcion_id).toBe(recId);
     expect(altaRow.recepcion_item_id).toBe(itemId);
+  });
+});
+
+describe('Tareas de validación de vínculos en altas Woo — Tarea 1 y Tarea 2', () => {
+  const DB = './test/tmp-recep-vinculos.sqlite';
+  let db, app;
+
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+    app = makeApp(db);
+    mockWooOk();
+
+    // Catálogo: simple con id_woo=10
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(10, 'Producto A', 'SKU-A', 'simple', null, 5, 'x');
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  });
+
+  // TAREA 1: Rechazar reutilización de operation_id ajeno
+  it('Tarea 1: rechaza reutilizar operation_id perteneciente a otra recepción/ítem', async () => {
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.url.includes('/categories')) return { status: 200, data: [{ id: 1, name: 'C', parent: 0 }] };
+      if (opts.method === 'post') return { status: 200, data: { id: 800, status: 'draft', stock_quantity: 0 } };
+      if (opts.method === 'patch') return { status: 200, data: { id: 800, status: 'draft', stock_quantity: 0, sku: 'FB-800' } };
+      return { status: 200, data: { id: 800, status: 'draft', stock_quantity: 0, sku: 'FB-800' } };
+    });
+
+    const rec1 = db.prepare("INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')").run().lastInsertRowid;
+    const item1 = db.prepare('INSERT INTO recepcion_items (recepcion_id,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?)').run(rec1, 'Producto 1', 1, 1, 'x').lastInsertRowid;
+
+    const rec2 = db.prepare("INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')").run().lastInsertRowid;
+    const item2 = db.prepare('INSERT INTO recepcion_items (recepcion_id,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?)').run(rec2, 'Producto 2', 1, 1, 'x').lastInsertRowid;
+
+    const operationId = '12345678-1234-5678-8234-567812345678';
+    const ficha = { modo: 'simple', titulo: 'X', marca: 'M', categoria_id: 1, categoria_nombre: 'C', precio: '100', atributos: [{ nombre: 'Color', valor: 'Negro' }] };
+
+    // Crear la primera alta con ese operationId, vinculada a rec1/item1
+    await crearBorradorWoo({ db, cfg, operationId, ficha, actor: 'test', recepcionId: rec1, recepcionItemId: item1 });
+
+    // Verificar que quedó persistido con el vínculo correcto
+    const altaRow1 = db.prepare('SELECT * FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(altaRow1).toBeDefined();
+    expect(altaRow1.recepcion_id).toBe(rec1);
+    expect(altaRow1.recepcion_item_id).toBe(item1);
+
+    // Intentar reutilizar el mismo operation_id desde rec2/item2: debe rechazarse
+    try {
+      await crearBorradorWoo({ db, cfg, operationId, ficha, actor: 'test', recepcionId: rec2, recepcionItemId: item2 });
+      expect.fail('Debería haber lanzado error');
+    } catch (e) {
+      expect(e.message).toMatch(/operationId pertenece a otra recepción\/ítem/i);
+    }
+  });
+
+  // TAREA 2: Excluir de ML con motivo apropiado para fila vieja sin vínculo
+  it('Tarea 2: sync_ml marca "excluido_alta_sin_vinculo" para fila vieja sin recepcion_item_id', async () => {
+    // Setup: stock stateful para /products/10
+    let stockWc = 5;
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.url.includes('/products/10')) {
+        if (opts.method === 'get') return { status: 200, data: { stock_quantity: stockWc, status: 'draft' } };
+        if (opts.method === 'patch') {
+          stockWc = opts.data.stock_quantity;
+          return { status: 200, data: { stock_quantity: stockWc, status: 'draft' } };
+        }
+      }
+      return { status: 200, data: {} };
+    });
+
+    const recId = db.prepare("INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')").run().lastInsertRowid;
+
+    // Insertar el ítem con estado_item='creado' (es requerido para que se aplique)
+    const itemId = db.prepare('INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)').run(recId, 10, 'SKU-A', 'Producto A', 3, 1, 'creado', 'x').lastInsertRowid;
+
+    // Insertar una fila vieja (NULL en recepcion_item_id) — simula fila pre-migración 111
+    const opId = '11111111-1111-5111-8111-111111111111';
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO recepcion_altas_woo (operation_id, request_hash, estado, id_woo, sku, modo, creado_por, creado_en, actualizado_en, respuesta_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(opId, 'hash-old', 'creado', 10, 'SKU-A', 'simple', 'system', now, now, JSON.stringify({ id_woo: 10, sku: 'SKU-A', status: 'draft' }));
+
+    // Vincular el ítem a esa alta
+    db.prepare('UPDATE recepcion_items SET alta_operation_id=? WHERE id=?').run(opId, itemId);
+
+    // Confirmar
+    const res = await request(app).post(`/api/recepciones/${recId}/confirmar`).send();
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.aplicados).toBe(1);
+    expect(res.body.errores).toBe(0);
+
+    // Verificar sync_ml: debe marcar "excluido_alta_sin_vinculo" porque la fila vieja no tiene recepcion_item_id
+    const syncMlEntry = res.body.sync_ml.find(e => e.sku === 'SKU-A');
+    expect(syncMlEntry).toBeDefined();
+    expect(syncMlEntry.estado).toBe('excluido_alta_sin_vinculo');
+  });
+
+  // TAREA 2: Excluir de ML con motivo "excluido_alta_vinculo_inconsistente"
+  it('Tarea 2: sync_ml marca "excluido_alta_vinculo_inconsistente" cuando recepcion_item_id apunta a otro ítem', async () => {
+    // Agregar catalogo_cache para id_woo=11 (SKU-B)
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(11, 'Producto B', 'SKU-B', 'simple', null, 5, 'x');
+
+    // Setup: stocks stateful para ambos productos
+    const stocks = new Map([[10, 5], [11, 5]]);
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.url.includes('/products/10')) {
+        if (opts.method === 'get') return { status: 200, data: { stock_quantity: stocks.get(10), status: 'draft' } };
+        if (opts.method === 'patch') {
+          stocks.set(10, opts.data.stock_quantity);
+          return { status: 200, data: { stock_quantity: stocks.get(10), status: 'draft' } };
+        }
+      }
+      if (opts.url.includes('/products/11')) {
+        if (opts.method === 'get') return { status: 200, data: { stock_quantity: stocks.get(11), status: 'draft' } };
+        if (opts.method === 'patch') {
+          stocks.set(11, opts.data.stock_quantity);
+          return { status: 200, data: { stock_quantity: stocks.get(11), status: 'draft' } };
+        }
+      }
+      return { status: 200, data: {} };
+    });
+
+    const recId = db.prepare("INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')").run().lastInsertRowid;
+    // itemA: estado_item='creado' porque será vinculado a una alta (inconsistente)
+    // itemB: estado_item='pendiente' porque es un ítem normal sin alta
+    const itemA = db.prepare('INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)').run(recId, 10, 'SKU-A', 'Producto A', 3, 1, 'creado', 'x').lastInsertRowid;
+    const itemB = db.prepare('INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)').run(recId, 11, 'SKU-B', 'Producto B', 2, 1, 'pendiente', 'x').lastInsertRowid;
+
+    // Crear una alta que pertenece a itemB
+    const opId = '22222222-2222-5222-8222-222222222222';
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO recepcion_altas_woo (operation_id, request_hash, estado, id_woo, sku, modo, creado_por, creado_en, actualizado_en, respuesta_json, recepcion_id, recepcion_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(opId, 'hash1', 'creado', 10, 'SKU-A', 'simple', 'system', now, now, JSON.stringify({ id_woo: 10, sku: 'SKU-A', status: 'draft' }), recId, itemB);
+
+    // Vincular itemA a esa alta (vínculo inconsistente: la alta pertenece a itemB pero se vincula a itemA)
+    db.prepare('UPDATE recepcion_items SET alta_operation_id=? WHERE id=?').run(opId, itemA);
+
+    // Confirmar
+    const res = await request(app).post(`/api/recepciones/${recId}/confirmar`).send();
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.aplicados).toBe(2);
+    expect(res.body.errores).toBe(0);
+
+    // Verificar que itemA tiene motivo "excluido_alta_vinculo_inconsistente"
+    expect(res.body.sync_ml).toBeDefined();
+    const syncMlEntry = res.body.sync_ml.find(e => e && e.sku === 'SKU-A');
+    expect(syncMlEntry).toBeDefined();
+    expect(syncMlEntry.estado).toBe('excluido_alta_vinculo_inconsistente');
+
+    // SKU-B no debe tener entrada en sync_ml (se aplicó normalmente, sin alta)
+    const syncMlEntryB = res.body.sync_ml.find(e => e && e.sku === 'SKU-B');
+    expect(syncMlEntryB).toBeUndefined();
+  });
+
+  // TAREA 2: Verificar que el caso normal (vínculo correcto) sigue dando "excluido_alta"
+  it('Tarea 2: sync_ml marca "excluido_alta" para vínculo correcto entre recepcion_item_id e ítem', async () => {
+    // Stock stateful para crearBorradorWoo y confirmar
+    let stockWc = 0;
+    const fetchWoo = async (_c, path, method = 'get', body) => {
+      if (path.includes('/categories')) return { data: [{ id: 1, name: 'C', parent: 0 }] };
+      if (method === 'post') return { data: { id: 801, status: 'draft', stock_quantity: 0 } };
+      if (method === 'patch') {
+        if (body?.stock_quantity !== undefined) stockWc = body.stock_quantity;
+        return { data: { id: 801, status: 'draft', stock_quantity: stockWc, sku: 'FB-801' } };
+      }
+      return { data: { id: 801, status: 'draft', stock_quantity: stockWc, sku: 'FB-801' } };
+    };
+
+    const recId = db.prepare("INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')").run().lastInsertRowid;
+    const itemId = db.prepare('INSERT INTO recepcion_items (recepcion_id,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?)').run(recId, 'Producto nuevo', 3, 1, 'x').lastInsertRowid;
+
+    const ficha = { modo: 'simple', titulo: 'X', marca: 'M', categoria_id: 1, categoria_nombre: 'C', precio: '100', atributos: [{ nombre: 'Color', valor: 'Negro' }] };
+
+    // Crear el alta con fetchWoo personalizado
+    const alta = await crearBorradorWoo({
+      db, cfg, operationId: '333e8400-e29b-41d4-a716-446655440333', ficha, actor: 'test', fetchWoo,
+      recepcionId: recId, recepcionItemId: itemId,
+    });
+    expect(alta.sku).toBe('FB-801');
+    expect(alta.id_woo).toBe(801);
+
+    // Actualizar el ítem con los datos de la alta
+    db.prepare('UPDATE recepcion_items SET id_woo=?, sku=?, estado_item=?, alta_operation_id=? WHERE id=?')
+      .run(alta.id_woo, alta.sku, 'creado', '333e8400-e29b-41d4-a716-446655440333', itemId);
+
+    // Mock stateful para confirmar
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: stockWc, status: 'draft' } };
+      if (opts.method === 'patch') {
+        if (opts.data?.stock_quantity !== undefined) stockWc = opts.data.stock_quantity;
+        return { status: 200, data: { stock_quantity: stockWc, status: 'draft' } };
+      }
+      return { status: 200, data: {} };
+    });
+
+    // Confirmar
+    const res = await request(app).post(`/api/recepciones/${recId}/confirmar`).send();
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.aplicados).toBe(1);
+    expect(res.body.errores).toBe(0);
+
+    // Verificar que sync_ml contiene la entrada con motivo "excluido_alta"
+    const syncMlEntry = res.body.sync_ml.find(e => e.sku === 'FB-801');
+    expect(syncMlEntry).toBeDefined();
+    expect(syncMlEntry.estado).toBe('excluido_alta');
   });
 });
 
@@ -1935,13 +2148,13 @@ describe('recepciones — PUNTO 6 recuperación de recepciones huérfanas en pro
       "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'procesando', 'x')"
     ).run().lastInsertRowid;
 
-    const itemId1 = db.prepare(
+    const _itemId1 = db.prepare(
       `INSERT INTO recepcion_items
         (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(recId, 10, 'SKU1', 'Item 1', 1, 1, 'aplicado', 8, 'x').lastInsertRowid;
 
-    const itemId2 = db.prepare(
+    const _itemId2 = db.prepare(
       `INSERT INTO recepcion_items
         (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`

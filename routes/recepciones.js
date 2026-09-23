@@ -1017,16 +1017,36 @@ export function recepcionesRouter(db, cfg) {
       ).all(id);
       for (const it of itemsAplicados) {
         // Determinar alta_borrador igual que en el código principal (línea ~951-953)
-        const altaBorrador = it.alta_operation_id && db.prepare(
-          'SELECT 1 FROM recepcion_altas_woo WHERE operation_id=? AND estado=\'creado\' AND id_woo=?'
-        ).get(it.alta_operation_id, it.id_woo) ? true : false;
+        // Tarea 2: traer recepcion_item_id para validar el vínculo
+        let altaBorrador = false;
+        let altaBorradorMotivo = null;
+        if (it.alta_operation_id) {
+          const altaRow = db.prepare(
+            'SELECT recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=? AND estado=\'creado\' AND id_woo=?'
+          ).get(it.alta_operation_id, it.id_woo);
+          if (altaRow) {
+            altaBorrador = true;
+            // Determinar el motivo según el vínculo
+            if (altaRow.recepcion_item_id === null) {
+              // Fila vieja sin vínculo (de antes de migración 111)
+              altaBorradorMotivo = 'excluido_alta_sin_vinculo';
+            } else if (altaRow.recepcion_item_id === it.id) {
+              // Vínculo correcto: el ítem actual es el dueño de esta alta
+              altaBorradorMotivo = 'excluido_alta';
+            } else {
+              // Vínculo inconsistente: la alta pertenece a otro ítem
+              altaBorradorMotivo = 'excluido_alta_vinculo_inconsistente';
+            }
+          }
+        }
         resultados.push({
           sku: it.sku,
           nombre: it.nombre_doc,
           ok: true,
-          alta_borrador: altaBorrador,  // Reconstruir desde recepcion_altas_woo igual que original
-          stock_previo: it.stock_previo,    // Persistido en línea 105
-          stock_nuevo: it.stock_nuevo       // Persistido en línea 143
+          alta_borrador: altaBorrador,
+          alta_borrador_motivo: altaBorradorMotivo,  // Nuevo campo: motivo de exclusión
+          stock_previo: it.stock_previo,
+          stock_nuevo: it.stock_nuevo
         });
       }
     }
@@ -1091,10 +1111,29 @@ export function recepcionesRouter(db, cfg) {
           // PUNTO 4: alta_borrador debe verificarse contra recepcion_altas_woo (fuente durable),
           // no contra it.estado_item (transitorio). Usa el patrón de verificación que ya existe
           // en verificarAltaCreado / estadoItemAlGuardar / opIdSiVerificable.
-          const altaBorrador = it.alta_operation_id && db.prepare(
-            'SELECT 1 FROM recepcion_altas_woo WHERE operation_id=? AND estado=\'creado\' AND id_woo=?'
-          ).get(it.alta_operation_id, it.id_woo) ? true : false;
-          resultados.push({ sku: it.sku, nombre: it.nombre_doc, ok: true, alta_borrador: altaBorrador, stock_previo: r.stock_previo, stock_nuevo: r.stock_nuevo });
+          // Tarea 2: traer recepcion_item_id para validar el vínculo
+          let altaBorrador = false;
+          let altaBorradorMotivo = null;
+          if (it.alta_operation_id) {
+            const altaRow = db.prepare(
+              'SELECT recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=? AND estado=\'creado\' AND id_woo=?'
+            ).get(it.alta_operation_id, it.id_woo);
+            if (altaRow) {
+              altaBorrador = true;
+              // Determinar el motivo según el vínculo
+              if (altaRow.recepcion_item_id === null) {
+                // Fila vieja sin vínculo (de antes de migración 111)
+                altaBorradorMotivo = 'excluido_alta_sin_vinculo';
+              } else if (altaRow.recepcion_item_id === it.id) {
+                // Vínculo correcto: el ítem actual es el dueño de esta alta
+                altaBorradorMotivo = 'excluido_alta';
+              } else {
+                // Vínculo inconsistente: la alta pertenece a otro ítem
+                altaBorradorMotivo = 'excluido_alta_vinculo_inconsistente';
+              }
+            }
+          }
+          resultados.push({ sku: it.sku, nombre: it.nombre_doc, ok: true, alta_borrador: altaBorrador, alta_borrador_motivo: altaBorradorMotivo, stock_previo: r.stock_previo, stock_nuevo: r.stock_nuevo });
         } catch (e) {
           // aplicarStockItemInterno ya persistió el estado terminal correcto ('error_reintentable' /
           // 'operacion_incierta' / 'conflicto_stock') antes de lanzar, o no tocó nada si el ítem ya
@@ -1136,7 +1175,9 @@ export function recepcionesRouter(db, cfg) {
     // sincronizar". `syncSkuPuntual` NUNCA se llama para estos SKUs (ver el filtro `!r.alta_borrador`
     // de abajo); esta entrada es solo un registro de que se excluyó a propósito, no una llamada a ML.
     for (const r of resultados.filter(r => r.ok && r.sku && r.alta_borrador)) {
-      sync_ml.push({ sku: r.sku, estado: 'excluido_alta', detalle: 'primer stock de una alta nueva: no se sincroniza a Mercado Libre' });
+      // Tarea 2: usar el motivo específico en lugar de hardcodear 'excluido_alta'
+      const estado = r.alta_borrador_motivo || 'excluido_alta';
+      sync_ml.push({ sku: r.sku, estado, detalle: 'primer stock de una alta nueva: no se sincroniza a Mercado Libre' });
     }
     const skusAplicados = [...new Set(resultados.filter(r => r.ok && r.sku && !r.alta_borrador).map(r => r.sku))];
     for (const sku of skusAplicados) {
