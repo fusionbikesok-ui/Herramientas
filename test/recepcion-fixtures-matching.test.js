@@ -26,13 +26,22 @@ function construirCatalogo(db) {
   const now = new Date().toISOString();
   // 01: SKU único
   ins.run(1, 'Casco Alpha', 'CASCO-ALPHA-001', 'simple', null, 4, 'Marca A', null, now);
-  // 02: SKU duplicado (dos filas con el mismo sku)
-  ins.run(10, 'Zapatilla Trail', 'ZAPA-001', 'simple', null, 5, 'Marca B', null, now);
-  ins.run(11, 'Zapatilla Trail', 'ZAPA-001', 'simple', null, 3, 'Marca B', null, now);
-  // 03/04/05/09: familia "Zapatilla Base" con hermanos que permiten ambigüedad y contradicción
-  ins.run(20, 'Zapatilla Base', 'ZAPA-BASE-41-NEGRO', 'variation', null, 6, 'Marca B', JSON.stringify({ talle: '41', color: 'Negro' }), now);
-  ins.run(21, 'Zapatilla Base', 'ZAPA-BASE-42-AZUL', 'variation', null, 7, 'Marca B', JSON.stringify({ talle: '42', color: 'Azul' }), now);
-  ins.run(22, 'Zapatilla Base', 'ZAPA-BASE-43-NEGRO', 'variation', null, 8, 'Marca B', JSON.stringify({ talle: '43', color: 'Negro' }), now);
+  // 02: SKU duplicado (dos filas con el mismo sku). El nombre real de catálogo es irrelevante
+  // acá — el fixture matchea por SKU exacto, que corta antes de llegar al matcher fuzzy — pero
+  // se evita a propósito la palabra "Zapatilla" para no competir por texto con la familia
+  // "Zapatilla Base" de más abajo (03/04/05/09).
+  ins.run(10, 'Botín de Trekking', 'ZAPA-001', 'simple', null, 5, 'Marca B', null, now);
+  ins.run(11, 'Botín de Trekking', 'ZAPA-001', 'simple', null, 3, 'Marca B', null, now);
+  // 03/04/05/09: familia "Zapatilla Base" con hermanos (mismo id_padre) que permiten ambigüedad
+  // y contradicción. atributos_json es [{name,option}] (formato real de Woo, ver
+  // extraerAtributosDeAttrsWC en matcherEngine.js) — NO {talle,color}. Con la forma equivocada,
+  // atributosEstructurados da false y contradiccionAtributo() nunca se evalúa: cualquier
+  // talle/color del documento caía en 'revisar' en vez de 'contradiccion' aunque contradijera
+  // de verdad (hallazgo de revisión sobre este mismo test, corregido acá).
+  const attrsWc = (talle, color) => JSON.stringify([{ name: 'Talle', option: talle }, { name: 'Color', option: color }]);
+  ins.run(20, 'Zapatilla Base', 'ZAPA-BASE-41-NEGRO', 'variation', 200, 6, 'Marca B', attrsWc('41', 'Negro'), now);
+  ins.run(21, 'Zapatilla Base', 'ZAPA-BASE-42-AZUL', 'variation', 200, 7, 'Marca B', attrsWc('42', 'Azul'), now);
+  ins.run(22, 'Zapatilla Base', 'ZAPA-BASE-43-NEGRO', 'variation', 200, 8, 'Marca B', attrsWc('43', 'Negro'), now);
   // 10/11: alias válido y alias huérfano (ver confirmarAlias abajo)
   ins.run(5, 'Guante de Ciclismo', 'GUANTE-001', 'simple', null, 20, 'Marca A', null, now);
 
@@ -75,16 +84,18 @@ describe('resolverLoteRecepcion contra los 13 fixtures de recepción', () => {
     expect(resultados[0].ambiguo).toBe(true);
   });
 
-  it('04-contradiccion-talle: el talle del documento no coincide con el del mejor candidato, requiere revisión', () => {
+  it('04-contradiccion-talle: el talle del documento contradice al del mejor candidato → estado "contradiccion", no un genérico "revisar"', () => {
     const { resultados } = resolverFixture('04-contradiccion-talle.json');
-    expect(resultados[0].estado).toBe('revisar');
+    expect(resultados[0].estado).toBe('contradiccion');
     expect(resultados[0].auto_aplicable).toBe(false);
+    expect(resultados[0].candidato.razones).toContainEqual(expect.objectContaining({ tipo: 'talle', resultado: 'contradice' }));
   });
 
-  it('05-contradiccion-color: el color del documento no coincide con el del mejor candidato, requiere revisión', () => {
+  it('05-contradiccion-color: el color del documento contradice al del mejor candidato → estado "contradiccion", no un genérico "revisar"', () => {
     const { resultados } = resolverFixture('05-contradiccion-color.json');
-    expect(resultados[0].estado).toBe('revisar');
+    expect(resultados[0].estado).toBe('contradiccion');
     expect(resultados[0].auto_aplicable).toBe(false);
+    expect(resultados[0].candidato.razones).toContainEqual(expect.objectContaining({ tipo: 'color', resultado: 'contradice' }));
   });
 
   it('06-producto-inexistente: ningún candidato en catálogo, sin match', () => {
@@ -109,11 +120,10 @@ describe('resolverLoteRecepcion contra los 13 fixtures de recepción', () => {
     }
   });
 
-  it('09-variacion-familia-existente: combinación talle/color nueva dentro de una familia existente, ambigua entre hermanos, requiere revisión', () => {
+  it('09-variacion-familia-existente: talle 42 pertenece a un hermano de otro color → contradicción de color, requiere revisión', () => {
     const { resultados } = resolverFixture('09-variacion-familia-existente.json');
-    expect(resultados[0].estado).toBe('revisar');
+    expect(resultados[0].estado).toBe('contradiccion');
     expect(resultados[0].auto_aplicable).toBe(false);
-    expect(resultados[0].ambiguo).toBe(true);
   });
 
   it('10-alias-valido: código de proveedor con alias vigente resuelve automático por el alias', () => {
@@ -130,18 +140,7 @@ describe('resolverLoteRecepcion contra los 13 fixtures de recepción', () => {
     expect(resultados[0].sin_candidato).toBe(true);
   });
 
-  // 12 y 13 documentan escenarios de timeout/idempotencia del PATCH a Woo durante el E2E
-  // (ver npm run e2e:recepcion-urgente), no de matching: sus códigos de proveedor no están
-  // en ningún catálogo real porque lo que prueban es qué pasa cuando Woo no responde a
-  // tiempo, no si el matcher encuentra un candidato. resolverLineaRecepcion, sin ese
-  // contexto de red, correctamente no encuentra nada que matchear.
-  it('12-timeout-antes-patch: fuera del alcance del matcher (escenario de timeout de red), sin match', () => {
-    const { resultados } = resolverFixture('12-timeout-antes-patch.json');
-    expect(resultados[0].estado).toBe('sin_match');
-  });
-
-  it('13-timeout-despues-patch: fuera del alcance del matcher (escenario de timeout de red), sin match', () => {
-    const { resultados } = resolverFixture('13-timeout-despues-patch.json');
-    expect(resultados[0].estado).toBe('sin_match');
-  });
+  // 12 y 13 (timeout antes/después del PATCH a Woo) no son casos de matching: documentan
+  // idempotencia de red durante el E2E y ya están cubiertos ahí (npm run e2e:recepcion-urgente)
+  // y en recepciones.test.js. No se testean acá para no mezclar dos capas distintas.
 });
