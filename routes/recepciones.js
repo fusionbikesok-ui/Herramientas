@@ -813,6 +813,42 @@ export function recepcionesRouter(db, cfg) {
     }
   }
 
+  // PUNTO 7 (recuperación al arrancar): un alta en 'procesando' huérfana (quedó atrapada si el proceso
+  // murió durante crearBorradorWoo) necesita recuperación. Evaluar la evidencia persistida:
+  // - Si id_woo IS NOT NULL → red definitivamente creó el recurso final → pasa a 'incierto'
+  // - Si id_padre IS NOT NULL y modo='familia_variable' → red definitivamente creó el padre → pasa a 'incierto'
+  // - En otro caso → nada persistido que sea evidencia → pasa a 'fallido' (libera operationId para reintento)
+  try {
+    const altasHuerfanas = db.prepare(
+      "SELECT operation_id, id_woo, id_padre, modo FROM recepcion_altas_woo WHERE estado='procesando'"
+    ).all();
+    if (altasHuerfanas.length > 0) {
+      const now = new Date().toISOString();
+      for (const alta of altasHuerfanas) {
+        let estadoFinal = 'fallido';
+        let error = null;
+
+        if (alta.id_woo !== null) {
+          // Red creó el recurso final (simple, familia_variable o variacion_existente)
+          estadoFinal = 'incierto';
+        } else if (alta.modo === 'familia_variable' && alta.id_padre !== null) {
+          // Para familia_variable, id_padre persistido indica que red creó el padre
+          estadoFinal = 'incierto';
+        } else {
+          // Nada persistido que sea evidencia → fallido
+          error = 'Proceso murió antes de crear recurso en Woo. Reintentable.';
+        }
+
+        db.prepare(
+          "UPDATE recepcion_altas_woo SET estado=?, error=?, actualizado_en=? WHERE operation_id=?"
+        ).run(estadoFinal, error, now, alta.operation_id);
+      }
+    }
+  } catch (err) {
+    // BD vieja que no tiene la tabla recepcion_altas_woo. La migración la creará al ejecutarse.
+    if (!err.message.includes('no such table')) throw err;
+  }
+
   // Lista historial de recepciones
   router.get('/', (req, res) => {
     const rows = db.prepare(`

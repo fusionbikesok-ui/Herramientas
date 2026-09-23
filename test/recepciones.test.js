@@ -2221,3 +2221,95 @@ describe('recepciones — PUNTO 6 error 409 cuando hay confirmación en curso', 
     });
   });
 });
+
+describe('recepciones — recuperación de altas_woo en "procesando"', () => {
+  const DB = './test/tmp-recep-altas-recovery.sqlite';
+  let db;
+
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+    // Al instanciar el router se ejecuta la recuperación (al iniciar el módulo)
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  });
+
+  it('caso (a): modo=simple sin id_woo → estado=fallido', () => {
+    // Insertar una alta en estado 'procesando', modo simple, sin id_woo (nunca se llegó a crear)
+    const operationId = 'op-a-' + Math.random().toString(36).slice(2);
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-a', null, 'SKU-A', 'procesando', 'simple', 'test', now, now);
+
+    // Instanciar el router → ejecuta recuperación
+    makeApp(db);
+
+    // Verificar que pasó a 'fallido'
+    const alta = db.prepare('SELECT estado, error FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(alta.estado).toBe('fallido');
+    expect(alta.error).toBeTruthy(); // debe tener un error descriptivo
+  });
+
+  it('caso (b): modo=simple con id_woo → estado=incierto', () => {
+    // id_woo persistido → la red creó el recurso final
+    const operationId = 'op-b-' + Math.random().toString(36).slice(2);
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-b', 999, 'SKU-B', 'procesando', 'simple', 'test', now, now);
+
+    makeApp(db);
+
+    const alta = db.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(alta.estado).toBe('incierto');
+  });
+
+  it('caso (c): modo=familia_variable sin id_padre ni id_woo → estado=fallido', () => {
+    // Nada persistido que indique que la red hizo algo
+    const operationId = 'op-c-' + Math.random().toString(36).slice(2);
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,id_padre,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-c', null, null, 'SKU-C', 'procesando', 'familia_variable', 'test', now, now);
+
+    makeApp(db);
+
+    const alta = db.prepare('SELECT estado, error FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(alta.estado).toBe('fallido');
+    expect(alta.error).toBeTruthy();
+  });
+
+  it('caso (d): modo=familia_variable con id_padre pero sin id_woo → estado=incierto', () => {
+    // id_padre persistido para familia_variable → la red creó el padre, pasó a incierto
+    const operationId = 'op-d-' + Math.random().toString(36).slice(2);
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,id_padre,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-d', null, 888, 'SKU-D', 'procesando', 'familia_variable', 'test', now, now);
+
+    makeApp(db);
+
+    const alta = db.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(alta.estado).toBe('incierto');
+  });
+
+  it('caso (e): modo=variacion_existente con id_padre pero sin id_woo → estado=fallido', () => {
+    // Para variacion_existente, id_padre se persiste DESDE el INICIO (viene de la ficha)
+    // No es evidencia de que la red hizo algo. Solo id_woo lo es.
+    const operationId = 'op-e-' + Math.random().toString(36).slice(2);
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,id_padre,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-e', null, 777, 'SKU-E', 'procesando', 'variacion_existente', 'test', now, now);
+
+    makeApp(db);
+
+    const alta = db.prepare('SELECT estado, error FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(alta.estado).toBe('fallido');
+    expect(alta.error).toBeTruthy();
+  });
+});
