@@ -967,7 +967,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('0 4 * * *', () => {
         try {
           const n = purgarFotosBorradas(app._db);
-          if (n) console.log(`Purgadas ${n} fotos de preparaciones de más de 30 días`);
+          if (n) console.log(`Purgadas ${n} fotos de preparación (borrado_en > 60 días)`);
         } catch (err) { console.error('Error purgando fotos de preparación:', err.message); }
       });
 
