@@ -801,7 +801,7 @@ export function recepcionesRouter(db, cfg) {
       if (!rec.solo_documento) {
         const pendientes = db.prepare(`
           SELECT COUNT(*) as count FROM recepcion_items
-          WHERE recepcion_id=? AND estado_item IN ('pendiente','creado','sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock')
+          WHERE recepcion_id=? AND (estado_item IN ('pendiente','creado','sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock','aplicando') OR estado_item IS NULL)
         `).get(rec.id);
         if (pendientes.count > 0) {
           estadoFinal = 'confirmada_con_pendientes';

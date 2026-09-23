@@ -2078,6 +2078,103 @@ describe('recepciones — PUNTO 6 recuperación de recepciones huérfanas en pro
 
     db2.close();
   });
+
+  it('HUECO 1: ítem con estado_item NULL (nunca tocado) debe contar como pendiente → confirmada_con_pendientes', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    // Escenario del Hueco 1: una recepción en 'procesando' con un ítem cuyo estado_item es NULL
+    // (nunca se intentó aplicar, puede haber sido creado por API sin estado_item explícito).
+    // El claim de aplicarStockItemInterno acepta ítems con estado_item NULL (42 filas en producción).
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'procesando', 'x')"
+    ).run().lastInsertRowid;
+
+    // Ítem #1: aplicado ok
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 10, 'SKU1', 'Item procesado', 1, 1, 'aplicado', 8, 'x');
+
+    // Ítem #2: estado_item NULL (nunca se tocó, pero está en la recepción)
+    // Insertamos explícitamente NULL en estado_item (sin especificar la columna, SQLite asume NULL por defecto)
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 11, 'SKU2', 'Item nunca tocado', 1, 1, 'x');
+
+    let rec = db.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('procesando');
+
+    // Verificar que el ítem #2 realmente tiene estado_item NULL
+    const item2 = db.prepare('SELECT estado_item FROM recepcion_items WHERE recepcion_id=? AND sku=?').get(recId, 'SKU2');
+    expect(item2.estado_item).toBeNull();
+
+    db.close();
+
+    // Reiniciar para disparar recuperación
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // VERIFICACIÓN: debe ser 'confirmada_con_pendientes' porque el ítem #2 con estado_item NULL debería contar como pendiente.
+    // Esto es ROJO actualmente porque el WHERE usa IN (...) que no matchea NULL.
+    rec = db2.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('confirmada_con_pendientes');
+    expect(rec.confirmado_en).not.toBeNull();
+
+    db2.close();
+  });
+
+  it('HUECO 2: ítem en estado "aplicando" (huérfano) debe contar como pendiente → confirmada_con_pendientes', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    // Escenario del Hueco 2: una recepción en 'procesando' con un ítem en estado 'aplicando'.
+    // Esto ocurre si el proceso murió entre el claim (que marca 'aplicando') y el UPDATE final del punto 2.
+    // El Bloque A debería resolver todos los 'aplicando' antes que el Bloque B corra, pero
+    // como defensa en profundidad, el Bloque B debería también considerar 'aplicando' como pendiente.
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'procesando', 'x')"
+    ).run().lastInsertRowid;
+
+    // Ítem #1: aplicado ok
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 10, 'SKU1', 'Item procesado', 1, 1, 'aplicado', 8, 'x');
+
+    // Ítem #2: estado_item 'aplicando' (huérfano, quedó atrapado entre el claim y el UPDATE final)
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 12, 'SKU3', 'Item huérfano en aplicando', 1, 1, 'aplicando', 'x');
+
+    let rec = db.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('procesando');
+
+    db.close();
+
+    // Reiniciar para disparar recuperación
+    // El Bloque A (P0.2) corre primero y convierte los 'aplicando' huérfanos a 'error_reintentable' o 'operacion_incierta'
+    // Pero el Bloque B también debería considerar 'aplicando' en su lista de pendientes como defensa en profundidad.
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // VERIFICACIÓN: debe ser 'confirmada_con_pendientes' porque el ítem #2 es un huérfano.
+    // Incluso si el Bloque A ya lo convirtió a 'error_reintentable', sigue siendo pendiente.
+    // Esto es ROJO actualmente porque el WHERE del Bloque B no incluye 'aplicando'.
+    rec = db2.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('confirmada_con_pendientes');
+    expect(rec.confirmado_en).not.toBeNull();
+
+    db2.close();
+  });
 });
 
 describe('recepciones — PUNTO 6 error 409 cuando hay confirmación en curso', () => {
