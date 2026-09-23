@@ -1781,21 +1781,71 @@ function conciliarStockItem(event, recId, itemId) {
     });
 }
 
-// PUNTO 3: Resolver un ítem en conflicto_stock
-function resolverConflictoItem(event, recId, itemId, decision) {
-  event.stopPropagation();
-  event.preventDefault();
+// PUNTO 3: Mostrar stock actual de Woo antes de resolver conflicto (HUECO 3)
+function mostrarDialogoResolverConflicto(recId, itemId, item) {
+  // Primero cargar el stock actual de Woo
+  mostrarStatus('status-hist', 'loading', 'Leyendo stock actual desde WooCommerce...');
+  fetch('/api/recepciones/' + recId + '/items/' + itemId + '/stock-actual-woo')
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+    .then(function(r) {
+      if (!r.data.ok) {
+        mostrarStatus('status-hist', 'err', 'Error al leer stock actual: ' + r.data.error);
+        return;
+      }
+      var stockActual = r.data.stock_actual;
+      var stockPrevio = item.stock_previo || '?';
+      var stockObjetivo = item.stock_objetivo || '?';
+
+      // Mostrar un diálogo con opciones
+      var titulo = 'Resolver conflicto de stock';
+      var msg = 'Stock previo: ' + stockPrevio + '\nStock objetivo (intentado): ' + stockObjetivo + '\nStock actual en Woo: ' + stockActual + '\n\n';
+
+      // Usar confirm() nativo para escoger opción
+      var opcion = confirm(msg + 'Click "Aceptar" para aceptar el stock de Woo, o "Cancelar" para reintentar.\n\nNOTA: Si elegís Reintentar y el PATCH anterior YA se aplicó, el stock se duplicará. Solo reintentar si estás seguro de que no llegó.');
+
+      if (opcion) {
+        // Aceptar stock de Woo
+        pedirMotivoYResolver(recId, itemId, 'aceptar_woo');
+      } else {
+        // Reintentar
+        pedirMotivoYResolver(recId, itemId, 'reintentar');
+      }
+    })
+    .catch(function(e) {
+      mostrarStatus('status-hist', 'err', 'Error: ' + e.message);
+    });
+}
+
+// PUNTO 3: Pedir motivo y resolver conflicto (HUECO 2)
+function pedirMotivoYResolver(recId, itemId, decision) {
   var decisionLabel = decision === 'aceptar_woo' ? 'Aceptar stock de WooCommerce' : 'Reintentar desde cero';
+  var motivo = prompt('Explicá el motivo de esta decisión (' + decisionLabel + '):');
+  if (motivo === null) {
+    // Cancelado
+    mostrarStatus('status-hist', 'ok', 'Operación cancelada');
+    return;
+  }
+  if (motivo.trim() === '') {
+    mostrarStatus('status-hist', 'err', 'El motivo es obligatorio');
+    return;
+  }
+
   mostrarStatus('status-hist', 'loading', 'Resolviendo conflicto (' + decisionLabel + ')...');
   fetch('/api/recepciones/' + recId + '/items/' + itemId + '/resolver-conflicto', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ decision: decision })
+    body: JSON.stringify({ decision: decision, motivo: motivo })
   })
     .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
     .then(function(r) {
       if (!r.data.ok) {
-        var errMsg = r.status === 404 ? 'Ítem no encontrado' : r.status === 409 ? 'El ítem no está en conflicto de stock' : r.data.error;
+        var errMsg = '';
+        if (r.status === 404) errMsg = 'Ítem no encontrado';
+        else if (r.status === 409) {
+          // HUECO 1: El PATCH ya se aplicó, no se puede reintentar
+          errMsg = 'No se puede reintentar: ' + r.data.error;
+        } else if (r.status === 400) errMsg = r.data.error;
+        else errMsg = r.data.error;
         mostrarStatus('status-hist', 'err', 'Error: ' + errMsg);
         return;
       }
@@ -1836,10 +1886,7 @@ function toggleHist(id) {
           if (it.estado_item === 'operacion_incierta') {
             accionesHtml = '<button class="btn btn-sm" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="conciliarStockItem(event,' + id + ',' + it.id + ')">Conciliar</button>';
           } else if (it.estado_item === 'conflicto_stock') {
-            accionesHtml = '<div style="display:flex;gap:4px;flex-wrap:wrap">'
-              + '<button class="btn btn-sm" style="background:var(--green-bg);color:var(--green);border:1px solid var(--green-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="resolverConflictoItem(event,' + id + ',' + it.id + ',\'aceptar_woo\')">Aceptar</button>'
-              + '<button class="btn btn-sm" style="background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="resolverConflictoItem(event,' + id + ',' + it.id + ',\'reintentar\')">Reintentar</button>'
-              + '</div>';
+            accionesHtml = '<button class="btn btn-sm" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="event.stopPropagation(); event.preventDefault(); mostrarDialogoResolverConflicto(' + id + ',' + it.id + ', {stock_previo:' + (it.stock_previo != null ? it.stock_previo : 'null') + ',stock_objetivo:' + (it.stock_objetivo != null ? it.stock_objetivo : 'null') + '})">Resolver conflicto</button>';
           }
           return '<tr>'
             + '<td style="color:var(--gray2)">'+(i+1)+'</td>'

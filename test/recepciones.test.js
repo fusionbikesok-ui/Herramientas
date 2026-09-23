@@ -1535,7 +1535,7 @@ describe('PUNTO 3: conciliar operacion_incierta y resolver conflicto_stock', () 
 
     const res = await request(app)
       .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
-      .send({ decision: 'aceptar_woo' });
+      .send({ decision: 'aceptar_woo', motivo: 'test' });
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -1556,9 +1556,14 @@ describe('PUNTO 3: conciliar operacion_incierta y resolver conflicto_stock', () 
       "UPDATE recepcion_items SET estado_item='conflicto_stock', stock_previo=5, stock_objetivo=8, operation_id='old-op-id' WHERE id=?"
     ).run(db._itemId);
 
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 6 } };
+      return { status: 200, data: {} };
+    });
+
     const res = await request(app)
       .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
-      .send({ decision: 'reintentar' });
+      .send({ decision: 'reintentar', motivo: 'test' });
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -1575,7 +1580,7 @@ describe('PUNTO 3: conciliar operacion_incierta y resolver conflicto_stock', () 
 
     const res = await request(app)
       .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
-      .send({ decision: 'aceptar_woo' });
+      .send({ decision: 'aceptar_woo', motivo: 'test' });
     expect(res.status).toBe(409);
     expect(res.body.ok).toBe(false);
   });
@@ -1586,5 +1591,266 @@ describe('PUNTO 3: conciliar operacion_incierta y resolver conflicto_stock', () 
       .send({ decision: 'aceptar_woo' });
     expect(res.status).toBe(404);
     expect(res.body.ok).toBe(false);
+  });
+
+  // HUECO 1: reintentar peligroso — validar que no se duplica stock
+  it('HUECO 1: resolver-conflicto con decision=reintentar — rechaza 409 si PATCH ya se aplicó en Woo', async () => {
+    // Escenario: ítem en conflicto_stock con stock_previo=5, stock_objetivo=8.
+    // Woo ahora tiene 8 (el PATCH anterior sí llegó). Si reintentar, sería 8+3=11 (duplicado).
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='conflicto_stock', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    // Mock: Woo ya tiene 8 (el PATCH se aplicó)
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 8 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
+      .send({ decision: 'reintentar', motivo: 'error de red' });
+
+    // Debe rechazar con 409 en lugar de permitir reintentar
+    expect(res.status).toBe(409);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toMatch(/PATCH ya se aplicó|no se puede reintentar sin duplicar/i);
+
+    // Estado del ítem no debe cambiar
+    const item = db.prepare('SELECT estado_item FROM recepcion_items WHERE id=?').get(db._itemId);
+    expect(item.estado_item).toBe('conflicto_stock');
+  });
+
+  it('HUECO 1: resolver-conflicto con decision=reintentar — permite si stock_actual != stock_objetivo', async () => {
+    // Escenario: stock_previo=5, stock_objetivo=8, pero Woo tiene 6 (el PATCH no se aplicó o se revirtió).
+    // Reintentar es seguro.
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='conflicto_stock', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 6 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
+      .send({ decision: 'reintentar', motivo: 'voy a reintentar la aplicación' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.estado).toBe('error_reintentable');
+
+    const item = db.prepare('SELECT estado_item FROM recepcion_items WHERE id=?').get(db._itemId);
+    expect(item.estado_item).toBe('error_reintentable');
+  });
+
+  // HUECO 2: auditoría persistida
+  it('HUECO 2: resolver-conflicto con decision=aceptar_woo — inserta registro en recepcion_conciliaciones_stock', async () => {
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='conflicto_stock', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 7 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo', motivo: 'conflicto real, aceptar lo que dice Woo' });
+
+    expect(res.status).toBe(200);
+
+    // Verificar que se insertó auditoría
+    const auditoria = db.prepare(`
+      SELECT * FROM recepcion_conciliaciones_stock
+      WHERE recepcion_item_id=? AND tipo='resolver_conflicto' AND decision='aceptar_woo'
+    `).get(db._itemId);
+    expect(auditoria).toBeDefined();
+    expect(auditoria.motivo).toBe('conflicto real, aceptar lo que dice Woo');
+    expect(auditoria.stock_leido).toBe(7);
+    expect(auditoria.estado_resultante).toBe('aplicado');
+    expect(auditoria.actor).toBe('sistema'); // req.user?.username || 'sistema'
+  });
+
+  it('HUECO 2: resolver-conflicto con decision=reintentar — inserta auditoría con motivo', async () => {
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='conflicto_stock', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 6 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
+      .send({ decision: 'reintentar', motivo: 'hubo timeout en el PATCH anterior, voy a reintentar' });
+
+    expect(res.status).toBe(200);
+
+    const auditoria = db.prepare(`
+      SELECT * FROM recepcion_conciliaciones_stock
+      WHERE recepcion_item_id=? AND tipo='resolver_conflicto' AND decision='reintentar'
+    `).get(db._itemId);
+    expect(auditoria).toBeDefined();
+    expect(auditoria.motivo).toBe('hubo timeout en el PATCH anterior, voy a reintentar');
+    expect(auditoria.stock_leido).toBe(6);
+    expect(auditoria.estado_resultante).toBe('error_reintentable');
+  });
+
+  it('HUECO 2: conciliar-stock — inserta auditoría cuando PATCH se confirmó', async () => {
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='operacion_incierta', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 8 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/conciliar-stock`)
+      .send();
+
+    expect(res.status).toBe(200);
+
+    const auditoria = db.prepare(`
+      SELECT * FROM recepcion_conciliaciones_stock
+      WHERE recepcion_item_id=? AND tipo='conciliar_incierta'
+    `).get(db._itemId);
+    expect(auditoria).toBeDefined();
+    expect(auditoria.stock_leido).toBe(8);
+    expect(auditoria.estado_resultante).toBe('aplicado');
+  });
+
+  // HUECO 3: GET endpoint para stock actual de Woo
+  it('HUECO 3: GET /:id/items/:itemId/stock-actual-woo — devuelve stock actual sin modificar nada', async () => {
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 12 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .get(`/api/recepciones/${db._recId}/items/${db._itemId}/stock-actual-woo`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.stock_actual).toBe(12);
+
+    // Verificar que no cambió nada en la BD
+    const item = db.prepare('SELECT estado_item FROM recepcion_items WHERE id=?').get(db._itemId);
+    expect(item.estado_item).toBe(null); // Sin cambios
+  });
+
+  it('HUECO 3: GET stock-actual-woo — 404 si ítem no existe', async () => {
+    const res = await request(app)
+      .get(`/api/recepciones/${db._recId}/items/99999/stock-actual-woo`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('HUECO 3: GET stock-actual-woo — 400 si ítem sin id_woo', async () => {
+    // Crear un ítem sin id_woo
+    const itemId2 = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,sku,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?)'
+    ).run(db._recId, null, 'Item sin match', 1, 1, 'x').lastInsertRowid;
+
+    const res = await request(app)
+      .get(`/api/recepciones/${db._recId}/items/${itemId2}/stock-actual-woo`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/sin id_woo/i);
+  });
+
+  // HUECO 4: transición automática confirmada_con_pendientes → confirmada
+  it('HUECO 4: resolver-conflicto del último ítem pendiente — transiciona recepción a confirmada', async () => {
+    const recId2 = db.prepare(
+      "INSERT INTO recepciones (proveedor,importador,fecha,solo_documento,estado,creado_en) VALUES ('Prov2','Prov2','2026-07-17',0,'confirmada_con_pendientes','x')"
+    ).run().lastInsertRowid;
+
+    // Crear 2 ítems, ambos con conflicto_stock
+    const item1 = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,stock_previo,stock_objetivo,creado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(recId2, 10, 'CASCO', 'Casco', 1, 1, 'conflicto_stock', 5, 8, 'x').lastInsertRowid;
+
+    const item2 = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,stock_previo,stock_objetivo,creado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(recId2, 10, 'CASCO', 'Casco 2', 2, 1, 'conflicto_stock', 5, 8, 'x').lastInsertRowid;
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 7 } };
+      return { status: 200, data: {} };
+    });
+
+    // Resolver item1: recepción sigue en confirmada_con_pendientes (item2 sigue pendiente)
+    let res = await request(app)
+      .post(`/api/recepciones/${recId2}/items/${item1}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo', motivo: 'test' });
+    expect(res.status).toBe(200);
+
+    let rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(recId2);
+    expect(rec.estado).toBe('confirmada_con_pendientes'); // Aún hay un ítem pendiente
+
+    // Resolver item2: ahora sí pasa a confirmada
+    res = await request(app)
+      .post(`/api/recepciones/${recId2}/items/${item2}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo', motivo: 'test' });
+    expect(res.status).toBe(200);
+
+    rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(recId2);
+    expect(rec.estado).toBe('confirmada'); // Transición completada
+  });
+
+  it('HUECO 2: motivo obligatorio para resolver-conflicto — 400 si falta', async () => {
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='conflicto_stock', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo' }); // motivo falta
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/motivo/i);
+  });
+
+  it('HUECO 4: conciliar-stock del último ítem en operacion_incierta — transiciona recepción a confirmada', async () => {
+    const recId2 = db.prepare(
+      "INSERT INTO recepciones (proveedor,importador,fecha,solo_documento,estado,creado_en) VALUES ('Prov2','Prov2','2026-07-17',0,'confirmada_con_pendientes','x')"
+    ).run().lastInsertRowid;
+
+    // Crear 2 ítems: uno en operacion_incierta, otro en conflicto_stock
+    const item1 = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,stock_previo,stock_objetivo,creado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(recId2, 10, 'CASCO', 'Casco 1', 1, 1, 'operacion_incierta', 5, 8, 'x').lastInsertRowid;
+
+    const item2 = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,stock_previo,stock_objetivo,creado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(recId2, 10, 'CASCO', 'Casco 2', 2, 1, 'conflicto_stock', 5, 8, 'x').lastInsertRowid;
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 8 } };
+      return { status: 200, data: {} };
+    });
+
+    // Conciliar item1: recepción sigue en confirmada_con_pendientes (item2 sigue pendiente)
+    let res = await request(app)
+      .post(`/api/recepciones/${recId2}/items/${item1}/conciliar-stock`)
+      .send();
+    expect(res.status).toBe(200);
+
+    let rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(recId2);
+    expect(rec.estado).toBe('confirmada_con_pendientes'); // Aún hay un ítem pendiente (item2)
+
+    // Resolver item2: ahora sí pasa a confirmada
+    res = await request(app)
+      .post(`/api/recepciones/${recId2}/items/${item2}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo', motivo: 'test' });
+    expect(res.status).toBe(200);
+
+    rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(recId2);
+    expect(rec.estado).toBe('confirmada'); // Transición completada
   });
 });

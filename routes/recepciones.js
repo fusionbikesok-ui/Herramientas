@@ -13,6 +13,22 @@ import { crearBorradorWoo } from '../lib/nuevosProductosWoo.js';
 // se pisen las escrituras y pierdan stock recibido.
 const locksStockPorIdWoo = new Map();
 
+/**
+ * HUECO 4: Intenta cerrar una recepción en 'confirmada_con_pendientes'.
+ * Si ya no hay ítems pendientes (sin_match, pendiente_creacion, error_reintentable, operacion_incierta, conflicto_stock),
+ * transiciona a 'confirmada'. Se llama DESDE DENTRO de una db.transaction() que ya está en vuelo,
+ * no es ella misma una transacción — better-sqlite3 permite anidar prepares.
+ */
+function intentarCerrarRecepcion(db, recepcionId) {
+  const pendientes = db.prepare(`
+    SELECT COUNT(*) as count FROM recepcion_items
+    WHERE recepcion_id=? AND estado_item IN ('sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock')
+  `).get(recepcionId);
+  if (pendientes.count === 0) {
+    db.prepare("UPDATE recepciones SET estado='confirmada' WHERE id=? AND estado='confirmada_con_pendientes'").run(recepcionId);
+  }
+}
+
 // Aplica el stock de un ítem recibido en WooCommerce (GET stock actual + PATCH suma).
 // Resuelve el path correcto para variaciones vía catalogo_cache/buildWooPath.
 // Actualiza recepcion_items (stock_previo/stock_nuevo/estado_item='aplicado') y catalogo_cache.
@@ -144,8 +160,10 @@ async function aplicarStockItemInterno(db, cfg, item) {
  * (no antes del await wooFetch), para que sea atómico como el claim de aplicarStockItemInterno.
  * Si otro request ya concilió este ítem entre nuestro SELECT inicial y nuestro UPDATE, changes===0
  * y devolvemos el estado actual sin duplicar.
+ *
+ * HUECO 2: inserta auditoría en recepcion_conciliaciones_stock.
  */
-export async function conciliarOperacionIncierta(db, cfg, itemId) {
+export async function conciliarOperacionIncierta(db, cfg, itemId, actor = 'sistema') {
   const item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
   if (!item) {
     throw new Error(`el ítem ${itemId} no existe`);
@@ -161,38 +179,89 @@ export async function conciliarOperacionIncierta(db, cfg, itemId) {
   const apiPath = buildWooPath(prod);
   const get = await wooFetch(cfg, apiPath);
   const stockReal = Number(get.data?.stock_quantity);
+  const now = new Date().toISOString();
+
   if (!Number.isFinite(stockReal)) {
-    // Usar UPDATE con condición para atomicidad: si changes===0, otro ya lo resolvió
-    const update = db.prepare("UPDATE recepcion_items SET estado_item='conflicto_stock', error_wc=? WHERE id=? AND estado_item='operacion_incierta'")
-      .run('WooCommerce no devolvió stock_quantity al conciliar', itemId);
-    if (update.changes === 0) {
-      // Otro request ya concilió: devolve el estado actual
-      const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
-      return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+    // Usar transacción para atomicidad (incluyendo HUECO 4: intentar cerrar recepción)
+    const txn = db.transaction(() => {
+      const update = db.prepare("UPDATE recepcion_items SET estado_item='conflicto_stock', error_wc=? WHERE id=? AND estado_item='operacion_incierta'")
+        .run('WooCommerce no devolvió stock_quantity al conciliar', itemId);
+      if (update.changes === 0) {
+        throw new Error('item ya fue resuelto por otro request');
+      }
+      // HUECO 2: insertar auditoría
+      db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+        (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(itemId, 'conciliar_incierta', null, 'WooCommerce no devolvió stock_quantity válido', null, 'conflicto_stock', actor, now);
+      // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+      intentarCerrarRecepcion(db, item.recepcion_id);
+    });
+    try {
+      txn();
+    } catch (e) {
+      if (e.message === 'item ya fue resuelto por otro request') {
+        const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
+        return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+      }
+      throw e;
     }
     return { estado: 'conflicto_stock' };
   }
+
   if (stockReal === item.stock_objetivo) {
-    const now = new Date().toISOString();
-    // Usar condición en WHERE para atomicidad: solo sucede si sigue en operacion_incierta
-    const update = db.prepare("UPDATE recepcion_items SET estado_item='aplicado', stock_nuevo=?, error_wc=NULL WHERE id=? AND estado_item='operacion_incierta'")
-      .run(stockReal, itemId);
+    // Usar transacción para atomicidad (incluyendo HUECO 4)
+    const txn = db.transaction(() => {
+      const update = db.prepare("UPDATE recepcion_items SET estado_item='aplicado', stock_nuevo=?, error_wc=NULL WHERE id=? AND estado_item='operacion_incierta'")
+        .run(stockReal, itemId);
+      if (update.changes === 0) {
+        throw new Error('item ya fue resuelto por otro request');
+      }
+      db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?').run(stockReal, now, item.id_woo);
+      // HUECO 2: insertar auditoría
+      db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+        (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(itemId, 'conciliar_incierta', null, 'PATCH se confirmó al leer stock desde Woo', stockReal, 'aplicado', actor, now);
+      // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+      intentarCerrarRecepcion(db, item.recepcion_id);
+    });
+    try {
+      txn();
+    } catch (e) {
+      if (e.message === 'item ya fue resuelto por otro request') {
+        const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
+        return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+      }
+      throw e;
+    }
+    return { estado: 'aplicado', stock_nuevo: stockReal };
+  }
+
+  // Cualquier otro valor (incluso si coincide con stock_previo por casualidad de una venta intermedia)
+  // es indeterminado: no reintentar a ciegas.
+  const txn = db.transaction(() => {
+    const update = db.prepare("UPDATE recepcion_items SET estado_item='conflicto_stock', error_wc=? WHERE id=? AND estado_item='operacion_incierta'")
+      .run(`conciliación ambigua: Woo tiene ${stockReal}; se esperaba stock_objetivo=${item.stock_objetivo} pero se lee ${stockReal}. Posible venta intermedia después del PATCH.`, itemId);
     if (update.changes === 0) {
-      // Otro request ya lo resolvió: devolver estado actual
+      throw new Error('item ya fue resuelto por otro request');
+    }
+    // HUECO 2: insertar auditoría
+    db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+      (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(itemId, 'conciliar_incierta', null, `Woo tiene ${stockReal} pero se esperaba ${item.stock_objetivo} - posible venta intermedia`, stockReal, 'conflicto_stock', actor, now);
+    // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+    intentarCerrarRecepcion(db, item.recepcion_id);
+  });
+  try {
+    txn();
+  } catch (e) {
+    if (e.message === 'item ya fue resuelto por otro request') {
       const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
       return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
     }
-    db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?').run(stockReal, now, item.id_woo);
-    return { estado: 'aplicado', stock_nuevo: stockReal };
-  }
-  // Cualquier otro valor (incluso si coincide con stock_previo por casualidad de una venta intermedia)
-  // es indeterminado: no reintentar a ciegas.
-  const update = db.prepare("UPDATE recepcion_items SET estado_item='conflicto_stock', error_wc=? WHERE id=? AND estado_item='operacion_incierta'")
-    .run(`conciliación ambigua: Woo tiene ${stockReal}; se esperaba stock_objetivo=${item.stock_objetivo} pero se lee ${stockReal}. Posible venta intermedia después del PATCH.`, itemId);
-  if (update.changes === 0) {
-    // Otro request ya lo resolvió: devolver estado actual
-    const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
-    return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+    throw e;
   }
   return { estado: 'conflicto_stock' };
 }
@@ -203,9 +272,13 @@ export async function conciliarOperacionIncierta(db, cfg, itemId) {
  * o 'reintentar' (volver a error_reintentable para un intento limpio desde cero).
  *
  * decision: 'aceptar_woo' | 'reintentar'
- * Devuelve: { estado, stock_nuevo? }
+ * Devuelve: { estado, stock_nuevo?, stockReal? }
+ *
+ * HUECOS 1 y 2: antes de 'reintentar', verifica que el PATCH anterior no se aplicó ya (compara
+ * stock actual de Woo con stock_objetivo); solo si distintos permite pasar a error_reintentable.
+ * Inserta auditoría en recepcion_conciliaciones_stock (motivo y actor son obligatorios).
  */
-async function resolverConflictoStock(db, cfg, itemId, decision) {
+async function resolverConflictoStock(db, cfg, itemId, decision, motivo, actor) {
   const item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
   if (!item) {
     throw new Error(`el ítem ${itemId} no existe`);
@@ -215,11 +288,12 @@ async function resolverConflictoStock(db, cfg, itemId, decision) {
     return { estado: item.estado_item, stock_nuevo: item.stock_nuevo };
   }
 
+  const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
+  if (!prod) throw new Error(`no se encontró el producto id_woo=${item.id_woo} en catalogo_cache`);
+  const apiPath = buildWooPath(prod);
+
   if (decision === 'aceptar_woo') {
     // Relee stock real de Woo, marca aplicado, actualiza catalogo_cache
-    const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
-    if (!prod) throw new Error(`no se encontró el producto id_woo=${item.id_woo} en catalogo_cache`);
-    const apiPath = buildWooPath(prod);
     const get = await wooFetch(cfg, apiPath);
     const stockReal = Number(get.data?.stock_quantity);
     if (!Number.isFinite(stockReal)) {
@@ -228,17 +302,25 @@ async function resolverConflictoStock(db, cfg, itemId, decision) {
 
     // Transacción: ambos UPDATE deben suceder juntos o ninguno. Si otro request ya lo resolvió,
     // el primero UPDATE tendrá changes===0 y lanzaremos un error que revierte la txn.
+    // HUECO 2 y 4: insertar auditoría e intentar cerrar recepción
     const txn = db.transaction(() => {
       const update = db.prepare("UPDATE recepcion_items SET estado_item='aplicado', stock_nuevo=?, error_wc=NULL WHERE id=? AND estado_item='conflicto_stock'")
         .run(stockReal, itemId);
       if (update.changes === 0) {
-        // Otro request ya lo resolvió: lanzar error para revertir la txn (no hay cambios a revertir aquí, pero mantiene la estructura consistente)
+        // Otro request ya lo resolvió: lanzar error para revertir la txn
         throw new Error('item ya fue resuelto por otro request');
       }
       // Actualizar catalogo_cache con el stock aceptado (dentro de la txn para consistencia)
       const now = new Date().toISOString();
       db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?')
         .run(stockReal, now, item.id_woo);
+      // HUECO 2: insertar auditoría dentro de la transacción
+      db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+        (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(itemId, 'resolver_conflicto', 'aceptar_woo', motivo || null, stockReal, 'aplicado', actor || 'sistema', now);
+      // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+      intentarCerrarRecepcion(db, item.recepcion_id);
     });
 
     try {
@@ -252,17 +334,51 @@ async function resolverConflictoStock(db, cfg, itemId, decision) {
       throw e; // Propagar otros errores (ej. fallo de Woo, SQL error, etc.)
     }
 
-    return { estado: 'aplicado', stock_nuevo: stockReal };
+    return { estado: 'aplicado', stock_nuevo: stockReal, stockReal };
   } else if (decision === 'reintentar') {
-    // Marcar error_reintentable, limpiar operation_id para próximo intento desde cero
-    const update = db.prepare("UPDATE recepcion_items SET estado_item='error_reintentable', operation_id=NULL WHERE id=? AND estado_item='conflicto_stock'")
-      .run(itemId);
-    if (update.changes === 0) {
-      // Otro request ya lo resolvió: devolver estado actual
-      const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
-      return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+    // HUECO 1: antes de permitir reintentar, verificar que el PATCH anterior no se aplicó ya
+    const get = await wooFetch(cfg, apiPath);
+    const stockReal = Number(get.data?.stock_quantity);
+    if (!Number.isFinite(stockReal)) {
+      throw new Error(`WooCommerce no devolvió stock_quantity válido al resolver conflicto`);
     }
-    return { estado: 'error_reintentable' };
+    // Si el stock actual de Woo coincide con el stock_objetivo (lo que se intentó aplicar),
+    // significa que el PATCH anterior ya se aplicó. NO se puede reintentar sin duplicar stock.
+    if (stockReal === item.stock_objetivo) {
+      const err = new Error('el PATCH ya se aplicó en WooCommerce (stock_actual === stock_objetivo); no se puede reintentar sin duplicar. Usá "aceptar_woo" en lugar de "reintentar".');
+      err.status = 409;
+      throw err;
+    }
+
+    // Marcar error_reintentable, limpiar operation_id para próximo intento desde cero
+    // Transacción para atomicidad (HUECO 2 y 4)
+    const now = new Date().toISOString();
+    const txn = db.transaction(() => {
+      const update = db.prepare("UPDATE recepcion_items SET estado_item='error_reintentable', operation_id=NULL WHERE id=? AND estado_item='conflicto_stock'")
+        .run(itemId);
+      if (update.changes === 0) {
+        throw new Error('item ya fue resuelto por otro request');
+      }
+      // HUECO 2: insertar auditoría dentro de la transacción
+      db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+        (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(itemId, 'resolver_conflicto', 'reintentar', motivo || null, stockReal, 'error_reintentable', actor || 'sistema', now);
+      // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+      intentarCerrarRecepcion(db, item.recepcion_id);
+    });
+
+    try {
+      txn();
+    } catch (e) {
+      if (e.message === 'item ya fue resuelto por otro request') {
+        const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
+        return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+      }
+      throw e;
+    }
+
+    return { estado: 'error_reintentable', stockReal };
   } else {
     throw new Error(`decisión inválida: ${decision} (esperado 'aceptar_woo' o 'reintentar')`);
   }
@@ -521,8 +637,31 @@ export function recepcionesRouter(db, cfg) {
     if (item.estado_item !== 'operacion_incierta') return res.status(409).json({ ok: false, error: 'item no está en operacion_incierta' });
 
     try {
-      const result = await conciliarOperacionIncierta(db, cfg, itemId);
+      const actor = req.user?.username || 'sistema';
+      const result = await conciliarOperacionIncierta(db, cfg, itemId, actor);
       return res.json({ ok: true, estado: result.estado, stock_nuevo: result.stock_nuevo });
+    } catch (e) {
+      return res.status(502).json({ ok: false, error: e.message });
+    }
+  });
+
+  // PUNTO 3: GET endpoint para leer el stock actual de WooCommerce (HUECO 3)
+  router.get('/:id/items/:itemId/stock-actual-woo', async (req, res) => {
+    const id = Number(req.params.id), itemId = Number(req.params.itemId);
+    const item = db.prepare('SELECT * FROM recepcion_items WHERE id=? AND recepcion_id=?').get(itemId, id);
+    if (!item) return res.status(404).json({ ok: false, error: 'item no encontrado' });
+    if (!item.id_woo) return res.status(400).json({ ok: false, error: 'item sin id_woo: no hay stock en WooCommerce' });
+
+    try {
+      const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
+      if (!prod) throw new Error(`no se encontró el producto id_woo=${item.id_woo} en catalogo_cache`);
+      const apiPath = buildWooPath(prod);
+      const get = await wooFetch(cfg, apiPath);
+      const stockActual = Number(get.data?.stock_quantity);
+      if (!Number.isFinite(stockActual)) {
+        return res.status(502).json({ ok: false, error: 'WooCommerce no devolvió stock_quantity válido' });
+      }
+      return res.json({ ok: true, stock_actual: stockActual });
     } catch (e) {
       return res.status(502).json({ ok: false, error: e.message });
     }
@@ -540,10 +679,23 @@ export function recepcionesRouter(db, cfg) {
       return res.status(400).json({ ok: false, error: 'decision debe ser "aceptar_woo" o "reintentar"' });
     }
 
+    // HUECO 2: motivo es obligatorio en ambas decisiones
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!motivo) {
+      return res.status(400).json({ ok: false, error: 'motivo es obligatorio' });
+    }
+
     try {
-      const result = await resolverConflictoStock(db, cfg, itemId, decision);
+      const actor = req.user?.username || 'sistema';
+      const result = await resolverConflictoStock(db, cfg, itemId, decision, motivo, actor);
+      // HUECO 4: la transición confirmada_con_pendientes→confirmada ahora ocurre DENTRO de
+      // la transacción de resolverConflictoStock (vía intentarCerrarRecepcion), no aquí.
       return res.json({ ok: true, estado: result.estado, stock_nuevo: result.stock_nuevo });
     } catch (e) {
+      // HUECO 1: manejar el error 409 cuando se intenta reintentar y el PATCH ya se aplicó
+      if (e.status === 409) {
+        return res.status(409).json({ ok: false, error: e.message });
+      }
       return res.status(502).json({ ok: false, error: e.message });
     }
   });

@@ -3382,7 +3382,7 @@ para que un humano lo resuelva.
   a ciegas asumiendo "no llegó").
 - Si hay un error de red/timeout al consultar Woo, la excepción se propaga como 502.
 
-### POST /api/recepciones/:id/items/:itemId/resolver-conflicto (PUNTO 3)
+### POST /api/recepciones/:id/items/:itemId/resolver-conflicto (PUNTO 3, HUECOS 1-2)
 Resuelve un ítem en estado `conflicto_stock` — un desacuerdo entre el stock esperado
 y el que WooCommerce realmente tiene. El operador elige: aceptar el stock actual de Woo
 como definitivo, o marcar para reintento limpio desde cero.
@@ -3391,13 +3391,18 @@ como definitivo, o marcar para reintento limpio desde cero.
 - El ítem debe existir y pertenecer a la recepción.
 - Status 404 si el ítem no existe o no pertenece a la recepción.
 - Status 409 si el estado_item no es `conflicto_stock`.
-- Status 400 si `decision` no es válido.
+- Status 400 si `decision` no es válido, o si `motivo` falta.
+- **HUECO 1 (Seguridad 'reintentar'):** si `decision='reintentar'`, antes de permitir se verifica
+  el stock actual en Woo. Si coincide con `stock_objetivo` (el PATCH anterior ya se aplicó),
+  rechaza con Status 409 y mensaje claro. Solo si `stock_actual !== stock_objetivo` permite pasar
+  a `error_reintentable`.
 - Atomicidad: si otro request ya resolvió el ítem, devuelve el estado actual sin duplicar.
 
 **Request:**
 ```json
 {
-  "decision": "aceptar_woo" | "reintentar"
+  "decision": "aceptar_woo" | "reintentar",
+  "motivo": "explicación obligatoria (string no vacío)"
 }
 ```
 
@@ -3405,8 +3410,17 @@ como definitivo, o marcar para reintento limpio desde cero.
   - `"aceptar_woo"`: consulta el stock real de WooCommerce AHORA (refresco), lo marca
     como `aplicado` (`stock_nuevo=<stock real>`), y actualiza `catalogo_cache.stock`.
     Fallback: si Woo no devuelve `stock_quantity` válido, lanza excepción (fail-closed).
-  - `"reintentar"`: marca el ítem como `error_reintentable` y limpia `operation_id`
-    para un intento limpio en la próxima confirmación de recepción (no hace consultas a Woo).
+    **HUECO 2:** Inserta auditoría en `recepcion_conciliaciones_stock` con tipo='resolver_conflicto',
+    decision='aceptar_woo', motivo, stock_leido, actor (usuario de sesión), estado_resultante='aplicado'.
+  - `"reintentar"`: primero verifica que el stock real de Woo **NO coincida** con `stock_objetivo`
+    (para evitar duplicar stock en caso de que el PATCH anterior sí haya llegado). Si coinciden,
+    rechaza con 409. Si no coinciden, marca el ítem como `error_reintentable` y limpia `operation_id`
+    para un intento limpio en la próxima confirmación de recepción.
+    **HUECO 2:** Inserta auditoría con tipo='resolver_conflicto', decision='reintentar', motivo,
+    stock_leido (stock real leído antes de resolver), actor, estado_resultante='error_reintentable'.
+
+- `motivo`: texto explicativo obligatorio (no puede estar vacío o ser null). Es de riesgo decidir
+  reintentar o aceptar, así que la auditoría persiste qué motivó cada decisión.
 
 **Response 200:**
 ```json
@@ -3420,3 +3434,52 @@ como definitivo, o marcar para reintento limpio desde cero.
 - `estado`: resultado de la resolución.
 - `stock_nuevo`: presente si `estado='aplicado'` (el stock aceptado de Woo), null si
   `error_reintentable`.
+
+**Response 409 (HUECO 1):**
+```json
+{
+  "ok": false,
+  "error": "el PATCH ya se aplicó en WooCommerce (stock_actual === stock_objetivo); no se puede reintentar sin duplicar. Usá 'aceptar_woo' en lugar de 'reintentar'."
+}
+```
+Ocurre solo si `decision='reintentar'` y el stock actual en Woo es igual a `stock_objetivo`.
+Previene la duplicación silenciosa de stock.
+
+### GET /api/recepciones/:id/items/:itemId/stock-actual-woo (HUECO 3)
+Lectura de solo referencia: obtiene el stock actual de un producto en WooCommerce sin modificar
+nada. Útil para mostrar al operador el stock real antes de que decide resolver un conflicto.
+
+**Validación:**
+- El ítem debe existir y pertenecer a la recepción (mismo patrón que otros endpoints).
+- Status 404 si el ítem no existe o no pertenece a la recepción.
+- Status 400 si el ítem no tiene `id_woo` (sin match, no se puede consultar Woo).
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "stock_actual": <número>
+}
+```
+
+- `stock_actual`: el valor de `stock_quantity` leído directamente de WooCommerce en este momento.
+
+**Comportamiento:**
+- Solo lectura: no actualiza `recepcion_items` ni `catalogo_cache`.
+- Si WooCommerce no devuelve `stock_quantity` válido, Status 502 (error de integración, fail-closed).
+- Puede llamarse múltiples veces sin efectos colaterales (idempotente por definición).
+
+## HUECO 4: Transición automática confirmada_con_pendientes → confirmada
+
+Cuando se resuelve un ítem en `conflicto_stock` (usando `POST .../resolver-conflicto`), si la
+recepción está en estado `confirmada_con_pendientes` y ya no le queda ningún ítem en uno de
+estos estados pendientes:
+- `sin_match`, `pendiente_creacion`, `error_reintentable`, `operacion_incierta`, `conflicto_stock`
+
+Entonces la recepción transiciona automáticamente a `confirmada` dentro de la misma transacción
+del endpoint `resolver-conflicto`. Esto simplifica el flujo: el operador solo necesita resolver
+los ítems problemáticos; cuando el último se resuelve, la recepción pasa a estado definitivo sin
+necesidad de pasos adicionales.
+
+La lógica es **atomic**: si otro request resuelve el último ítem entre el check y el UPDATE,
+no hay duplicados (el check ocurre dentro de la misma transacción).

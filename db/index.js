@@ -161,6 +161,20 @@ export function openDb(dbPath) {
   // CREATE TABLE IF NOT EXISTS del router no puede ampliar una tabla existente.
   migrateMlClaims(db);
   migrateClaimsBackbone(db);
+  const recepcionUrgenteMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='recepcion_aliases_proveedor_109'").get();
+  if (!recepcionUrgenteMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '109_recepcion_aliases_proveedor.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('recepcion_aliases_proveedor_109')").run();
+    })();
+  }
+  const recepcionConciliacionesStockMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='recepcion_conciliaciones_stock_110'").get();
+  if (!recepcionConciliacionesStockMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '110_recepcion_conciliaciones_stock.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('recepcion_conciliaciones_stock_110')").run();
+    })();
+  }
   // Horarios de despacho: migración independiente para bases que ya alcanzaron user_version=30.
   const horarioMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='despacho_horarios_032'").get();
   if (!horarioMigration) {
