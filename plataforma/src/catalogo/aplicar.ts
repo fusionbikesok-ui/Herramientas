@@ -34,6 +34,11 @@ export interface ResumenAplicacion {
   /** Representaciones que no se tocaron porque ya había una versión más nueva. */
   viejas: number;
   casosAbiertos: string[];
+  /** 6b: modelos tocados por esta proyección (COALESCE(r.model_id, v.model_id) de cada representación escrita). */
+  modelos: string[];
+  /** 6b: de esos, los que tuvieron un valor de `categoria_canal` abierto o cerrado en esta proyección. */
+  categoriaCambio: Set<string>;
+  empresa: string;
 }
 
 export type TipoCaso =
@@ -54,7 +59,7 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
   const empresa = (await tx.query<{ company_id: string }>(
     'SELECT company_id FROM core.channel_accounts WHERE id = $1', [ctx.cuenta])).rows[0]?.company_id;
   if (!empresa) throw new Error(`cuenta de canal inexistente: ${ctx.cuenta}`);
-  const resumen: ResumenAplicacion = { representaciones: 0, viejas: 0, casosAbiertos: [] };
+  const resumen: ResumenAplicacion = { representaciones: 0, viejas: 0, casosAbiertos: [], modelos: [], categoriaCambio: new Set(), empresa };
 
   // Serializa por recurso ANTES de tocar cualquier fila (hallazgo crítico de la revisión de la implementación):
   // dos mensajes de un recurso NUEVO (el bootstrap y un barrido, por ejemplo) no encuentran fila que bloquear,
@@ -334,26 +339,43 @@ export async function persistirExtras(
   tx: Consultable, ctx: ContextoAplicacion, repId: string, obs: Pick<RepresentacionObservada, 'atributos' | 'imagenes' | 'crudo'>,
   resumen: ResumenAplicacion, empresa: string,
 ): Promise<void> {
-  if (!obs.crudo) return;
-  const modelo = (await tx.query<{ model_id: string | null }>(
+  // Aun sin `crudo` conviene registrar a qué modelo pertenece esta representación (6b): el proyector clasifica
+  // por modelo tocado, y una representación sin extras igual pudo cambiar de variante/modelo.
+  const modeloFila = (await tx.query<{ model_id: string | null }>(
     `SELECT COALESCE(r.model_id, v.model_id) AS model_id FROM catalog.external_representations r
        LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [repId])).rows[0]?.model_id;
-  // Una publicación omitida por decisión no tiene modelo ni variante: no hay a quién colgarle los atributos.
-  if (!modelo) return;
+  // Una publicación omitida por decisión no tiene modelo ni variante: no hay a quién colgarle nada.
+  if (!modeloFila) return;
+  const modelo = modeloFila;
+  resumen.modelos.push(modelo);
+  if (!obs.crudo) return;
 
   const attrs = obs.atributos ?? [];
   const nombres = attrs.map((a) => a.nombre); const valores = attrs.map((a) => a.valor);
-  await tx.query(
+  // "Cambió" = se insertó de cero, o ya existía pero estaba cerrada (revivida). Una fila ya vigente con el mismo
+  // valor se re-escribe igual (mismo observado_en) pero no es un cambio real: se filtra por la vigencia PREVIA.
+  const previaVigente = new Set((await tx.query<{ nombre_normalizado: string; valor: string }>(
+    `SELECT nombre_normalizado, valor FROM catalog.model_attributes
+      WHERE representation_id = $1 AND vigente_hasta IS NULL`, [repId])).rows.map((a) => `${a.nombre_normalizado}\u0000${a.valor}`));
+  const nuevos = (await tx.query<{ nombre_normalizado: string; valor: string }>(
     `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
      SELECT $1, $2, n, v, now() FROM unnest($3::text[], $4::text[]) AS u(n, v)
      ON CONFLICT (representation_id, nombre_normalizado, valor) DO UPDATE
-       SET observado_en = EXCLUDED.observado_en, vigente_hasta = NULL, model_id = EXCLUDED.model_id`,
-    [modelo, repId, nombres, valores]);
-  await tx.query(
+       SET observado_en = EXCLUDED.observado_en, vigente_hasta = NULL, model_id = EXCLUDED.model_id
+     RETURNING nombre_normalizado, valor`,
+    [modelo, repId, nombres, valores])).rows
+    .filter((a) => !previaVigente.has(`${a.nombre_normalizado}\u0000${a.valor}`));
+  const cerrados = (await tx.query<{ nombre_normalizado: string }>(
     `UPDATE catalog.model_attributes m SET vigente_hasta = now()
       WHERE m.representation_id = $1 AND m.vigente_hasta IS NULL
         AND NOT EXISTS (SELECT 1 FROM unnest($2::text[], $3::text[]) AS u(n, v)
-                         WHERE u.n = m.nombre_normalizado AND u.v = m.valor)`, [repId, nombres, valores]);
+                         WHERE u.n = m.nombre_normalizado AND u.v = m.valor)
+      RETURNING nombre_normalizado`, [repId, nombres, valores])).rows;
+  // 6b: `categoria_canal` es lo único que dispara la clasificación (D25). Un valor nuevo, revivido o cerrado
+  // cuenta como cambio; que la fila se haya tocado sin cambiar de vigencia (mismo valor, sólo observado_en) no.
+  const tocoCategoria = nuevos.some((n) => n.nombre_normalizado === 'categoria_canal')
+    || cerrados.some((n) => n.nombre_normalizado === 'categoria_canal');
+  if (tocoCategoria) resumen.categoriaCambio.add(modelo);
 
   const imgs = obs.imagenes ?? [];
   const urls = imgs.map((i) => i.url); const ordenes = imgs.map((i) => i.orden);

@@ -23,7 +23,7 @@ import { clasificarModelo, desclasificarModelo, leerArbol } from './taxonomia.ts
 
 export type CanalClasif = 'woocommerce' | 'mercadolibre';
 export type TipoCasoModelo = 'categoria_en_desacuerdo' | 'categoria_sin_mapeo' | 'categoria_persona_contradicha';
-const TIPOS_CLASIFICACION: TipoCasoModelo[] = ['categoria_en_desacuerdo', 'categoria_sin_mapeo'];
+const TIPOS_CLASIFICACION: TipoCasoModelo[] = ['categoria_en_desacuerdo', 'categoria_sin_mapeo', 'categoria_persona_contradicha'];
 
 export type Decision =
   | { tipo: 'primaria'; nodo: string; /** raíces que perdieron por D27: entran como secundarias */ secundarias: string[] }
@@ -93,6 +93,14 @@ async function cerrarCasosDeModelo(tx: Consultable, modelo: string, tipos: TipoC
 
 export interface OpcionesClasificar {
   empresa: string; dryRun: boolean;
+  /** Sólo probar estos modelos (6b: uno o unos pocos, recién ingeridos). Sin esto, la foto entera (6a). */
+  modelos?: string[];
+  /**
+   * 6b: modelos cuyo atributo `categoria_canal` cambió en esta proyección. Sin esto (6a), D24 nunca abre
+   * `categoria_persona_contradicha`: que el canal difiera de la persona no alcanza si el canal no cambió — la
+   * persona pudo haber decidido justamente contra lo que el canal ya decía.
+   */
+  categoriaCambio?: Set<string>;
   /** Sólo para probar el chequeo final: reemplaza la escritura de la clasificación. */
   clasificar?: typeof clasificarModelo;
 }
@@ -102,6 +110,8 @@ export interface ResumenClasificacion {
   sinPrimariaPorDesacuerdo: number;
   sinMapeo: { sin_categoria: number; categoria_no_mapeada: number };
   personaRespetada: number;
+  /** D24: modelos con clasificación de persona cuya decisión de canal, si se recalculara, sería otra. */
+  personaContradicha: number;
   /** D26: modelos a los que se les descartó una categoría por ser ancestro, en su canal, de otra del mismo modelo. */
   conCategoriaDescartadaPorJerarquiaDelCanal: number;
   /** D27: modelos cuyas raíces del árbol perdieron contra un nodo no raíz y quedaron como secundarias. */
@@ -115,7 +125,8 @@ export interface ResumenClasificacion {
 
 interface FilaCategoria { modelo: string; canal: CanalClasif; cuenta: string; valor: string }
 
-export async function clasificarFoto(tx: Consultable, o: OpcionesClasificar): Promise<ResumenClasificacion> {
+/** 6a (toda la foto) y 6b (los modelos recién tocados por una ingestión) comparten el mismo núcleo. */
+export async function clasificarModelos(tx: Consultable, o: OpcionesClasificar): Promise<ResumenClasificacion> {
   const version = (await tx.query<{ id: string }>(
     `SELECT id FROM catalog.taxonomy_versions WHERE company_id = $1 AND estado = 'vigente'`, [o.empresa])).rows[0];
   if (!version) throw new Error(`la empresa ${o.empresa} no tiene una versión vigente del árbol`);
@@ -164,25 +175,32 @@ export async function clasificarFoto(tx: Consultable, o: OpcionesClasificar): Pr
        FROM catalog.product_models p
        JOIN catalog.model_attributes a ON a.model_id = p.id AND a.nombre_normalizado = 'categoria_canal' AND a.vigente_hasta IS NULL
        JOIN catalog.external_representations r ON r.id = a.representation_id AND r.archivado_en IS NULL
-      WHERE p.company_id = $1 AND p.archivado_en IS NULL`, [o.empresa])).rows;
+      WHERE p.company_id = $1 AND p.archivado_en IS NULL AND ($2::uuid[] IS NULL OR p.id = ANY($2))`,
+    [o.empresa, o.modelos ?? null])).rows;
   const porModelo = new Map<string, FilaCategoria[]>();
   for (const f of filas) porModelo.set(f.modelo, [...(porModelo.get(f.modelo) ?? []), f]);
   const modelos = (await tx.query<{ id: string }>(
-    `SELECT id FROM catalog.product_models WHERE company_id = $1 AND archivado_en IS NULL ORDER BY id`, [o.empresa])).rows.map((m) => m.id);
+    `SELECT id FROM catalog.product_models WHERE company_id = $1 AND archivado_en IS NULL AND ($2::uuid[] IS NULL OR id = ANY($2)) ORDER BY id`,
+    [o.empresa, o.modelos ?? null])).rows.map((m) => m.id);
 
-  const conPersona = new Set((await tx.query<{ model_id: string }>(
-    `SELECT DISTINCT model_id FROM catalog.model_categories WHERE company_id = $1 AND quitado_en IS NULL AND origen = 'persona'`,
-    [o.empresa])).rows.map((r) => r.model_id));
+  const conPersona = new Map<string, Array<{ node_id: string; primaria: boolean }>>();
+  for (const p of (await tx.query<{ model_id: string; node_id: string; primaria: boolean }>(
+    `SELECT model_id, node_id, primaria FROM catalog.model_categories
+      WHERE company_id = $1 AND quitado_en IS NULL AND origen = 'persona' AND ($2::uuid[] IS NULL OR model_id = ANY($2))`,
+    [o.empresa, o.modelos ?? null])).rows) {
+    conPersona.set(p.model_id, [...(conPersona.get(p.model_id) ?? []), p]);
+  }
   const previas = new Map<string, Array<{ node_id: string; primaria: boolean }>>();
   for (const r of (await tx.query<{ model_id: string; node_id: string; primaria: boolean }>(
     `SELECT model_id, node_id, primaria FROM catalog.model_categories
-      WHERE company_id = $1 AND quitado_en IS NULL AND origen = 'mapeo_canal'`, [o.empresa])).rows) {
+      WHERE company_id = $1 AND quitado_en IS NULL AND origen = 'mapeo_canal' AND ($2::uuid[] IS NULL OR model_id = ANY($2))`,
+    [o.empresa, o.modelos ?? null])).rows) {
     previas.set(r.model_id, [...(previas.get(r.model_id) ?? []), r]);
   }
 
   const r: ResumenClasificacion = {
     modelos: modelos.length, conPrimaria: 0, sinPrimariaPorDesacuerdo: 0,
-    sinMapeo: { sin_categoria: 0, categoria_no_mapeada: 0 }, personaRespetada: 0, yaEstaban: 0,
+    sinMapeo: { sin_categoria: 0, categoria_no_mapeada: 0 }, personaRespetada: 0, personaContradicha: 0, yaEstaban: 0,
     conCategoriaDescartadaPorJerarquiaDelCanal: 0, conRaicesComoSecundarias: 0,
     casosPorTipo: { categoria_en_desacuerdo: 0, categoria_sin_mapeo: 0 }, quedaron: null,
   };
@@ -191,7 +209,7 @@ export async function clasificarFoto(tx: Consultable, o: OpcionesClasificar): Pr
     { primarias: [], desacuerdo: new Set(), sinMapeo: [], secundarias: 0 };
 
   for (const modelo of modelos) {
-    if (conPersona.has(modelo)) { r.personaRespetada++; continue; }
+    const persona = conPersona.get(modelo);
     const cats = porModelo.get(modelo) ?? [];
     const nodos = new Set<string>();
     const porCanal: Record<string, Set<string>> = { woocommerce: new Set(), mercadolibre: new Set() };
@@ -228,6 +246,32 @@ export async function clasificarFoto(tx: Consultable, o: OpcionesClasificar): Pr
       : d.tipo === 'desacuerdo' ? [...d.nodos, ...d.secundarias].map((n) => ({ node_id: n, primaria: false })) : [];
     const igual = antes.length === deseadas.length
       && deseadas.every((x) => antes.some((a) => a.node_id === x.node_id && a.primaria === x.primaria));
+
+    // D24: la decisión de una persona nunca la pisa la corrida automática. Sólo si el canal CAMBIÓ en esta
+    // proyección (o.categoriaCambio) tiene sentido comparar: si el canal no cambió, que difiera de la persona no es
+    // novedad — la persona pudo haber decidido justamente contra lo que el canal ya decía, y eso no es un caso.
+    // Si cambió y ahora difiere, se abre el caso (sin tocar `model_categories`). Si cambió y ahora coincide, se
+    // cierra el caso si estaba abierto. Sin cambio, se saltea como siempre (6a: o.categoriaCambio nunca está).
+    if (persona) {
+      r.personaRespetada++;
+      if (!o.categoriaCambio?.has(modelo)) continue;
+      const coincide = persona.length === deseadas.length
+        && deseadas.every((x) => persona.some((p) => p.node_id === x.node_id && p.primaria === x.primaria));
+      if (o.dryRun) { if (!coincide) r.personaContradicha++; continue; }
+      if (coincide) {
+        await cerrarCasosDeModelo(tx, modelo, ['categoria_persona_contradicha'], 'el canal ya coincide con la persona');
+      } else {
+        r.personaContradicha++;
+        await abrirCasoDeModelo(tx, o.empresa, modelo, 'categoria_persona_contradicha', {
+          persona: persona.map((p) => clave(p.node_id)).sort(),
+          canales: d.tipo === 'primaria'
+            ? { tipo: 'primaria', nodo: clave(d.nodo), secundarias: d.secundarias.map(clave).sort() }
+            : d.tipo === 'desacuerdo' ? { tipo: 'desacuerdo', nodos: d.nodos.map(clave).sort(), secundarias: d.secundarias.map(clave).sort() }
+            : { tipo: 'sin_mapeo', razon: d.razon },
+        });
+      }
+      continue;
+    }
 
     if (descartoCanal) r.conCategoriaDescartadaPorJerarquiaDelCanal++;
     if (d.tipo !== 'sin_mapeo' && d.secundarias.length > 0) r.conRaicesComoSecundarias++;
@@ -284,3 +328,7 @@ export async function clasificarFoto(tx: Consultable, o: OpcionesClasificar): Pr
   }
   return r;
 }
+
+/** 6a: la foto entera, sin filtro. Alias histórico de `clasificarModelos`. */
+export const clasificarFoto = (tx: Consultable, o: Omit<OpcionesClasificar, 'modelos'>): Promise<ResumenClasificacion> =>
+  clasificarModelos(tx, o);

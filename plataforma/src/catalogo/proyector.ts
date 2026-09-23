@@ -20,9 +20,15 @@ import { ErrorTransitorio } from '../colas/errores.ts';
 import { enTransaccion, type Consultable } from '../db/pool.ts';
 import { descifrarSobre, type KeyringSobre } from '../seguridad/sobre.ts';
 import { aplicarProyeccion, type Canal } from './aplicar.ts';
+import { clasificarModelos } from './clasificacion.ts';
 import { esRechazo } from './intenciones.ts';
 import { proyectarItemMl } from './ml.ts';
 import { proyectarProductoWoo } from './woo.ts';
+
+/** Mismo contrato que `RegistroCiclo` de `worker/catalogo.ts`, repetido acá para no importar del worker. */
+export interface RegistroProyector {
+  error(obj: Record<string, unknown>, msg: string): void;
+}
 
 export const TOPICOS_CATALOGO = ['woo.products', 'ml.items'] as const;
 
@@ -38,6 +44,8 @@ export interface OpcionesProyector {
   umbralErrorPorciento: number;
   /** Por defecto false. Falso: los atributos se capturan pero no se abre `atributo_divergente`. */
   compararAtributos?: boolean;
+  /** 6b: dónde registrar que una clasificación falló tras aplicar la proyección. Por defecto, silencioso. */
+  log?: RegistroProyector;
 }
 
 export interface ResultadoVuelta {
@@ -84,8 +92,23 @@ export function crearProyector(o: OpcionesProyector): Proyector {
     const canal: Canal = r.tipo === 'woo.products' ? 'woocommerce' : 'mercadolibre';
     const proyeccion = canal === 'woocommerce' ? proyectarProductoWoo(payload) : proyectarItemMl(payload);
     if (esRechazo(proyeccion)) throw new ErrorRechazoProyeccion(proyeccion.rechazo);
-    await aplicarProyeccion({ tx, cuenta: r.channelAccountId, canal, versionRemota: r.remoteVersion,
+    const resumen = await aplicarProyeccion({ tx, cuenta: r.channelAccountId, canal, versionRemota: r.remoteVersion,
       compararAtributos: o.compararAtributos ?? false }, proyeccion);
+
+    // 6b: clasificar lo que esta proyección tocó, en la misma transacción, pero sin que un problema de taxonomía
+    // (un mapeo colgado, un nombre de Woo duplicado) deshaga la proyección ya aplicada — eso sí es dato real.
+    // El SAVEPOINT aísla sólo la clasificación: si falla, se vuelve a antes de ella y la proyección queda firme.
+    // La recuperación es volver a correr catalogo-clasificar-foto.mjs sobre estos modelos.
+    if (resumen.modelos.length) {
+      await tx.query('SAVEPOINT clasificacion');
+      try {
+        await clasificarModelos(tx, { empresa: resumen.empresa, dryRun: false, modelos: resumen.modelos, categoriaCambio: resumen.categoriaCambio });
+        await tx.query('RELEASE SAVEPOINT clasificacion');
+      } catch (error) {
+        await tx.query('ROLLBACK TO SAVEPOINT clasificacion');
+        o.log?.error({ modelos: resumen.modelos, err: (error as Error).message }, 'clasificación del catálogo falló tras la proyección');
+      }
+    }
     return 'aplicado';
   }
 

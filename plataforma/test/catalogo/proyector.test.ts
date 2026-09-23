@@ -8,8 +8,9 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { crearProyector, type OpcionesProyector } from '../../src/catalogo/proyector.ts';
+import { crearVersion, escribirArbol, mapearCategoria, publicarVersion } from '../../src/catalogo/taxonomia.ts';
 import { encolarInbox } from '../../src/colas/colas.ts';
-import { crearPool } from '../../src/db/pool.ts';
+import { crearPool, enTransaccion } from '../../src/db/pool.ts';
 import { cifrarSobre, type KeyringSobre } from '../../src/seguridad/sobre.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 
@@ -297,6 +298,123 @@ describe('E2-PRY-10 proyector del catálogo', () => {
       expect(await estadoMensaje(id)).toBe('dead_lettered');
       expect(await q('SELECT reason_code, detail FROM integrations.dead_letters'))
         .toEqual([{ reason_code: 'error_terminal', detail: expect.stringMatching(/grouped/) }]);
+    });
+  });
+
+  describe('6b: clasificar al ingerir', () => {
+    let cubiertas: string; let camaras: string;
+
+    beforeEach(async () => {
+      await admin.query(`TRUNCATE catalog.channel_categories, catalog.taxonomy_channel_map, catalog.model_categories,
+        catalog.taxonomy_node_versions, catalog.taxonomy_versions, catalog.taxonomy_nodes, catalog.model_attributes CASCADE`);
+      await admin.query(`INSERT INTO catalog.channel_categories (company_id, channel_account_id, canal, id_externo, nombre) VALUES
+        ($1, $2, 'woocommerce', 'C1', 'CUBIERTAS'), ($1, $2, 'woocommerce', 'C2', 'CAMARAS')`, [empresa, woo]);
+      await enTransaccion(app, async (tx) => {
+        const v = await crearVersion(tx, empresa, 'test');
+        const nodos = await escribirArbol(tx, empresa, v.id, [
+          { clave: 'cubiertas', nombre: 'CUBIERTAS', padre: null }, { clave: 'camaras', nombre: 'CAMARAS', padre: null },
+        ]);
+        await publicarVersion(tx, empresa, v.id);
+        cubiertas = nodos.get('cubiertas')!; camaras = nodos.get('camaras')!;
+        await mapearCategoria(tx, empresa, cubiertas, woo, 'woocommerce', 'C1', 'jose');
+        await mapearCategoria(tx, empresa, camaras, woo, 'woocommerce', 'C2', 'jose');
+      });
+    });
+
+    const modeloDe = async (recurso: string) => (await q<{ model_id: string }>(
+      `SELECT model_id FROM catalog.external_representations WHERE channel_account_id = $1 AND recurso = $2`, [woo, recurso]))[0]!.model_id;
+    const claveVigente = async (m: string) => (await q<{ clave: string; primaria: boolean }>(
+      `SELECT n.clave, c.primaria FROM catalog.model_categories c JOIN catalog.taxonomy_nodes n ON n.id = c.node_id
+        WHERE c.model_id = $1 AND c.quitado_en IS NULL ORDER BY n.clave`, [m]));
+
+    it('un producto con categoría mapeada queda clasificado primario al ingerir', async () => {
+      await encolar(woo, 'woo.products', '2000', {
+        id: 2000, type: 'simple', sku: 'FB-2000', categories: [{ id: 'C1', name: 'CUBIERTAS' }],
+      });
+      await proyector().unaVuelta();
+      const m = await modeloDe('2000');
+      expect(await claveVigente(m)).toEqual([{ clave: 'cubiertas', primaria: true }]);
+      expect(await casos()).toEqual([]);
+    });
+
+    it('un producto con categorías en desacuerdo abre el caso al ingerir', async () => {
+      await encolar(woo, 'woo.products', '2001', {
+        id: 2001, type: 'simple', sku: 'FB-2001',
+        categories: [{ id: 'C1', name: 'CUBIERTAS' }, { id: 'C2', name: 'CAMARAS' }],
+      });
+      await proyector().unaVuelta();
+      const m = await modeloDe('2001');
+      expect((await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])))
+        .toEqual([{ tipo: 'categoria_en_desacuerdo' }]);
+    });
+
+    it('persona contradicha: la persona decide, después el canal cambia a otra categoría y se abre el caso sin pisar', async () => {
+      await encolar(woo, 'woo.products', '2002', { id: 2002, type: 'simple', sku: 'FB-2002', categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      await proyector().unaVuelta();
+      const m = await modeloDe('2002');
+      await admin.query(`UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = 'test' WHERE model_id = $1 AND quitado_en IS NULL`, [m]);
+      await admin.query(`INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen) VALUES ($1, $2, $3, true, 'persona')`,
+        [empresa, m, camaras]);
+      await encolar(woo, 'woo.products', '2002', { id: 2002, type: 'simple', sku: 'FB-2002', categories: [{ id: 'C1', name: 'CUBIERTAS' }, { id: 'C2', name: 'CAMARAS' }] });
+      // Da la misma categoría que ya tenía persona antes: no dispara nada. Ahora cambiamos de verdad:
+      await encolar(woo, 'woo.products', '2002', { id: 2002, type: 'simple', sku: 'FB-2002', categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      await proyector().unaVuelta();
+      expect(await claveVigente(m)).toEqual([{ clave: 'camaras', primaria: true }]);
+      expect((await q('SELECT tipo, detalle FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])))
+        .toEqual([{ tipo: 'categoria_persona_contradicha', detalle: expect.objectContaining({ persona: ['camaras'] }) }]);
+    });
+
+    it('sin cambio de categoria_canal, D24 no abre nada aunque persona y canal difieran', async () => {
+      await encolar(woo, 'woo.products', '2003', { id: 2003, type: 'simple', sku: 'FB-2003', categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      await proyector().unaVuelta();
+      const m = await modeloDe('2003');
+      await admin.query(`UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = 'test' WHERE model_id = $1 AND quitado_en IS NULL`, [m]);
+      await admin.query(`INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen) VALUES ($1, $2, $3, true, 'persona')`,
+        [empresa, m, camaras]);
+      // Mismo recurso, mismos datos: no toca categoria_canal (mismo nombre/valor ya vigente).
+      await encolar(woo, 'woo.products', '2003', { id: 2003, type: 'simple', sku: 'FB-2003', categories: [{ id: 'C1', name: 'CUBIERTAS' }], name: 'otro título' });
+      await proyector().unaVuelta();
+      expect(await claveVigente(m)).toEqual([{ clave: 'camaras', primaria: true }]);
+      expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])).toEqual([]);
+    });
+
+    it('si el canal cambia a lo mismo que ya decidió la persona, el caso se cierra', async () => {
+      await encolar(woo, 'woo.products', '2004', { id: 2004, type: 'simple', sku: 'FB-2004', categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      await proyector().unaVuelta();
+      const m = await modeloDe('2004');
+      await admin.query(`UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = 'test' WHERE model_id = $1 AND quitado_en IS NULL`, [m]);
+      await admin.query(`INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen) VALUES ($1, $2, $3, true, 'persona')`,
+        [empresa, m, camaras]);
+      // Sigue en C1 (CUBIERTAS): eso YA difería de la persona (CAMARAS) cuando persona se decidió, pero recién
+      // ahora categoria_canal vuelve a escribirse (mismo valor, pero re-observada) — igual no alcanza para abrir
+      // si el valor no cambió realmente. Forzamos un cambio real: C1 -> C2 (coincide con persona) primero no abre nada,
+      // y de C2 a C1 (difiere) abre; volver a C2 (coincide) cierra.
+      await encolar(woo, 'woo.products', '2004', { id: 2004, type: 'simple', sku: 'FB-2004', categories: [{ id: 'C2', name: 'CAMARAS' }] });
+      await proyector().unaVuelta();
+      expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])).toEqual([]);
+      await encolar(woo, 'woo.products', '2004', { id: 2004, type: 'simple', sku: 'FB-2004', categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      await proyector().unaVuelta();
+      expect((await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])))
+        .toEqual([{ tipo: 'categoria_persona_contradicha' }]);
+      await encolar(woo, 'woo.products', '2004', { id: 2004, type: 'simple', sku: 'FB-2004', categories: [{ id: 'C2', name: 'CAMARAS' }] });
+      await proyector().unaVuelta();
+      expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])).toEqual([]);
+    });
+
+    it('un error de clasificación no deshace la proyección ya aplicada', async () => {
+      // Dos categorías vigentes de Woo con el mismo nombre: clasificarModelos no puede identificar cuál es
+      // «CUBIERTAS» y tira («el nombre no identifica y no se adivina»).
+      await admin.query(`INSERT INTO catalog.channel_categories (company_id, channel_account_id, canal, id_externo, nombre) VALUES
+        ($1, $2, 'woocommerce', 'C1B', 'CUBIERTAS')`, [empresa, woo]);
+      const logs: Array<{ obj: Record<string, unknown>; msg: string }> = [];
+      await encolar(woo, 'woo.products', '2005', { id: 2005, type: 'simple', sku: 'FB-2005', categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      const r = await proyector({ log: { error: (obj, msg) => logs.push({ obj, msg }) } }).unaVuelta();
+      expect(r).toMatchObject({ aplicados: 1, errores: 0 });
+      const m = await modeloDe('2005');
+      expect(m).toBeTruthy();
+      expect(await q('SELECT sku FROM catalog.sellable_variants WHERE model_id = $1', [m])).toEqual([{ sku: 'FB-2005' }]);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]!.msg).toMatch(/clasificación/);
     });
   });
 });

@@ -133,7 +133,7 @@ export async function backfillAtributos(pool: pg.Pool, fuente: FuenteLegado, o: 
             numeroAcotado(c?.precio, 1e10), c?.moneda ?? null,
             numeroAcotado(c?.stock, 2 ** 31) === null ? null : Math.trunc(c!.stock!), c?.gtin ?? null]);
         if (!marcada.rowCount) continue;
-        const resumen: ResumenAplicacion = { representaciones: 0, viejas: 0, casosAbiertos: [] };
+        const resumen: ResumenAplicacion = { representaciones: 0, viejas: 0, casosAbiertos: [], modelos: [], categoriaCambio: new Set(), empresa: f.company_id };
         await persistirExtras(tx, { tx, cuenta: f.channel_account_id, canal: f.canal as 'woocommerce' | 'mercadolibre',
           versionRemota: '', compararAtributos: false }, f.id, extras, resumen, f.company_id);
       }
