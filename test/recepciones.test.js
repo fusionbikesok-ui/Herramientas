@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import axios from 'axios';
 import { openDb } from '../db/index.js';
 import { recepcionesRouter, aplicarStockItem } from '../routes/recepciones.js';
-import { crearBorradorWoo } from '../lib/nuevosProductosWoo.js';
+import { crearBorradorWoo, conciliarAltaIncierta } from '../lib/nuevosProductosWoo.js';
 import * as syncModule from '../routes/sync.js';
 
 vi.mock('axios');
@@ -2314,5 +2314,150 @@ describe('recepciones — recuperación de altas_woo en "procesando"', () => {
     const alta = db.prepare('SELECT estado, error FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
     expect(alta.estado).toBe('incierto');
     expect(alta.error).toBeTruthy();
+  });
+});
+
+describe('Padre perdido en familia_variable — recuperación por SKU provisional del padre', () => {
+  const DB = './test/tmp-recep-padre-perdido.sqlite';
+  let db;
+
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  });
+
+  it('(a) crearBorradorWoo: POST del padre familia_variable incluye sku/meta_data con skuProvisionalPadre', async () => {
+    const operationId = '550e8400-e29b-41d4-a716-446655440099';
+    const categoria = { id: 17, name: 'CASCOS', parent: 0 };
+
+    let payloadCapturado = null;
+    let idVariacion = null;
+    const fetchWoo = async (_c, path, method = 'get', body) => {
+      if (path.includes('/categories')) return { data: [categoria] };
+      // Capturar el payload del POST que crea el padre (se detecta por ser POST a /products sin id en path)
+      if (method === 'post' && path === '/products' && body?.type === 'variable') {
+        payloadCapturado = body;
+        return { data: { id: 501, status: 'draft', stock_quantity: 0 } };
+      }
+      // POST de la variación
+      if (method === 'post' && path.includes('/variations')) {
+        idVariacion = 502;
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: `FB-PEND-${operationId}` } };
+      }
+      // GET de verificación después del PATCH: responde con el SKU final correcto para la variación
+      if (method === 'get' && path.includes('/variations/502')) {
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: `FB-502` } };
+      }
+      // GETs de verificación otros (padre, etc)
+      if (method === 'get' && path.includes('/products/501')) {
+        return { data: { id: 501, status: 'draft', stock_quantity: 0, sku: `FB-501` } };
+      }
+      // PATCH responde OK
+      if (method === 'patch') {
+        return { data: { id: idVariacion || 502, status: 'draft', stock_quantity: 0 } };
+      }
+      return { data: { id: 502, status: 'draft', stock_quantity: 0 } };
+    };
+
+    const ficha = {
+      modo: 'familia_variable',
+      titulo: 'Remera Variable',
+      marca: 'Marca',
+      categoria_id: 17,
+      categoria_nombre: 'CASCOS',
+      precio: '50000',
+      descripcion: 'Test padre',
+      atributos: [{ nombre: 'Color', valor: 'Rojo' }],
+    };
+
+    await crearBorradorWoo({
+      db, cfg, operationId, ficha, actor: 'test', fetchWoo,
+    });
+
+    // El payload del padre debe incluir sku con skuProvisionalPadre
+    expect(payloadCapturado).toBeTruthy();
+    expect(payloadCapturado.sku).toBe(`FB-PEND-PADRE-${operationId}`);
+    expect(payloadCapturado.meta_data).toBeTruthy();
+    expect(payloadCapturado.meta_data[0].key).toBe('_fb_recepcion_op');
+    expect(payloadCapturado.meta_data[0].value).toBe(operationId);
+  });
+
+  it('(b) conciliarAltaIncierta: familia_variable sin id_padre busca y persiste el padre perdido', async () => {
+    const operationId = '550e8400-e29b-41d4-a716-446655440100';
+    const now = new Date().toISOString();
+
+    // Crear una fila incierto: familia_variable sin id_padre ni id_woo
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,id_padre,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-test', null, null, 'FB-502', 'incierto', 'familia_variable', 'test', now, now);
+
+    let buscadasPorSku = [];
+    const fetchWoo = async (_c, path) => {
+      // Capturar búsquedas por SKU
+      if (path.includes('?sku=')) {
+        buscadasPorSku.push(path);
+        // Si busca el padre (SKU con "PADRE"), devolver id del padre
+        if (path.includes(`FB-PEND-PADRE-${operationId}`)) {
+          return { data: [{ id: 501 }] };
+        }
+        // Si busca la variación (SKU sin "PADRE"), devolver id de la variación bajo el padre encontrado
+        if (path.includes(`FB-PEND-${operationId}`) && !path.includes('PADRE')) {
+          return { data: [{ id: 502 }] };
+        }
+      }
+      // GET de verificación: la variación debe estar en draft
+      if (path.includes('/variations/502')) {
+        return { data: { id: 502, status: 'draft', stock_quantity: 0, sku: 'FB-502' } };
+      }
+      return { data: {} };
+    };
+
+    const result = await conciliarAltaIncierta({ db, cfg, operationId, fetchWoo });
+
+    // El resultado debe indicar que se creó (se encontró por búsqueda de SKU)
+    expect(result.estado).toBe('creado');
+    expect(result.id_woo).toBe(502);
+    expect(result.id_padre).toBe(501);
+
+    // Verificar que el id_padre se persistió en BD
+    const row = db.prepare('SELECT id_padre FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(row.id_padre).toBe(501);
+
+    // Verificar que se realizaron búsquedas: primero el padre, luego la variación
+    expect(buscadasPorSku.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('(c) conciliarAltaIncierta: familia_variable sin padre pero padre no encontrado → sigue incierto', async () => {
+    const operationId = '550e8400-e29b-41d4-a716-446655440101';
+    const now = new Date().toISOString();
+
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,id_padre,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-test', null, null, 'FB-502', 'incierto', 'familia_variable', 'test', now, now);
+
+    const fetchWoo = async (_c, path) => {
+      // Simular que ninguna búsqueda encuentra nada (padre ni variación)
+      if (path.includes('?sku=')) {
+        return { data: [] };
+      }
+      return { data: {} };
+    };
+
+    const result = await conciliarAltaIncierta({ db, cfg, operationId, fetchWoo });
+
+    // Sin poder encontrar el padre, tampoco se puede buscar la variación
+    // → debe seguir 'incierto' con mensaje explícito
+    expect(result.estado).toBe('incierto');
+    expect(result.motivo).toMatch(/sin id_woo conocido|no se encontró/i);
+
+    // Verificar que sigue sin id_padre ni id_woo en BD
+    const row = db.prepare('SELECT id_padre, id_woo FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
+    expect(row.id_padre).toBeNull();
+    expect(row.id_woo).toBeNull();
   });
 });
