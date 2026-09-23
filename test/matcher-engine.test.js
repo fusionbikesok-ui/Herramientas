@@ -74,6 +74,37 @@ describe('MatcherEngine · atributos estructurados de WC (H-06)', () => {
     expect(ME.extraerAtributosDeAttrsWC(null)).toBeNull();
   });
 
+  // DEFECTO A (piloto Pedalar #205): un atributo "Marca" (y otros no-variante reales del
+  // catálogo) se colaba entero en `talles` por el catch-all — "igpsport" quedaba taggeado
+  // como talle para cualquier producto simple con solo ese atributo estructurado, generando
+  // contradicciones fantasma. Lista explícita de atributos ignorados (José, verificado contra
+  // catalogo_cache real), NO eliminación del catch-all: Velocidades/Dientes/Largo/Ancho/Rodado/
+  // Altura siguen siendo dimensiones de variante reales.
+  it('un atributo "Marca" (no-variante) no se clasifica como talle ni color', () => {
+    expect(ME.extraerAtributosDeAttrsWC(JSON.stringify([{ name: 'Marca', option: 'IGPSPORT' }]))).toBeNull();
+  });
+
+  it('con Marca + Talle, ignora Marca y conserva el talle real', () => {
+    const r = ME.extraerAtributosDeAttrsWC(JSON.stringify([
+      { name: 'Marca', option: 'IGPSPORT' }, { name: 'Talle', option: 'M' },
+    ]));
+    expect(r.talles.has('igpsport')).toBe(false);
+    expect(r.talles.has('m')).toBe(true);
+  });
+
+  it('Velocidades sigue siendo una dimensión de variante real (discrimina 11v de 12v)', () => {
+    const r = ME.extraerAtributosDeAttrsWC(JSON.stringify([{ name: 'Velocidades', option: '12v' }]));
+    expect(r).not.toBeNull();
+    expect(r.talles.has('12v')).toBe(true);
+  });
+
+  it('otros atributos no-variante (Tipo de Producto, Tipo de Artículo, Tipo de Montaje, Genero, Diseño, Compuesto, Body, Material del Cuadro) se ignoran', () => {
+    for (const name of ['Tipo de Producto', 'Tipo de Artículo', 'Tipo de Montaje', 'Genero', 'Diseño', 'Compuesto', 'Body', 'Material del Cuadro']) {
+      const r = ME.extraerAtributosDeAttrsWC(JSON.stringify([{ name, option: 'Cualquiera' }]));
+      expect(r, `atributo "${name}" no debería producir colores/talles`).toBeNull();
+    }
+  });
+
   it('construirWC prefiere atributos estructurados sobre el nombre', () => {
     // El nombre NO trae color/talle parseable; los atributos sí.
     const { wcPorSku } = ME.construirWC([

@@ -127,6 +127,19 @@ describe('ingresoMatcher · discriminantes y marca', () => {
     expect(autoAplicable(res)).toBe(false);
   });
 
+  it('B1 (piloto Pedalar #205) · el candidato que comparte el código de modelo del documento nunca queda detrás de uno con código en conflicto', () => {
+    const idx = construirWCIndex([
+      { id_woo: 1, sku: 'HR-40', tipo: 'simple', nombre: 'Banda Cardiaca Igpsport Hr40 Ant+ Bluetooth' },
+      { id_woo: 2, sku: 'HR-50', tipo: 'simple', nombre: 'Banda Cardiaca Igpsport Hr50 Ant+ Bluetooth' },
+      { id_woo: 3, sku: 'HR-70', tipo: 'simple', nombre: 'Banda Brazalete Cardiaco Igpsport Hr70 Ant+ Bluetooth' },
+      ...relleno(),
+    ]);
+    const res = candidatosParaDoc({ descripcion: 'Banda Cardiaca Igpsport Hr70 Bluetooth Brazo', marca: 'IGPSPORT' }, idx);
+    expect(res.candidatos[0].sku).toBe('HR-70');
+    expect(res.candidatos.find((c) => c.sku === 'HR-40').confianza).not.toBe('alta');
+    expect(res.candidatos.find((c) => c.sku === 'HR-50').confianza).not.toBe('alta');
+  });
+
   it('9 · esDiscriminante sobre un corpus de 100: "shimano" (40) no, "m520" (1) sí', () => {
     const items = [];
     for (let i = 0; i < 100; i++) {

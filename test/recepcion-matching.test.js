@@ -80,6 +80,14 @@ describe('matching backend de recepción — lib/recepcionMatching.js', () => {
     // Y tampoco por código: el padre no tiene SKU propio, pero si lo tuviera no debería colarse.
   });
 
+  it('BUG4: color_ok===false nunca es auto_aplicable, aunque no haya contradiccion_atributo estructurada', () => {
+    const r = resolverLoteRecepcion(d(), 'P', [{ linea_id: '12', nombre_doc: 'Casco Alpha', color: 'Azul' }])[0];
+    expect(r.candidato.color_ok).toBe(false);
+    expect(r.candidato.contradiccion_atributo).toBe(false);
+    expect(r.auto_aplicable).toBe(false);
+    expect(r.estado).not.toBe('resuelto');
+  });
+
   it('un alias huérfano (su id_woo ya no está en catalogo_cache) cae al matcher en vez de romper', () => {
     const x = d();
     confirmarAlias(x, { proveedor: 'P', codigo_proveedor: 'AL-1', nombre_doc: 'Guante', id_woo: 5, actor: 'j' });

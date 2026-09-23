@@ -7,23 +7,50 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent';
 
+// BUG5 (piloto Pedalar #205): dos 503 seguidos de Gemini tiraban abajo la extracción entera sin
+// reintento. Solo se reintentan errores transitorios (5xx/429 y errores de red sin response, p.
+// ej. ECONNRESET) — nunca un 4xx de payload (400/401/403), que es un error real del request.
+const ESTADOS_REINTENTABLES = new Set([429, 500, 502, 503, 504]);
+const REINTENTOS_GEMINI = [1000, 3000]; // delays entre intentos: 3 intentos en total
+
+function esperar(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
 export async function llamarGemini(key, payload) {
   const body = {
     ...payload,
     generationConfig: { ...payload.generationConfig, responseMimeType: 'application/json' }
   };
-  const resp = await axios.post(`${GEMINI_URL}?key=${key}`, body, {
-    headers: { 'Content-Type': 'application/json' },
-    validateStatus: () => true
-  });
-  if (resp.status !== 200) {
-    throw new Error(`Gemini API error ${resp.status}`);
+  let ultimoError;
+  for (let intento = 0; intento <= REINTENTOS_GEMINI.length; intento++) {
+    try {
+      const resp = await axios.post(`${GEMINI_URL}?key=${key}`, body, {
+        headers: { 'Content-Type': 'application/json' },
+        validateStatus: () => true
+      });
+      if (resp.status !== 200) {
+        if (ESTADOS_REINTENTABLES.has(resp.status) && intento < REINTENTOS_GEMINI.length) {
+          ultimoError = new Error(`Gemini API error ${resp.status}`);
+          await esperar(REINTENTOS_GEMINI[intento]);
+          continue;
+        }
+        throw new Error(`Gemini API error ${resp.status}`);
+      }
+      const candidate = resp.data?.candidates?.[0];
+      if (!candidate) {
+        throw new Error('Gemini no devolvió candidatos — posible bloqueo por safety filter');
+      }
+      return candidate.content.parts[0].text;
+    } catch (err) {
+      const esErrorDeRed = !err.message?.startsWith('Gemini API error') && err.message !== 'Gemini no devolvió candidatos — posible bloqueo por safety filter';
+      if (esErrorDeRed && intento < REINTENTOS_GEMINI.length) {
+        ultimoError = err;
+        await esperar(REINTENTOS_GEMINI[intento]);
+        continue;
+      }
+      throw err;
+    }
   }
-  const candidate = resp.data?.candidates?.[0];
-  if (!candidate) {
-    throw new Error('Gemini no devolvió candidatos — posible bloqueo por safety filter');
-  }
-  return candidate.content.parts[0].text;
+  throw ultimoError;
 }
 
 export function parseJsonArrayText(text) {
