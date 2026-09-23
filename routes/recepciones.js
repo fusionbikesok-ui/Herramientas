@@ -483,7 +483,11 @@ function opIdSiVerificable(db, it, idWoo, recepcionId) {
   const opId = it.alta_operation_id || null;
   if (opId) {
     const alta = db.prepare('SELECT * FROM recepcion_altas_woo WHERE operation_id=?').get(opId);
-    if (alta && alta.id_woo === idWoo) return opId;
+    // El camino explícito (el payload trae alta_operation_id) también tiene que exigir que el alta
+    // sea de ESTA recepción, no solo el mismo id_woo — si no, un item podría reclamar un
+    // alta_operation_id ajeno (de otra recepción) con solo acertarle al id_woo. recepcionId es null
+    // en la creación (POST /), donde la recepción todavía no existe: ahí no hay nada que comparar.
+    if (alta && alta.id_woo === idWoo && (recepcionId == null || alta.recepcion_id === recepcionId)) return opId;
   }
   if (!idWoo || !recepcionId) return null;
   // recepcion_altas_woo.operation_id es TEXT PRIMARY KEY — no hay columna 'id' numérica; se ordena

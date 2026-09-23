@@ -1497,6 +1497,43 @@ describe('Tareas de validación de vínculos en altas Woo — Tarea 1 y Tarea 2'
     // No debe vincularse al alta de la OTRA recepción, aunque comparta id_woo y esté 'creado'.
     expect(item.alta_operation_id).toBeNull();
   });
+
+  it('DEFECTO 1 (camino explícito): /actualizar con alta_operation_id de un alta "creado" de OTRA recepción no lo acepta', async () => {
+    const now = new Date().toISOString();
+    // Recepción ajena: dueña real de la alta 'creado' para id_woo=10.
+    const recAjena = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    const itemAjeno = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,alta_operation_id,creado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(recAjena, 10, 'SKU-A', 'Producto A (ajena)', 1, 1, 'creado', 'op-ajeno-explicito', now).lastInsertRowid;
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,id_woo,sku,modo,creado_por,creado_en,actualizado_en,recepcion_id,recepcion_item_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run('op-ajeno-explicito', 'hash', 'creado', 10, 'SKU-A', 'simple', 'x', now, now, recAjena, itemAjeno);
+
+    // Recepción propia: mismo id_woo, sin alta propia. El payload manda EXPLÍCITAMENTE el
+    // alta_operation_id ajeno (p.ej. un cliente manipulado, o un bug de copia/paste en la UI).
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P2','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(recId, 10, 'SKU-A', 'Producto A', 1, 1, now);
+
+    const res = await request(app).post(`/api/recepciones/${recId}/actualizar`).send({
+      items: [{ id_woo: 10, sku: 'SKU-A', nombre_doc: 'Producto A', cantidad: 1, alta_operation_id: 'op-ajeno-explicito' }],
+    });
+    expect(res.status).toBe(200);
+
+    const item = db.prepare('SELECT alta_operation_id FROM recepcion_items WHERE recepcion_id=?').get(recId);
+    // NO puede quedar vinculado al alta ajena solo porque el payload lo pidió explícitamente.
+    expect(item.alta_operation_id).not.toBe('op-ajeno-explicito');
+
+    // La alta ajena no se tocó: sigue apuntando a su propio ítem/recepción.
+    const altaAjena = db.prepare('SELECT recepcion_id, recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=?').get('op-ajeno-explicito');
+    expect(altaAjena.recepcion_id).toBe(recAjena);
+    expect(altaAjena.recepcion_item_id).toBe(itemAjeno);
+  });
 });
 
 describe('P1 — POST / y /:id/actualizar aprenden alias si el ítem trae aprender:true', () => {
