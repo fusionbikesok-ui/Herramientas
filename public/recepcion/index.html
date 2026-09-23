@@ -205,9 +205,11 @@ input[type=file] { display:none; }
     <span>⚠ No se pudo cargar el catálogo de WooCommerce. La búsqueda y el matcheo automático no son confiables ahora mismo: un producto puede existir aunque el buscador diga "Sin resultados".</span>
   </div>
 
-  <div class="pill-tabs" role="tablist" aria-label="Secciones de recepción de mercadería">
-    <button type="button" class="pill-tab active" role="tab" aria-selected="true" id="tab-nueva" onclick="mostrarTab('nueva')">Nueva recepción</button>
-    <button type="button" class="pill-tab" role="tab" aria-selected="false" id="tab-historial" onclick="mostrarTab('historial'); cargarHistorial()">Historial</button>
+  <div class="pill-tabs">
+    <div role="tablist" aria-label="Secciones de recepción de mercadería" style="display:contents">
+      <button type="button" class="pill-tab active" role="tab" aria-selected="true" id="tab-nueva" onclick="mostrarTab('nueva')">Nueva recepción</button>
+      <button type="button" class="pill-tab" role="tab" aria-selected="false" id="tab-historial" onclick="mostrarTab('historial'); cargarHistorial()">Historial</button>
+    </div>
     <a class="pill-tab" id="tab-pedidos" href="/herramientas/pedidos/">📦 Pedidos</a>
   </div>
 
@@ -230,7 +232,7 @@ input[type=file] { display:none; }
       </div>
       <div class="field-row">
         <div class="field" style="flex:2">
-          <label>Importador <span style="color:var(--gray2);font-weight:400">(si difiere del proveedor)</span>
+          <label>Importador <span style="color:var(--gray);font-weight:400">(si difiere del proveedor)</span>
           <input type="text" id="inp-importador" placeholder="Se completa igual que proveedor por defecto" oninput="this.dataset.editadoManual=this.value?'1':'';sincronizarImportador()"></label>
         </div>
         <div class="field" style="flex:2">
