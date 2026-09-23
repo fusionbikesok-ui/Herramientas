@@ -3514,7 +3514,36 @@ resultado conocido, no un error.
     posible nuevo `sync_ml`, etc.
 
 - Si la recepción está en estado `procesando`:
-  - Status 400. El confirmar está en curso, no se puede reconstruir.
+  - Status 409 (Conflict). El confirmar está en curso — hay una confirmación en progreso sobre
+    esta recepción. Reintentar después.
+  - Response: `{ "ok": false, "error": "confirmación en curso" }`.
 
 - Si no existe:
   - Status 404 (sin cambios).
+
+**PUNTO 6 (2026-09-23): recuperación de recepciones huérfanas al arrancar + 409 para conflicto**
+
+Cuando una recepción queda en estado `procesando` (el proceso Node mató durante la confirmación,
+antes de llegar al UPDATE final del estado), necesita recuperación al arrancar el servidor.
+La lógica es idéntica a la del punto 2 (recuperación de ítems 'aplicando' huérfanos): observar
+el estado final de cada ítem y decidir el estado de la recepción.
+
+**Mecanismo de recuperación (automático al montar el router):**
+1. Recorrer todas las filas en `recepciones` con `estado='procesando'`.
+2. Para cada recepción:
+   - Si `solo_documento=1` (no toca stock): cambiar a `estado='confirmada'` directo.
+   - Si `solo_documento=0`: contar ítems pendientes (estado_item en
+     `'pendiente','creado','sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock'`).
+     Esto incluye estados de trabajo previo sin intentar aplicar (`'pendiente'`, `'creado'`) — crítico
+     si el proceso murió en el loop de /:id/confirmar ANTES de procesar un ítem (quedó sin tocarse).
+   - Si no hay pendientes: `estado='confirmada'`.
+   - Si hay al menos uno: `estado='confirmada_con_pendientes'`.
+3. En ambos casos, grabar `confirmado_en = <ahora>` (el timestamp de recuperación, no el
+   de ejecución original; se desconoce el original).
+
+**409 Conflict para intento de confirmación en curso:**
+Cuando se llama `POST /api/recepciones/:id/confirmar` a una recepción que YA está en estado
+`procesando` (recuperación de arranque aún no corrió, o dos confirmaciones concurrentes, o
+la recuperación de arranque recién corrió pero todavía está en `procesando` momentáneamente),
+la respuesta es ahora 409 en lugar de 400. Esto diferencia claramente "hay una confirmación
+en progreso" (conflicto transitorio, reintentar) de "el estado es inválido" (no reintentable).

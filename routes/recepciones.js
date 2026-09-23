@@ -778,6 +778,41 @@ export function recepcionesRouter(db, cfg) {
     }
   }
 
+  // PUNTO 6 (recuperación al arrancar): una recepción en 'procesando' huérfana (quedó atrapada si el proceso
+  // murió durante el loop de ítems o antes del UPDATE final del estado) necesita recuperación.
+  // Por cada recepción en 'procesando', evaluar si sus ítems tienen pendientes. La lista de estados
+  // "pendientes" debe incluir TODOS los que indica "no se ha resuelto completamente":
+  // - 'pendiente': nunca se intentó aplicar (el proceso murió antes de procesarlo)
+  // - 'creado': fue creado en Woo, nunca se intentó aplicar stock
+  // - 'error_reintentable': se intentó, falló, falta reintento
+  // - 'operacion_incierta': se intentó, no se sabe si llegó el PATCH
+  // - 'conflicto_stock': se intentó, conflicto sin resolver
+  // - 'sin_match': no tiene id_woo, no se puede aplicar
+  // - 'pendiente_creacion': pendiente crear el producto en Woo
+  // Las recepciones 'solo_documento=1' pasan directo a 'confirmada' sin evaluar ítems.
+  const recepcionesHuerfanas = db.prepare(
+    "SELECT id, solo_documento FROM recepciones WHERE estado='procesando'"
+  ).all();
+  if (recepcionesHuerfanas.length > 0) {
+    const now = new Date().toISOString();
+    for (const rec of recepcionesHuerfanas) {
+      let estadoFinal = 'confirmada';
+      // Si no es 'solo_documento', verificar si quedan ítems pendientes
+      if (!rec.solo_documento) {
+        const pendientes = db.prepare(`
+          SELECT COUNT(*) as count FROM recepcion_items
+          WHERE recepcion_id=? AND estado_item IN ('pendiente','creado','sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock')
+        `).get(rec.id);
+        if (pendientes.count > 0) {
+          estadoFinal = 'confirmada_con_pendientes';
+        }
+      }
+      db.prepare(
+        "UPDATE recepciones SET estado=?, confirmado_en=? WHERE id=?"
+      ).run(estadoFinal, now, rec.id);
+    }
+  }
+
   // Lista historial de recepciones
   router.get('/', (req, res) => {
     const rows = db.prepare(`
@@ -1000,8 +1035,13 @@ export function recepcionesRouter(db, cfg) {
         return res.json(reconstruirConfirmacionIdempotente(id, rec.estado, rec.solo_documento));
       }
 
-      // Estado 'procesando' u otro: devolver error (confirmación en curso o no reintentable)
-      return res.status(400).json({ ok: false, error: rec.estado === 'procesando' ? 'ya en proceso' : 'ya confirmada con pendientes' });
+      // PUNTO 6: 409 Conflicto — hay una confirmación en curso (estado 'procesando')
+      if (rec.estado === 'procesando') {
+        return res.status(409).json({ ok: false, error: 'confirmación en curso' });
+      }
+
+      // Otro estado: no reintentable
+      return res.status(400).json({ ok: false, error: 'ya confirmada con pendientes' });
     }
 
     const recMeta = db.prepare('SELECT pedido_id, solo_documento FROM recepciones WHERE id=?').get(id);

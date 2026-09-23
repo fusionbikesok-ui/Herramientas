@@ -1893,3 +1893,234 @@ describe('PUNTO 3: conciliar operacion_incierta y resolver conflicto_stock', () 
     expect(rec.estado).toBe('confirmada'); // Transición completada
   });
 });
+
+describe('recepciones — PUNTO 6 recuperación de recepciones huérfanas en procesando', () => {
+  const DB = './test/tmp-recep-punto6-recovery.sqlite';
+
+  afterEach(() => { if (fs.existsSync(DB)) fs.unlinkSync(DB); });
+
+  it('recuperación al arrancar: recepción en procesando con todos los ítems resueltos → confirmada', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    // Setup: crear recepción en 'procesando' con items ya resueltos (aplicados)
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'procesando', 'x')"
+    ).run().lastInsertRowid;
+
+    const itemId1 = db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 10, 'SKU1', 'Item 1', 1, 1, 'aplicado', 8, 'x').lastInsertRowid;
+
+    const itemId2 = db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 11, 'SKU2', 'Item 2', 2, 1, 'aplicado', 7, 'x').lastInsertRowid;
+
+    // Verificar que está en 'procesando'
+    let rec = db.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('procesando');
+    expect(rec.confirmado_en).toBeNull();
+
+    db.close();
+
+    // Reiniciar: cerrar y abrir de nuevo, luego montar el router (dispara recuperación)
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // Verificar que ahora está en 'confirmada' (sin pendientes)
+    rec = db2.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('confirmada');
+    expect(rec.confirmado_en).not.toBeNull(); // Se registró el momento de recuperación
+
+    db2.close();
+  });
+
+  it('recuperación al arrancar: recepción en procesando con ítems pendientes → confirmada_con_pendientes', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    // Setup: crear recepción en 'procesando' con mix de items: algunos aplicados, uno pendiente
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'procesando', 'x')"
+    ).run().lastInsertRowid;
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 10, 'SKU1', 'Item OK', 1, 1, 'aplicado', 8, 'x');
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, null, null, 'Item sin_match', 1, 1, 'sin_match', 'x');
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 12, 'SKU3', 'Item pendiente', 1, 1, 'error_reintentable', 'x');
+
+    let rec = db.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('procesando');
+
+    db.close();
+
+    // Reiniciar para disparar recuperación
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // Verificar que está en 'confirmada_con_pendientes' (hay pendientes)
+    rec = db2.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('confirmada_con_pendientes');
+    expect(rec.confirmado_en).not.toBeNull();
+
+    db2.close();
+  });
+
+  it('recuperación al arrancar: ítem en pendiente (nunca procesado) se cuenta como pendiente → confirmada_con_pendientes', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    // Escenario específico del bug encontrado por Codex:
+    // El proceso murió en el loop de /:id/confirmar ANTES de llegar a un ítem.
+    // Ese ítem sigue en 'pendiente' (nunca llegó a tocarse) y debe contar como "pendiente"
+    // para que la recuperación marque la recepción como 'confirmada_con_pendientes', no 'confirmada'.
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'procesando', 'x')"
+    ).run().lastInsertRowid;
+
+    // Ítem #1: ya aplicado (el proceso llegó a este antes de morir)
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 10, 'SKU1', 'Item procesado', 1, 1, 'aplicado', 8, 'x');
+
+    // Ítem #2, #3, #4: siguen en 'pendiente' (el proceso murió antes de procesarlos)
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 11, 'SKU2', 'Item no procesado #2', 1, 1, 'pendiente', 'x');
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 12, 'SKU3', 'Item no procesado #3', 1, 1, 'pendiente', 'x');
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 13, 'SKU4', 'Item creado no procesado', 1, 1, 'creado', 'x');
+
+    let rec = db.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('procesando');
+
+    db.close();
+
+    // Reiniciar para disparar recuperación
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // VERIFICACIÓN CRÍTICA: debe ser 'confirmada_con_pendientes' porque hay ítems en 'pendiente' y 'creado'
+    // que nunca se procesaron. Este es el bug que Codex encontró.
+    rec = db2.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('confirmada_con_pendientes');
+    expect(rec.confirmado_en).not.toBeNull();
+
+    db2.close();
+  });
+
+  it('recuperación al arrancar: recepción en procesando solo_documento=1 → confirmada directo sin evaluar ítems', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    // Setup: crear recepción solo_documento en 'procesando'
+    // (no debería tocar items ni evaluar pendientes, solo cambiar el estado)
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 1, 'procesando', 'x')"
+    ).run().lastInsertRowid;
+
+    // Agregar items con estados "pendientes" (pero no deberían importar para solo_documento)
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, null, null, 'Item irrelevante', 1, 1, 'sin_match', 'x');
+
+    let rec = db.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('procesando');
+    expect(rec.solo_documento).toBe(1);
+
+    db.close();
+
+    // Reiniciar para disparar recuperación
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // Verificar que está en 'confirmada' sin mirar items
+    rec = db2.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('confirmada');
+    expect(rec.solo_documento).toBe(1);
+    expect(rec.confirmado_en).not.toBeNull();
+
+    db2.close();
+  });
+});
+
+describe('recepciones — PUNTO 6 error 409 cuando hay confirmación en curso', () => {
+  const DB = './test/tmp-recep-punto6-409.sqlite';
+  let db, app;
+
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+    app = makeApp(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  });
+
+  it('POST /:id/confirmar → 409 Conflict si la recepción ya está en estado procesando', () => {
+    // Setup: crear recepción forzada en estado 'procesando' (sin pasar por el flujo normal de confirmación)
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'procesando', 'x')"
+    ).run().lastInsertRowid;
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 10, 'SKU1', 'Item', 1, 1, 'pendiente', 'x');
+
+    // Intentar confirmar una recepción que ya está en 'procesando'
+    // (simula el escenario: dos confirmaciones concurrentes, la segunda llega después de que
+    // la primera ya puso la recepción en 'procesando')
+    const res = request(app).post(`/api/recepciones/${recId}/confirmar`).send();
+
+    // No esperar async, pasar a sync para verificar el estado
+    return res.then(r => {
+      expect(r.status).toBe(409);
+      expect(r.body.ok).toBe(false);
+      expect(r.body.error).toMatch(/confirmación en curso|en proceso/i);
+
+      // Verificar que el estado no cambió (sigue en 'procesando')
+      const rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(recId);
+      expect(rec.estado).toBe('procesando');
+    });
+  });
+});
