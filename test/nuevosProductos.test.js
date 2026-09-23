@@ -99,13 +99,23 @@ describe('POST /operaciones/:operationId/conciliar — P1.6', () => {
   }
 
   it('concilia una alta incierta confirmada por Woo y la deja "creado"', async () => {
-    const a = armarApp(async () => ({ data: { id: 44, status: 'draft', sku: 'FB-44', name: 'Casco' } }));
+    const a = armarApp(async () => ({ data: { id: 44, status: 'draft', sku: 'FB-44', name: 'Casco', stock_quantity: 0, manage_stock: true } }));
     const now = new Date().toISOString();
     db.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?)")
       .run('op-http-1', 'h', 'incierto', 'simple', 44, 'j', now, now);
     const res = await request(a).post('/api/nuevos-productos/operaciones/op-http-1/conciliar').send();
     expect(res.status).toBe(200);
     expect(res.body.estado).toBe('creado');
+  });
+
+  it('conciliación queda "incierto" si Woo confirma el recurso pero sin stock_quantity=0 o manage_stock=true', async () => {
+    const a = armarApp(async () => ({ data: { id: 45, status: 'draft', sku: 'FB-45', name: 'Casco' } }));
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?)")
+      .run('op-http-1b', 'h', 'incierto', 'simple', 45, 'j', now, now);
+    const res = await request(a).post('/api/nuevos-productos/operaciones/op-http-1b/conciliar').send();
+    expect(res.status).toBe(200);
+    expect(res.body.estado).toBe('incierto');
   });
 
   it('404 si la operación no existe', async () => {
