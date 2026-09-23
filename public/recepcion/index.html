@@ -1707,6 +1707,13 @@ function retomar(id) {
       // Restaurar items (con sus matches ya guardados)
       // P1.3: no depende de catalogo[] en memoria — usa nombre_doc como fallback
       items = (rec.items || []).map(function(it){
+        // P0.4: restaurar el vínculo del alta y el estado de match — si se pierden acá, un
+        // reguardado (payloadRecepcion) manda el ítem como un match común (sin alta_operation_id)
+        // y el primer stock de un producto nuevo puede sincronizarse a Mercado Libre por error.
+        // El backend tiene su propia defensa (opIdSiVerificable busca por id_woo si esto falla),
+        // pero acá además evita forzar una reconfirmación manual innecesaria de ítems ya resueltos.
+        var esAltaCreada  = it.alta_estado === 'creado';
+        var eraMatchOk    = it.id_woo && it.estado_item && it.estado_item !== 'sin_match';
         return {
           id:               Date.now() + Math.random(),
           db_id:            it.id, // P1.3: id real de recepcion_items — habilita /resolver sobre este ítem
@@ -1720,7 +1727,12 @@ function retomar(id) {
           stock_wc:         it.stock_previo != null ? it.stock_previo : null,
           match_tipo:       it.id_woo ? 'guardado' : null,
           match_score:      it.id_woo ? 99 : 0,
-          recibido:         it.recibido === 1 || it.recibido === true
+          recibido:         it.recibido === 1 || it.recibido === true,
+          alta_operation_id: it.alta_operation_id || null,
+          alta_estado:       it.alta_estado || null,
+          match_confirmado:  esAltaCreada || eraMatchOk,
+          match_estado:      esAltaCreada || eraMatchOk ? 'resuelto' : null,
+          match_origen:      null // no se persiste server-side; no crítico para la exclusión de ML
         };
       });
 

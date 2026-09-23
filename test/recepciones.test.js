@@ -1357,6 +1357,146 @@ describe('Tareas de validación de vínculos en altas Woo — Tarea 1 y Tarea 2'
     expect(syncMlEntry).toBeDefined();
     expect(syncMlEntry.estado).toBe('excluido_alta');
   });
+
+  // DEFECTO 1: opIdSiVerificable recupera el vínculo por id_woo SOLO dentro de la MISMA recepción.
+  it('DEFECTO 1: /actualizar sin alta_operation_id recupera el vínculo por id_woo dentro de la misma recepción (retomar borrador)', async () => {
+    const now = new Date().toISOString();
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    const itemId = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,alta_operation_id,creado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(recId, 10, 'SKU-A', 'Producto A', 3, 1, 'creado', 'op-defecto1', now).lastInsertRowid;
+    // Alta 'creado' vinculada a ESTA recepción/ítem (como la dejó crearBorradorWoo)
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,id_woo,sku,modo,creado_por,creado_en,actualizado_en,recepcion_id,recepcion_item_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run('op-defecto1', 'hash', 'creado', 10, 'SKU-A', 'simple', 'x', now, now, recId, itemId);
+
+    // ROJO: /actualizar reguarda el ítem SIN alta_operation_id (lo que hacía retomar() antes del fix de UI)
+    let res = await request(app).post(`/api/recepciones/${recId}/actualizar`).send({
+      items: [{ id_woo: 10, sku: 'SKU-A', nombre_doc: 'Producto A', cantidad: 3 }],
+    });
+    expect(res.status).toBe(200);
+
+    const itemTrasActualizar = db.prepare('SELECT id, alta_operation_id FROM recepcion_items WHERE recepcion_id=?').get(recId);
+    // El backend debe haber recuperado el vínculo buscando por id_woo dentro de esta recepción.
+    expect(itemTrasActualizar.alta_operation_id).toBe('op-defecto1');
+    // El ítem viejo fue borrado y reinsertado (DELETE+INSERT de /actualizar): el id cambió.
+    expect(itemTrasActualizar.id).not.toBe(itemId);
+
+    // DEFECTO 3: el alta debe quedar re-vinculada al id NUEVO del ítem, no al viejo (que ya no existe).
+    const altaTrasActualizar = db.prepare('SELECT recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=?').get('op-defecto1');
+    expect(altaTrasActualizar.recepcion_item_id).toBe(itemTrasActualizar.id);
+
+    // Confirmar y verificar que el ítem queda excluido de ML (no se sincroniza el primer stock)
+    let stockWc = 0;
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: stockWc, status: 'draft' } };
+      stockWc = opts.data.stock_quantity;
+      return { status: 200, data: {} };
+    });
+    res = await request(app).post(`/api/recepciones/${recId}/confirmar`).send();
+    expect(res.status).toBe(200);
+    expect(res.body.aplicados).toBe(1);
+    const syncMlEntry = res.body.sync_ml.find(e => e.sku === 'SKU-A');
+    expect(syncMlEntry).toBeDefined();
+    // Con el vínculo re-apuntado al ítem nuevo, el motivo debe ser el correcto ('excluido_alta'),
+    // no 'excluido_alta_vinculo_inconsistente' ni 'excluido_alta_sin_vinculo'.
+    expect(syncMlEntry.estado).toBe('excluido_alta');
+    expect(syncModule.syncSkuPuntual).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'SKU-A');
+  });
+
+  it('DEFECTO 3: /actualizar dos veces seguidas mantiene el vínculo del alta (sin 500, sin perderlo)', async () => {
+    const now = new Date().toISOString();
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    const itemId = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,alta_operation_id,creado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(recId, 10, 'SKU-A', 'Producto A', 3, 1, 'creado', 'op-doble', now).lastInsertRowid;
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,id_woo,sku,modo,creado_por,creado_en,actualizado_en,recepcion_id,recepcion_item_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run('op-doble', 'hash', 'creado', 10, 'SKU-A', 'simple', 'x', now, now, recId, itemId);
+
+    let res = await request(app).post(`/api/recepciones/${recId}/actualizar`).send({
+      items: [{ id_woo: 10, sku: 'SKU-A', nombre_doc: 'Producto A', cantidad: 3 }],
+    });
+    expect(res.status).toBe(200);
+    const itemTras1 = db.prepare('SELECT id, alta_operation_id FROM recepcion_items WHERE recepcion_id=?').get(recId);
+    expect(itemTras1.alta_operation_id).toBe('op-doble');
+
+    // Segundo /actualizar seguido: no debe dar 500 (FK ya destrabada la vez anterior) y debe seguir
+    // manteniendo el vínculo, ahora apuntado al id (nuevo de nuevo) del ítem reinsertado.
+    res = await request(app).post(`/api/recepciones/${recId}/actualizar`).send({
+      items: [{ id_woo: 10, sku: 'SKU-A', nombre_doc: 'Producto A', cantidad: 3 }],
+    });
+    expect(res.status).toBe(200);
+    const itemTras2 = db.prepare('SELECT id, alta_operation_id FROM recepcion_items WHERE recepcion_id=?').get(recId);
+    expect(itemTras2.alta_operation_id).toBe('op-doble');
+    expect(itemTras2.id).not.toBe(itemTras1.id);
+
+    const altaFinal = db.prepare('SELECT recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=?').get('op-doble');
+    expect(altaFinal.recepcion_item_id).toBe(itemTras2.id);
+  });
+
+  it('DEFECTO 3: crear-alta sobre el ítem nuevo tras /actualizar no da 409 espurio de "alta ajena"', async () => {
+    const now = new Date().toISOString();
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?)'
+    ).run(recId, 'Producto nuevo', 1, 1, now);
+
+    // Guardar de nuevo (sin alta todavía) — no debe romper nada.
+    let res = await request(app).post(`/api/recepciones/${recId}/actualizar`).send({
+      items: [{ nombre_doc: 'Producto nuevo', cantidad: 1 }],
+    });
+    expect(res.status).toBe(200);
+    const item = db.prepare('SELECT id FROM recepcion_items WHERE recepcion_id=?').get(recId);
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.url.includes('/categories')) return { status: 200, data: [{ id: 1, name: 'C', parent: 0 }] };
+      if (opts.method === 'post') return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0 } };
+      if (opts.method === 'patch') return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0, sku: 'FB-900' } };
+      return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0, sku: 'FB-900' } };
+    });
+    const ficha = { modo: 'simple', titulo: 'X', marca: 'M', categoria_id: 1, categoria_nombre: 'C', precio: '100', atributos: [{ nombre: 'Color', valor: 'Negro' }] };
+    res = await request(app).post(`/api/recepciones/${recId}/items/${item.id}/crear-alta`).send({ ficha });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it('DEFECTO 1 (caso negativo): /actualizar sin alta_operation_id NO vincula un alta "creado" del mismo id_woo si pertenece a OTRA recepción', async () => {
+    const now = new Date().toISOString();
+    // Recepción 1 (ajena): tiene el alta 'creado' real para id_woo=10
+    const recAjena = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    const itemAjeno = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,alta_operation_id,creado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(recAjena, 10, 'SKU-A', 'Producto A (ajena)', 1, 1, 'creado', 'op-ajeno', now).lastInsertRowid;
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,id_woo,sku,modo,creado_por,creado_en,actualizado_en,recepcion_id,recepcion_item_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).run('op-ajeno', 'hash', 'creado', 10, 'SKU-A', 'simple', 'x', now, now, recAjena, itemAjeno);
+
+    // Recepción 2 (la que estamos guardando): mismo id_woo, pero NUNCA tuvo su propia alta
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P2','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(recId, 10, 'SKU-A', 'Producto A', 1, 1, now);
+
+    const res = await request(app).post(`/api/recepciones/${recId}/actualizar`).send({
+      items: [{ id_woo: 10, sku: 'SKU-A', nombre_doc: 'Producto A', cantidad: 1 }],
+    });
+    expect(res.status).toBe(200);
+
+    const item = db.prepare('SELECT alta_operation_id FROM recepcion_items WHERE recepcion_id=?').get(recId);
+    // No debe vincularse al alta de la OTRA recepción, aunque comparta id_woo y esté 'creado'.
+    expect(item.alta_operation_id).toBeNull();
+  });
 });
 
 describe('P1 — POST / y /:id/actualizar aprenden alias si el ítem trae aprender:true', () => {
@@ -2131,6 +2271,78 @@ describe('PUNTO 3: conciliar operacion_incierta y resolver conflicto_stock', () 
     rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(recId2);
     expect(rec.estado).toBe('confirmada'); // Transición completada
   });
+
+  // DEFECTO 2: ESTADOS_ITEM_TERMINALES / recepcionTienePendientes — intentarCerrarRecepcion
+  it('DEFECTO 2: intentarCerrarRecepcion NO cierra si quedan ítems en pendiente/creado/aplicando/NULL', async () => {
+    const recId2 = db.prepare(
+      "INSERT INTO recepciones (proveedor,importador,fecha,solo_documento,estado,creado_en) VALUES ('Prov2','Prov2','2026-07-17',0,'confirmada_con_pendientes','x')"
+    ).run().lastInsertRowid;
+
+    const itemAResolver = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,stock_previo,stock_objetivo,creado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(recId2, 10, 'CASCO', 'Casco', 1, 1, 'conflicto_stock', 5, 8, 'x').lastInsertRowid;
+
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    ).run(recId2, 11, 'X11', 'Pendiente', 1, 1, 'pendiente', 'x');
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    ).run(recId2, 12, 'X12', 'Creado', 1, 1, 'creado', 'x');
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    ).run(recId2, 13, 'X13', 'Aplicando', 1, 1, 'aplicando', 'x');
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(recId2, 14, 'X14', 'Nunca tocado (NULL)', 1, 1, 'x');
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 7 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${recId2}/items/${itemAResolver}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo', motivo: 'test' });
+    expect(res.status).toBe(200);
+
+    const rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(recId2);
+    // pendiente/creado/aplicando/NULL bloquean el cierre aunque no estén en la lista vieja
+    // de estados "pendientes" positiva — con ESTADOS_ITEM_TERMINALES cualquiera de estos cuenta.
+    expect(rec.estado).toBe('confirmada_con_pendientes');
+  });
+
+  it('DEFECTO 2: intentarCerrarRecepcion SÍ cierra cuando el resto son estados terminales (aplicado/no_recibido/error_historico)', async () => {
+    const recId3 = db.prepare(
+      "INSERT INTO recepciones (proveedor,importador,fecha,solo_documento,estado,creado_en) VALUES ('Prov3','Prov3','2026-07-17',0,'confirmada_con_pendientes','x')"
+    ).run().lastInsertRowid;
+
+    const itemAResolver = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,stock_previo,stock_objetivo,creado_en) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(recId3, 10, 'CASCO', 'Casco', 1, 1, 'conflicto_stock', 5, 8, 'x').lastInsertRowid;
+
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    ).run(recId3, 21, 'Y21', 'Ya aplicado', 1, 1, 'aplicado', 'x');
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    ).run(recId3, null, null, 'No recibido', 1, 0, 'no_recibido', 'x');
+    db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,creado_en) VALUES (?,?,?,?,?,?,?,?)'
+    ).run(recId3, 22, 'Y22', 'Fila histórica', 1, 1, 'error_historico', 'x');
+
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 7 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${recId3}/items/${itemAResolver}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo', motivo: 'test' });
+    expect(res.status).toBe(200);
+
+    const rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(recId3);
+    expect(rec.estado).toBe('confirmada');
+  });
 });
 
 describe('recepciones — PUNTO 6 recuperación de recepciones huérfanas en procesando', () => {
@@ -2410,6 +2622,51 @@ describe('recepciones — PUNTO 6 recuperación de recepciones huérfanas en pro
     // Esto es ROJO actualmente porque el WHERE del Bloque B no incluye 'aplicando'.
     rec = db2.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
     expect(rec.estado).toBe('confirmada_con_pendientes');
+    expect(rec.confirmado_en).not.toBeNull();
+
+    db2.close();
+  });
+
+  it('DEFECTO 2: recuperación al arrancar — mezcla aplicado/no_recibido/error_historico (todos terminales) → confirmada', () => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    const db = openDb(DB);
+    makeApp(db); // corre migraciones
+
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor, fecha, solo_documento, estado, creado_en) VALUES ('P', '2026-07-16', 0, 'procesando', 'x')"
+    ).run().lastInsertRowid;
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, stock_nuevo, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 10, 'SKU1', 'Item aplicado', 1, 1, 'aplicado', 8, 'x');
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, null, null, 'Item no recibido', 1, 0, 'no_recibido', 'x');
+
+    db.prepare(
+      `INSERT INTO recepcion_items
+        (recepcion_id, id_woo, sku, nombre_doc, cantidad, recibido, estado_item, creado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(recId, 12, 'SKU3', 'Fila histórica', 1, 1, 'error_historico', 'x');
+
+    let rec = db.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('procesando');
+
+    db.close();
+
+    // Reiniciar para disparar recuperación
+    const db2 = openDb(DB);
+    makeApp(db2);
+
+    // Los tres estados son terminales (ESTADOS_ITEM_TERMINALES): la recepción debe cerrar
+    // directo a 'confirmada', sin pasar por 'confirmada_con_pendientes'.
+    rec = db2.prepare('SELECT * FROM recepciones WHERE id=?').get(recId);
+    expect(rec.estado).toBe('confirmada');
     expect(rec.confirmado_en).not.toBeNull();
 
     db2.close();

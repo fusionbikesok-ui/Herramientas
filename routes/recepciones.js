@@ -13,18 +13,34 @@ import { crearBorradorWoo } from '../lib/nuevosProductosWoo.js';
 // se pisen las escrituras y pierdan stock recibido.
 const locksStockPorIdWoo = new Map();
 
+// Conjunto TERMINAL explícito de estado_item: un ítem NO bloquea el cierre de su recepción solo
+// si está en esta lista. Cualquier otro valor —incluidos 'pendiente', 'creado', 'aplicando', NULL,
+// o un estado que todavía no exista hoy— cuenta como pendiente por default (fail-closed): es más
+// seguro dejar una recepción de más en 'confirmada_con_pendientes' que cerrarla con una línea sin
+// resolver (el bug real que esto reemplaza era una lista POSITIVA de estados "pendientes" que
+// omitía 'pendiente'/'creado'/'aplicando'/NULL — cualquier estado nuevo que no se agregara ahí
+// cerraba la recepción por accidente).
+// - 'aplicado': stock ya aplicado en Woo, resuelto.
+// - 'no_recibido': el usuario marcó la línea como no recibida explícitamente, nada más que hacer.
+// - 'error_historico' (migración 112): fila de historia previa a esta máquina de estados, ya
+//   documentada en la migración como "estado terminal de solo lectura" — no es parte de la cola viva.
+// 'sin_match' y 'pendiente_creacion' NO son terminales: siguen requiriendo match manual o alta de
+// producto nuevo antes de poder aplicarse, así que cuentan como pendientes.
+const ESTADOS_ITEM_TERMINALES = new Set(['aplicado', 'no_recibido', 'error_historico']);
+
+function recepcionTienePendientes(db, recepcionId) {
+  const items = db.prepare('SELECT estado_item FROM recepcion_items WHERE recepcion_id=?').all(recepcionId);
+  return items.some((it) => !ESTADOS_ITEM_TERMINALES.has(it.estado_item));
+}
+
 /**
  * HUECO 4: Intenta cerrar una recepción en 'confirmada_con_pendientes'.
- * Si ya no hay ítems pendientes (sin_match, pendiente_creacion, error_reintentable, operacion_incierta, conflicto_stock),
- * transiciona a 'confirmada'. Se llama DESDE DENTRO de una db.transaction() que ya está en vuelo,
- * no es ella misma una transacción — better-sqlite3 permite anidar prepares.
+ * Si ya no hay ítems pendientes (ver ESTADOS_ITEM_TERMINALES), transiciona a 'confirmada'.
+ * Se llama DESDE DENTRO de una db.transaction() que ya está en vuelo, no es ella misma una
+ * transacción — better-sqlite3 permite anidar prepares.
  */
 function intentarCerrarRecepcion(db, recepcionId) {
-  const pendientes = db.prepare(`
-    SELECT COUNT(*) as count FROM recepcion_items
-    WHERE recepcion_id=? AND estado_item IN ('sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock')
-  `).get(recepcionId);
-  if (pendientes.count === 0) {
+  if (!recepcionTienePendientes(db, recepcionId)) {
     db.prepare("UPDATE recepciones SET estado='confirmada' WHERE id=? AND estado='confirmada_con_pendientes'").run(recepcionId);
   }
 }
@@ -437,7 +453,7 @@ function normalizarNumeroPedido(num) {
  * 'pendiente' (matcheo manual normal), sin id_woo queda 'sin_match' — nunca se pierde silenciosamente,
  * pero tampoco se le cree al cliente algo que no puede probar.
  */
-function estadoItemAlGuardar(db, it) {
+function estadoItemAlGuardar(db, it, recepcionId = null) {
   const idWoo = it.id_woo || null;
   if (it.estado_item === 'creado') {
     const opId = it.alta_operation_id || null;
@@ -447,16 +463,36 @@ function estadoItemAlGuardar(db, it) {
     }
     return { estado_item: idWoo ? 'pendiente' : 'sin_match', alta_operation_id: null };
   }
-  return { estado_item: it.estado_item || (idWoo ? 'pendiente' : 'sin_match'), alta_operation_id: opIdSiVerificable(db, it, idWoo) };
+  return { estado_item: it.estado_item || (idWoo ? 'pendiente' : 'sin_match'), alta_operation_id: opIdSiVerificable(db, it, idWoo, recepcionId) };
 }
 
 // Conserva alta_operation_id en ítems que no reclaman 'creado' pero sí lo traen (p.ej. quedaron en
 // 'pendiente' tras una alta previa) — solo si sigue correspondiendo a la misma alta e id_woo.
-function opIdSiVerificable(db, it, idWoo) {
+// Si el payload NO trae alta_operation_id (p.ej. la UI perdió el estado al retomar un borrador,
+// o simplemente re-guarda con un objeto item nuevo), no hay que confiar ciegamente en eso para
+// borrar el vínculo: se busca por id_woo si existe una alta 'creado' real para ese producto — pero
+// SOLO entre las altas vinculadas a ESTA recepción (recepcion_altas_woo.recepcion_id=recepcionId).
+// Sin ese filtro, dos recepciones distintas que dieron de alta el mismo id_woo (p.ej. reintento tras
+// un error) se pisarían el vínculo entre sí. No se usa recepcion_item_id como filtro: /actualizar
+// hace DELETE+INSERT de recepcion_items en cada guardado, así que ese id queda viejo de inmediato.
+// recepcionId es null en la creación de una recepción nueva (POST /): ahí no hay fallback posible
+// porque la recepción todavía no existe cuando se guardan sus ítems.
+// La exclusión de ML en /confirmar depende de que este id_woo quede vinculado — perderlo por un
+// payload incompleto haría que el primer stock de un producto nuevo se sincronice a ML por error.
+function opIdSiVerificable(db, it, idWoo, recepcionId) {
   const opId = it.alta_operation_id || null;
-  if (!opId) return null;
-  const alta = db.prepare('SELECT * FROM recepcion_altas_woo WHERE operation_id=?').get(opId);
-  return (alta && alta.id_woo === idWoo) ? opId : null;
+  if (opId) {
+    const alta = db.prepare('SELECT * FROM recepcion_altas_woo WHERE operation_id=?').get(opId);
+    if (alta && alta.id_woo === idWoo) return opId;
+  }
+  if (!idWoo || !recepcionId) return null;
+  // recepcion_altas_woo.operation_id es TEXT PRIMARY KEY — no hay columna 'id' numérica; se ordena
+  // por creado_en para quedarse con el alta más reciente si hubiera más de una (no debería, pero
+  // por las dudas no toma una al azar).
+  const altaPorIdWoo = db.prepare(
+    "SELECT operation_id FROM recepcion_altas_woo WHERE id_woo=? AND estado='creado' AND recepcion_id=? ORDER BY creado_en DESC LIMIT 1"
+  ).get(idWoo, recepcionId);
+  return altaPorIdWoo ? altaPorIdWoo.operation_id : null;
 }
 
 // P1: persiste la intención "usar y recordar" marcada por línea al guardar/actualizar una recepción
@@ -796,15 +832,10 @@ export function recepcionesRouter(db, cfg) {
     const now = new Date().toISOString();
     for (const rec of recepcionesHuerfanas) {
       let estadoFinal = 'confirmada';
-      // Si no es 'solo_documento', verificar si quedan ítems pendientes
-      if (!rec.solo_documento) {
-        const pendientes = db.prepare(`
-          SELECT COUNT(*) as count FROM recepcion_items
-          WHERE recepcion_id=? AND (estado_item IN ('pendiente','creado','sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock','aplicando') OR estado_item IS NULL)
-        `).get(rec.id);
-        if (pendientes.count > 0) {
-          estadoFinal = 'confirmada_con_pendientes';
-        }
+      // Si no es 'solo_documento', verificar si quedan ítems pendientes (mismo criterio TERMINAL
+      // que intentarCerrarRecepcion — ver ESTADOS_ITEM_TERMINALES).
+      if (!rec.solo_documento && recepcionTienePendientes(db, rec.id)) {
+        estadoFinal = 'confirmada_con_pendientes';
       }
       db.prepare(
         "UPDATE recepciones SET estado=?, confirmado_en=? WHERE id=?"
@@ -861,6 +892,13 @@ export function recepcionesRouter(db, cfg) {
     if (!rec) return res.status(404).json({ ok: false, error: 'no encontrada' });
     const docs  = db.prepare('SELECT * FROM recepcion_documentos WHERE recepcion_id=?').all(id);
     const items = db.prepare('SELECT * FROM recepcion_items WHERE recepcion_id=? ORDER BY id').all(id);
+    // Retomar un borrador necesita saber si un ítem ya tiene una alta creada para restaurar el
+    // vínculo en la UI (si no, el primer stock de un producto nuevo puede sincronizarse a ML por
+    // error al reconfirmar) — alta_operation_id ya es columna propia; alta_estado sale del join.
+    const altaEstadoStmt = db.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?');
+    for (const it of items) {
+      it.alta_estado = it.alta_operation_id ? (altaEstadoStmt.get(it.alta_operation_id)?.estado || null) : null;
+    }
     res.json({ ok: true, data: { ...rec, documentos: docs, items } });
   });
 
@@ -946,6 +984,12 @@ export function recepcionesRouter(db, cfg) {
       if (solo_documento !== undefined) {
         db.prepare('UPDATE recepciones SET solo_documento=? WHERE id=?').run(solo_documento ? 1 : 0, id);
       }
+      // DEFECTO 3: recepcion_altas_woo.recepcion_item_id (migración 111) referencia recepcion_items(id)
+      // sin ON DELETE, y la conexión corre con foreign_keys=ON. El DELETE de abajo violaría esa FK en
+      // cualquier recepción que ya tuvo una alta vinculada vía /crear-alta. Se desvincula ANTES del
+      // DELETE (recepcion_item_id=NULL no rompe nada: recepcion_id sigue identificando la recepción) y
+      // se re-vincula más abajo al id nuevo del ítem reinsertado que la reclame por operation_id.
+      db.prepare('UPDATE recepcion_altas_woo SET recepcion_item_id=NULL WHERE recepcion_id=?').run(id);
       db.prepare('DELETE FROM recepcion_items WHERE recepcion_id=?').run(id);
       db.prepare('DELETE FROM recepcion_documentos WHERE recepcion_id=?').run(id);
 
@@ -965,11 +1009,17 @@ export function recepcionesRouter(db, cfg) {
         const recibido = it.recibido === false || it.recibido === 0 ? 0 : 1;
         const cantidad = Math.max(1, parseInt(it.cantidad) || 1);
         const idWooEfectivo = it.id_woo || null;
-        const { estado_item, alta_operation_id } = estadoItemAlGuardar(db, { ...it, id_woo: idWooEfectivo });
+        const { estado_item, alta_operation_id } = estadoItemAlGuardar(db, { ...it, id_woo: idWooEfectivo }, id);
         const itemId = insItem.run(id, idWooEfectivo, it.sku_wc || it.sku || null, it.nombre_doc || it.nombre || '',
           it.codigo_proveedor || null, cantidad,
           it.precio_unitario || null, it.stock_wc ?? null, null, recibido,
           estado_item, alta_operation_id, now).lastInsertRowid;
+        // DEFECTO 3: re-vincular el alta (si la hay) al id NUEVO del ítem reinsertado, para que la
+        // exclusión de ML en /confirmar salga con motivo 'excluido_alta' y no 'vinculo_inconsistente'.
+        if (alta_operation_id) {
+          db.prepare('UPDATE recepcion_altas_woo SET recepcion_item_id=? WHERE operation_id=? AND recepcion_id=?')
+            .run(itemId, alta_operation_id, id);
+        }
         const fallo = aprenderAliasSiCorresponde(db, it, { proveedor: proveedorRec, id_woo: idWooEfectivo, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
         if (fallo) aliasesNoAprendidos.push(fallo);
       }
