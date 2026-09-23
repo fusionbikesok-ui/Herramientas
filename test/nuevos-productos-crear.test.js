@@ -387,6 +387,50 @@ describe('conciliarAltaIncierta — (a) sin id_woo, se encuentra por marca busca
   });
 });
 
+describe('conciliarAltaIncierta — (a-bis) búsqueda por marca ambigua (2+ resultados): trata como no encontrado', () => {
+  it('modo simple: 2+ resultados para sku provisional → null → incierto', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-ambiguo-1','h','incierto','simple',null,null,'j',now,now);
+    const skuProv = 'FB-PEND-op-ambiguo-1';
+    const fetchWoo = async (_c, path, _method='get', _body) => {
+      // Simula inconsistencia: dos productos con el mismo SKU provisional (bug de Woo o corrupción)
+      if (path===`/products?sku=${encodeURIComponent(skuProv)}`) {
+        return { data: [
+          { id: 77, status:'draft', sku: skuProv, name:'Casco 1' },
+          { id: 88, status:'draft', sku: skuProv, name:'Casco 2' }
+        ] };
+      }
+      return { data: [] };
+    };
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-ambiguo-1', fetchWoo });
+    expect(r.estado).toBe('incierto');
+    expect(r.motivo).toContain('no se encontró por marca buscable');
+  });
+
+  it('variacion_existente: 2+ resultados en las variaciones del padre → null → incierto', async () => {
+    const x=db();
+    const now=new Date().toISOString();
+    x.prepare("INSERT INTO recepcion_altas_woo (operation_id,request_hash,estado,modo,id_woo,id_padre,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)")
+      .run('op-ambiguo-2','h','incierto','variacion_existente',null,9,'j',now,now);
+    const skuProv = 'FB-PEND-op-ambiguo-2';
+    const fetchWoo = async (_c, path, _method='get', _body) => {
+      // Simula inconsistencia: dos variaciones con el mismo SKU provisional
+      if (path===`/products/9/variations?sku=${encodeURIComponent(skuProv)}`) {
+        return { data: [
+          { id: 99, status:'draft', sku: skuProv },
+          { id: 110, status:'draft', sku: skuProv }
+        ] };
+      }
+      return { data: [] };
+    };
+    const r = await conciliarAltaIncierta({ db: x, cfg: {}, operationId: 'op-ambiguo-2', fetchWoo });
+    expect(r.estado).toBe('incierto');
+    expect(r.motivo).toContain('no se encontró por marca buscable');
+  });
+});
+
 describe('conciliarAltaIncierta — (b) resolución humana explícita, como último recurso', () => {
   it('exige actor y motivo', async () => {
     const x=db();
