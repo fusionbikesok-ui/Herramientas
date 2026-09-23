@@ -127,6 +127,20 @@ interface FilaCategoria { modelo: string; canal: CanalClasif; cuenta: string; va
 
 /** 6a (toda la foto) y 6b (los modelos recién tocados por una ingestión) comparten el mismo núcleo. */
 export async function clasificarModelos(tx: Consultable, o: OpcionesClasificar): Promise<ResumenClasificacion> {
+  // Candados: la foto entera toma el de la empresa en exclusivo; la ingestión lo toma compartido y además uno por
+  // modelo, en orden estable. Así dos proyecciones del mismo modelo (dos publicaciones distintas) no clasifican
+  // con fotos parciales cruzadas, y la foto no corre en paralelo con ninguna. Uno por modelo en la foto agotaría
+  // la tabla de locks (miles de modelos en una transacción).
+  if (!o.dryRun) {
+    if (o.modelos) {
+      await tx.query("SELECT pg_advisory_xact_lock_shared(hashtextextended('catalogo.clasificacion:' || $1, 0))", [o.empresa]);
+      for (const m of [...new Set(o.modelos)].sort()) {
+        await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalogo.clasificacion.modelo:' || $1, 0))", [m]);
+      }
+    } else {
+      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended('catalogo.clasificacion:' || $1, 0))", [o.empresa]);
+    }
+  }
   const version = (await tx.query<{ id: string }>(
     `SELECT id FROM catalog.taxonomy_versions WHERE company_id = $1 AND estado = 'vigente'`, [o.empresa])).rows[0];
   if (!version) throw new Error(`la empresa ${o.empresa} no tiene una versión vigente del árbol`);
