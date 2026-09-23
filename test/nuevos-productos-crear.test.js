@@ -6,7 +6,7 @@ const ficha={modo:'simple',titulo:'Casco Nuevo',marca:'Marca',categoria_id:17,ca
 
 function db(){
   const d=new Database(':memory:');
-  d.exec('CREATE TABLE recepcion_altas_woo (operation_id TEXT PRIMARY KEY,request_hash TEXT,estado TEXT,modo TEXT,id_woo INTEGER,id_padre INTEGER,sku TEXT,respuesta_json TEXT,error TEXT,creado_por TEXT,creado_en TEXT,actualizado_en TEXT)');
+  d.exec('CREATE TABLE recepcion_altas_woo (operation_id TEXT PRIMARY KEY,request_hash TEXT,estado TEXT,modo TEXT,id_woo INTEGER,id_padre INTEGER,sku TEXT,respuesta_json TEXT,error TEXT,creado_por TEXT,creado_en TEXT,actualizado_en TEXT,recepcion_id INTEGER,recepcion_item_id INTEGER)');
   d.exec('CREATE TABLE catalogo_cache (id_woo INTEGER PRIMARY KEY, nombre TEXT, sku TEXT, tipo TEXT, id_padre INTEGER, stock INTEGER, no_contable INTEGER, regular_price TEXT, actualizado_en TEXT)');
   return d;
 }
@@ -766,5 +766,39 @@ describe('alta Woo fail-closed',()=>{
     // para conciliarAltaIncierta — no se pierde evidencia del intento.
     const row = x.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?').get('550e8400-e29b-41d4-a716-446655440002');
     expect(row.estado).toBe('incierto');
+  });
+});
+
+describe('crearBorradorWoo — campos recepcion_id e recepcion_item_id', () => {
+  it('persiste recepcion_id e recepcion_item_id cuando se pasan', async () => {
+    const x = db();
+    await crearBorradorWoo({
+      db: x,
+      cfg: {},
+      operationId: '550e8400-e29b-41d4-a716-446655440040',
+      ficha: { ...ficha, atributos: [] },
+      actor: 'j',
+      recepcionId: 10,
+      recepcionItemId: 25,
+      fetchWoo: fetchWooDraft([])
+    });
+    const row = x.prepare('SELECT recepcion_id, recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=?').get('550e8400-e29b-41d4-a716-446655440040');
+    expect(row.recepcion_id).toBe(10);
+    expect(row.recepcion_item_id).toBe(25);
+  });
+
+  it('deja recepcion_id e recepcion_item_id en NULL cuando no se pasan', async () => {
+    const x = db();
+    await crearBorradorWoo({
+      db: x,
+      cfg: {},
+      operationId: '550e8400-e29b-41d4-a716-446655440041',
+      ficha: { ...ficha, atributos: [] },
+      actor: 'j',
+      fetchWoo: fetchWooDraft([])
+    });
+    const row = x.prepare('SELECT recepcion_id, recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=?').get('550e8400-e29b-41d4-a716-446655440041');
+    expect(row.recepcion_id).toBeNull();
+    expect(row.recepcion_item_id).toBeNull();
   });
 });

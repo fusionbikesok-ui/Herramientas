@@ -619,7 +619,7 @@ export function recepcionesRouter(db, cfg) {
     }
 
     try {
-      const result = await crearBorradorWoo({ db, cfg, operationId, ficha: req.body?.ficha, actor: req.user?.username || 'sistema' });
+      const result = await crearBorradorWoo({ db, cfg, operationId, ficha: req.body?.ficha, actor: req.user?.username || 'sistema', recepcionId: id, recepcionItemId: itemId });
       db.prepare("UPDATE recepcion_items SET id_woo=?, sku=?, estado_item='creado', error_wc=NULL, ficha_json=?, resuelto_en=? WHERE id=?")
         .run(result.id_woo, result.sku, JSON.stringify(req.body?.ficha || {}), new Date().toISOString(), itemId);
       return res.json({ ok: true, id_woo: result.id_woo, sku: result.sku });

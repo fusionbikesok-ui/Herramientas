@@ -1118,6 +1118,32 @@ describe('P0.3 — el servidor nunca confía en un id_woo/estado "creado" que ma
     const r = await request(app).post(`/api/recepciones/${recId}/items/${itemId}/crear-alta`).send({ ficha });
     expect(r.status).toBe(404);
   });
+
+  it('crear-alta: persiste recepcion_id e recepcion_item_id en recepcion_altas_woo', async () => {
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.url.includes('/categories')) return { status: 200, data: [{ id: 1, name: 'C', parent: 0 }] };
+      if (opts.method === 'post') return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0 } };
+      if (opts.method === 'patch') return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0, sku: 'FB-900' } };
+      return { status: 200, data: { id: 900, status: 'draft', stock_quantity: 0, sku: 'FB-900' } };
+    });
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,fecha,solo_documento,estado,creado_en) VALUES ('P','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    const itemId = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?)'
+    ).run(recId, 'Producto nuevo', 1, 1, 'x').lastInsertRowid;
+    const ficha = { modo: 'simple', titulo: 'X', marca: 'M', categoria_id: 1, categoria_nombre: 'C', precio: '100', atributos: [{ nombre: 'Color', valor: 'Negro' }] };
+    const r = await request(app).post(`/api/recepciones/${recId}/items/${itemId}/crear-alta`).send({ ficha });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    // Obtiene el operation_id del ítem y verifica que la fila en recepcion_altas_woo tiene los valores correctos
+    const item = db.prepare('SELECT alta_operation_id FROM recepcion_items WHERE id=?').get(itemId);
+    expect(item.alta_operation_id).toBeTruthy();
+    const altaRow = db.prepare('SELECT recepcion_id, recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=?').get(item.alta_operation_id);
+    expect(altaRow).toBeDefined();
+    expect(altaRow.recepcion_id).toBe(recId);
+    expect(altaRow.recepcion_item_id).toBe(itemId);
+  });
 });
 
 describe('P1 — POST / y /:id/actualizar aprenden alias si el ítem trae aprender:true', () => {
