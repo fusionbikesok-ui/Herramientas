@@ -2237,8 +2237,9 @@ describe('recepciones — recuperación de altas_woo en "procesando"', () => {
     if (fs.existsSync(DB)) fs.unlinkSync(DB);
   });
 
-  it('caso (a): modo=simple sin id_woo → estado=fallido', () => {
-    // Insertar una alta en estado 'procesando', modo simple, sin id_woo (nunca se llegó a crear)
+  it('caso (a): modo=simple sin id_woo → estado=incierto (requiere conciliación)', () => {
+    // Insertar una alta en estado 'procesando', modo simple, sin id_woo local
+    // (pero el SKU provisional buscable podría existir en Woo si el POST llegó)
     const operationId = 'op-a-' + Math.random().toString(36).slice(2);
     const now = new Date().toISOString();
     db.prepare(
@@ -2248,10 +2249,10 @@ describe('recepciones — recuperación de altas_woo en "procesando"', () => {
     // Instanciar el router → ejecuta recuperación
     makeApp(db);
 
-    // Verificar que pasó a 'fallido'
+    // Verificar que pasó a 'incierto' (conciliarAltaIncierta decidirá si fallido o creado)
     const alta = db.prepare('SELECT estado, error FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
-    expect(alta.estado).toBe('fallido');
-    expect(alta.error).toBeTruthy(); // debe tener un error descriptivo
+    expect(alta.estado).toBe('incierto');
+    expect(alta.error).toBeTruthy(); // debe tener un error descriptivo de la causa de incertidumbre
   });
 
   it('caso (b): modo=simple con id_woo → estado=incierto', () => {
@@ -2268,8 +2269,8 @@ describe('recepciones — recuperación de altas_woo en "procesando"', () => {
     expect(alta.estado).toBe('incierto');
   });
 
-  it('caso (c): modo=familia_variable sin id_padre ni id_woo → estado=fallido', () => {
-    // Nada persistido que indique que la red hizo algo
+  it('caso (c): modo=familia_variable sin id_padre ni id_woo → estado=incierto (requiere conciliación)', () => {
+    // Sin evidencia local, pero el SKU provisional buscable podría existir en Woo
     const operationId = 'op-c-' + Math.random().toString(36).slice(2);
     const now = new Date().toISOString();
     db.prepare(
@@ -2279,7 +2280,7 @@ describe('recepciones — recuperación de altas_woo en "procesando"', () => {
     makeApp(db);
 
     const alta = db.prepare('SELECT estado, error FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
-    expect(alta.estado).toBe('fallido');
+    expect(alta.estado).toBe('incierto');
     expect(alta.error).toBeTruthy();
   });
 
@@ -2297,9 +2298,11 @@ describe('recepciones — recuperación de altas_woo en "procesando"', () => {
     expect(alta.estado).toBe('incierto');
   });
 
-  it('caso (e): modo=variacion_existente con id_padre pero sin id_woo → estado=fallido', () => {
-    // Para variacion_existente, id_padre se persiste DESDE el INICIO (viene de la ficha)
-    // No es evidencia de que la red hizo algo. Solo id_woo lo es.
+  it('caso (e): modo=variacion_existente con id_padre pero sin id_woo → estado=incierto (requiere conciliación)', () => {
+    // Para variacion_existente, id_padre se persiste DESDE el INICIO (viene de la ficha),
+    // no es evidencia de que la red creó la variación. Solo id_woo lo es.
+    // Aún así, como toda fila 'procesando' pasa a 'incierto', conciliarAltaIncierta
+    // decidirá si es fallido (no existe en Woo) o creado (existe).
     const operationId = 'op-e-' + Math.random().toString(36).slice(2);
     const now = new Date().toISOString();
     db.prepare(
@@ -2309,7 +2312,7 @@ describe('recepciones — recuperación de altas_woo en "procesando"', () => {
     makeApp(db);
 
     const alta = db.prepare('SELECT estado, error FROM recepcion_altas_woo WHERE operation_id=?').get(operationId);
-    expect(alta.estado).toBe('fallido');
+    expect(alta.estado).toBe('incierto');
     expect(alta.error).toBeTruthy();
   });
 });

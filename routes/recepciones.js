@@ -814,34 +814,27 @@ export function recepcionesRouter(db, cfg) {
   }
 
   // PUNTO 7 (recuperación al arrancar): un alta en 'procesando' huérfana (quedó atrapada si el proceso
-  // murió durante crearBorradorWoo) necesita recuperación. Evaluar la evidencia persistida:
-  // - Si id_woo IS NOT NULL → red definitivamente creó el recurso final → pasa a 'incierto'
-  // - Si id_padre IS NOT NULL y modo='familia_variable' → red definitivamente creó el padre → pasa a 'incierto'
-  // - En otro caso → nada persistido que sea evidencia → pasa a 'fallido' (libera operationId para reintento)
+  // murió durante crearBorradorWoo) necesita recuperación. TODA fila 'procesando' huérfana pasa a
+  // estado='incierto' — nunca a 'fallido' desde aquí. La razón: crearBorradorWoo persiste un SKU
+  // provisional (skuProvisional + metaOperacion) en el MISMO POST que crea el recurso final, ANTES
+  // de que sepamos su id_woo. Si ese POST llega a Woo pero la respuesta se pierde (el proceso muere
+  // antes de la línea 222 que persiste id_woo), el recurso EXISTE en Woo, buscable por ese SKU
+  // provisional — pero nuestro bloque solo ve "sin evidencia local" (id_woo null, o id_padre null
+  // para familia_variable) y marcaría 'fallido', permitiendo un reintento que crearía duplicado.
+  //
+  // conciliarAltaIncierta (lib/nuevosProductosWoo.js:262-310) ES la única vía que decide 'fallido',
+  // porque esa función VERIFICA contra Woo primero (buscarIdPorMarca línea 106-119) antes de concluir.
   try {
     const altasHuerfanas = db.prepare(
-      "SELECT operation_id, id_woo, id_padre, modo FROM recepcion_altas_woo WHERE estado='procesando'"
+      "SELECT operation_id FROM recepcion_altas_woo WHERE estado='procesando'"
     ).all();
     if (altasHuerfanas.length > 0) {
       const now = new Date().toISOString();
       for (const alta of altasHuerfanas) {
-        let estadoFinal = 'fallido';
-        let error = null;
-
-        if (alta.id_woo !== null) {
-          // Red creó el recurso final (simple, familia_variable o variacion_existente)
-          estadoFinal = 'incierto';
-        } else if (alta.modo === 'familia_variable' && alta.id_padre !== null) {
-          // Para familia_variable, id_padre persistido indica que red creó el padre
-          estadoFinal = 'incierto';
-        } else {
-          // Nada persistido que sea evidencia → fallido
-          error = 'Proceso murió antes de crear recurso en Woo. Reintentable.';
-        }
-
+        const error = 'Recuperado al arrancar: estado procesando huérfano, requiere conciliación';
         db.prepare(
-          "UPDATE recepcion_altas_woo SET estado=?, error=?, actualizado_en=? WHERE operation_id=?"
-        ).run(estadoFinal, error, now, alta.operation_id);
+          "UPDATE recepcion_altas_woo SET estado='incierto', error=?, actualizado_en=? WHERE operation_id=? AND estado='procesando'"
+        ).run(error, now, alta.operation_id);
       }
     }
   } catch (err) {
