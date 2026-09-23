@@ -793,7 +793,13 @@ export function recepcionesRouter(db, cfg) {
             await verificarAltaCreado(db, cfg, it);
           }
           const r = await aplicarStockItem(db, cfg, it);
-          resultados.push({ sku: it.sku, nombre: it.nombre_doc, ok: true, alta_borrador: it.estado_item === 'creado', stock_previo: r.stock_previo, stock_nuevo: r.stock_nuevo });
+          // PUNTO 4: alta_borrador debe verificarse contra recepcion_altas_woo (fuente durable),
+          // no contra it.estado_item (transitorio). Usa el patrón de verificación que ya existe
+          // en verificarAltaCreado / estadoItemAlGuardar / opIdSiVerificable.
+          const altaBorrador = it.alta_operation_id && db.prepare(
+            'SELECT 1 FROM recepcion_altas_woo WHERE operation_id=? AND estado=\'creado\' AND id_woo=?'
+          ).get(it.alta_operation_id, it.id_woo) ? true : false;
+          resultados.push({ sku: it.sku, nombre: it.nombre_doc, ok: true, alta_borrador: altaBorrador, stock_previo: r.stock_previo, stock_nuevo: r.stock_nuevo });
         } catch (e) {
           // aplicarStockItemInterno ya persistió el estado terminal correcto ('error_reintentable' /
           // 'operacion_incierta' / 'conflicto_stock') antes de lanzar, o no tocó nada si el ítem ya

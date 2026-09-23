@@ -114,6 +114,63 @@ describe('recepciones — confirmar (esquema actual)', () => {
     const urls = axios.request.mock.calls.map(c => c[0].url);
     expect(urls.some(u => u.includes('/products/500/variations/501'))).toBe(true);
   });
+
+  it('PUNTO 4: alta_borrador se determina desde recepcion_altas_woo, no desde estado_item transitorio', async () => {
+    // Reproducir el caso: un ítem marcado 'creado' con una alta en recepcion_altas_woo.
+    // Después de aplicarStockItem, su estado_item habrá cambiado a 'aplicado', pero
+    // alta_borrador en la respuesta debe seguir siendo true porque está vinculado a
+    // una alta 'creado' en la tabla durable (no al estado_item transitorio).
+
+    // Mock: devuelve status='draft' (requerido por verificarAltaCreado)
+    const stocks = new Map();
+    axios.request.mockImplementation(async (opts) => {
+      if (!stocks.has(opts.url)) stocks.set(opts.url, 5);
+      if (opts.method === 'get') {
+        return { status: 200, data: { stock_quantity: stocks.get(opts.url), status: 'draft' } };
+      }
+      if (opts.method === 'patch' && opts.data && opts.data.stock_quantity !== undefined) {
+        stocks.set(opts.url, opts.data.stock_quantity);
+      }
+      return { status: 200, data: {} };
+    });
+
+    // Crear una recepción limpia con un único ítem
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,importador,fecha,solo_documento,estado,creado_en) VALUES ('Prov','Prov','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+
+    // Crear entrada en catalogo_cache para el producto
+    db.prepare('DELETE FROM catalogo_cache WHERE id_woo=?').run(999);
+    db.prepare(
+      'INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(999, 'Producto Creado', 'PROD-CREADO', 'simple', null, 5, 'x');
+
+    // Crear una alta en recepcion_altas_woo (sin recepcion_id, porque no existe esa columna)
+    const operationId = 'op-' + Math.random().toString(36).slice(2);
+    const now = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO recepcion_altas_woo (operation_id,request_hash,id_woo,sku,estado,modo,creado_por,creado_en,actualizado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(operationId, 'hash-' + Math.random(), 999, 'PROD-CREADO', 'creado', 'simple', 'test', now, now);
+
+    // Crear el ítem con estado 'creado' y vinculado a esa alta
+    const itemId = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,estado_item,alta_operation_id,creado_en) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).run(recId, 999, 'PROD-CREADO', 'Producto Creado', 1, 1, 'creado', operationId, now).lastInsertRowid;
+
+    // Llamar a /confirmar
+    const res = await request(app).post(`/api/recepciones/${recId}/confirmar`).send();
+
+    expect(res.body.ok).toBe(true);
+    expect(res.body.resultados).toHaveLength(1);
+    const resultado = res.body.resultados[0];
+
+    // Verificación: el resultado debe mostrar alta_borrador=true porque el ítem sigue vinculado
+    // a una alta 'creado' en recepcion_altas_woo. Esto DEBE funcionar incluso si el estado_item
+    // en memoria o en BD cambió a 'aplicado' tras la aplicación del stock.
+    expect(resultado.ok).toBe(true);
+    expect(resultado.sku).toBe('PROD-CREADO');
+    expect(resultado.alta_borrador).toBe(true);
+  });
 });
 
 describe('recepciones — solo_documento no genera pendientes ni toca WC', () => {
