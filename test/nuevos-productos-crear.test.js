@@ -151,6 +151,36 @@ describe('crearBorradorWoo — P1.6: validaciones contra el estado real de Woo',
     const a = await crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440024',ficha:f,actor:'j',fetchWoo:fetchWooDraft([],{variaciones})});
     expect(a.sku).toBe('FB-44');
   });
+
+  it('rechaza una combinación que existe en la página 2 de variaciones (paginación completa)', async () => {
+    const x = db();
+    x.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (9,?,?,?,?,?,?)')
+      .run('Familia', null, 'variable', null, null, 'x');
+
+    // Mockea fetchWoo para devolver 2 páginas: 100 variaciones sin duplicado en la página 1,
+    // la variación duplicada en la página 2
+    const fetchWooPaginado = async (cfg, path, method = 'get', _body) => {
+      if (path.includes('/categories')) return { data: CATS };
+      if (/\/variations/.test(path) && method === 'get') {
+        if (path.includes('page=2')) {
+          // Segunda página: contiene la variación con el mismo color
+          return { data: [{ attributes: [{ name: 'Color', option: 'Negro' }] }] };
+        }
+        // Primera página (o sin page=2): 100 variaciones con otros colores
+        const page1 = Array.from({ length: 100 }, (_, i) => ({
+          attributes: [{ name: 'Color', option: `Color${i}` }]
+        }));
+        return { data: page1 };
+      }
+      // Para POST/PATCH
+      if (method === 'post' || method === 'patch') return { data: { id: 44, status: 'draft', stock_quantity: 0 } };
+      return { data: { id: 44, status: 'draft', stock_quantity: 0 } };
+    };
+
+    const f = { ...ficha, modo: 'variacion_existente', parent_id: 9, atributos: [{ nombre: 'Color', valor: 'negro' }] };
+    await expect(crearBorradorWoo({db:x,cfg:{},operationId:'550e8400-e29b-41d4-a716-446655440025',ficha:f,actor:'j',fetchWoo:fetchWooPaginado}))
+      .rejects.toThrow(/combinación/i);
+  });
 });
 
 describe('crearBorradorWoo — P1.6: familia_variable y variacion_existente', () => {
