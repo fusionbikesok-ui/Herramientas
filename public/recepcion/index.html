@@ -1755,6 +1755,62 @@ function retomar(id) {
     .catch(function(){ alert('Error al cargar el borrador.'); });
 }
 
+// PUNTO 3: Conciliar un ítem en operacion_incierta
+function conciliarStockItem(event, recId, itemId) {
+  event.stopPropagation();
+  event.preventDefault();
+  mostrarStatus('status-hist', 'loading', 'Conciliando con WooCommerce...');
+  fetch('/api/recepciones/' + recId + '/items/' + itemId + '/conciliar-stock', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  })
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+    .then(function(r) {
+      if (!r.data.ok) {
+        var errMsg = r.status === 404 ? 'Ítem no encontrado' : r.status === 409 ? 'El ítem no está en estado "operacion_incierta"' : r.data.error;
+        mostrarStatus('status-hist', 'err', 'Error: ' + errMsg);
+        return;
+      }
+      mostrarStatus('status-hist', 'ok', '✓ Ítem conciliado — estado: ' + r.data.estado + (r.data.stock_nuevo != null ? ', stock: ' + r.data.stock_nuevo : ''));
+      // Recargar historial para ver cambios
+      setTimeout(function() { cargarHistorial(); }, 500);
+    })
+    .catch(function(e) {
+      mostrarStatus('status-hist', 'err', 'Error: ' + e.message);
+    });
+}
+
+// PUNTO 3: Resolver un ítem en conflicto_stock
+function resolverConflictoItem(event, recId, itemId, decision) {
+  event.stopPropagation();
+  event.preventDefault();
+  var decisionLabel = decision === 'aceptar_woo' ? 'Aceptar stock de WooCommerce' : 'Reintentar desde cero';
+  mostrarStatus('status-hist', 'loading', 'Resolviendo conflicto (' + decisionLabel + ')...');
+  fetch('/api/recepciones/' + recId + '/items/' + itemId + '/resolver-conflicto', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision: decision })
+  })
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+    .then(function(r) {
+      if (!r.data.ok) {
+        var errMsg = r.status === 404 ? 'Ítem no encontrado' : r.status === 409 ? 'El ítem no está en conflicto de stock' : r.data.error;
+        mostrarStatus('status-hist', 'err', 'Error: ' + errMsg);
+        return;
+      }
+      var msg = decision === 'aceptar_woo'
+        ? '✓ Conflicto resuelto — se aceptó stock de WooCommerce (' + r.data.stock_nuevo + ')'
+        : '✓ Ítem marcado para reintentar aplicación desde cero';
+      mostrarStatus('status-hist', 'ok', msg);
+      // Recargar historial para ver cambios
+      setTimeout(function() { cargarHistorial(); }, 500);
+    })
+    .catch(function(e) {
+      mostrarStatus('status-hist', 'err', 'Error: ' + e.message);
+    });
+}
+
 function toggleHist(id) {
   var row    = document.getElementById('hist-' + id);
   var detail = document.getElementById('hist-detail-' + id);
@@ -1775,17 +1831,28 @@ function toggleHist(id) {
             + (TIPOS_LABEL[doc.tipo]||doc.tipo) + (doc.numero ? ' #'+esc(doc.numero) : '') + fileLink + '</span>';
         }).join('');
         var items_html = (rec.items||[]).map(function(it, i){
+          var accionesHtml = '';
+          // PUNTO 3: botones de acción para ítems en estados especiales
+          if (it.estado_item === 'operacion_incierta') {
+            accionesHtml = '<button class="btn btn-sm" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="conciliarStockItem(event,' + id + ',' + it.id + ')">Conciliar</button>';
+          } else if (it.estado_item === 'conflicto_stock') {
+            accionesHtml = '<div style="display:flex;gap:4px;flex-wrap:wrap">'
+              + '<button class="btn btn-sm" style="background:var(--green-bg);color:var(--green);border:1px solid var(--green-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="resolverConflictoItem(event,' + id + ',' + it.id + ',\'aceptar_woo\')">Aceptar</button>'
+              + '<button class="btn btn-sm" style="background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="resolverConflictoItem(event,' + id + ',' + it.id + ',\'reintentar\')">Reintentar</button>'
+              + '</div>';
+          }
           return '<tr>'
             + '<td style="color:var(--gray2)">'+(i+1)+'</td>'
             + '<td>'+(it.codigo_proveedor?'<span style="font-family:monospace;color:var(--blue)">'+esc(it.codigo_proveedor)+'</span>':'—')+'</td>'
             + '<td>'+esc(it.nombre_doc)+'</td>'
-            + '<td>'+(it.sku?esc(it.sku):'<span style="color:var(--red)">sin match</span>')+'</td>'
+            + '<td>'+(it.sku?esc(it.sku)+'<span style="font-size:10px;color:var(--gray2);margin-left:6px">'+esc(it.estado_item||'—')+'</span>':'<span style="color:var(--red)">sin match</span>')+'</td>'
             + '<td style="text-align:center">'+it.cantidad+'</td>'
-            + '<td style="text-align:center">'+(it.stock_previo!=null?it.stock_previo+'→'+it.stock_nuevo:'—')+'</td>'
+            + '<td style="text-align:center">'+(it.stock_previo!=null?it.stock_previo+'→'+(it.stock_nuevo!=null?it.stock_nuevo:'?'):'—')+'</td>'
+            + '<td style="text-align:center;font-size:12px">' + (accionesHtml || '—') + '</td>'
             + '</tr>';
         }).join('');
         detail.innerHTML = (docs_html?'<div style="margin-bottom:8px">'+docs_html+'</div>':'')
-          + '<table class="hist-items-table"><thead><tr><th>#</th><th>Cód. prov.</th><th>Descripción</th><th>SKU WC</th><th>Cant.</th><th>Stock</th></tr></thead><tbody>'+items_html+'</tbody></table>';
+          + '<table class="hist-items-table"><thead><tr><th>#</th><th>Cód. prov.</th><th>Descripción</th><th>SKU WC</th><th>Cant.</th><th>Stock</th><th>Acción</th></tr></thead><tbody>'+items_html+'</tbody></table>';
       })
       .catch(function(){ detail.textContent = 'Error cargando detalle'; });
   }

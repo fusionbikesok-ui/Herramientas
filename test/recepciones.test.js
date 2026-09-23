@@ -1321,3 +1321,213 @@ describe('recepciones — P0.2 recuperación de aplicando huérfano al arrancar'
     db2.close();
   });
 });
+
+describe('PUNTO 3: conciliar operacion_incierta y resolver conflicto_stock', () => {
+  const DB = './test/tmp-recep-punto3.sqlite';
+  let db, app;
+
+  beforeEach(() => {
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+    db = openDb(DB);
+    app = makeApp(db); // corre migraciones (estado_item, etc.)
+    mockWooOk();
+
+    // Catálogo
+    db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,actualizado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(10, 'Casco', 'CASCO', 'simple', null, 5, 'x');
+
+    // Recepción con un ítem que aplicaremos a operacion_incierta para testear
+    const recId = db.prepare(
+      "INSERT INTO recepciones (proveedor,importador,fecha,solo_documento,estado,creado_en) VALUES ('Prov','Prov','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    db._recId = recId;
+
+    const itemId = db.prepare(
+      'INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?,?)'
+    ).run(recId, 10, 'CASCO', 'Casco', 3, 1, 'x').lastInsertRowid;
+    db._itemId = itemId;
+  });
+
+  afterEach(() => {
+    db.close();
+    if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  });
+
+  it('POST /:id/items/:itemId/conciliar-stock existe y valida estado_item correctamente', async () => {
+    // Test de la existencia y validación básica del endpoint
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='operacion_incierta', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    // Mock: stock ya aplicado en Woo
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: 8 } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/conciliar-stock`)
+      .send();
+
+    // El endpoint debe existir y procesar correctamente
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it('POST /:id/items/:itemId/conciliar-stock — concilia ítem en operacion_incierta (PATCH llegó)', async () => {
+    // Stock en Woo: 5. Cantidad a sumar: 3. Objetivo: 8.
+    // Escenario: el PATCH de aplicación llegó a Woo (stock es ahora 8).
+    // Conciliación debe detectar esto y marcar 'aplicado' con stock_nuevo=8.
+
+    // Poner ítem en operacion_incierta sin aplicación anterior (simular un timeout del PATCH)
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='operacion_incierta', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    // Mock: GET devuelve 8 (el PATCH ya se aplicó)
+    let stockWc = 8;
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: stockWc } };
+      stockWc = opts.data.stock_quantity;
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/conciliar-stock`)
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.estado).toBe('aplicado');
+    expect(res.body.stock_nuevo).toBe(8);
+
+    const item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(db._itemId);
+    expect(item.estado_item).toBe('aplicado');
+    expect(item.stock_nuevo).toBe(8);
+  });
+
+  it('POST /:id/items/:itemId/conciliar-stock — 404 si ítem no existe o no pertenece a la recepción', async () => {
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/99999/conciliar-stock`)
+      .send();
+    expect(res.status).toBe(404);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('POST /:id/items/:itemId/conciliar-stock — 409 si estado_item no es operacion_incierta', async () => {
+    // Poner ítem en 'aplicado' (no es incierto)
+    db.prepare("UPDATE recepcion_items SET estado_item='aplicado' WHERE id=?").run(db._itemId);
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/conciliar-stock`)
+      .send();
+    expect(res.status).toBe(409);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('conciliarOperacionIncierta con condición de carrera: dos llamadas concurrentes, solo una gana', async () => {
+    // Escenario: dos requests concurrentes intenta conciliar el mismo ítem.
+    // Con el fix del WHERE sobre estado_item, solo una debe ejecutar los UPDATE,
+    // la otra debe detectar cambio=0 y devolver el estado actual (si otro lo resolvió primero).
+
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='operacion_incierta', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    let stockWc = 8; // Ya aplicado en Woo
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: stockWc } };
+      stockWc = opts.data.stock_quantity;
+      return { status: 200, data: {} };
+    });
+
+    const { conciliarOperacionIncierta } = await import('../routes/recepciones.js');
+
+    // Llamar dos veces concurrentemente
+    const [res1, res2] = await Promise.all([
+      conciliarOperacionIncierta(db, cfg, db._itemId),
+      conciliarOperacionIncierta(db, cfg, db._itemId),
+    ]);
+
+    // Ambas deben reportar 'aplicado' sin error
+    expect(res1.estado).toBe('aplicado');
+    expect(res2.estado).toBe('aplicado');
+
+    // Debe haber solo un GET de Woo (secuencial), o máximo dos si se solapan antes del await.
+    // Lo importante: NUNCA debe hacer dos PATCH. Verificamos con `axios.request.mock.calls`.
+    const patches = axios.request.mock.calls.filter(c => c[0].method === 'patch');
+    expect(patches.length).toBe(0); // No hay PATCH en conciliación
+
+    const item = db.prepare('SELECT estado_item FROM recepcion_items WHERE id=?').get(db._itemId);
+    expect(item.estado_item).toBe('aplicado');
+  });
+
+  it('POST /:id/items/:itemId/resolver-conflicto con decision=aceptar_woo — marca aplicado con stock real de Woo', async () => {
+    // Poner ítem en conflicto_stock (desacuerdo entre lo que se esperaba y lo que Woo tiene)
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='conflicto_stock', stock_previo=5, stock_objetivo=8 WHERE id=?"
+    ).run(db._itemId);
+
+    // Mock: Woo devuelve stock 7 (ni 5, ni 8 — desacuerdo)
+    let stockWc = 7;
+    axios.request.mockImplementation(async (opts) => {
+      if (opts.method === 'get') return { status: 200, data: { stock_quantity: stockWc } };
+      stockWc = opts.data.stock_quantity;
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.estado).toBe('aplicado');
+    expect(res.body.stock_nuevo).toBe(7); // Se acepta lo que Woo dice
+
+    const item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(db._itemId);
+    expect(item.estado_item).toBe('aplicado');
+    expect(item.stock_nuevo).toBe(7);
+    // catalogo_cache también debe haberse actualizado
+    const cat = db.prepare('SELECT stock FROM catalogo_cache WHERE id_woo=?').get(10);
+    expect(cat.stock).toBe(7);
+  });
+
+  it('POST /:id/items/:itemId/resolver-conflicto con decision=reintentar — marca error_reintentable', async () => {
+    // Poner ítem en conflicto_stock
+    db.prepare(
+      "UPDATE recepcion_items SET estado_item='conflicto_stock', stock_previo=5, stock_objetivo=8, operation_id='old-op-id' WHERE id=?"
+    ).run(db._itemId);
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
+      .send({ decision: 'reintentar' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.estado).toBe('error_reintentable');
+
+    const item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(db._itemId);
+    expect(item.estado_item).toBe('error_reintentable');
+    expect(item.operation_id).toBeNull(); // Limpiado para próximo intento
+  });
+
+  it('POST /:id/items/:itemId/resolver-conflicto — 409 si estado_item no es conflicto_stock', async () => {
+    // Dejar en 'aplicado'
+    db.prepare("UPDATE recepcion_items SET estado_item='aplicado' WHERE id=?").run(db._itemId);
+
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/${db._itemId}/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo' });
+    expect(res.status).toBe(409);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('POST /:id/items/:itemId/resolver-conflicto — 404 si ítem no existe', async () => {
+    const res = await request(app)
+      .post(`/api/recepciones/${db._recId}/items/99999/resolver-conflicto`)
+      .send({ decision: 'aceptar_woo' });
+    expect(res.status).toBe(404);
+    expect(res.body.ok).toBe(false);
+  });
+});

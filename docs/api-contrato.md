@@ -3343,3 +3343,80 @@ Todas las columnas retornadas son obligatorias y exactamente éstas (no agregar 
 - En caso de empate de relevancia, ordena por id_woo ascendente.
 
 Fail-open: si la búsqueda no tiene coincidencias, devuelve `{ ok: true, data: [] }` sin error.
+
+### POST /api/recepciones/:id/items/:itemId/conciliar-stock (PUNTO 3)
+Concilia un ítem en estado `operacion_incierta` leyendo el stock real de WooCommerce.
+Resuelve la incertidumbre tras un timeout del PATCH de stock: si el stock en Woo coincide
+con lo esperado (`stock_objetivo`), marca `aplicado`; si difiere, marca `conflicto_stock`
+para que un humano lo resuelva.
+
+**Validación:**
+- El ítem debe existir y pertenecer a la recepción (mismo patrón que `POST .../resolver`).
+- Status 404 si el ítem no existe o no pertenece a la recepción.
+- Status 409 si el estado_item no es `operacion_incierta`.
+- Atomicidad contra concurrencia: si otro request ya concilió el ítem entre el leer y el
+  actualizar, esta llamada devuelve el estado actual (idempotencia correcta, no duplica).
+
+**Request:**
+```json
+{}
+```
+(body vacío)
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "estado": "aplicado" | "conflicto_stock",
+  "stock_nuevo": <número> | null
+}
+```
+
+- `estado`: resultado de la conciliación (`aplicado` si el stock en Woo coincidió con
+  `stock_objetivo`, o `conflicto_stock` si hay desacuerdo).
+- `stock_nuevo`: el valor de stock que se registró (presente si `estado='aplicado'`, null si
+  conflicto que requiere intervención manual).
+
+**Comportamiento fail-closed:**
+- Si WooCommerce no devuelve `stock_quantity` válido, marca `conflicto_stock` (no reintentar
+  a ciegas asumiendo "no llegó").
+- Si hay un error de red/timeout al consultar Woo, la excepción se propaga como 502.
+
+### POST /api/recepciones/:id/items/:itemId/resolver-conflicto (PUNTO 3)
+Resuelve un ítem en estado `conflicto_stock` — un desacuerdo entre el stock esperado
+y el que WooCommerce realmente tiene. El operador elige: aceptar el stock actual de Woo
+como definitivo, o marcar para reintento limpio desde cero.
+
+**Validación:**
+- El ítem debe existir y pertenecer a la recepción.
+- Status 404 si el ítem no existe o no pertenece a la recepción.
+- Status 409 si el estado_item no es `conflicto_stock`.
+- Status 400 si `decision` no es válido.
+- Atomicidad: si otro request ya resolvió el ítem, devuelve el estado actual sin duplicar.
+
+**Request:**
+```json
+{
+  "decision": "aceptar_woo" | "reintentar"
+}
+```
+
+- `decision`:
+  - `"aceptar_woo"`: consulta el stock real de WooCommerce AHORA (refresco), lo marca
+    como `aplicado` (`stock_nuevo=<stock real>`), y actualiza `catalogo_cache.stock`.
+    Fallback: si Woo no devuelve `stock_quantity` válido, lanza excepción (fail-closed).
+  - `"reintentar"`: marca el ítem como `error_reintentable` y limpia `operation_id`
+    para un intento limpio en la próxima confirmación de recepción (no hace consultas a Woo).
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "estado": "aplicado" | "error_reintentable",
+  "stock_nuevo": <número> | null
+}
+```
+
+- `estado`: resultado de la resolución.
+- `stock_nuevo`: presente si `estado='aplicado'` (el stock aceptado de Woo), null si
+  `error_reintentable`.
