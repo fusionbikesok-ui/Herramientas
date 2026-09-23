@@ -915,6 +915,73 @@ export function recepcionesRouter(db, cfg) {
     res.json({ ok: true, id, aliases_no_aprendidos: aliasesNoAprendidos });
   });
 
+  // Reconstruir respuesta idempotente cuando una recepción ya está completamente confirmada
+  function reconstruirConfirmacionIdempotente(id, estadoRec, soloDoc) {
+    const rec = db.prepare('SELECT confirmado_en FROM recepciones WHERE id=?').get(id);
+
+    // Contar aplicados y errores solo si NO es solo_documento (igual que ejecución original)
+    let aplicados = 0;
+    let errores = 0;
+    if (!soloDoc) {
+      const aplicadosResult = db.prepare(
+        'SELECT COUNT(*) as cnt FROM recepcion_items WHERE recepcion_id=? AND estado_item=\'aplicado\''
+      ).get(id);
+      aplicados = aplicadosResult?.cnt || 0;
+
+      // Contar errores: items en estados terminales de error
+      const erroresResult = db.prepare(
+        `SELECT COUNT(*) as cnt FROM recepcion_items WHERE recepcion_id=?
+         AND estado_item IN ('error_reintentable','operacion_incierta','conflicto_stock')`
+      ).get(id);
+      errores = erroresResult?.cnt || 0;
+    }
+
+    // Pendientes: reutilizar la misma query del código principal (línea ~1016-1021)
+    const pendientes = soloDoc ? [] : db.prepare(`
+      SELECT id, id_woo, sku, nombre_doc, codigo_proveedor, cantidad, estado_item, error_wc
+      FROM recepcion_items
+      WHERE recepcion_id=? AND estado_item IN ('sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock')
+      ORDER BY id
+    `).all(id);
+    const sin_match = pendientes.filter(p => p.estado_item === 'sin_match').length;
+
+    // Reconstruir resultados: solo de los items que se aplicaron exitosamente
+    const resultados = [];
+    if (!soloDoc) {
+      const itemsAplicados = db.prepare(
+        'SELECT id, id_woo, sku, nombre_doc, alta_operation_id, stock_previo, stock_nuevo FROM recepcion_items WHERE recepcion_id=? AND estado_item=\'aplicado\' ORDER BY id'
+      ).all(id);
+      for (const it of itemsAplicados) {
+        // Determinar alta_borrador igual que en el código principal (línea ~951-953)
+        const altaBorrador = it.alta_operation_id && db.prepare(
+          'SELECT 1 FROM recepcion_altas_woo WHERE operation_id=? AND estado=\'creado\' AND id_woo=?'
+        ).get(it.alta_operation_id, it.id_woo) ? true : false;
+        resultados.push({
+          sku: it.sku,
+          nombre: it.nombre_doc,
+          ok: true,
+          alta_borrador: altaBorrador,  // Reconstruir desde recepcion_altas_woo igual que original
+          stock_previo: it.stock_previo,    // Persistido en línea 105
+          stock_nuevo: it.stock_nuevo       // Persistido en línea 143
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      estado: estadoRec,
+      aplicados,
+      errores,
+      sin_match,
+      resultados,
+      pendientes,
+      confirmado_en: rec.confirmado_en,
+      solo_documento: soloDoc === 1,
+      sync_ml: [],  // No se re-sincronizó
+      replay: true  // Marca que es una reconstrucción idempotente, no una ejecución nueva
+    };
+  }
+
   // Confirma una recepción: actualiza stock en WooCommerce ítem a ítem
   router.post('/:id/confirmar', async (req, res) => {
     const id = parseInt(req.params.id);
@@ -925,9 +992,16 @@ export function recepcionesRouter(db, cfg) {
     ).run(id);
 
     if (lock.changes === 0) {
-      const rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(id);
+      const rec = db.prepare('SELECT estado, solo_documento FROM recepciones WHERE id=?').get(id);
       if (!rec) return res.status(404).json({ ok: false, error: 'no encontrada' });
-      return res.status(400).json({ ok: false, error: rec.estado === 'confirmada' ? 'ya confirmada' : 'ya en proceso' });
+
+      // PUNTO 5: Idempotencia — si ya está completamente confirmada (sin pendientes), reconstruir respuesta en lugar de error
+      if (rec.estado === 'confirmada') {
+        return res.json(reconstruirConfirmacionIdempotente(id, rec.estado, rec.solo_documento));
+      }
+
+      // Estado 'procesando' u otro: devolver error (confirmación en curso o no reintentable)
+      return res.status(400).json({ ok: false, error: rec.estado === 'procesando' ? 'ya en proceso' : 'ya confirmada con pendientes' });
     }
 
     const recMeta = db.prepare('SELECT pedido_id, solo_documento FROM recepciones WHERE id=?').get(id);

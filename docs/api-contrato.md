@@ -3483,3 +3483,38 @@ necesidad de pasos adicionales.
 
 La lógica es **atomic**: si otro request resuelve el último ítem entre el check y el UPDATE,
 no hay duplicados (el check ocurre dentro de la misma transacción).
+
+### POST /api/recepciones/:id/confirmar (comportamiento cambiado: idempotencia)
+
+**PUNTO 5 (2026-09-23): idempotencia para confirmaciones ya completadas**
+
+Cuando una recepción ya está en estado `confirmada` (completamente procesada, sin pendientes),
+un reintento de `/confirmar` (ej. doble click, timeout de red con reintento automático) devuelve
+ahora 200 con la respuesta reconstruida, en lugar de 400 `'ya confirmada'`. Patrón igual al de
+`aplicarStockItemInterno` línea ~53-60: si la acción YA se ejecutó exitosamente, devolver el
+resultado conocido, no un error.
+
+**Contrato:**
+- Si la recepción ya está en estado `confirmada`:
+  - Status 200.
+  - Response: `{ "ok": true, "estado": "confirmada", "aplicados": N, "errores": 0,
+    "sin_match": 0, "resultados": [...], "pendientes": [], "confirmado_en": "<ISO grabado>",
+    "solo_documento": <bool>, "sync_ml": [], "replay": true }`.
+  - `confirmado_en` es el timestamp guardado en la BD (no uno nuevo).
+  - `sync_ml` es array vacío (`[]`) — no se re-sincronizó.
+  - `replay: true` indica que es una reconstrucción idempotente, no una ejecución nueva.
+  - `stock_previo`/`stock_nuevo` en `resultados` vienen como `null` (no se persistieron
+    originalmente, desconocidos en replay).
+  - `alta_borrador` se reconstruye consultando `recepcion_altas_woo` (mismo patrón que en
+    ejecución normal).
+
+- Si la recepción está en estado `confirmada_con_pendientes`:
+  - Se reintenta el procesamiento normal (algunos ítems en `error_reintentable`, etc.,
+    siguen siendo reintentables). No es una reconstrucción: produce nuevos `resultados`,
+    posible nuevo `sync_ml`, etc.
+
+- Si la recepción está en estado `procesando`:
+  - Status 400. El confirmar está en curso, no se puede reconstruir.
+
+- Si no existe:
+  - Status 404 (sin cambios).

@@ -171,6 +171,45 @@ describe('recepciones — confirmar (esquema actual)', () => {
     expect(resultado.sku).toBe('PROD-CREADO');
     expect(resultado.alta_borrador).toBe(true);
   });
+
+  it('PUNTO 5: /confirmar es idempotente — segunda confirmación reconstruye la respuesta sin error', async () => {
+    // Crear una recepción limpia (sin ítems que fallen) para que el estado final sea 'confirmada'
+    const cleanRecId = db.prepare(
+      "INSERT INTO recepciones (proveedor,importador,fecha,solo_documento,estado,creado_en) VALUES ('Prov','Prov','2026-07-16',0,'borrador','x')"
+    ).run().lastInsertRowid;
+    db.prepare('INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(cleanRecId, 10, 'CASCO', 'Casco', 2, 1, 'x');   // A => aplicado
+    db.prepare('INSERT INTO recepcion_items (recepcion_id,id_woo,sku,nombre_doc,cantidad,recibido,creado_en) VALUES (?,?,?,?,?,?,?)')
+      .run(cleanRecId, 501, 'REM-M', 'Remera M', 1, 1, 'x'); // B => aplicado
+
+    // Primera confirmación: debe devolver 200 con estado 'confirmada' (todo ok, sin errores)
+    const firstRes = await request(app).post(`/api/recepciones/${cleanRecId}/confirmar`).send();
+    expect(firstRes.status).toBe(200);
+    expect(firstRes.body.ok).toBe(true);
+    expect(firstRes.body.estado).toBe('confirmada'); // SIN pendientes, porque todo se aplicó ok
+    expect(firstRes.body.aplicados).toBe(2);
+    expect(firstRes.body.errores).toBe(0);
+    expect(firstRes.body.sin_match).toBe(0);
+    expect(firstRes.body.pendientes).toHaveLength(0);
+    const firstConfirmTime = firstRes.body.confirmado_en;
+    expect(firstConfirmTime).toBeTruthy();
+
+    // Segunda confirmación: idempotencia
+    // Hoy falla con 400 "ya confirmada", pero debería devolver 200 con el mismo resultado reconstruido
+    const secondRes = await request(app).post(`/api/recepciones/${cleanRecId}/confirmar`).send();
+
+    // Esperado: status 200 (no error), resultado reconstruido
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.body.ok).toBe(true);
+    expect(secondRes.body.estado).toBe('confirmada');
+    expect(secondRes.body.aplicados).toBe(2); // reconstruido: mismo conteo
+    expect(secondRes.body.errores).toBe(0);
+    expect(secondRes.body.sin_match).toBe(0);
+    expect(secondRes.body.confirmado_en).toBe(firstConfirmTime); // la misma que quedó grabada
+    expect(secondRes.body.pendientes).toHaveLength(0);
+    expect(secondRes.body.replay).toBe(true); // marca que es una reconstrucción, no una ejecución nueva
+    expect(secondRes.body.sync_ml).toEqual([]); // no se sincronizó de nuevo (es replay)
+  });
 });
 
 describe('recepciones — solo_documento no genera pendientes ni toca WC', () => {
