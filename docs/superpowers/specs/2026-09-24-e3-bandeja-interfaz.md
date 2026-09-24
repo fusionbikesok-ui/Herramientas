@@ -7,7 +7,7 @@
 - investigación propia;
 - una segunda investigación con Codex (`/tmp/claude-0/codex-ui-bandeja.txt`).
 
-**Estado:** es un borrador. Los puntos marcados **[José]** esperan su decisión.
+**Estado:** aprobado. José decidió el 2026-09-24: deshacer lo propio lo puede cualquiera, y la pantalla avanza en el acto con el guardado en segundo plano.
 
 ## 1. Qué es la pantalla
 
@@ -133,12 +133,18 @@ Todo se puede hacer sin mouse, y con mouse todo sigue igual.
   - la decisión se guarda en segundo plano con su `Idempotency-Key`;
   - un indicador muestra «guardando / guardado»;
   - si falla o hay un 409, un aviso **persistente**, no un toast que se va, lleva de vuelta al caso con la elección conservada;
-  - nunca se muestra «guardado» antes de la respuesta del servidor. **[José]** La alternativa es esperar la respuesta, unos 200 ms, antes de avanzar. Es más simple y sin sorpresas, pero más lenta en 5.300 casos.
+  - nunca se muestra «guardado» antes de la respuesta del servidor. **Decidido por José:** avanzar en el acto, con el guardado en segundo plano.
 - **Deshacer en vez de confirmar:**
   - elegir, omitir y «no existe» se aplican sin diálogo, y durante 10 s se pueden deshacer (`z` o el botón del aviso);
   - deshacer genera una **decisión compensatoria**, así que nada se borra (append-only);
   - revertir decisiones viejas o ajenas sigue siendo sólo del admin, con diálogo y motivo obligatorio.
-  - **[José]** El plan hoy dice que sólo el admin revierte. Para que «deshacer» sirva, cualquier operador tendría que poder revertir **su propia** última decisión dentro de los 10 s y mientras nadie haya tocado el caso después. Es un cambio chico en `decidirCaso` (T3).
+  - **Decidido por José: cualquier operador deshace lo propio.** El servidor acepta `revierte` sin ser admin sólo si se cumplen las cuatro condiciones:
+    1. la decisión revertida es la vigente;
+    2. su `actor` es el mismo que pide;
+    3. tiene menos de 60 s (tolerancia del servidor para el guardado en segundo plano; la pantalla ofrece 10 s);
+    4. la versión del caso es la que dejó esa decisión, o sea que nadie lo tocó después.
+
+    Todo lo demás sigue siendo sólo del admin.
 - **Conflicto 409:** se muestra «Este caso cambió mientras lo revisabas; tu elección se conserva». La matriz se muestra actualizada, con los cambios marcados, y hay un botón «aplicar mi decisión sobre la versión nueva». Nunca se sobrescribe automáticamente.
 - **Estados de la pantalla:** cargando (esqueleto del mismo tamaño, sin saltos), vacío («no quedan casos en este filtro»), error con reintento y sin conexión.
 

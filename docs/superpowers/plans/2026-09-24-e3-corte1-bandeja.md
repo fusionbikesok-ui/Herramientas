@@ -415,3 +415,22 @@ Estas enmiendas **prevalecen** sobre el texto de las tareas.
   - `color_ok` y `talle_ok`.
 
   Se compara el top-3 **y** los campos de contradicción de cada candidato.
+
+## Enmienda de interfaz (2026-09-24, aprobada por José)
+
+La pantalla sigue `docs/superpowers/specs/2026-09-24-e3-bandeja-interfaz.md`, que prevalece sobre la Tarea 6 en cuanto a la pantalla y agrega:
+
+- **T3, deshacer lo propio:**
+  - `decidirCaso` acepta `revierte` sin admin si la decisión revertida es la vigente, tiene el mismo `actor`, fue creada hace menos de 60 s (reloj del servidor) y la versión del caso es igual a su `resultado.version`.
+  - Si no cumple: `solo_admin`.
+  - Tests: deshacer lo propio a los 5 s → ok; a los 61 s → `solo_admin`; lo de otro → `solo_admin`; con el caso tocado después → `solo_admin`.
+- **T5, lo que la API devuelve:**
+  - de cada lado (la publicación y cada candidato), todos los atributos normalizados, la marca por atributo (`coincide`/`difiere`/`falta`/`equivalente`), la foto, el precio y el stock;
+  - en el listado, `next_cursor` y el id del caso siguiente, para precargarlo;
+  - la búsqueda de variantes devuelve lo mismo que un candidato.
+- **T6:**
+  - pantalla intrínseca, sin `@media` para la maquetación, sin cortes de texto;
+  - teclado según §4 de la spec de interfaz;
+  - avance en el acto con guardado en segundo plano y aviso persistente ante un error o un 409;
+  - deshacer con `z` durante 10 s.
+  - La verificación es el barrido de 320 a 3840 px, el zoom al 400 %, el espaciado de texto y el recorrido sólo con teclado. Reemplaza a 390/768/1440.
