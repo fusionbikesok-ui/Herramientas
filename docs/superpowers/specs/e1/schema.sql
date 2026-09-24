@@ -904,6 +904,11 @@ CREATE TABLE catalog.identity_cases (
   cerrado_en      timestamptz,
   motivo_cierre   text,
   model_id        uuid REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
+  -- Identidad E3 (0020): versión optimista para decidirCaso (409 si no coincide) y el estado de la
+  -- máquina de estados de la bandeja (spec E3 §8).
+  version         int NOT NULL DEFAULT 1,
+  estado          text NOT NULL DEFAULT 'actionable' CHECK (estado IN
+                    ('unclassified','actionable','decided','verified','parked','intervention','conflict','archived')),
   CONSTRAINT identity_cases_cierre_check CHECK ((cerrado_en IS NULL) = (motivo_cierre IS NULL)),
   -- Todo caso apunta a algo concreto: sin objeto no hay nada que revisar.
   CONSTRAINT identity_cases_objeto_check CHECK (variant_id IS NOT NULL OR representation_id IS NOT NULL OR model_id IS NOT NULL)
@@ -921,6 +926,90 @@ CREATE UNIQUE INDEX identity_cases_un_abierto_modelo
   ON catalog.identity_cases (model_id, tipo) WHERE cerrado_en IS NULL AND model_id IS NOT NULL;
 CREATE INDEX identity_cases_abiertos
   ON catalog.identity_cases (company_id, tipo, prioridad) WHERE cerrado_en IS NULL;
+
+-- ───────────────────────────── decisiones de identidad (E3 corte 1, 0020) ─────────────────────────────
+-- Append-only por diseño: la única historia de "quién decidió qué" tiene que quedar completa, nunca
+-- reescrita. El rol de la app pierde UPDATE y DELETE sobre esta tabla puntualmente (REVOKE más abajo);
+-- la única columna que cambia después del INSERT es `superada_en`, y sólo la escribe el trigger
+-- SECURITY DEFINER de acá abajo, nunca la app directamente.
+--
+-- El CHECK ata `origen` a `efecto` (humano→aplicar, auto_sku→sombra) porque en este corte no existe
+-- auto-vínculo aplicado (D2 del diseño E3): la base lo hace imposible en vez de confiar en que el
+-- código nunca lo intente. El corte 3 reemplaza este CHECK cuando el canario habilite auto_sku/aplicar.
+CREATE TABLE catalog.identity_decisions (
+  id uuid PRIMARY KEY DEFAULT uuidv7(),
+  company_id uuid NOT NULL REFERENCES core.companies(id) ON DELETE RESTRICT,
+  case_id uuid REFERENCES catalog.identity_cases(id) ON DELETE RESTRICT,
+  channel_account_id uuid NOT NULL REFERENCES core.channel_accounts(id) ON DELETE RESTRICT,
+  recurso text NOT NULL, variacion_normalizada text NOT NULL DEFAULT '',
+  eleccion text NOT NULL CHECK (eleccion IN ('vincular','omitir','mantener_omision','sin_candidato')),
+  variant_id uuid REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
+  origen text NOT NULL CHECK (origen IN ('humano','auto_sku')),
+  actor text NOT NULL, motivo text,
+  efecto text NOT NULL CHECK (efecto IN ('sombra','aplicar')),
+  engine_version text, hash_payload_ml text, expected_version int,
+  idempotency_key text UNIQUE, hash_peticion text,
+  supersede_a uuid REFERENCES catalog.identity_decisions(id),
+  superada_en timestamptz,            -- la única columna que cambia, y sólo la escribe un trigger al superar
+  creado_en timestamptz NOT NULL DEFAULT now(),
+  CHECK ((eleccion = 'vincular') = (variant_id IS NOT NULL)),
+  CHECK (origen <> 'humano' OR efecto = 'aplicar'),
+  CHECK (origen <> 'auto_sku' OR efecto = 'sombra')   -- el corte 3 lo reemplaza
+);
+-- Una decisión vigente por clave (canal, recurso, variación) y efecto: humana (aplicar) y auto_sku
+-- (sombra) sobre la misma publicación conviven sin chocar, son dos anotaciones distintas.
+CREATE UNIQUE INDEX identity_decisions_una_vigente
+  ON catalog.identity_decisions (channel_account_id, recurso, variacion_normalizada, efecto)
+  WHERE superada_en IS NULL;
+CREATE INDEX identity_decisions_caso ON catalog.identity_decisions (case_id, creado_en DESC);
+
+-- Puntual sobre esta tabla: catalog ya tiene GRANT UPDATE de esquema completo desde la 0013 y no hay
+-- forma de revocarlo sólo para esta fila sin REVOKE explícito.
+REVOKE UPDATE, DELETE ON catalog.identity_decisions FROM plataforma_app;
+
+-- BEFORE INSERT y no AFTER: el UNIQUE parcial de arriba se evalúa contra el estado de la tabla en el
+-- momento del INSERT. Si se marcara la anterior superada DESPUÉS de insertar la nueva, las dos filas
+-- coexistirían con `superada_en IS NULL` en el instante de la evaluación del índice y el propio INSERT
+-- violaría el UNIQUE que se supone que este trigger evita.
+CREATE FUNCTION catalog.identity_decisions_superar_anterior() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = catalog AS $$
+BEGIN
+  IF NEW.supersede_a IS NOT NULL THEN
+    UPDATE catalog.identity_decisions SET superada_en = now()
+     WHERE id = NEW.supersede_a AND superada_en IS NULL;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER identity_decisions_superar_anterior BEFORE INSERT ON catalog.identity_decisions
+  FOR EACH ROW EXECUTE FUNCTION catalog.identity_decisions_superar_anterior();
+
+-- ───────────────────────────── candidatos calculados por el motor (0020) ─────────────────────────────
+-- Se retienen por corrida (run_id): la bandeja siempre muestra la última, pero no se pisan las viejas,
+-- así queda trazado qué vio el motor en cada vuelta (calibración de la tarea 7 de E3).
+CREATE TABLE catalog.identity_candidates (
+  id uuid PRIMARY KEY DEFAULT uuidv7(),
+  case_id uuid NOT NULL REFERENCES catalog.identity_cases(id) ON DELETE RESTRICT,
+  run_id uuid NOT NULL,
+  variant_id uuid NOT NULL REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
+  rank int NOT NULL CHECK (rank > 0),
+  puntaje double precision NOT NULL,
+  explicacion jsonb NOT NULL DEFAULT '{}'::jsonb,
+  fuentes text[] NOT NULL DEFAULT '{}',
+  engine_version text NOT NULL,
+  creado_en timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX identity_candidates_caso ON catalog.identity_candidates (case_id, creado_en DESC);
+
+-- ───────────────────────────── evidencia releída antes de auto-vincular (D4, 0020) ─────────────────────────────
+CREATE TABLE catalog.identity_evidence (
+  id uuid PRIMARY KEY DEFAULT uuidv7(),
+  case_id uuid NOT NULL REFERENCES catalog.identity_cases(id) ON DELETE RESTRICT,
+  fuente text NOT NULL CHECK (fuente IN ('ml','woo','plataforma')),
+  observado_en timestamptz NOT NULL DEFAULT now(),
+  hash text,
+  campos jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX identity_evidence_caso ON catalog.identity_evidence (case_id, observado_en DESC);
 
 -- ───────────────────────────── checkpoint del bootstrap ─────────────────────────────
 -- Una corrida por cuenta y tópico, con la página ya confirmada en disco: si el proceso se muere en la
