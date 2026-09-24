@@ -203,7 +203,40 @@
   --role-candidate-bg:  var(--chip-on-bg);
   --role-candidate-bd:  var(--chip-on-bd);
   --role-candidate-txt: var(--chip-on-txt);
+
+  /* Bandeja de identidad (E3) — marcas de comparación por atributo. Alias sobre colores
+     existentes; cada marca SIEMPRE lleva símbolo + texto (WCAG 1.4.1). Ver
+     docs/superpowers/specs/2026-09-24-e3-bandeja-visual-ui.md. */
+  --mk-ok:      var(--success);   /* ✓ coincide: se atenúa, no compite */
+  --mk-diff:    var(--critical);  /* ≠ difiere: lo que salta */
+  --mk-diff-bg: var(--critical-bg);
+  --mk-diff-bd: var(--critical-bd);
+  --mk-miss:    var(--warning);   /* — falta */
+  --mk-miss-bg: var(--warning-bg);
+  --mk-miss-bd: var(--warning-bd);
+  --mk-eq:      var(--accent);    /* ≈ equivalente normalizado */
+  --mk-eq-bg:   var(--accent-dim);
+  --mk-eq-bd:   var(--blue-bd);
+  --sel-bd:     var(--accent);    /* candidato seleccionado */
+  --sel-bg:     var(--accent-dim);
+
+  /* Tipografía y espacio fluidos (sin @media) */
+  --fs-sm:  clamp(.8rem, .76rem + .2vw, .9rem);
+  --fs-md:  clamp(.9rem, .85rem + .25vw, 1.05rem);
+  --fs-lg:  clamp(1.1rem, 1rem + .6vw, 1.5rem);
+  --sp-1:   clamp(.25rem, .2rem + .2vw, .5rem);
+  --sp-2:   clamp(.5rem, .4rem + .4vw, 1rem);
+  --sp-3:   clamp(.75rem, .6rem + .8vw, 1.5rem);
+  --col-min: 14rem;  /* ancho mínimo intrínseco de una columna de la matriz */
 }
+
+/* Bandeja de identidad: marca de celda (símbolo + texto). Ver spec visual. */
+.mk { display: inline-flex; align-items: baseline; gap: .35em; font-size: var(--fs-sm); font-weight: 700; padding: .1em .5em; border-radius: var(--radius-pill); border: 1px solid currentColor; min-width: 0; overflow-wrap: anywhere; }
+.mk--ok   { color: var(--mk-ok);   background: transparent; border-color: transparent; font-weight: 500; }
+.mk--diff { color: var(--mk-diff); background: var(--mk-diff-bg); border-color: var(--mk-diff-bd); border-width: 2px; }
+.mk--miss { color: var(--mk-miss); background: var(--mk-miss-bg); border-color: var(--mk-miss-bd); border-style: dashed; }
+.mk--eq   { color: var(--mk-eq);   background: var(--mk-eq-bg);   border-color: var(--mk-eq-bd); }
+.sr-only-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--focus-color);

@@ -1,0 +1,297 @@
+/**
+ * public/bandeja-identidad/bandeja.css
+ * Estilos específicos para la Bandeja de identidad
+ */
+
+/* Marca de comparación (✓/≠/—/≈) */
+.mk {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  padding: 0.1em 0.5em;
+  border-radius: var(--radius-pill);
+  border: 1px solid currentColor;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.mk--ok {
+  color: var(--mk-ok);
+  background: transparent;
+  border-color: transparent;
+  font-weight: 500;
+}
+.mk--diff {
+  color: var(--mk-diff);
+  background: var(--mk-diff-bg);
+  border-color: var(--mk-diff-bd);
+  border-width: 2px;
+}
+.mk--miss {
+  color: var(--mk-miss);
+  background: var(--mk-miss-bg);
+  border-color: var(--mk-miss-bd);
+  border-style: dashed;
+}
+.mk--eq {
+  color: var(--mk-eq);
+  background: var(--mk-eq-bg);
+  border-color: var(--mk-eq-bd);
+}
+
+/* Estado "Cambió" (409) */
+.cambio-marcado {
+  border-left: 4px solid var(--mk-diff);
+  padding-left: calc(var(--sp-2) - 4px);
+  position: relative;
+}
+.cambio-marcado::before {
+  content: "Cambió";
+  display: inline-block;
+  font-size: var(--fs-sm);
+  color: var(--mk-diff);
+  font-weight: 700;
+  margin-right: 0.5em;
+}
+
+/* Foto con viewer */
+.foto-btn {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  cursor: pointer;
+  padding: 0;
+  min-height: var(--tap-min);
+  overflow: hidden;
+}
+.foto-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.foto-sin-disponible {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* Encabezado de candidato */
+.cand-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  flex-wrap: wrap;
+}
+.cand-rank {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-weight: 700;
+}
+.cand-titulo {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cand-sel {
+  display: none;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+.cand:has(input:checked) .cand-sel {
+  display: inline;
+}
+
+/* Banda de contradicción fuerte */
+.contradiccion-banda {
+  background: var(--warning-bg);
+  border-left: 6px solid var(--warning);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: var(--fs-sm);
+  color: var(--warning);
+  font-weight: 700;
+  margin-bottom: var(--sp-2);
+}
+
+/* Historial */
+.historial {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-2);
+  background: var(--surface2);
+  margin-top: var(--sp-2);
+}
+.historial-titulo {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: var(--sp-2);
+}
+.historial-item {
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.historial-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.historial-meta {
+  display: flex;
+  gap: var(--sp-1);
+  margin-bottom: 0.25em;
+  flex-wrap: wrap;
+}
+.historial-actor {
+  color: var(--accent);
+  font-weight: 600;
+}
+.historial-fecha {
+  color: var(--muted);
+}
+.historial-accion {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Evidencia */
+.evidencia {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-2);
+  background: var(--surface2);
+  margin-top: var(--sp-2);
+}
+.evidencia-titulo {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: var(--sp-2);
+}
+.evidencia-item {
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.evidencia-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.evidencia-fuente {
+  color: var(--accent);
+  font-weight: 600;
+  display: block;
+  margin-bottom: 0.25em;
+}
+.evidencia-fecha {
+  color: var(--muted);
+  display: block;
+  margin-bottom: 0.5em;
+}
+.evidencia-campos {
+  color: var(--text);
+}
+
+/* Región de estado (para anuncios) */
+.sr-only-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* Buscador de variantes (modo búsqueda) */
+.buscador-variantes {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  background: var(--surface);
+}
+.buscador-input {
+  width: 100%;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  min-height: var(--tap-min);
+}
+.buscador-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.resultados-busqueda {
+  margin-top: var(--sp-2);
+}
+.resultado-variante {
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: var(--sp-1);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.resultado-variante:hover, .resultado-variante:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface2);
+}
+
+/* Indicador de guardado */
+.indicador-guardado {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.indicador-guardado--guardando {
+  color: var(--accent);
+}
+.indicador-guardado--guardado {
+  color: var(--success);
+}
+.indicador-guardado--error {
+  color: var(--critical);
+}
+
+/* Sin preselección: ningún candidato marcado por defecto */
+.cand input[type="radio"]:not(:checked) ~ .cand-sel {
+  display: none;
+}
+
+/* Avisos persistentes (errores y estados que no se pierden solos) */
+.avisos { display: flex; flex-direction: column; gap: var(--sp-2); padding: 0 var(--sp-3); }
+.avisos:empty { display: none; }
+.aviso-persistente {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--radius);
+  background: var(--warning-bg); border: 2px solid var(--warning-bd);
+  overflow-wrap: anywhere;
+}
+.aviso-persistente .aviso-texto { flex: 1 1 16rem; min-inline-size: 0; }
+.aviso-persistente .btn { min-block-size: var(--tap-min); min-inline-size: var(--tap-min); }
+.caso-prioridad { color: var(--muted); font-size: var(--fs-sm); margin-block-start: 0.5em; }
+.sugerencia-sistema { color: var(--success); font-size: var(--fs-sm); margin: var(--sp-1) 0 0; }
+.valor, .valor-ml { overflow-wrap: anywhere; font-size: var(--fs-sm); }
+.valor-ml { color: var(--muted); }
+#banda { padding: var(--sp-1) var(--sp-3); font-size: var(--fs-sm); color: var(--muted); }

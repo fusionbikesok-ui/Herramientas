@@ -41,6 +41,7 @@
 - La App móvil se valida primero en iPhone; Android queda fuera hasta demanda concreta. Stock móvil usa tareas, movimientos y conteos, no edición absoluta directa.
 - Objetivos medibles: listas/filtros ≤2 s, feedback de escaneo <500 ms, preview/progreso de foto inmediato y confirmación objetivo ≤10 s; controles principales de una mano y al menos 44 px.
 - Guardia ML presenta intenciones separadas para resolver urgencias, investigar, corregir catálogo, auditar cobertura y revisar decisiones previas. La comparación muestra la ficha ML y candidatos Woo en paralelo, con estados de lectura y acciones diferenciados; no presupone que toda visita sea una vinculación.
+- Bandeja de identidad (`public/bandeja-identidad/`, E3): decidir avanza al instante y guarda en segundo plano (varias decisiones en vuelo, misma `Idempotency-Key` en cada reintento; sólo se reintenta red/5xx/429). «Guardado» sólo tras el 200. Deshacer (`z`, 10 s, una vez) espera al 200 porque el `revierte` necesita el `decision_id` y la versión devueltos. Los chips filtran por `grupo` (0–4) en la API. Sin preselección de candidato; el cliente nunca manda `actor` (lo pone el proxy desde la sesión). Errores = avisos persistentes `role=alert`, nunca `alert()`. Lógica pura en `logica.js` (testeada en `test/bandejaIdentidad-ui.test.js`).
 
 ## Cuándo actualizar
 

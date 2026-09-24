@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bandeja de identidad — FusionBikes</title>
+  <link rel="stylesheet" href="../lib/theme.css">
+  <link rel="stylesheet" href="bandeja.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-padding-block: 6rem; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    a { color: inherit; }
+    button, input, select, textarea { font: inherit; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+    .hidden { display: none !important; }
+
+    /* Topbar sticky */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(12, 15, 22, 0.92);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      height: 54px;
+    }
+    .topbar-title {
+      font-size: 0.9rem;
+      font-weight: 700;
+      flex: 1;
+      text-align: center;
+    }
+    .topbar-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      text-decoration: none;
+      padding: 8px;
+    }
+    .topbar-back:hover, .topbar-back:focus-visible {
+      color: var(--accent);
+    }
+
+    /* Chips de prioridad */
+    .chips-header {
+      position: sticky;
+      top: 54px;
+      z-index: 35;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: var(--sp-2);
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-1);
+    }
+    .chip-pri {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4em;
+      min-height: var(--tap-min);
+      padding: 0 var(--sp-2);
+      border-radius: var(--radius-pill);
+      min-width: 0;
+      overflow-wrap: anywhere;
+      background: var(--chip-bg);
+      border: 1px solid var(--chip-bd);
+      color: var(--chip-txt);
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .chip-pri:hover, .chip-pri:focus-visible {
+      border-color: var(--accent);
+    }
+    .chip-pri[aria-pressed="true"] {
+      background: var(--chip-on-bg);
+      border-color: var(--chip-on-bd);
+      color: var(--chip-on-txt);
+    }
+    .chip-pri[aria-pressed="true"]::before {
+      content: "✓";
+      margin-right: 0.2em;
+    }
+    .chip-pri--alert {
+      --chip-bg: var(--warning-bg);
+      --chip-bd: var(--warning-bd);
+      --chip-txt: var(--warning);
+    }
+
+    /* Contenedor principal */
+    .bandeja-wrap {
+      display: flex;
+      min-height: calc(100vh - 54px);
+      flex-direction: column;
+    }
+
+    /* Caso y estado */
+    .caso {
+      container: caso / inline-size;
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--sp-3);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-2);
+    }
+
+    /* Aviso de conflicto 409 */
+    .aviso-conflicto {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-2) var(--sp-3);
+      border-radius: var(--radius);
+      background: var(--warning-bg);
+      border: 2px solid var(--warning-bd);
+      border-inline-start: 6px solid var(--warning);
+      font-size: var(--fs-md);
+      color: var(--text);
+      role: alert;
+    }
+    .aviso-conflicto .btn {
+      min-height: var(--tap-min);
+      min-inline-size: var(--tap-min);
+    }
+
+    /* Encabezado del caso */
+    .caso-header {
+      padding: var(--sp-2) 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .caso-id {
+      font-size: var(--fs-sm);
+      color: var(--muted);
+    }
+    .caso-titulo {
+      font-size: var(--fs-lg);
+      font-weight: 700;
+      margin-top: 0.5em;
+    }
+
+    /* Matriz de comparación */
+    .matriz {
+      display: grid;
+      gap: var(--sp-1);
+      grid-template-columns:
+        minmax(min(8rem, 100%), 0.6fr)
+        repeat(auto-fit, minmax(min(var(--col-min), 100%), 1fr));
+    }
+    .matriz > * {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .fila {
+      display: contents;
+    }
+    .celda {
+      padding: var(--sp-2);
+      font-size: var(--fs-md);
+      line-height: 1.5;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .celda-etiqueta {
+      color: var(--muted);
+      font-size: var(--fs-sm);
+      padding: var(--sp-2);
+    }
+    .celda[data-col]::before { display: none; }
+    .sku {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+
+    /* En modo lista (<40rem) */
+    @container caso (max-width: 40rem) {
+      .matriz {
+        display: block;
+      }
+      .fila {
+        display: grid;
+        gap: var(--sp-1);
+        padding-block: var(--sp-2);
+        border-bottom: 1px solid var(--border);
+      }
+      .fila-encabezado {
+        display: none;
+      }
+      .celda[data-col]::before {
+        display: block;
+        content: attr(data-col);
+        color: var(--muted);
+        font-size: var(--fs-sm);
+      }
+      .celda {
+        padding: var(--sp-1);
+        border-radius: 0;
+        border: none;
+        background: transparent;
+      }
+    }
+
+    /* Candidatos (fieldset) */
+    .candidatos {
+      border: none;
+      padding: 0;
+      margin: var(--sp-2) 0 0;
+    }
+    .candidatos-legend {
+      font-size: var(--fs-md);
+      font-weight: 700;
+      padding: var(--sp-2) 0;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: var(--sp-2);
+    }
+
+    .cand {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--sp-2);
+      margin-bottom: var(--sp-2);
+      background: var(--surface);
+    }
+    .cand:has(input:checked) {
+      border: 2px solid var(--sel-bd);
+      background: var(--sel-bg);
+      padding: calc(var(--sp-2) - 0.5px);
+    }
+    .cand__sel {
+      display: none;
+      color: var(--accent);
+      font-size: var(--fs-sm);
+      font-weight: 700;
+    }
+    .cand:has(input:checked) .cand__sel {
+      display: inline;
+    }
+    .cand input[type="radio"] {
+      inline-size: var(--tap-min);
+      block-size: var(--tap-min);
+      margin-right: 0.5em;
+    }
+
+    /* Acciones */
+    .acciones {
+      display: grid;
+      gap: var(--sp-1);
+      margin-top: var(--sp-2);
+    }
+    .btn {
+      min-height: var(--tap-min);
+      padding: var(--sp-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .btn:hover, .btn:focus-visible {
+      border-color: var(--accent);
+      background: var(--surface2);
+    }
+    .btn--primary {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Estados */
+    .api-estado {
+      padding: var(--sp-2) var(--sp-3);
+      border-radius: var(--radius);
+      font-size: var(--fs-md);
+      text-align: center;
+    }
+    .api-estado--error {
+      background: var(--critical-bg);
+      border: 1px solid var(--critical-bd);
+      color: var(--critical);
+    }
+    .api-estado--vacio {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .btn-reintentar {
+      min-height: var(--tap-min);
+      border: 1px solid currentColor;
+      background: transparent;
+      color: inherit;
+      border-radius: var(--radius);
+      padding: var(--sp-2);
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    /* Aviso de deshacer (10s) */
+    .aviso-deshacer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface2);
+      border-top: 1px solid var(--border2);
+      border-bottom: 2px solid var(--border);
+      padding: var(--sp-2) var(--sp-3);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--sp-2);
+      font-size: var(--fs-md);
+      z-index: 50;
+    }
+    .aviso-deshacer--oculto {
+      display: none;
+    }
+    .aviso-deshacer-progreso {
+      flex: 1;
+      min-width: 100px;
+      height: 2px;
+      background: var(--progress-track);
+      border-radius: 1px;
+      overflow: hidden;
+    }
+    .aviso-deshacer-barra {
+      height: 100%;
+      background: var(--progress-fill);
+      width: 100%;
+      animation: deshacer-countdown 10s linear forwards;
+    }
+    @keyframes deshacer-countdown {
+      to { width: 0%; }
+    }
+    @media (prefers-reduced-motion) {
+      .aviso-deshacer-barra {
+        animation: none;
+      }
+    }
+
+    /* Diálogos */
+    dialog {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--surface);
+      color: var(--text);
+      max-inline-size: min(100% - 2rem, 48rem);
+      max-block-size: 90dvh;
+      overflow: auto;
+    }
+    dialog::backdrop {
+      background: var(--danger-veil);
+    }
+
+    /* Visor de foto */
+    .visor-foto-dialog:not([open]) {
+      display: none;
+    }
+    .visor-foto-dialog {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--sp-2);
+      padding: var(--sp-3);
+    }
+    .visor-foto-imagen {
+      max-inline-size: 100%;
+      max-block-size: 90dvh;
+      object-fit: contain;
+    }
+
+    /* Ayuda de atajos */
+    .ayuda-dialog {
+      padding: var(--sp-3);
+    }
+    .ayuda-tabla {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: var(--sp-2);
+    }
+    .ayuda-tabla th, .ayuda-tabla td {
+      padding: var(--sp-2);
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      min-height: var(--tap-min);
+    }
+    .ayuda-tabla kbd {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 0.25em 0.5em;
+      font-family: ui-monospace;
+      font-size: var(--fs-sm);
+      min-width: 44px;
+      text-align: center;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .interruptor-atajos {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      min-height: var(--tap-min);
+      margin-bottom: var(--sp-2);
+    }
+    .interruptor-atajos input[type="checkbox"] {
+      inline-size: var(--tap-min);
+      block-size: var(--tap-min);
+    }
+  </style>
+</head>
+<body>
+  <!-- Topbar -->
+  <div class="topbar">
+    <a href="../home/" class="topbar-back">← Inicio</a>
+    <div class="topbar-title">Bandeja de identidad</div>
+    <button type="button" class="topbar-btn" id="btn-ayuda" aria-label="Atajos (?)">?</button>
+  </div>
+
+  <!-- Chips de prioridad -->
+  <div class="chips-header" role="toolbar" aria-label="Filtros de prioridad">
+    <button type="button" class="chip-pri" id="chip-conflictos" data-filtro="conflictos" aria-pressed="false">
+      ⚠ Conflictos <span class="contador">0</span>
+    </button>
+    <button type="button" class="chip-pri" id="chip-d5" data-filtro="d5" aria-pressed="false">
+      D5 <span class="contador">0</span>
+    </button>
+    <button type="button" class="chip-pri" id="chip-sku-exacto" data-filtro="sku_exacto" aria-pressed="false">
+      SKU exacto <span class="contador">0</span>
+    </button>
+    <button type="button" class="chip-pri" id="chip-activas" data-filtro="activas_con_stock" aria-pressed="false">
+      Activas con stock <span class="contador">0</span>
+    </button>
+    <button type="button" class="chip-pri" id="chip-resto" data-filtro="resto" aria-pressed="false">
+      Resto <span class="contador">0</span>
+    </button>
+    <span class="chip-pri" id="chip-no-decidibles">
+      Sin publicación única: <span class="contador">0</span>
+    </span>
+  </div>
+
+  <!-- Contenedor principal -->
+  <div class="bandeja-wrap">
+    <div id="root" class="caso"></div>
+  </div>
+
+  <!-- Aviso de deshacer -->
+  <div class="aviso-deshacer aviso-deshacer--oculto" id="aviso-deshacer" role="status">
+    <span id="aviso-deshacer-texto">Vinculado a FB-123. Caso 12 de 340.</span>
+    <div class="aviso-deshacer-progreso">
+      <div class="aviso-deshacer-barra"></div>
+    </div>
+    <button type="button" class="btn" id="btn-deshacer-aviso" title="z">Deshacer (z)</button>
+  </div>
+
+  <!-- Diálogo: Visor de foto -->
+  <dialog id="visor-foto-dialog" class="visor-foto-dialog">
+    <button type="button" id="btn-cerrar-visor" class="btn" style="align-self: flex-end;">Cerrar (Esc)</button>
+    <h2 id="visor-titulo" style="font-size: var(--fs-md); margin-top: var(--sp-2);"></h2>
+    <img id="visor-imagen" src="" alt="" class="visor-foto-imagen">
+    <p id="visor-sku" class="sku" style="color: var(--muted); font-size: var(--fs-sm);"></p>
+  </dialog>
+
+  <!-- Diálogo: Ayuda -->
+  <dialog id="ayuda-dialog" class="ayuda-dialog">
+    <h1 style="font-size: var(--fs-lg); margin-bottom: var(--sp-2);">Atajos de teclado</h1>
+
+    <div class="interruptor-atajos">
+      <input type="checkbox" id="toggle-atajos" checked>
+      <label for="toggle-atajos">Atajos de una tecla: activados</label>
+    </div>
+
+    <table class="ayuda-tabla">
+      <thead>
+        <tr>
+          <th>Tecla</th>
+          <th>Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><kbd>j</kbd> / <kbd>↓</kbd></td>
+          <td>Siguiente caso</td>
+        </tr>
+        <tr>
+          <td><kbd>k</kbd> / <kbd>↑</kbd></td>
+          <td>Anterior caso</td>
+        </tr>
+        <tr>
+          <td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td>
+          <td>Seleccionar candidato</td>
+        </tr>
+        <tr>
+          <td><kbd>Enter</kbd></td>
+          <td>Vincular al seleccionado</td>
+        </tr>
+        <tr>
+          <td><kbd>s</kbd></td>
+          <td>Omitir</td>
+        </tr>
+        <tr>
+          <td><kbd>n</kbd></td>
+          <td>No existe en el catálogo</td>
+        </tr>
+        <tr>
+          <td><kbd>/</kbd></td>
+          <td>Buscar otra variante</td>
+        </tr>
+        <tr>
+          <td><kbd>d</kbd></td>
+          <td>Solo diferencias</td>
+        </tr>
+        <tr>
+          <td><kbd>f</kbd></td>
+          <td>Ampliar foto</td>
+        </tr>
+        <tr>
+          <td><kbd>z</kbd></td>
+          <td>Deshacer</td>
+        </tr>
+        <tr>
+          <td><kbd>h</kbd></td>
+          <td>Historial</td>
+        </tr>
+        <tr>
+          <td><kbd>?</kbd></td>
+          <td>Ayuda</td>
+        </tr>
+        <tr>
+          <td><kbd>Esc</kbd></td>
+          <td>Cerrar diálogos</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <button type="button" class="btn" id="btn-cerrar-ayuda" style="margin-top: var(--sp-3); width: 100%;">Cerrar</button>
+  </dialog>
+
+  <script src="../lib/api.js"></script>
+  <script src="logica.js"></script>
+  <script src="bandeja.js"></script>
+</body>
+</html>
