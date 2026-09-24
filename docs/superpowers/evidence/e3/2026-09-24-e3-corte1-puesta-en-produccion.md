@@ -20,3 +20,10 @@ Pendiente de configuración en el legado: `SOMBRA_PLATAFORMA_URL` y `SOMBRA_KEYR
 
 ## Deuda para el corte 3 (marcada por revisión)
 - Si el SKU observado deja de resolver (ninguna o varias), la `auto_sku` en sombra anterior sigue vigente. En sombra no daña; en el canario `vincularMl` la leería, así que la relectura D4 tiene que invalidarla o superarla.
+
+## Hallazgo del paso 3 (2026-09-24): título ML observado y deuda de las 492
+La primera corrida del motor en producción (18:42Z, 500 casos) guardó 0 candidatos: las representaciones vendibles de ML tienen `model_id` NULL y los tests sembraban lo contrario. El título observado de ML vive en un modelo `ml_*` (ml_simple / ml_clasico) al que se llega por (a) `model_id` propio si es ml_*, (b) el contenedor de ML con el mismo (cuenta, recurso), (c) la variante SÓLO si su modelo es ml_*; nunca `woo_*` (fuga de la verdad: el top-1 acertaría por construcción). Si (b) y (c) difieren, gana el contenedor. Código: `plataforma/src/identidad/modelo-ml.ts`; el motor loguea `codigo: sin_titulo_ml` por caso y un resumen por corrida (`sin_titulo_ml`, `contenedor_difiere_variante`, `fuente_titulo`).
+
+Cobertura medida en producción (sólo lectura), sobre los tipos que procesa el motor (4346 abiertos): sku_pendiente 2095/2095, sku_inexistente_en_woo 17/17, omitida_revisar 1731/2223 → 3843/4335 (89 %).
+
+**Deuda:** 492 casos `omitida_revisar` sin variante, sin contenedor y con `model_id` NULL no tienen ninguna fuente de título observado de ML; el motor los deja sin candidatos (`sin_titulo_ml`). Hay que revisar aparte cómo se proyectan (¿falta el contenedor? ¿publicaciones viejas?). El contador por corrida sirve para medirlos.

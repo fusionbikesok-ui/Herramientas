@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { decisionVigente } from './autoridad.ts';
 import { candidatosDe, construirWCIndex, ctDesdeApi, type IndiceWoo, type ItemMl, type ItemWoo } from './candidatos.ts';
+import { modeloMlDe } from './modelo-ml.ts';
 import { normalizarSku, skuUnico } from './sku.ts';
 import type { Consultable } from '../db/pool.ts';
 import { enTransaccion } from '../db/pool.ts';
@@ -32,8 +33,10 @@ interface CasoAbierto {
   id: string; company_id: string; variant_id: string | null; representation_id: string | null; tipo: string;
 }
 interface RepresentacionCaso {
-  id: string; channel_account_id: string; recurso: string; variacion_normalizada: string; sku_observado: string | null; model_id: string | null;
+  id: string; channel_account_id: string; recurso: string; variacion_normalizada: string; sku_observado: string | null; model_id: string | null; variant_id: string | null;
 }
+/** Contadores de una corrida (se loguean al final; el retorno de correrMotor no cambia). */
+interface Contadores { sinTituloMl: number; contenedorDifiereVariante: number; porFuente: Record<string, number> }
 
 /** Arma el índice del catálogo Woo (candidato universo) de una empresa, una sola vez por corrida. */
 async function indiceWoo(tx: Consultable, empresa: string): Promise<IndiceWoo> {
@@ -53,10 +56,13 @@ async function indiceWoo(tx: Consultable, empresa: string): Promise<IndiceWoo> {
 }
 
 /** El ItemMl de candidatosDe para una representación de ML: título propio + color/talle de model_attributes. */
-async function itemMlDe(tx: Consultable, rep: RepresentacionCaso): Promise<ItemMl | null> {
-  if (!rep.model_id) return null;
+async function itemMlDe(tx: Consultable, rep: RepresentacionCaso, cont: Contadores): Promise<ItemMl | null> {
+  const m = await modeloMlDe(tx, rep);
+  if (!m) return null;
+  cont.porFuente[m.fuente] = (cont.porFuente[m.fuente] ?? 0) + 1;
+  if (m.difiere) cont.contenedorDifiereVariante++;
   const modelo = (await tx.query<{ titulo: string }>(
-    'SELECT titulo FROM catalog.product_models WHERE id = $1', [rep.model_id])).rows[0];
+    'SELECT titulo FROM catalog.product_models WHERE id = $1', [m.modeloId])).rows[0];
   if (!modelo) return null;
   const atributos = (await tx.query<{ nombre_normalizado: string; valor: string }>(
     `SELECT nombre_normalizado, valor FROM catalog.model_attributes
@@ -68,19 +74,17 @@ async function itemMlDe(tx: Consultable, rep: RepresentacionCaso): Promise<ItemM
   return { ml_title: modelo.titulo, ml_es_variante: ct.colores.size > 0 || ct.talles.size > 0, ml_variations: '', _ct: ct };
 }
 
-/** La representación gobernante del caso (su modelo: el propio o, como en las publicaciones de ML de producción, el de su variante): la propia si la tiene, o la única de ML viva de su variante. */
+/** La representación gobernante del caso: la propia si la tiene, o la única de ML viva de su variante. */
 async function representacionDe(tx: Consultable, caso: CasoAbierto): Promise<RepresentacionCaso | null> {
   if (caso.representation_id) {
     return (await tx.query<RepresentacionCaso>(
-      `SELECT id, channel_account_id, recurso, variacion_normalizada, sku_observado,
-             COALESCE(model_id, (SELECT sv.model_id FROM catalog.sellable_variants sv WHERE sv.id = variant_id)) AS model_id
+      `SELECT id, channel_account_id, recurso, variacion_normalizada, sku_observado, model_id, variant_id
          FROM catalog.external_representations WHERE id = $1 AND canal = 'mercadolibre' AND archivado_en IS NULL`,
       [caso.representation_id])).rows[0] ?? null;
   }
   if (!caso.variant_id) return null;
   const reps = (await tx.query<RepresentacionCaso>(
-    `SELECT id, channel_account_id, recurso, variacion_normalizada, sku_observado,
-           COALESCE(model_id, (SELECT sv.model_id FROM catalog.sellable_variants sv WHERE sv.id = variant_id)) AS model_id
+    `SELECT id, channel_account_id, recurso, variacion_normalizada, sku_observado, model_id, variant_id
        FROM catalog.external_representations WHERE variant_id = $1 AND canal = 'mercadolibre' AND archivado_en IS NULL`,
     [caso.variant_id])).rows;
   return reps.length === 1 ? reps[0]! : null;
@@ -99,12 +103,12 @@ async function autoSkuVigente(tx: Consultable, cuenta: string, recurso: string, 
     [cuenta, recurso, variacion])).rows[0];
 }
 
-async function correrCaso(tx: Consultable, caso: CasoAbierto, empresa: string, indice: IndiceWoo, runId: string, log: Logger): Promise<{ autoSku: boolean }> {
+async function correrCaso(tx: Consultable, caso: CasoAbierto, empresa: string, indice: IndiceWoo, runId: string, log: Logger, cont: Contadores): Promise<{ autoSku: boolean }> {
   const rep = await representacionDe(tx, caso);
   if (!rep) return { autoSku: false }; // sin publicación viva que gobierne: nada que el motor pueda anotar hoy.
 
   // Paso 1: candidatos, siempre que haya con qué calcularlos (título propio).
-  const ml = await itemMlDe(tx, rep);
+  const ml = await itemMlDe(tx, rep, cont);
   if (ml) {
     const candidatos = candidatosDe(ml, [], indice, 3);
     if (candidatos.length) {
@@ -122,7 +126,8 @@ async function correrCaso(tx: Consultable, caso: CasoAbierto, empresa: string, i
       }
     }
   } else {
-    log.warn('identidad.motor: caso sin título propio (model_id ausente), sin candidatos', { caso: caso.id });
+    cont.sinTituloMl++;
+    log.warn('identidad.motor: sin_titulo_ml (ninguna fuente de título observado de ML), sin candidatos', { codigo: 'sin_titulo_ml', caso: caso.id, tipo: caso.tipo });
   }
 
   // Paso 2: auto-SKU en sombra.
@@ -170,10 +175,12 @@ export async function correrMotor(pool: pg.Pool, o: { empresa: string; limite: n
 
     const indice = await indiceWoo(tx, o.empresa);
     let autoSku = 0;
+    const cont: Contadores = { sinTituloMl: 0, contenedorDifiereVariante: 0, porFuente: {} };
     for (const caso of casos) {
-      const r = await correrCaso(tx, caso, o.empresa, indice, runId, o.log);
+      const r = await correrCaso(tx, caso, o.empresa, indice, runId, o.log, cont);
       if (r.autoSku) autoSku++;
     }
+    o.log.info('identidad.motor: resumen de la corrida', { casos: casos.length, sin_titulo_ml: cont.sinTituloMl, contenedor_difiere_variante: cont.contenedorDifiereVariante, fuente_titulo: cont.porFuente });
     return { casos: casos.length, autoSku };
   });
 }

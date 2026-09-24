@@ -133,6 +133,66 @@ describe('E3-MOTOR-01 correrMotor', () => {
     expect(filas).toEqual([{ variant_id: a, vigente: false }, { variant_id: b, vigente: true }]);
   });
 
+  describe('título ML observado (fuente y no-fuga)', () => {
+    const registros: Array<{ nivel: string; msg: string; meta?: any }> = [];
+    const logCaptura = {
+      info: (msg: string, meta?: object) => registros.push({ nivel: 'info', msg, meta }),
+      warn: (msg: string, meta?: object) => registros.push({ nivel: 'warn', msg, meta }),
+      error: (msg: string, meta?: object) => registros.push({ nivel: 'error', msg, meta }),
+    };
+    beforeEach(() => { registros.length = 0; });
+    const candidatos = async () => q<{ n: number }>('SELECT count(*)::int n FROM catalog.identity_candidates');
+    const resumen = () => registros.find((r) => r.msg.includes('resumen de la corrida'))!.meta;
+
+    /** Un destino Woo con SKU cuyo título coincide con el título ML de los casos de estos tests. */
+    async function destinoParaTitulo(titulo: string, sku: string) {
+      const modelo = (await q<{ id: string }>(
+        `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', $3, $4) RETURNING id`,
+        [empresa, ml, `W-${sku}`, titulo]))[0]!.id;
+      await q('INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, $3)', [empresa, modelo, sku]);
+    }
+    async function contenedor(recurso: string, titulo: string) {
+      const modelo = (await q<{ id: string }>(
+        `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'ml_clasico', $3, $4) RETURNING id`,
+        [empresa, ml, `C-${recurso}`, titulo]))[0]!.id;
+      await q(`INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id)
+               VALUES ($1, $2, 'mercadolibre', 'contenedor', $3, '', $4)`, [empresa, ml, recurso, modelo]);
+    }
+
+    it('no-fuga: publicación vinculada a una variante de modelo woo_*, sin contenedor → sin candidatos y código sin_titulo_ml', async () => {
+      await destinoParaTitulo('Casco Bell Super Negro', 'FB-8001');
+      const { variante } = await casoConSkuObservado('MLC1', null, 'irrelevante');
+      // La variante del caso pasa a estar vinculada a Woo: su modelo es el NUESTRO (woo_simple) y trae el título "correcto".
+      const woo = (await q<{ id: string }>(
+        `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W-x', 'Casco Bell Super Negro') RETURNING id`, [empresa, ml]))[0]!.id;
+      await q('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, variante]);
+      await correrMotor(app, { empresa, limite: 500, log: logCaptura });
+      expect((await candidatos())[0]!.n).toBe(0);
+      expect(registros.some((r) => r.meta?.codigo === 'sin_titulo_ml')).toBe(true);
+      expect(resumen().sin_titulo_ml).toBe(1);
+    });
+
+    it('sin representación de modelo propio: el título sale de la variante ml_* y se calculan candidatos', async () => {
+      await destinoParaTitulo('Casco Bell Super Negro', 'FB-8002');
+      await casoConSkuObservado('MLC2', null, 'Casco Bell Super Negro');
+      await correrMotor(app, { empresa, limite: 500, log: logCaptura });
+      expect((await candidatos())[0]!.n).toBeGreaterThan(0);
+      expect(resumen().fuente_titulo).toEqual({ variante: 1 });
+    });
+
+    it('contenedor gana sobre la variante cuando difieren, y se cuenta', async () => {
+      await destinoParaTitulo('Casco Bell Super Negro', 'FB-8003');
+      await casoConSkuObservado('MLC3', null, 'Título viejo de la variante');
+      await q("UPDATE catalog.external_representations SET variacion_normalizada = '55' WHERE recurso = 'MLC3'"); // en producción el contenedor lleva '' y la vendible el id de variación
+      await contenedor('MLC3', 'Casco Bell Super Negro');
+      await correrMotor(app, { empresa, limite: 500, log: logCaptura });
+      const r = resumen();
+      expect(r.fuente_titulo).toEqual({ contenedor: 1 });
+      expect(r.contenedor_difiere_variante).toBe(1);
+      expect((await candidatos())[0]!.n).toBeGreaterThan(0); // acertó por el título del contenedor, no por el de la variante
+    });
+  });
+
   it('[esc:gtin] GTIN igual y SKU distinto (o sea sku_observado no resuelve): no hay auto_sku', async () => {
     // El motor sólo mira sku_observado (no GTIN: eso es evidencia, no identidad — ver 0014). Con
     // sku_observado null (representación sin ese dato, GTIN es lo único que trajo el canal), skuUnico

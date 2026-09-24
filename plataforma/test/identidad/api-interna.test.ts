@@ -181,6 +181,22 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${randomUUID()}`)).status).toBe(404);
   });
 
+  it('el título de la publicación es el observado de ML (contenedor), nunca el de la variante woo_* vinculada', async () => {
+    const c = await caso('MLA8');
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W8', 'Título NUESTRO de Woo') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, c.variante]);
+    let d = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(d.body.publicacion.titulo).toBeNull(); // sin fuente ML: no se inventa con el título de Woo
+    await admin.query("UPDATE catalog.external_representations SET variacion_normalizada = '55' WHERE recurso = 'MLA8'"); // producción: la vendible lleva el id de variación; el contenedor ''
+    const cont = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'ml_clasico', 'C8', 'Título que muestra ML') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id)
+                       VALUES ($1, $2, 'mercadolibre', 'contenedor', 'MLA8', '', $3)`, [empresa, ml, cont]);
+    d = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(d.body.publicacion.titulo).toBe('Título que muestra ML');
+  });
+
   it('POST sin Idempotency-Key: 422', async () => {
     const c = await caso('MLA8');
     const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, { expected_version: 1, eleccion: 'omitir', actor }, { idem: null });
