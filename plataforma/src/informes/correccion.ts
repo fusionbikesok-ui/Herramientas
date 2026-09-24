@@ -10,9 +10,12 @@
  * irreversible por diseño, y corregirla ahí adentro rompería esa garantía.
  *
  * La corrección es su propio artefacto firmado (mismo par de claves, mismo depósito, misma
- * retención compliance), bajo una clave de objeto NUEVA (`correcciones/<fecha-emisión>-manifiestos.json`),
- * nunca la del original. Registra un evento append-only en audit.audit_events para que quede
- * trazado que se publicó, con la clave de objeto, el version id y el hash del JSON firmado.
+ * retención compliance), bajo una clave de objeto NUEVA
+ * (`correcciones/<fecha-emisión>-manifiestos-<sha8>.json`, con los primeros 8 caracteres del hash
+ * del sobre firmado: dos correcciones publicadas el mismo día, con conjuntos de fechas distintos,
+ * no pueden chocar en la misma clave "vigente" de B2), nunca la del original. Registra un evento
+ * append-only en audit.audit_events para que quede trazado que se publicó, con la clave de objeto,
+ * el version id y el hash del JSON firmado.
  *
  * Idempotente por diseño de "última palabra": antes de publicar, se pregunta a `audit.audit_events`
  * si ya hay una corrección publicada para el mismo conjunto de fechas (mismo payload.fechas
@@ -61,7 +64,11 @@ export type ResultadoCorreccion =
   | { publicado: true; dias: DiaCorregido[]; b2ObjectKey: string; b2VersionId: string; hashSobre: string }
   | { publicado: false; motivo: 'sin_discrepancias' | 'ya_publicada' | 'dry_run'; dias: DiaCorregido[] };
 
-const claveObjeto = (fechaEmision: string) => `correcciones/${fechaEmision}-manifiestos.json`;
+// El sha8 del contenido evita que dos correcciones publicadas el mismo día (conjuntos de fechas
+// distintos) choquen en la misma clave de objeto: B2 versiona, pero la versión "vigente" (la que
+// devuelve un GET sin versionId) pisaría a la anterior, y un lector que no pida versión explícita
+// vería sólo la última.
+const claveObjeto = (fechaEmision: string, sha8: string) => `correcciones/${fechaEmision}-manifiestos-${sha8}.json`;
 const sha256Hex = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 
 /**
@@ -123,13 +130,13 @@ export async function publicarCorreccion(pool: pg.Pool, o: OpcionesCorreccion): 
   };
   const sobre: Sobre = firmar(contenido, o.clave);
   const cuerpo = JSON.stringify(sobre);
-  const objeto = claveObjeto(fechaEmision);
+  const hashSobre = sha256Hex(cuerpo);
+  const objeto = claveObjeto(fechaEmision, hashSobre.slice(0, 8));
 
   await o.deposito.guardarPendiente(objeto, cuerpo);
   const subida = await o.deposito.subir(objeto, cuerpo, ahora);
   await o.deposito.limpiarPendiente(objeto).catch(() => undefined);
 
-  const hashSobre = sha256Hex(cuerpo);
   await registrarEvento(pool, {
     companyId: o.companyId, actorType: 'system', actorId: 'correccion-manifiestos',
     action: 'informes.correccion_publicada', aggregateType: 'audit_daily_manifests', aggregateId: objeto,

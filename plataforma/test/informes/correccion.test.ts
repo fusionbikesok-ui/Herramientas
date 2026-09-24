@@ -108,8 +108,33 @@ describe('publicarCorreccion', () => {
     });
 
     expect(subidas).toHaveLength(1);
-    expect(subidas[0]!.clave).toMatch(/^correcciones\/2026-09-24-manifiestos\.json$/);
+    expect(subidas[0]!.clave).toMatch(/^correcciones\/2026-09-24-manifiestos-[0-9a-f]{8}\.json$/);
     expect(subidas[0]!.clave).not.toBe('e1/manifiestos/2026-09-19.json');
+  });
+
+  it('dos correcciones publicadas el mismo día, con conjuntos de fechas distintos, suben a claves distintas', async () => {
+    const e1 = await insertarEvento('2026-09-19');
+    await insertarManifiesto('2026-09-19', e1.chainSeq, sha256('mal-19'));
+    const e2 = await insertarEvento('2026-09-20');
+    await insertarManifiesto('2026-09-20', e2.chainSeq, sha256('mal-20'));
+
+    const r1 = await publicarCorreccion(pool, {
+      fechas: ['2026-09-19'], clave: { kid: 'k1', privada: PAR.privateKey }, deposito, reloj: () => reloj, companyId, dryRun: false,
+    });
+    const r2 = await publicarCorreccion(pool, {
+      fechas: ['2026-09-20'], clave: { kid: 'k1', privada: PAR.privateKey }, deposito, reloj: () => reloj, companyId, dryRun: false,
+    });
+
+    expect(r1.publicado).toBe(true);
+    expect(r2.publicado).toBe(true);
+    if (!r1.publicado || !r2.publicado) throw new Error('inalcanzable'); // narrowing para TS
+    expect(subidas).toHaveLength(2);
+    expect(r1.b2ObjectKey).not.toBe(r2.b2ObjectKey);
+    expect(r1.b2ObjectKey).toMatch(/^correcciones\/2026-09-24-manifiestos-[0-9a-f]{8}\.json$/);
+    expect(r2.b2ObjectKey).toMatch(/^correcciones\/2026-09-24-manifiestos-[0-9a-f]{8}\.json$/);
+    // Ambas quedaron en B2, cada una bajo su propia clave: ninguna pisó a la otra.
+    expect(b2.has(r1.b2ObjectKey)).toBe(true);
+    expect(b2.has(r2.b2ObjectKey)).toBe(true);
   });
 
   it('la firma del JSON de corrección verifica con la clave pública', async () => {
