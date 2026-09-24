@@ -86,6 +86,13 @@ describe('E3 T6 proxy de la bandeja de identidad', () => {
     expect(p.recibidos[1].ruta).not.toContain('extra');
   });
 
+  it('el filtro por grupo de los chips llega a la plataforma (y firmado)', async () => {
+    const p = plataformaFalsa();
+    await request(app({ user: operador, fetch: p.fetch })).get('/api/bandeja-identidad/casos').query({ grupo: '1', limit: '50' });
+    expect(new URL(p.recibidos[0].ruta, 'http://x').searchParams.get('grupo')).toBe('1');
+    expect(p.recibidos[0].firmaValida).toBe(true);
+  });
+
   it('el detalle valida el id y firma el GET', async () => {
     const p = plataformaFalsa();
     const a = app({ user: operador, fetch: p.fetch });

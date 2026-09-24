@@ -20,7 +20,7 @@ import { firmarInterno } from '../lib/internoHmac.js';
 
 const PREFIJO = '/internal/v1/identidad';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CONSULTAS = { casos: ['tipo', 'estado', 'cursor', 'limit'], variantes: ['q'] };
+const CONSULTAS = { casos: ['tipo', 'estado', 'grupo', 'cursor', 'limit'], variantes: ['q'] };
 
 export function bandejaIdentidadRouter({ url, keyring, fetch: hacerFetch = globalThis.fetch, timeoutMs = 5000 } = {}) {
   const router = Router();
