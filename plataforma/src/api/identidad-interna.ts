@@ -23,6 +23,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import type { Logger } from 'pino';
 import { z } from 'zod';
+import { otrosAtributos, type Atributos } from '../identidad/comparar.ts';
 import { decidirCaso, type ResultadoDecision } from '../identidad/decidir.ts';
 import { verificarInterna } from '../seguridad/interna.ts';
 import type { OpcionesSenales } from './senales.ts';
@@ -54,7 +55,6 @@ const STATUS_DECISION: Record<Exclude<ResultadoDecision, { ok: true }>['code'], 
 };
 
 const linkMl = (recurso: string) => 'https://articulo.mercadolibre.com.ar/' + recurso.replace(/^(ML[A-Z])/, '$1-');
-const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
 
 /** La publicación de ML que gobierna un caso: MISMA resolución que decidirCaso (por representation_id, o la
  *  ÚNICA representación viva de ML de la variante). Sin publicación única el caso no se puede decidir
@@ -81,22 +81,11 @@ function error(req: FastifyRequest, reply: FastifyReply, status: number, code: s
 }
 
 interface Fila { [k: string]: unknown }
-type Atributos = Map<string, string>;
 async function atributosDe(pool: pg.Pool, sql: string, id: string): Promise<Atributos> {
   const r = await pool.query<{ nombre: string; valor: string }>(sql, [id]);
   const m: Atributos = new Map();
   for (const f of r.rows) m.set(f.nombre, m.has(f.nombre) ? `${m.get(f.nombre)} / ${f.valor}` : f.valor);
   return m;
-}
-
-/** Los atributos que el motor no compara (todo menos color/talle), marcados por igualdad normalizada. */
-function otrosAtributos(ml: Atributos, cand: Atributos) {
-  const nombres = [...new Set([...ml.keys(), ...cand.keys()])].filter((n) => n !== 'color' && n !== 'talle').sort();
-  return nombres.map((nombre) => {
-    const valorMl = ml.get(nombre) ?? '', valorCandidato = cand.get(nombre) ?? '';
-    const marca = !valorMl || !valorCandidato ? 'falta' : norm(valorMl) === norm(valorCandidato) ? 'coincide' : 'difiere';
-    return { nombre, marca, valorMl, valorCandidato };
-  });
 }
 
 export function registrarIdentidadInterna(
@@ -127,6 +116,9 @@ export function registrarIdentidadInterna(
       }
       const cuenta = opciones.cuentas.get('mercadolibre');
       if (!cuenta) { error(req, reply, 409, 'cuenta_no_configurada', 'No hay cuenta de Mercado Libre configurada.'); return null; }
+      // F: una cuenta configurada que no existe en core.channel_accounts es 409, no un 500 por `rows[0]!`.
+      const empresaCuenta = (await pool.query<{ company_id: string }>('SELECT company_id FROM core.channel_accounts WHERE id = $1', [cuenta])).rows[0]?.company_id;
+      if (!empresaCuenta) { error(req, reply, 409, 'cuenta_no_configurada', 'La cuenta de Mercado Libre no existe.'); return null; }
       const empresa = await pool.connect().then(async (c) => {
         try {
           await c.query('BEGIN');
@@ -134,7 +126,7 @@ export function registrarIdentidadInterna(
           const nonce = await c.query('INSERT INTO integrations.signal_nonces(key_id, nonce) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING 1', [v.keyId, v.nonce]);
           await c.query('COMMIT');
           if (!nonce.rowCount) return null;
-          return (await pool.query<{ company_id: string }>('SELECT company_id FROM core.channel_accounts WHERE id = $1', [cuenta])).rows[0]!.company_id;
+          return empresaCuenta;
         } catch (e) { await c.query('ROLLBACK').catch(() => undefined); throw e; } finally { c.release(); }
       });
       if (!empresa) {
@@ -174,6 +166,23 @@ export function registrarIdentidadInterna(
           WHERE $4::int IS NULL OR (g, abierto_en, id) > ($4::int, $5::timestamptz, $6::uuid)
           ORDER BY g, abierto_en, id LIMIT $7`,
         [auth.empresa, q.data.tipo ?? null, q.data.estado ?? null, cur?.g ?? null, cur?.a ?? null, cur?.id ?? null, q.data.limit + 1]);
+      // Contadores para los chips de la cabecera (spec §6): mismos filtros de empresa y abiertos, SIN cursor ni
+      // tipo/estado, para que los números sean los de toda la bandeja. `no_decidibles` (A): abiertos sin publicación
+      // única — no salen en la cola, pero se cuentan para que no se pierdan de vista.
+      const cnt = (await pool.query<{ g: number | null; n: number }>(
+        `SELECT CASE WHEN r.id IS NULL THEN NULL
+                     WHEN c.estado = 'conflict' THEN 0
+                     WHEN (c.detalle->>'d5')::boolean IS TRUE THEN 1
+                     WHEN EXISTS (SELECT 1 FROM catalog.identity_decisions d
+                                   WHERE d.channel_account_id = r.channel_account_id AND d.recurso = r.recurso
+                                     AND d.variacion_normalizada = r.variacion_normalizada
+                                     AND d.origen = 'auto_sku' AND d.efecto = 'sombra' AND d.superada_en IS NULL) THEN 2
+                     WHEN r.estado_remoto = 'active' AND COALESCE(r.stock_canal, 0) > 0 THEN 3
+                     ELSE 4 END AS g, count(*)::int AS n
+           FROM catalog.identity_cases c ${PUBLICACION}
+          WHERE c.company_id = $1 AND c.cerrado_en IS NULL GROUP BY 1`, [auth.empresa])).rows;
+      const en = (g: number | null) => cnt.find((f) => f.g === g)?.n ?? 0;
+      const contadores = { conflictos: en(0), d5: en(1), sku_exacto: en(2), activas_con_stock: en(3), resto: en(4), no_decidibles: en(null) };
       const hay = r.rows.length > q.data.limit;
       const filas = r.rows.slice(0, q.data.limit);
       const ultimo = filas.at(-1);
@@ -185,6 +194,7 @@ export function registrarIdentidadInterna(
             estado: f.estado_remoto ?? null, stock: f.stock_canal ?? null, precio: f.precio ?? null, moneda: f.moneda ?? null, link_ml: linkMl(String(f.recurso)) },
         })),
         // Precargable: el legado pide el "siguiente" con este cursor mientras el operador decide el actual.
+        contadores,
         siguiente: hay && ultimo ? codificar({ g: ultimo.g, a: ultimo.abierto_iso, id: String(ultimo.id) }) : null,
       };
     });
@@ -295,8 +305,8 @@ export function registrarIdentidadInterna(
            LEFT JOIN LATERAL (SELECT precio, moneda, stock_canal FROM catalog.external_representations
                                WHERE variant_id = v.id AND canal = 'woocommerce' AND archivado_en IS NULL
                                ORDER BY observado_en DESC LIMIT 1) w ON true
-          WHERE v.company_id = $1 AND v.archivado_en IS NULL AND (v.sku = $2 OR m.titulo ILIKE $3)
-          ORDER BY (v.sku = $2) DESC, m.titulo, v.sku LIMIT 20`, [auth.empresa, q.data.q, patron]);
+          WHERE v.company_id = $1 AND v.archivado_en IS NULL AND (upper(trim(v.sku)) = upper(trim($2)) OR m.titulo ILIKE $3)
+          ORDER BY (upper(trim(v.sku)) = upper(trim($2))) DESC, m.titulo, v.sku LIMIT 20`, [auth.empresa, q.data.q, patron]);
       return { variantes: r.rows.map((f) => ({ variant_id: f.variant_id, sku: f.sku ?? null, titulo: f.titulo, foto: f.foto ?? null,
         precio: f.precio ?? null, moneda: f.moneda ?? null, stock: f.stock ?? null })) };
     });

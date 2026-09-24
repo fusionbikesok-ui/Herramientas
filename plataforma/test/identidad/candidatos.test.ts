@@ -62,3 +62,16 @@ describe('extraerAtributosDeAttrsWC: ausente/inválido cae al fallback por títu
     expect(wcItems[0]!.talleToks).toEqual(porTitulo.talles);
   });
 });
+
+describe('candidatosDe usa la posición del ítem, no busca por SKU (SKU repetido en el catálogo)', () => {
+  it('con dos filas del mismo SKU, el candidato toma los atributos de la fila que puntuó', () => {
+    const idx = construirWCIndex([
+      { sku: 'FB-1', nombre: 'Casco Bell Rojo', tipo: 'simple', atributos_json: null },
+      { sku: 'FB-1', nombre: 'Casco Bell Negro', tipo: 'simple', atributos_json: null },
+    ]);
+    const ml: ItemMl = { ml_title: 'Casco Bell Negro', ml_es_variante: true, _ct: ctDesdeApi('Negro', '') };
+    const [c] = candidatosDe(ml, [], idx, 1);
+    expect(c!.explicacion.atributos.find((a) => a.nombre === 'color')!.valorCandidato).toBe(
+      [...idx.wcItems.find((w) => w.nombre.includes('Negro'))!.colorToks].join(' '));
+  });
+});

@@ -2,7 +2,7 @@ export interface ItemMl { ml_title: string; ml_es_variante: boolean; ml_variatio
 export interface ItemWoo { sku: string; nombre: string; tipo: string; color: string; talle: string; img: string; baseNorm: string; colorToks: Set<string>; talleToks: Set<string>; }
 export interface IndiceWoo { wcItems: ItemWoo[]; indice: Record<string, number[]>; }
 interface Atributos { colores: Set<string>; talles: Set<string>; }
-interface Resultado { score: number; color_ok: boolean | null; talle_ok: boolean | null; wc_sku: string; wc_nombre: string; wc_tipo: string; wc_color: string; wc_talle: string; wc_img: string; }
+interface Resultado { pos: number; score: number; color_ok: boolean | null; talle_ok: boolean | null; wc_sku: string; wc_nombre: string; wc_tipo: string; wc_color: string; wc_talle: string; wc_img: string; }
 // Marca por atributo (enmienda de interfaz 2026-09-24, spec bandeja §2): la API de T5 la devuelve
 // TAL CUAL, sin traducir. 'equivalente' es una coincidencia después de normalizar (mismo criterio de
 // color_ok/talle_ok: intersecta() ya normaliza vía norm()/COLORES, así que dos valores que matchean acá
@@ -33,7 +33,7 @@ export function construirWCIndex(items:any[]):IndiceWoo{return construirWC(items
 // (negra/negro, 700x25c/700x25), y candidatosDe/getCandidatos de esta tarea no lo usan
 // (usan intersecta() directo, como el legado). No lo agregues sin portar canonToken también.
 export function ctDesdeApi(color:unknown,talle:unknown):Atributos{const c=new Set<string>(),t=new Set<string>();norm(color).split(' ').filter(Boolean).forEach(x=>COLORES.has(x)?c.add(x):t.add(x));norm(talle).split(' ').filter(Boolean).forEach(x=>COLORES.has(x)?c.add(x):TALLE_RE.test(x)&&t.add(x));return{colores:c,talles:t}}
-export function getCandidatos(tn:string,esVar:boolean,varStr:string|undefined,override:Atributos|undefined,wcItems:ItemWoo[],indice:Record<string,number[]>):Resultado[]{const ct=override||(esVar?extraerAtributos(varStr):{colores:new Set(),talles:new Set()}),cuenta:Record<string,number>={};for(const t of new Set(tn.split(' ').filter(Boolean))){const posiciones=indice[t];if(posiciones)for(const p of posiciones)cuenta[p]=(cuenta[p]||0)+1}const pos=Object.keys(cuenta).sort((a,b)=>cuenta[b]!-cuenta[a]!).slice(0,50).map(Number),sc=pos.map(p=>{const w=wcItems[p]!,sm=tsr(tn,w.baseNorm),c=ct.colores.size?intersecta(ct.colores,w.colorToks):null,t=ct.talles.size?intersecta(ct.talles,w.talleToks):null,bonus=(c===true?.5:0)+(t===true?.5:0);return{sf:esVar?sm*(1+bonus)/2:sm,cOk:c,tOk:t,w}});sc.sort((a,b)=>{const x=attrScore(a.cOk)+attrScore(a.tOk),y=attrScore(b.cOk)+attrScore(b.tOk);return y!==x?y-x:b.sf-a.sf});return sc.slice(0,8).map(s=>({score:+s.sf.toFixed(3),color_ok:s.cOk,talle_ok:s.tOk,wc_sku:s.w!.sku,wc_nombre:s.w!.nombre,wc_tipo:s.w!.tipo,wc_color:s.w!.color,wc_talle:s.w!.talle,wc_img:s.w!.img}))}
+export function getCandidatos(tn:string,esVar:boolean,varStr:string|undefined,override:Atributos|undefined,wcItems:ItemWoo[],indice:Record<string,number[]>):Resultado[]{const ct=override||(esVar?extraerAtributos(varStr):{colores:new Set(),talles:new Set()}),cuenta:Record<string,number>={};for(const t of new Set(tn.split(' ').filter(Boolean))){const posiciones=indice[t];if(posiciones)for(const p of posiciones)cuenta[p]=(cuenta[p]||0)+1}const pos=Object.keys(cuenta).sort((a,b)=>cuenta[b]!-cuenta[a]!).slice(0,50).map(Number),sc=pos.map(p=>{const w=wcItems[p]!,sm=tsr(tn,w.baseNorm),c=ct.colores.size?intersecta(ct.colores,w.colorToks):null,t=ct.talles.size?intersecta(ct.talles,w.talleToks):null,bonus=(c===true?.5:0)+(t===true?.5:0);return{sf:esVar?sm*(1+bonus)/2:sm,cOk:c,tOk:t,w,p}});sc.sort((a,b)=>{const x=attrScore(a.cOk)+attrScore(a.tOk),y=attrScore(b.cOk)+attrScore(b.tOk);return y!==x?y-x:b.sf-a.sf});return sc.slice(0,8).map(s=>({pos:s.p,score:+s.sf.toFixed(3),color_ok:s.cOk,talle_ok:s.tOk,wc_sku:s.w!.sku,wc_nombre:s.w!.nombre,wc_tipo:s.w!.tipo,wc_color:s.w!.color,wc_talle:s.w!.talle,wc_img:s.w!.img}))}
 export function candidatosDeItem(ml:ItemMl,wc:ItemWoo[],indice:Record<string,number[]>):Resultado[]{return getCandidatos(norm(ml.ml_title),ml.ml_es_variante,ml.ml_variations,ml._ct,wc,indice)}
 export function djb2(str:string):number{let h=5381;for(let i=0;i<str.length;i++)h=((h*33)^str.charCodeAt(i))>>>0;return h>>>0}
 
@@ -59,7 +59,7 @@ function marcarAtributo(nombre: 'color' | 'talle', ml: Set<string>, wc: Set<stri
 export function candidatosDe(ml:ItemMl,woo:any[],indice:IndiceWoo,n=3):Candidato[]{
   const ct = ml._ct || (ml.ml_es_variante ? extraerAtributos(ml.ml_variations) : { colores: new Set<string>(), talles: new Set<string>() });
   return candidatosDeItem(ml,indice.wcItems,indice.indice).slice(0,n).map((x,i)=>{
-    const w = indice.wcItems.find((it) => it.sku === x.wc_sku);
+    const w = indice.wcItems[x.pos]; // por posición: un SKU repetido en wcItems no puede confundir el ítem.
     const atributos: AtributoComparado[] = w
       ? [marcarAtributo('color', ct.colores, w.colorToks), marcarAtributo('talle', ct.talles, w.talleToks)]
       : [];

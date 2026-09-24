@@ -111,6 +111,7 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(todo.body.casos.map((c: any) => c.grupo)).toEqual([0, 1, 2, 3, 4]);
     expect(todo.body.casos[0].publicacion).toMatchObject({ recurso: 'MLA1', link_ml: 'https://articulo.mercadolibre.com.ar/MLA-1' });
     expect(todo.body.siguiente).toBeNull();
+    expect(todo.body.contadores).toEqual({ conflictos: 1, d5: 1, sku_exacto: 1, activas_con_stock: 1, resto: 1, no_decidibles: 0 });
 
     const juntas: string[] = [];
     let cursor: string | null = null;
@@ -122,6 +123,23 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     }
     expect(juntas).toEqual(esperado);
     expect((await get(`${PREFIJO_IDENTIDAD}/casos?cursor=basura`)).status).toBe(422);
+  });
+
+  it('un caso abierto sin publicación única no sale en la cola pero se cuenta en no_decidibles', async () => {
+    const { variante: v } = await variante('Huérfana');
+    await admin.query(`INSERT INTO catalog.identity_cases (company_id, tipo, variant_id) VALUES ($1, 'sku_pendiente', $2)`, [empresa, v]);
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos).toEqual([]);
+    expect(r.body.contadores).toMatchObject({ no_decidibles: 1, resto: 0 });
+  });
+
+  it('una cuenta configurada que no existe en la base: 409 cuenta_no_configurada (no 500)', async () => {
+    const url = `${PREFIJO_IDENTIDAD}/casos`;
+    const app = crearApi({ pool, logger: crearLogger('test'), estadoPgDir: '/nada', bandejaCatalogo: true,
+      senales: { keyring, origenes: crearOrigenes('127.0.0.1/32'), cuentas: new Map([['mercadolibre', randomUUID()]]) } });
+    const r = await app.inject({ method: 'GET', url, headers: cabeceras('GET', url, ''), remoteAddress: '127.0.0.1' });
+    expect(r.statusCode).toBe(409);
+    expect(r.json()).toMatchObject({ code: 'cuenta_no_configurada' });
   });
 
   it('el detalle trae publicación, top-3 con la marca por atributo, historial y version; NUNCA el puntaje', async () => {
@@ -140,7 +158,7 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(d.body).toMatchObject({ id: c.id, version: 1, tipo: 'sku_pendiente', publicacion: { recurso: 'MLA7', titulo: 'Bici MLA7' } });
     expect(d.body.candidatos).toHaveLength(1);
     expect(d.body.candidatos[0]).toMatchObject({ rank: 1, sku: 'FB-77', titulo: 'Casco Bell Negro',
-      explicacion: { atributos: [{ nombre: 'color', marca: 'coincide' }], otros_atributos: [{ nombre: 'marca', marca: 'falta', valorMl: 'Bell' }] } });
+      explicacion: { atributos: [{ nombre: 'color', marca: 'coincide' }], otros_atributos: [{ nombre: 'marca', marca: 'difiere', valorMl: 'Bell', valorCandidato: '' }] } });
     expect(d.texto).not.toContain('puntaje');
     expect(d.body.historial).toEqual([]);
     expect(d.body.auto_sku_en_sombra).toBeNull();
@@ -204,6 +222,8 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     const porTitulo = await get(`${PREFIJO_IDENTIDAD}/variantes?q=bicicleta`);
     expect(porTitulo.body.variantes.map((v: any) => v.sku)).toEqual(['FB-100']);
     expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=%25`)).body.variantes.map((v: any) => v.sku)).toEqual(['FB-400']);
+    // E: el SKU exacto se normaliza (upper/trim), como en el plan.
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=%20fb-100%20`)).body.variantes[0].sku).toBe('FB-100');
     expect((await get(`${PREFIJO_IDENTIDAD}/variantes`)).status).toBe(422);
   });
 });
