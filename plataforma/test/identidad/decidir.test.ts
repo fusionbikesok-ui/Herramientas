@@ -98,6 +98,18 @@ describe('E3-DEC-01 decidirCaso', () => {
     expect((await q<{ n: number }>('SELECT count(*)::int n FROM catalog.identity_decisions WHERE case_id = $1', [caso]))[0]!.n).toBe(1);
   });
 
+  it('(b2) decidir un caso ya vinculado con expectedVersion vieja da version_conflict, no caso_sin_publicacion (carrera real hallada por opt-62 en 74106b91: la pendiente ya se fusionó y archivó)', async () => {
+    const v1 = await variantePendienteConSku('FB-2101'); const v2 = await variantePendienteConSku('FB-2102');
+    const { caso } = await casoPendiente('MLA2b');
+    const r1 = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: v1.variante }));
+    expect(r1).toMatchObject({ ok: true, version: 2 });
+    // Reintento con la misma expectedVersion=1, ahora YA stale: la representación que este pedido buscaba
+    // (colgada de variant_id, la pendiente original) fue fusionada/archivada por r1. El código correcto es
+    // version_conflict, no caso_sin_publicacion.
+    const r2 = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: v2.variante }));
+    expect(r2).toMatchObject({ ok: false, code: 'version_conflict' });
+  });
+
   it('(c) la misma clave de idempotencia dos veces: el mismo decisionId y una sola fila', async () => {
     const { variante: destino } = await variantePendienteConSku('FB-3');
     const { caso } = await casoPendiente('MLA3');

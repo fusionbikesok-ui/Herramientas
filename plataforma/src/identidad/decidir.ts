@@ -73,9 +73,18 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
     // Paso 2: el caso y la clave de la publicación que gobierna (por representation_id, o la única
     // representación de ML de la variante si el caso cuelga de variant_id).
     const caso = (await tx.query<{
-      id: string; company_id: string; variant_id: string | null; representation_id: string | null; estado: string;
-    }>('SELECT id, company_id, variant_id, representation_id, estado FROM catalog.identity_cases WHERE id = $1', [p.caseId])).rows[0];
+      id: string; company_id: string; variant_id: string | null; representation_id: string | null; estado: string; version: number;
+    }>('SELECT id, company_id, variant_id, representation_id, estado, version FROM catalog.identity_cases WHERE id = $1', [p.caseId])).rows[0];
     if (!caso) return { ok: false, code: 'caso_inexistente' };
+    // Carrera real (hallazgo de opt-62 sobre 74106b91): si OTRO decidirCaso concurrente ya ganó y fusionó
+    // la pendiente en la variante elegida, `variant_id` de este caso puede quedarse sin ninguna
+    // representación ML viva — no porque el caso esté mal, sino porque ya lo resolvieron. Antes de devolver
+    // caso_sin_publicacion o caso_cerrado por eso, hay que mirar si la versión ya cambió: si cambió, lo
+    // correcto es version_conflict (recargá y volvé a intentar), no "esto no tiene publicación", que
+    // sugiere un problema de datos que no existe. Esta lectura de `caso.version` es sin candado (la
+    // hicimos arriba, junto con el resto del caso), así que no reemplaza el FOR UPDATE + chequeo de abajo:
+    // sólo evita el código de error equivocado en el camino feliz de la carrera.
+    const versionCambio = () => caso.version !== p.expectedVersion;
     const repId = caso.representation_id ?? await (async () => {
       if (!caso.variant_id) return null;
       const reps = (await tx.query<{ id: string }>(
@@ -83,11 +92,11 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
         [caso.variant_id])).rows;
       return reps.length === 1 ? reps[0]!.id : null;
     })();
-    if (!repId) return { ok: false, code: 'caso_sin_publicacion' };
+    if (!repId) return versionCambio() ? { ok: false, code: 'version_conflict', details: { version_actual: caso.version } } : { ok: false, code: 'caso_sin_publicacion' };
     // Primera lectura sin candado, sólo para saber en qué cuenta bloquear (channel_account_id no cambia).
     const repCuenta = (await tx.query<{ channel_account_id: string }>(
       'SELECT channel_account_id FROM catalog.external_representations WHERE id = $1', [repId])).rows[0];
-    if (!repCuenta) return { ok: false, code: 'caso_sin_publicacion' };
+    if (!repCuenta) return versionCambio() ? { ok: false, code: 'version_conflict', details: { version_actual: caso.version } } : { ok: false, code: 'caso_sin_publicacion' };
 
     // Paso 3: candado de cuenta, y ahí sí, de nuevo la idempotencia — esta vez con la garantía de que nadie
     // más con la misma clave puede estar insertando en paralelo (mismo candado de cuenta que toma
@@ -106,7 +115,11 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
       archivado_en: Date | null; company_id: string;
     }>('SELECT channel_account_id, recurso, variacion_normalizada, canal, tipo, archivado_en, company_id FROM catalog.external_representations WHERE id = $1 FOR UPDATE', [repId])).rows[0];
     if (!rep || rep.canal !== 'mercadolibre' || rep.tipo !== 'vendible' || rep.archivado_en || rep.company_id !== caso.company_id) {
-      return { ok: false, code: 'caso_sin_publicacion' };
+      // Acá adentro del candado ya se puede leer la versión REAL del caso (nadie más la está tocando).
+      const actual = (await tx.query<{ version: number }>('SELECT version FROM catalog.identity_cases WHERE id = $1', [p.caseId])).rows[0]!.version;
+      return actual !== p.expectedVersion
+        ? { ok: false, code: 'version_conflict', details: { version_actual: actual } }
+        : { ok: false, code: 'caso_sin_publicacion' };
     }
     const bloqueado = (await tx.query<{ version: number; estado: string; cerrado_en: Date | null }>(
       'SELECT version, estado, cerrado_en FROM catalog.identity_cases WHERE id = $1 FOR UPDATE', [p.caseId])).rows[0]!;
