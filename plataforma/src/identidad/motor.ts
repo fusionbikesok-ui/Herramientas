@@ -104,17 +104,20 @@ async function autoSkuVigente(tx: Consultable, cuenta: string, recurso: string, 
 }
 
 /**
- * Marca el caso como procesado por esta versión del motor, HAYA O NO candidatos (un caso sin título o sin publicación
- * también tiene que salir del frente de la cola). Un solo UPDATE con merge de jsonb: no toca version, estado ni
+ * Marca los casos como procesados por esta versión del motor, HAYA O NO candidatos (un caso sin título o sin publicación
+ * también tiene que salir del frente de la cola). Un solo UPDATE para todos, justo antes del COMMIT: la corrida es una
+ * transacción larga y marcar caso por caso dejaría el lock de fila del primero hasta el final, frenando una decisión de la
+ * bandeja. Con merge de jsonb: no toca version, estado ni
  * abierto_en, así una decisión de la bandeja con expected_version tomada antes de la corrida no da version_conflict.
  * `corrido_en` es texto ISO en UTC, que ordena igual que el tiempo.
  */
-async function marcarCorrido(tx: Consultable, casoId: string): Promise<void> {
+async function marcarCorridos(tx: Consultable, casoIds: string[]): Promise<void> {
+  if (!casoIds.length) return;
   await tx.query(
     `UPDATE catalog.identity_cases
         SET detalle = detalle || jsonb_build_object('motor', jsonb_build_object(
               'engine', $2::text, 'corrido_en', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
-      WHERE id = $1`, [casoId, ENGINE_VERSION]);
+      WHERE id = ANY($1::uuid[])`, [casoIds, ENGINE_VERSION]);
 }
 
 function estable(v: unknown): string {
@@ -213,9 +216,9 @@ export async function correrMotor(pool: pg.Pool, o: { empresa: string; limite: n
     const cont: Contadores = { sinTituloMl: 0, contenedorDifiereVariante: 0, porFuente: {} };
     for (const caso of casos) {
       const r = await procesarCaso(tx, caso, o.empresa, indice, runId, o.log, cont);
-      await marcarCorrido(tx, caso.id);
       if (r.autoSku) autoSku++;
     }
+    await marcarCorridos(tx, casos.map((c) => c.id));
     o.log.info('identidad.motor: resumen de la corrida', { casos: casos.length, sin_titulo_ml: cont.sinTituloMl, contenedor_difiere_variante: cont.contenedorDifiereVariante, fuente_titulo: cont.porFuente });
     return { casos: casos.length, autoSku };
   });
