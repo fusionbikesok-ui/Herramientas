@@ -36,7 +36,13 @@ const publicaPem = readFileSync(i.clavePublicaUbicacion, 'utf8');
 verificarPar(clave, publicaPem);
 console.log(`clave de firma cargada: kid=${clave.kid} huella=${huella(publicaPem)}`);
 
-const deposito = crearDeposito({ ...i.b2, prefijo: 'e1/', dirPendientes: i.pendientesDir });
+// Prefijo vacío a propósito: la corrección firmada sube bajo `correcciones/`, no `e1/manifiestos/`
+// (correccion.ts la mantiene deliberadamente fuera del prefijo de los originales, para nunca pisar
+// la clave de un manifiesto ya subido), así que el depósito no puede acotarse a 'e1/' como en otros
+// usos de este mismo módulo. Encontrado en la corrida real de publicación del 2026-09-24: con
+// prefijo:'e1/' el script cortaba con "clave fuera del prefijo" antes de subir nada (fail-safe, no
+// llegó a escribir en B2), pero tampoco podía publicar nunca la corrección.
+const deposito = crearDeposito({ ...i.b2, prefijo: '', dirPendientes: i.pendientesDir });
 
 const empresa = await pool.query('SELECT id FROM core.companies ORDER BY id LIMIT 1');
 const companyId = empresa.rows[0]?.id;
