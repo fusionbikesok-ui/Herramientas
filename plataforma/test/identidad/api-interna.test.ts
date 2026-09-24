@@ -178,6 +178,40 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(soloSinTitulo.body.casos.map((c: any) => c.id)).toEqual([sinTitulo.id]);
   });
 
+  it('sin_titulo y confirmable ganan a "activa con stock": ese grupo no es un comodín para saltarse la regla de José', async () => {
+    // Activa con stock, pero sin título: tiene que caer en 6 igual, no en 3 (hallazgo HIGH de opt-16 sobre a8bda579).
+    const activaSinTitulo = await caso('MLA30', { activa: true, abierto: '2026-01-01T00:00:00Z' });
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W30', 'Título Woo') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, activaSinTitulo.variante]);
+    // Activa con stock, y ya confirmable (SKU vinculado): tiene que caer en 5, no en 3.
+    const activaConfirmable = await caso('MLA31', { activa: true, abierto: '2026-01-02T00:00:00Z' });
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-3000', activaConfirmable.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    const porId = (id: string) => r.body.casos.find((c: any) => c.id === id);
+    expect(porId(activaSinTitulo.id).grupo).toBe(6);
+    expect(porId(activaConfirmable.id).grupo).toBe(5);
+    expect(r.body.contadores).toMatchObject({ activas_con_stock: 0, sin_titulo: 1, confirmable: 1 });
+  });
+
+  it('confirmar: 422 confirmar_invalido si eleccion no es vincular', async () => {
+    const c = await caso('MLA32');
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-4000', c.variante]);
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 1, eleccion: 'omitir', actor, confirmar: true });
+    expect(r).toMatchObject({ status: 422, body: { code: 'confirmar_invalido' } });
+  });
+
+  it('confirmar: 422 confirmar_invalido si el variant_id no coincide con el ya vinculado al caso (no se puede confirmar otra cosa)', async () => {
+    const c = await caso('MLA33');
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-5000', c.variante]);
+    const otra = await variante('Otra bici', 'FB-6000');
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 1, eleccion: 'vincular', variant_id: otra.variante, actor, confirmar: true });
+    expect(r).toMatchObject({ status: 422, body: { code: 'confirmar_invalido' } });
+  });
+
   it('confirmar: un POST con eleccion vincular al variant_id ya asociado no busca candidatos y marca el motivo', async () => {
     const c = await caso('MLA26');
     await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-2845', c.variante]);

@@ -65,6 +65,28 @@ const STATUS_DECISION: Record<Exclude<ResultadoDecision, { ok: true }>['code'], 
 
 const linkMl = (recurso: string) => 'https://articulo.mercadolibre.com.ar/' + recurso.replace(/^(ML[A-Z])/, '$1-');
 
+/** Grupo de prioridad de la cola (menor = antes), compartido entre la consulta de casos y la de contadores
+ *  para que no puedan divergir (hallazgo LOW de opt-16 sobre a8bda579: estaba duplicado).
+ *
+ *  conflicto(0) → D5(1) → auto_sku en sombra(2) → sin título(6) → confirmable(5) → activa con stock(3) → resto(4).
+ *
+ *  Sin título y confirmable van INMEDIATAMENTE después de D5/sombra, antes de "activa con stock": si no,
+ *  un caso activo con stock pero sin título (o ya confirmable) se queda en el grupo 3 y nunca llega a su
+ *  chip propio — exactamente la regla de José que el hallazgo HIGH 1 de opt-16 encontró rota en a8bda579
+ *  (activa con stock ganaba SIEMPRE, sin importar si tenía título o ya estaba resuelto).
+ *  Requiere que la consulta traiga `m.titulo` (LEFT JOIN product_models) y `cv.sku` (LEFT JOIN
+ *  sellable_variants por `c.variant_id`, sólo vivas). */
+const GRUPO_CASE = `CASE WHEN c.estado = 'conflict' THEN 0
+                       WHEN (c.detalle->>'d5')::boolean IS TRUE THEN 1
+                       WHEN EXISTS (SELECT 1 FROM catalog.identity_decisions d
+                                     WHERE d.channel_account_id = r.channel_account_id AND d.recurso = r.recurso
+                                       AND d.variacion_normalizada = r.variacion_normalizada
+                                       AND d.origen = 'auto_sku' AND d.efecto = 'sombra' AND d.superada_en IS NULL) THEN 2
+                       WHEN m.titulo IS NULL THEN 6
+                       WHEN cv.sku IS NOT NULL THEN 5
+                       WHEN r.estado_remoto = 'active' AND COALESCE(r.stock_canal, 0) > 0 THEN 3
+                       ELSE 4 END`;
+
 /** La publicación de ML que gobierna un caso: MISMA resolución que decidirCaso (por representation_id, o la
  *  ÚNICA representación viva de ML de la variante). Sin publicación única el caso no se puede decidir
  *  (caso_sin_publicacion), así que la cola no lo ofrece. */
@@ -155,25 +177,13 @@ export function registrarIdentidadInterna(
       if (!q.success) return error(req, reply, 422, 'invalid_query', 'La consulta no es válida.');
       const cur = q.data.cursor ? decodificar(q.data.cursor) : null;
       if (q.data.cursor && !cur) return error(req, reply, 422, 'invalid_cursor', 'El cursor no es válido.');
-      // Grupo de prioridad (menor = antes): conflicto → D5 → con auto_sku en sombra → activa con stock → resto
-      // con título → confirmable (variant_id ya vinculado a una variante viva: un click, sin candidatos) →
-      // sin título (al fondo, hasta que el punto B les dé una fuente). Decisión de José vía opt-16
-      // 2026-09-24: los decidibles primero, "confirmar" después de esos, "sin título" al final de todos.
+      // Grupo de prioridad: ver GRUPO_CASE. Decisión de José vía opt-16 2026-09-24: los decidibles primero,
+      // "confirmar" después de esos, "sin título" al final de todos — antes incluso de "activa con stock".
       const r = await pool.query<Fila & { g: number; abierto_iso: string }>(
         `WITH cola AS (
            SELECT c.id, c.tipo, c.estado, c.prioridad, c.version, c.abierto_en, c.detalle, c.variant_id,
                   r.recurso, r.variacion_normalizada, r.sku_observado, r.estado_remoto, r.stock_canal, r.precio, r.moneda,
-                  m.titulo, cv.sku AS confirmar_sku,
-                  CASE WHEN c.estado = 'conflict' THEN 0
-                       WHEN (c.detalle->>'d5')::boolean IS TRUE THEN 1
-                       WHEN EXISTS (SELECT 1 FROM catalog.identity_decisions d
-                                     WHERE d.channel_account_id = r.channel_account_id AND d.recurso = r.recurso
-                                       AND d.variacion_normalizada = r.variacion_normalizada
-                                       AND d.origen = 'auto_sku' AND d.efecto = 'sombra' AND d.superada_en IS NULL) THEN 2
-                       WHEN r.estado_remoto = 'active' AND COALESCE(r.stock_canal, 0) > 0 THEN 3
-                       WHEN m.titulo IS NULL THEN 6
-                       WHEN cv.sku IS NOT NULL THEN 5
-                       ELSE 4 END AS g
+                  m.titulo, cv.sku AS confirmar_sku, ${GRUPO_CASE} AS g
              FROM catalog.identity_cases c
              ${PUBLICACION}
              LEFT JOIN catalog.product_models m ON m.id = ${modeloMlSql('r')}
@@ -189,17 +199,7 @@ export function registrarIdentidadInterna(
       // tipo/estado, para que los números sean los de toda la bandeja. `no_decidibles` (A): abiertos sin publicación
       // única — no salen en la cola, pero se cuentan para que no se pierdan de vista.
       const cnt = (await pool.query<{ g: number | null; n: number }>(
-        `SELECT CASE WHEN r.id IS NULL THEN NULL
-                     WHEN c.estado = 'conflict' THEN 0
-                     WHEN (c.detalle->>'d5')::boolean IS TRUE THEN 1
-                     WHEN EXISTS (SELECT 1 FROM catalog.identity_decisions d
-                                   WHERE d.channel_account_id = r.channel_account_id AND d.recurso = r.recurso
-                                     AND d.variacion_normalizada = r.variacion_normalizada
-                                     AND d.origen = 'auto_sku' AND d.efecto = 'sombra' AND d.superada_en IS NULL) THEN 2
-                     WHEN r.estado_remoto = 'active' AND COALESCE(r.stock_canal, 0) > 0 THEN 3
-                     WHEN m.titulo IS NULL THEN 6
-                     WHEN cv.sku IS NOT NULL THEN 5
-                     ELSE 4 END AS g, count(*)::int AS n
+        `SELECT CASE WHEN r.id IS NULL THEN NULL ELSE ${GRUPO_CASE} END AS g, count(*)::int AS n
            FROM catalog.identity_cases c ${PUBLICACION}
            LEFT JOIN catalog.product_models m ON m.id = ${modeloMlSql('r')}
            LEFT JOIN catalog.sellable_variants cv ON cv.id = c.variant_id AND cv.archivado_en IS NULL
@@ -305,6 +305,20 @@ export function registrarIdentidadInterna(
       const clave = req.headers['idempotency-key'];
       if (typeof clave !== 'string' || clave.length < 8 || clave.length > 200) {
         return error(req, reply, 422, 'idempotency_key_requerida', 'Falta la cabecera Idempotency-Key.');
+      }
+      // Hallazgo HIGH de opt-16 sobre a8bda579: sin esto, cualquier cliente podía mandar confirmar:true con
+      // CUALQUIER variant_id y quedaba registrado con el prefijo 'confirmar:' igual — contaminaría la
+      // calibración con decisiones que no fueron realmente "confirmar lo ya vinculado". "Confirmar" sólo
+      // tiene sentido para vincular EXACTAMENTE a la variante que el caso ya trae en variant_id: se valida acá,
+      // contra la base, antes de llamar a decidirCaso (que no conoce el concepto de "confirmar", sólo recibe
+      // un 'vincular' normal con el motivo ya prefijado).
+      if (d.data.confirmar) {
+        if (d.data.eleccion !== 'vincular') return error(req, reply, 422, 'confirmar_invalido', 'Confirmar sólo aplica a eleccion vincular.');
+        const caso = (await pool.query<{ variant_id: string | null }>(
+          'SELECT variant_id FROM catalog.identity_cases WHERE id = $1 AND company_id = $2', [req.params.id, auth.empresa])).rows[0];
+        if (!caso || !caso.variant_id || caso.variant_id !== d.data.variant_id) {
+          return error(req, reply, 422, 'confirmar_invalido', 'La variante a confirmar no coincide con la ya vinculada al caso.');
+        }
       }
       const motivo = d.data.confirmar
         ? PREFIJO_MOTIVO_CONFIRMAR + (d.data.motivo ?? 'sku ya vinculado')
