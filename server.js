@@ -23,6 +23,7 @@ import { geminiRouter } from './routes/gemini.js';
 import { nuevosProductosRouter } from './routes/nuevosProductos.js';
 import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
+import { bandejaIdentidadRouter } from './routes/bandejaIdentidad.js';
 import { matcherRouter, dispararRefrescoMl, estadoRefrescoMl } from './routes/matcher.js';
 import { syncRouter, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
@@ -670,6 +671,15 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/mapeo', mapeoRouter(db));
   app.use('/api/csv', csvRouter());
   app.use('/api/matcher', matcherRouter(db, syncCfg));
+  // E3: bandeja de identidad. Proxy firmado a la plataforma (mismo keyring y URL que la copia de sombra); sin esa
+  // configuración responde 503 bandeja_no_configurada, nunca impide arrancar. El permiso `matcher` lo aplica
+  // scopeCheck (lib/permisos.js) y el actor sale de la sesión.
+  app.use('/api/bandeja-identidad', (() => {
+    let keyring = null;
+    try { if (process.env.SOMBRA_KEYRING_FILE) keyring = cargarKeyringInternoActivo(process.env.SOMBRA_KEYRING_FILE); }
+    catch (e) { console.error('[bandeja-identidad] keyring inválido:', e.message); }
+    return bandejaIdentidadRouter({ url: process.env.SOMBRA_PLATAFORMA_URL, keyring });
+  })());
   app.use('/api/sync', syncRouter(db, syncCfg));
   app.use('/api/recepciones', recepcionesRouter(db, wooCfg));
   app.use('/recepcion', express.static(path.join(__dirname, 'public/recepcion')));
