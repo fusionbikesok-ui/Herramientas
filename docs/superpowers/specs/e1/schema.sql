@@ -1410,3 +1410,10 @@ END;
 $$;
 CREATE TRIGGER identity_cases_modelo_misma_empresa BEFORE INSERT OR UPDATE OF model_id, company_id ON catalog.identity_cases
   FOR EACH ROW EXECUTE FUNCTION catalog.identity_cases_modelo_misma_empresa();
+
+-- 0020 (E3 T3): resultado de decidirCaso, INSERT-only.
+CREATE TABLE catalog.identity_decision_results (
+  decision_id uuid PRIMARY KEY REFERENCES catalog.identity_decisions(id) ON DELETE RESTRICT,
+  vinculo text NOT NULL, version int NOT NULL,
+  creado_en timestamptz NOT NULL DEFAULT now()
+);
