@@ -17,3 +17,6 @@
 Rollback: `E3_BANDEJA=0` (vuelve el legado, las decisiones se conservan); `E3_MOTOR=0`; imagen `antes-e3c1`.
 
 Pendiente de configuración en el legado: `SOMBRA_PLATAFORMA_URL` y `SOMBRA_KEYRING_FILE` deben estar definidos para que el proxy no responda 503 `bandeja_no_configurada`.
+
+## Deuda para el corte 3 (marcada por revisión)
+- Si el SKU observado deja de resolver (ninguna o varias), la `auto_sku` en sombra anterior sigue vigente. En sombra no daña; en el canario `vincularMl` la leería, así que la relectura D4 tiene que invalidarla o superarla.
