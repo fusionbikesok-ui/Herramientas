@@ -51,7 +51,9 @@ describe('E3-AUT-01 autoridad de la decisión humana sobre el vínculo', () => {
      VALUES ($1, $2, 'mercadolibre', $3, '', $4, $5, 'copia', 'persona')`, [empresa, ml, recurso, sku, accion]);
 
   /** Decisión humana de la bandeja directamente en identity_decisions (vía la tabla, como haría decidirCaso). */
-  async function decisionHumana(recurso: string, eleccion: 'vincular' | 'omitir', variantId: string | null): Promise<string> {
+  async function decisionHumana(
+    recurso: string, eleccion: 'vincular' | 'omitir' | 'mantener_omision' | 'sin_candidato', variantId: string | null,
+  ): Promise<string> {
     const { rows } = await admin.query<{ id: string }>(
       `INSERT INTO catalog.identity_decisions
          (company_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
@@ -199,8 +201,10 @@ describe('E3-AUT-01 autoridad de la decisión humana sobre el vínculo', () => {
 
     const e = evento('MLA11', 'confirmar', 'FB-100'); // distinto destino que la humana: NO es redundante.
     expect(await aplicar(e, true)).toBe('aplicado');
-    const casos1 = await q<{ estado: string }>("SELECT estado FROM catalog.identity_cases WHERE tipo = 'decision_en_conflicto'");
-    expect(casos1).toEqual([{ estado: 'conflict' }]);
+    const casos1 = await q<{ estado: string; detalle: { legado: { sku: string | null }; e3: string } }>(
+      "SELECT estado, detalle FROM catalog.identity_cases WHERE tipo = 'decision_en_conflicto'");
+    expect(casos1.map((c) => c.estado)).toEqual(['conflict']);
+    const detalleOriginal = casos1[0]!.detalle;
     const auditoria1 = await q<{ n: number }>(
       "SELECT count(*)::int AS n FROM audit.audit_events WHERE action = 'identidad.conflicto_legado' AND payload->>'recurso' = 'MLA11'");
     expect(auditoria1[0]!.n).toBe(1);
@@ -228,5 +232,32 @@ describe('E3-AUT-01 autoridad de la decisión humana sobre el vínculo', () => {
     const auditoria3 = await q<{ n: number }>(
       "SELECT count(*)::int AS n FROM audit.audit_events WHERE action = 'identidad.conflicto_legado' AND payload->>'recurso' = 'MLA11'");
     expect(auditoria3[0]!.n).toBe(2);
+
+    // El ON CONFLICT DO NOTHING del INSERT del caso significa exactamente eso: el segundo evento no toca
+    // la fila ya existente. `detalle` (que guarda el `legado`/`sku` del PRIMER evento y el `e3` de la
+    // decisión humana en ese momento) tiene que seguir siendo el del primero, no el del segundo evento_id.
+    const casoFinal = (await q<{ detalle: { legado: { sku: string | null }; e3: string } }>(
+      "SELECT detalle FROM catalog.identity_cases WHERE tipo = 'decision_en_conflicto'"))[0]!.detalle;
+    expect(casoFinal).toEqual(detalleOriginal);
+  });
+
+  it('mantener_omision de la humana también manda sobre el legado con bandeja on', async () => {
+    await decisionHumana('MLA12', 'mantener_omision', null);
+    await decisionLegado('MLA12', 'confirmar', 'FB-120');
+    await publicacion('MLA12', true);
+    // La humana manda: la publicación nace omitida, no pendiente ni vinculada al SKU del legado.
+    expect(await vinculo('MLA12')).toBe('omitida');
+    await woos(120, true);
+    expect(await vinculo('MLA12')).toBe('omitida');
+  });
+
+  it('sin_candidato de la humana deja la publicación pendiente aunque el legado tenga un SKU asignado', async () => {
+    await decisionHumana('MLA13', 'sin_candidato', null);
+    await decisionLegado('MLA13', 'confirmar', 'FB-130');
+    await publicacion('MLA13', true);
+    // sin_candidato: ningún candidato todavía, la publicación queda pendiente por decisión propia (no la
+    // del legado, que existe pero la humana no la tomó).
+    expect(await vinculo('MLA13')).toBe('pendiente');
+    expect(await casosAbiertos('sku_pendiente')).toEqual([{ tipo: 'sku_pendiente' }]);
   });
 });

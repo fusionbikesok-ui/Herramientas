@@ -299,3 +299,18 @@ describe('E2-CFG-03 compose declara las variables de cada grupo en su servicio',
     });
   }
 });
+
+/*
+ * E3-CFG-02 — mismo defecto de clase que E2-CFG-03, para `E3_BANDEJA`.
+ *
+ * Hallazgo ALTO de la segunda opinión de Codex sobre T2 (commit 447126b6): `E3_BANDEJA` es un campo
+ * top-level de `Config`, no un `CATALOGO_*` ni vive en ninguna `CAMPOS_*`, así que ningún grupo de
+ * E2-CFG-03 lo cubre. Sin esta línea en compose.yml, `.env` podía decir `E3_BANDEJA=1` y el contenedor
+ * nunca lo veía: la bandeja quedaba apagada en producción sin que nada lo avisara. Se prueba por
+ * separado, un solo nombre, en los DOS servicios que la leen (worker y api).
+ */
+describe('E3-CFG-02 compose declara E3_BANDEJA en worker y en api', () => {
+  const declarada = (servicio: string) => new RegExp('^ +E3_BANDEJA: \\$\\{E3_BANDEJA[:}]', 'm').test(bloqueServicio(servicio));
+  it('está declarada en el worker', () => { expect(declarada('worker')).toBe(true); });
+  it('está declarada en la api', () => { expect(declarada('api')).toBe(true); });
+});

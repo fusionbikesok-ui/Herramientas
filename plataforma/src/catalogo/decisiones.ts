@@ -47,6 +47,11 @@ export async function reconciliarClave(
   tx: Consultable, cuenta: string, recurso: string, variacion: string, motivo: string,
   o: { bandeja: boolean },
 ): Promise<Reconciliacion> {
+  // Toma el candado ella misma (hallazgo BAJO de la revisión de Codex sobre T2): `pg_advisory_xact_lock` es
+  // reentrante dentro de la misma transacción, así que si el llamador ya lo tomó esto no cuesta nada extra;
+  // si un llamador futuro se olvida de tomarlo antes, el orden documentado en el módulo (candado de cuenta
+  // antes que filas) queda garantizado igual, en vez de depender de que cada caller lo recuerde.
+  await bloquearDecisiones(tx, cuenta);
   const rep = (await tx.query<{ id: string; company_id: string; variant_id: string | null; omitida_por_decision: boolean }>(
     `SELECT id, company_id, variant_id, omitida_por_decision FROM catalog.external_representations
       WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND tipo = 'vendible' FOR UPDATE`,
