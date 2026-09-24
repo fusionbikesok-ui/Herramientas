@@ -150,6 +150,14 @@ describe('E3 punto B: el título de un ítem ML sin variaciones no se pierde al 
     expect(rep.titulo_observado).toBe('Cubierta con título');
   });
 
+  it('un payload sin título (o sólo espacios) guarda NULL, no una cadena vacía (pedido de opt-16)', async () => {
+    await aplicar('woocommerce', wooSimple([]));
+    await decidirMl();
+    await aplicar('mercadolibre', mlItem([], { title: '   ' }));
+    const rep = (await admin.query(`SELECT titulo_observado FROM catalog.external_representations WHERE canal = 'mercadolibre'`)).rows[0]!;
+    expect(rep.titulo_observado).toBeNull();
+  });
+
   it('hashCatalogo no cambia por titulo_observado: dos estados con distinto título pero igual sku/origen dan el mismo hash', async () => {
     const { hashCatalogo } = await import('../../src/catalogo/conciliacion.ts');
     await aplicar('woocommerce', wooSimple([]));

@@ -123,7 +123,8 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
     // E3 punto B (revisión de opt-16 sobre 5cb02ef5): cuando ML no genera modelo propio (ya cuelga de una
     // variante de Woo), el título del payload no se pierde: se guarda en la representación misma, nunca en
     // un product_models nuevo. modeloMlSql lo usa como último fallback; hashCatalogo no lo lee.
-    const tituloObservado = ctx.canal === 'mercadolibre' && !vinculo.modelo ? p.modelo.titulo : null;
+    // Vacío o sólo espacios no es un título observado: NULL, no ''.
+    const tituloObservado = ctx.canal === 'mercadolibre' && !vinculo.modelo && p.modelo.titulo.trim() ? p.modelo.titulo : null;
     const repId = await upsertRepresentacion(tx, empresa, ctx, obs, vinculo, p.archivar, tituloObservado);
     resumen.representaciones++;
     await persistirExtras(tx, ctx, repId, obs, resumen, empresa);

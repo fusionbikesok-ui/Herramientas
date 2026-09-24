@@ -800,6 +800,10 @@ CREATE TABLE catalog.external_representations (
   moneda                text,
   stock_canal           integer,
   gtin                  text,                 -- evidencia, nunca autoridad: no casa identidades
+  -- Identidad E3 punto B v2 (0021): título del payload de ML para ESTA representación, cuando no hay modelo
+  -- propio que lo guarde (ítem sin variaciones ya vinculado a una variante de Woo). Sólo fallback de lectura
+  -- para modeloMlSql/tituloMlSql; nunca decide identidad ni entra en hashCatalogo.
+  titulo_observado      text,
   CONSTRAINT external_representations_archivo_check CHECK ((archivado_en IS NULL) = (motivo_archivo IS NULL)),
   -- Lo que el diseño pide que la base garantice sola: un contenedor jamás cuelga de una variante.
   -- El nombre no repite "tipo_check": ése lo toma PostgreSQL solo para el CHECK inline de la columna.
