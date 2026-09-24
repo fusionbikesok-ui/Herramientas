@@ -288,4 +288,30 @@ describe('E3-DEC-01 decidirCaso', () => {
     const r = await decidir(pedido({ caseId: randomUUID(), expectedVersion: 1, eleccion: 'sin_candidato' }));
     expect(r).toMatchObject({ ok: false, code: 'caso_inexistente' });
   });
+
+  it('la representación del caso ya está archivada al momento de decidir: caso_sin_publicacion', async () => {
+    const { variante: destino } = await variantePendienteConSku('FB-501');
+    const { caso } = await casoPendiente('MLA501');
+    await admin.query(
+      "UPDATE catalog.external_representations SET archivado_en = now(), motivo_archivo = 'de baja para el test' WHERE recurso = 'MLA501'");
+    const r = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+    expect(r).toMatchObject({ ok: false, code: 'caso_sin_publicacion' });
+    expect((await q<{ n: number }>('SELECT count(*)::int n FROM catalog.identity_decisions WHERE case_id = $1', [caso]))[0]!.n).toBe(0);
+  });
+
+  it('reintento idempotente con distinta situación actual del caso: devuelve EXACTAMENTE lo que devolvió la primera vez, no lo recalcula', async () => {
+    const { variante: destino } = await variantePendienteConSku('FB-502');
+    const { caso } = await casoPendiente('MLA502');
+    const p = pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino });
+    const r1 = await decidir(p);
+    expect(r1).toMatchObject({ ok: true, version: 2, vinculo: 'vinculada' });
+    // Una decisión POSTERIOR (revert) sigue subiendo la versión del caso — el reintento de la primera clave
+    // tiene que seguir devolviendo la versión y el vínculo que dejó ELLA, no la versión actual del caso.
+    if (!r1.ok) return;
+    const r2 = await decidir(pedido({
+      caseId: caso, expectedVersion: 2, eleccion: 'sin_candidato', esAdmin: true, revierte: r1.decisionId }));
+    expect(r2.ok).toBe(true);
+    const r1reintento = await decidir(p);
+    expect(r1reintento).toEqual(r1);
+  });
 });

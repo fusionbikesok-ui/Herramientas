@@ -45,14 +45,14 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
 
   /** Busca una decisión previa con esta clave de idempotencia y arma el resultado de reintento. */
   const buscarPrevia = async (tx: Consultable): Promise<ResultadoDecision | null> => {
-    const previa = (await tx.query<{ id: string; hash_peticion: string; case_id: string }>(
-      'SELECT id, hash_peticion, case_id FROM catalog.identity_decisions WHERE idempotency_key = $1', [p.idempotencyKey])).rows[0];
+    const previa = (await tx.query<{ id: string; hash_peticion: string; resultado_vinculo: Reconciliacion; resultado_version: number }>(
+      'SELECT id, hash_peticion, resultado_vinculo, resultado_version FROM catalog.identity_decisions WHERE idempotency_key = $1', [p.idempotencyKey])).rows[0];
     if (!previa) return null;
     if (previa.hash_peticion !== hash) return { ok: false, code: 'idempotency_mismatch' };
-    const caso = (await tx.query<{ version: number }>('SELECT version FROM catalog.identity_cases WHERE id = $1', [previa.case_id])).rows[0]!;
-    // El resultado de un reintento reporta el estado actual (no el `vinculo` original, que no se guardó):
-    // 'sin_cambios' es correcto porque, de haber cambiado algo, ya cambió en el intento original.
-    return { ok: true, decisionId: previa.id, version: caso.version, vinculo: 'sin_cambios' };
+    // Un reintento devuelve EXACTAMENTE lo que la primera vez devolvió (hallazgo de la segunda opinión de
+    // Codex): no recalcula nada, ni relee el caso — `resultado_version` es la versión que ESA decisión dejó,
+    // no la versión actual del caso, que puede haber seguido subiendo con decisiones posteriores.
+    return { ok: true, decisionId: previa.id, version: previa.resultado_version, vinculo: previa.resultado_vinculo };
   };
 
   return enTransaccion(pool, async (tx) => {
@@ -78,16 +78,30 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
       return reps.length === 1 ? reps[0]!.id : null;
     })();
     if (!repId) return { ok: false, code: 'caso_sin_publicacion' };
-    const rep = (await tx.query<{ channel_account_id: string; recurso: string; variacion_normalizada: string }>(
-      'SELECT channel_account_id, recurso, variacion_normalizada FROM catalog.external_representations WHERE id = $1', [repId])).rows[0];
-    if (!rep) return { ok: false, code: 'caso_sin_publicacion' };
+    // Primera lectura sin candado, sólo para saber en qué cuenta bloquear (channel_account_id no cambia).
+    const repCuenta = (await tx.query<{ channel_account_id: string }>(
+      'SELECT channel_account_id FROM catalog.external_representations WHERE id = $1', [repId])).rows[0];
+    if (!repCuenta) return { ok: false, code: 'caso_sin_publicacion' };
 
     // Paso 3: candado de cuenta, y ahí sí, de nuevo la idempotencia — esta vez con la garantía de que nadie
     // más con la misma clave puede estar insertando en paralelo (mismo candado de cuenta que toma
-    // reconciliarClave/bloquearDecisiones para todo lo demás). Recién después el FOR UPDATE del caso.
-    await bloquearDecisiones(tx, rep.channel_account_id);
+    // reconciliarClave/bloquearDecisiones para todo lo demás).
+    await bloquearDecisiones(tx, repCuenta.channel_account_id);
     const previa2 = await buscarPrevia(tx);
     if (previa2) return previa2;
+
+    // La representación, ahora sí con FOR UPDATE (ya adentro del candado de cuenta) y validada a fondo:
+    // tiene que seguir siendo de ML, vendible, viva y de la MISMA empresa que el caso — nada de esto podía
+    // cambiar entre el paso 2 y acá en la práctica (todo se toca bajo el mismo candado de cuenta), pero
+    // sin la relectura el caso de una representación archivada ENTRE la lectura y el candado pasaba
+    // desapercibido (hallazgo de la segunda opinión de Codex).
+    const rep = (await tx.query<{
+      channel_account_id: string; recurso: string; variacion_normalizada: string; canal: string; tipo: string;
+      archivado_en: Date | null; company_id: string;
+    }>('SELECT channel_account_id, recurso, variacion_normalizada, canal, tipo, archivado_en, company_id FROM catalog.external_representations WHERE id = $1 FOR UPDATE', [repId])).rows[0];
+    if (!rep || rep.canal !== 'mercadolibre' || rep.tipo !== 'vendible' || rep.archivado_en || rep.company_id !== caso.company_id) {
+      return { ok: false, code: 'caso_sin_publicacion' };
+    }
     const bloqueado = (await tx.query<{ version: number; estado: string; cerrado_en: Date | null }>(
       'SELECT version, estado, cerrado_en FROM catalog.identity_cases WHERE id = $1 FOR UPDATE', [p.caseId])).rows[0]!;
 
@@ -117,14 +131,14 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
         WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND efecto = 'aplicar' AND superada_en IS NULL`,
       [rep.channel_account_id, rep.recurso, rep.variacion_normalizada])).rows[0];
     if (p.revierte && p.revierte !== vigente?.id) return { ok: false, code: 'revierte_no_vigente' };
-    const decision = (await tx.query<{ id: string }>(
+    const decisionId = (await tx.query<{ id: string }>(
       `INSERT INTO catalog.identity_decisions
          (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id,
           origen, actor, motivo, efecto, expected_version, idempotency_key, hash_peticion, supersede_a)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'humano', $8, $9, 'aplicar', $10, $11, $12, $13) RETURNING id`,
       [caso.company_id, p.caseId, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, p.eleccion,
         p.eleccion === 'vincular' ? p.variantId : null, p.actor, p.motivo ?? null, p.expectedVersion,
-        p.idempotencyKey, hash, p.revierte ?? vigente?.id ?? null])).rows[0]!;
+        p.idempotencyKey, hash, p.revierte ?? vigente?.id ?? null])).rows[0]!.id;
 
     // Paso 8: sube la versión del caso; queda 'decided' hasta que el paso 10 confirme que el vínculo real
     // se movió (si `reconciliarClave` no cambia nada, el caso se queda en 'decided', no en 'verified').
@@ -138,10 +152,11 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
         ${p.revierte ? ', cerrado_en = NULL, motivo_cierre = NULL' : ''} WHERE id = $1`,
       [p.caseId, version, repId]);
 
-    // Paso 9: el vínculo real lo mueve E2, con la misma bandeja (siempre true acá: si estuviera apagada, ya
-    // se salió en el paso 0 con bandeja_apagada).
+    // Paso 9: el vínculo real lo mueve E2, con la bandeja del contexto (nunca en false acá: si lo estuviera,
+    // ya se salió en el paso 0 con bandeja_apagada; pasar `true` fijo en vez de `o.bandeja` funcionaba igual
+    // en la práctica, pero atarlo al parámetro es lo correcto — hallazgo de la segunda opinión de Codex).
     const vinculo = await reconciliarClave(
-      tx as Consultable, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, `bandeja: ${p.actor}`, { bandeja: true });
+      tx as Consultable, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, `bandeja: ${p.actor}`, { bandeja: o.bandeja });
 
     // Paso 10: cerrar el caso, y sólo si el vínculo real quedó donde la decisión mandaba — no basta con que
     // `reconciliarClave` haya corrido, porque devuelve 'sin_cambios' tanto cuando ya estaba bien (hay que
@@ -193,15 +208,21 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
       'UPDATE catalog.identity_cases SET estado = $2, cerrado_en = now(), motivo_cierre = $3 WHERE id = $1',
       [p.caseId, estadoFinal, motivoCierre]);
 
+    // El resultado queda grabado en la propia decisión: un reintento con la misma idempotency_key lo
+    // devuelve tal cual, sin recalcular nada (hallazgo de la segunda opinión de Codex).
+    await tx.query(
+      'UPDATE catalog.identity_decisions SET resultado_vinculo = $2, resultado_version = $3 WHERE id = $1',
+      [decisionId, vinculo, version]);
+
     // Paso 11: auditoría con actor, antes/después y correlation_id.
     const correlationId = randomUUID();
     await registrarEvento(tx, {
       companyId: caso.company_id, actorType: 'user', actorId: p.actor, action: 'identidad.decision',
       aggregateType: 'identity_case', aggregateId: p.caseId, correlationId, ...(p.motivo ? { reason: p.motivo } : {}),
       payload: { antes: { version: bloqueado.version, estado: bloqueado.estado }, despues: { version, eleccion: p.eleccion, variantId: p.variantId ?? null },
-        revierte: p.revierte ?? null, decisionId: decision.id },
+        revierte: p.revierte ?? null, decisionId },
     });
 
-    return { ok: true, decisionId: decision.id, version, vinculo };
+    return { ok: true, decisionId, version, vinculo };
   });
 }
