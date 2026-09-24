@@ -33,7 +33,11 @@ beforeEach(() => {
     setInterval() { return 1; }, clearInterval() {},
     sessionStorage: { getItem() { return null; }, setItem() {} },
     location: { href: '', pathname: '/preparacion/', search: '' },
-    fetch: vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true, is_admin: 1, user: 'tester' }) })),
+    // ok:false → Api.requirePermiso() redirige y queda con una promesa que nunca resuelve
+    // (ver public/lib/api.js). Así el auto-init de la página (Api.requirePermiso(...).then(
+    // cargarPendientes + iniciarPollingPendientes) en la última <script> del HTML) no dispara
+    // solo, y no compite por microtasks con las llamadas explícitas que hace cada test.
+    fetch: vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: false }) })),
     alert() {}, confirm() { return true; },
     addEventListener() {}, removeEventListener() {},
   };
@@ -195,6 +199,54 @@ describe('preparacion/index.html — buscador de pendientes', () => {
   it('aplica el filtro después de cada render automático', () => {
     const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
     expect(html).toContain('aplicarFiltroPendientes');
+  });
+});
+
+describe('preparacion/index.html — refresco de fondo no toca la lista bajo el dedo', () => {
+  function mockPendientes(pedidos) {
+    ctx.fetch = vi.fn((url) => {
+      if (String(url).includes('/api/preparacion/pendientes')) {
+        return Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true, data: pedidos, actualizado_en: '2026-09-24T12:00:00Z' }) });
+      }
+      return Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true, data: [] }) });
+    });
+  }
+  const pA = { canal: 'ml', ml_order_id: 'A', pack_id: 'A', numero_pedido: 'A', comprador: 'Ana', fecha: '2026-09-24T10:00:00Z', items: [] };
+  const pB = { canal: 'ml', ml_order_id: 'B', pack_id: 'B', numero_pedido: 'B', comprador: 'Beto', fecha: '2026-09-24T09:00:00Z', items: [] };
+
+  it('con el mismo conjunto de pedidos reordenado, no reescribe el DOM mientras hay touch reciente', async () => {
+    ctx.PEND_CACHE = [pA, pB];
+    ctx.PEND_STATUS = 'ready';
+    ctx.ULTIMA_INTERACCION_LISTA = Date.now();
+    const cuerpo = ctx.document.getElementById('cuerpo');
+    cuerpo.innerHTML = '<div class="ped-grid"><div class="ped" data-search="A">A</div><div class="ped" data-search="B">B</div></div>';
+    mockPendientes([pB, pA]); // mismo conjunto, orden invertido
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toBe('<div class="ped-grid"><div class="ped" data-search="A">A</div><div class="ped" data-search="B">B</div></div>');
+  });
+
+  it('con un pedido nuevo y touch reciente, antepone el aviso sin borrar las tarjetas existentes', async () => {
+    ctx.PEND_CACHE = [pA];
+    ctx.PEND_STATUS = 'ready';
+    ctx.ULTIMA_INTERACCION_LISTA = Date.now();
+    const cuerpo = ctx.document.getElementById('cuerpo');
+    const listaOriginal = '<div class="ped-grid"><div class="ped" data-search="A">A</div></div>';
+    cuerpo.innerHTML = listaOriginal;
+    mockPendientes([pA, pB]); // entra un pedido nuevo
+    await ctx.cargarDatosSilenciosos();
+    const html = ctx.document.getElementById('cuerpo').innerHTML;
+    expect(html).toContain(listaOriginal);
+    expect(html).toContain('pend-aviso-nuevos');
+    expect(ctx.PEND_CACHE).toEqual([pA]); // el cache visible no cambia hasta que el operario toca el aviso
+  });
+
+  it('sin interacción reciente, sí actualiza y re-renderiza normalmente', async () => {
+    ctx.PEND_CACHE = [pA];
+    ctx.PEND_STATUS = 'ready';
+    ctx.ULTIMA_INTERACCION_LISTA = 0; // sin touch reciente
+    mockPendientes([pA, pB]);
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.PEND_CACHE).toEqual([pA, pB]);
   });
 });
 

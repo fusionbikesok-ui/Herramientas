@@ -968,12 +968,19 @@ function aplicarFiltroPendientes(){
   });
 }
 
-function renderPendientesAvisoNuevos(){
-  // Muestra un aviso sticky de pedidos nuevos con opción de actualizar
+// Ojo: NO usa c.innerHTML=... con contenido nuevo — eso es exactamente el bug que esto
+// corrige (arrasa las tarjetas que el operario tiene bajo el dedo). Se antepone el aviso
+// como texto plano al innerHTML existente, dejando la lista intacta debajo. Solo se muestra
+// una vez por ventana de bloqueo (pendAvisoActivo); refrescos silenciosos posteriores mientras
+// sigue tocando actualizan el conteo guardado pero no duplican ni tocan el aviso ya pintado.
+var pendAvisoActivo=false;
+function mostrarAvisoNuevosPendientes(n){
+  if(pendAvisoActivo)return;
   var c=document.getElementById('cuerpo');
-  var html='<section class="jornada-panel cola-directa" aria-labelledby="cola-title"><div class="jornada-head"><div><h2 id="cola-title">Pedidos para preparar</h2><div class="jornada-meta">Abrí un pedido y verificá cada unidad con su código.</div></div><button class="btn sec mini" onclick="cargarPendientes()">Actualizar</button></div><p class="jornada-note">La cola se actualiza automáticamente. MercadoLibre aparece primero y luego los pedidos más antiguos.</p></section>';
-  html+='<div class="flash warn" style="display:block;cursor:pointer" onclick="actualizarPendientesDesdeCambios()" role="button" tabindex="0" onkeypress="if(event.key===\'Enter\')actualizarPendientesDesdeCambios()">Hay <b>'+PEND_CAMBIOS_PENDIENTES.length+'</b> pedidos nuevos. Toca para actualizar.</div>';
-  c.innerHTML=html;
+  var texto='Hay <b>'+n+'</b> pedido'+(n===1?'':'s')+' nuevo'+(n===1?'':'s')+' — tocá para actualizar.';
+  var aviso='<div id="pend-aviso-nuevos" class="flash warn" style="display:block;cursor:pointer" role="button" tabindex="0" onclick="actualizarPendientesDesdeCambios()" onkeypress="if(event.key===\'Enter\')actualizarPendientesDesdeCambios()">'+texto+'</div>';
+  c.innerHTML=aviso+c.innerHTML;
+  pendAvisoActivo=true;
 }
 
 function actualizarPendientesDesdeCambios(){
@@ -983,6 +990,7 @@ function actualizarPendientesDesdeCambios(){
     registrarPendientesNuevos(pedidos,true);
     PEND_CACHE=pedidos;
     PEND_CAMBIOS_PENDIENTES=null;
+    pendAvisoActivo=false;
     ULTIMA_INTERACCION_LISTA=0; // Reset la ventana
     renderPendientes();
   }
@@ -1000,11 +1008,15 @@ function registrarInteraccionLista(){
   ULTIMA_INTERACCION_LISTA=Date.now();
 }
 
+var pendientesListenersListos=false;
 function iniciarPollingPendientes(){
   detenerPollingPendientes();
-  // Registra touches/scrolls en la lista para evitar reordenamientos bajo el dedo
+  // Registra touches/scrolls en la lista para evitar reordenamientos bajo el dedo. Una sola
+  // vez por carga de página — ir('pendientes') puede llamar a esto muchas veces por turno y
+  // #cuerpo es el mismo nodo siempre, así que sin esta guarda se acumulaban listeners.
   var c=document.getElementById('cuerpo');
-  if(c){
+  if(c&&!pendientesListenersListos){
+    pendientesListenersListos=true;
     c.addEventListener('touchstart', registrarInteraccionLista);
     c.addEventListener('touchmove', registrarInteraccionLista);
     c.addEventListener('scroll', registrarInteraccionLista);
@@ -1034,24 +1046,26 @@ async function cargarDatosSilenciosos(){
     if(!pr.body.ok)throw new Error(pr.body.error||'No se pudo actualizar la cola');
     var pedidos=pr.body.data||[];
 
-    // Si hay interacción reciente y cambió el conjunto, congela la vista
+    // Interacción táctil reciente: NUNCA re-renderiza mientras dure la ventana, cambió o no
+    // el conjunto — un reordenamiento con el mismo conjunto (el caso más común: nadie entró
+    // ni salió, sólo corrió la prioridad) es tan peligroso bajo el dedo como una alta nueva.
     if(debeLockearRefreshPendientes()){
       var nuevasClaves={}, viejasClaves={};
       PEND_CACHE.forEach(function(p){ viejasClaves[clavePendiente(p)]=true; });
       pedidos.forEach(function(p){ nuevasClaves[clavePendiente(p)]=true; });
-      // Compara las claves para detectar cambios (órdenes nuevas o desapariciones)
-      var cambiaron=false;
-      if(Object.keys(nuevasClaves).length !== Object.keys(viejasClaves).length){ cambiaron=true; }
-      else { for(var k in nuevasClaves){ if(!viejasClaves[k]){ cambiaron=true; break; } } }
-      if(cambiaron){
-        // Guarda los cambios pendientes pero NO actualiza el cache ni re-renderiza
+      var entraron=pedidos.filter(function(p){ return !viejasClaves[clavePendiente(p)]; });
+      var salieron=PEND_CACHE.filter(function(p){ return !nuevasClaves[clavePendiente(p)]; });
+      if(entraron.length||salieron.length){
+        // Guarda los cambios pendientes pero NO toca el cache visible ni re-renderiza.
         PEND_CAMBIOS_PENDIENTES=pedidos;
-        renderPendientesAvisoNuevos();
-        return;
+        mostrarAvisoNuevosPendientes(entraron.length);
       }
+      // Sin altas/bajas (o con aviso ya mostrado): no se toca el DOM. El próximo ciclo,
+      // ya sin bloqueo, va a traer el dato fresco.
+      return;
     }
 
-    // Sin interacción reciente, o sin cambios: actualiza todo normalmente
+    // Sin interacción reciente: actualiza todo normalmente
     registrarPendientesNuevos(pedidos,true);PEND_CACHE=pedidos;PEND_META={actualizado_en:pr.body.actualizado_en,sync_error:pr.body.sync_error};
     // Una cancelación puede llegar en cualquier momento: si el refresco de fondo no las
     // trajera, la tarea de devolución sólo aparecería al recargar la pantalla entera.
@@ -1138,7 +1152,7 @@ function cardPendiente(p){
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
   var despacho=despachoSla(p)||(p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(fecha(p.fecha_despacho))+'</b></div>':'');
   // data-search: para filtrado en cliente por número, pack, comprador
-  var searchData=numMostrar(p)+' '+p.pack_id+' '+p.numero_pedido+' '+(p.comprador||'');
+  var searchData=numMostrar(p)+' '+(p.pack_id||'')+' '+(p.numero_pedido||'')+' '+(p.comprador||'');
   return '<div class="ped'+(marcaNuevo?' nuevo':'')+'" data-search="'+esc(searchData)+'" onclick="prepararClave(\''+esc(clavePendiente(p)).replace(/'/g,'&#39;')+'\')">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span><span style="display:flex;align-items:center;gap:6px">'+marcaNuevo+canal+'</span></div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
