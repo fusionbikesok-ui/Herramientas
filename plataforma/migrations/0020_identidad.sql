@@ -61,12 +61,34 @@ REVOKE UPDATE, DELETE ON catalog.identity_decisions FROM plataforma_app;
 -- estado de la tabla en el momento del INSERT. Si se marcara la anterior superada DESPUÉS de insertar
 -- la nueva, las dos filas coexistirían con `superada_en IS NULL` en el instante de la evaluación del
 -- índice y el propio INSERT violaría el UNIQUE que se supone que este trigger evita.
+--
+-- SECURITY DEFINER es justamente lo que hace peligroso no validar `supersede_a` a fondo (hallazgo de
+-- revisión): sin las comprobaciones de abajo, la app (que no tiene UPDATE directo) podría insertar una
+-- fila con `supersede_a` apuntando a la decisión VIGENTE DE OTRA CLAVE y "retirarla" sin pasar por
+-- decidirCaso — un UPDATE encubierto vía el trigger. Por eso NEW.supersede_a tiene que ser, ya
+-- superada_en IS NULL, de la MISMA clave natural (channel_account_id, recurso, variacion_normalizada,
+-- efecto) y la MISMA empresa que NEW: si no existe, si la clave no coincide o si ya estaba superada,
+-- el trigger aborta el INSERT entero en vez de dejar pasar un UPDATE que tocó 0 filas en silencio.
 CREATE FUNCTION catalog.identity_decisions_superar_anterior() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = catalog AS $$
+DECLARE anterior catalog.identity_decisions;
 BEGIN
   IF NEW.supersede_a IS NOT NULL THEN
-    UPDATE catalog.identity_decisions SET superada_en = now()
-     WHERE id = NEW.supersede_a AND superada_en IS NULL;
+    SELECT * INTO anterior FROM catalog.identity_decisions WHERE id = NEW.supersede_a;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'supersede_a % no existe', NEW.supersede_a USING ERRCODE = 'foreign_key_violation';
+    END IF;
+    IF anterior.superada_en IS NOT NULL THEN
+      RAISE EXCEPTION 'supersede_a % ya estaba superada', NEW.supersede_a USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF anterior.company_id <> NEW.company_id
+       OR anterior.channel_account_id <> NEW.channel_account_id
+       OR anterior.recurso <> NEW.recurso
+       OR anterior.variacion_normalizada <> NEW.variacion_normalizada
+       OR anterior.efecto <> NEW.efecto THEN
+      RAISE EXCEPTION 'supersede_a % es de otra clave o empresa', NEW.supersede_a USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    UPDATE catalog.identity_decisions SET superada_en = now() WHERE id = NEW.supersede_a;
   END IF;
   RETURN NEW;
 END $$;

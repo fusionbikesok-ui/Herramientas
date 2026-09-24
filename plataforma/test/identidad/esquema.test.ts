@@ -72,6 +72,21 @@ async function decisionHumana(
   return r.rows[0]!.id;
 }
 
+/** Como decisionHumana, pero deja fijar supersede_a a mano (para forzar los casos que el trigger tiene que rechazar). */
+async function decisionConSupersede(
+  db: pg.Client, e: { empresa: string; ml: string }, caseId: string, variantId: string,
+  o: { recurso: string; variacion?: string; supersedeA: string; idempotencyKey?: string },
+): Promise<string> {
+  const r = await db.query<{ id: string }>(
+    `INSERT INTO catalog.identity_decisions
+       (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id,
+        origen, actor, efecto, idempotency_key, supersede_a)
+     VALUES ($1, $2, $3, $4, $5, 'vincular', $6, 'humano', 'test', 'aplicar', $7, $8) RETURNING id`,
+    [e.empresa, caseId, e.ml, o.recurso, o.variacion ?? '', variantId, o.idempotencyKey ?? randomUUID(), o.supersedeA],
+  );
+  return r.rows[0]!.id;
+}
+
 afterEach(async () => {
   const db = await admin();
   // Forward-only también en los tests: se limpia el catálogo, nunca el esquema.
@@ -124,6 +139,22 @@ describe('E3-SCH-01 esquema de identity_decisions/candidates/evidence', () => {
       .rejects.toThrow(/permission denied/i);
   });
 
+  // Guardia contra la 0013: dejó `ALTER DEFAULT PRIVILEGES ... IN SCHEMA catalog GRANT UPDATE`, así que
+  // CUALQUIER tabla nueva del esquema catalog hereda UPDATE para plataforma_app sin que la migración que
+  // la crea tenga que pedirlo (0014 ya confía en eso explícitamente). El REVOKE puntual de la 0020 corrige
+  // esta tabla, pero nada impide que una migración futura repita un GRANT que lo vuelva a abrir en
+  // silencio. Este test no revisa el texto de las migraciones: revisa el privilegio real en la base
+  // migrada, así que cualquier forma de reabrirlo (un GRANT nuevo, revertir el REVOKE, un default
+  // privilege distinto) rompe la suite, sea cual sea el mecanismo.
+  it('has_table_privilege confirma que plataforma_app no tiene UPDATE ni DELETE sobre identity_decisions', async () => {
+    const db = await admin();
+    const r = await db.query<{ update: boolean; delete: boolean }>(
+      `SELECT has_table_privilege('plataforma_app', 'catalog.identity_decisions', 'UPDATE') AS update,
+              has_table_privilege('plataforma_app', 'catalog.identity_decisions', 'DELETE') AS delete`);
+    expect(r.rows[0]!.update).toBe(false);
+    expect(r.rows[0]!.delete).toBe(false);
+  });
+
   it('(e) identity_cases.version vale 1 y estado vale actionable por omisión', async () => {
     const db = await admin(); const e = await sembrar(db);
     const m = await modelo(db, e); const v = await variante(db, e.empresa, m);
@@ -164,5 +195,45 @@ describe('E3-SCH-01 esquema de identity_decisions/candidates/evidence', () => {
     const r = await db.query<{ superada_en: Date | null }>(
       `SELECT superada_en FROM catalog.identity_decisions WHERE id = $1`, [d1]);
     expect(r.rows[0]!.superada_en).not.toBeNull();
+  });
+
+  it('supersede_a de OTRA clave se rechaza: la vigente ajena no queda superada (retiro encubierto vía el trigger)', async () => {
+    const db = await admin(); const e = await sembrar(db);
+    const m = await modelo(db, e);
+    const v1 = await variante(db, e.empresa, m); const v2 = await variante(db, e.empresa, m); const v3 = await variante(db, e.empresa, m);
+    const c1 = await caso(db, e, v1); const c2 = await caso(db, e, v2); const c3 = await caso(db, e, v3);
+    // d1 vigente sobre MLA1; intento de insertar una decisión de OTRA clave (MLA2) declarando
+    // supersede_a=d1: el trigger tiene que rechazarla, no "retirar" a d1 en silencio.
+    const d1 = await decisionHumana(db, e, c1, v1, { recurso: 'MLA1', variacion: '' });
+    await decisionHumana(db, e, c2, v2, { recurso: 'MLA2', variacion: '' }); // para tener un id de otra clave, sin usarlo como supersede_a acá
+    await expect(decisionConSupersede(db, e, c3, v3, { recurso: 'MLA3', variacion: '', supersedeA: d1 }))
+      .rejects.toThrow(/otra clave o empresa/i);
+
+    const r = await db.query<{ superada_en: Date | null }>(
+      `SELECT superada_en FROM catalog.identity_decisions WHERE id = $1`, [d1]);
+    expect(r.rows[0]!.superada_en).toBeNull(); // d1 sigue vigente: el intento no tuvo ningún efecto parcial
+  });
+
+  it('supersede_a ya superada se rechaza', async () => {
+    const db = await admin(); const e = await sembrar(db);
+    const m = await modelo(db, e);
+    const v1 = await variante(db, e.empresa, m); const v2 = await variante(db, e.empresa, m); const v3 = await variante(db, e.empresa, m);
+    const c1 = await caso(db, e, v1); const c2 = await caso(db, e, v2); const c3 = await caso(db, e, v3);
+    const d1 = await decisionHumana(db, e, c1, v1, { recurso: 'MLA1', variacion: '' });
+    const d2 = await decisionConSupersede(db, e, c2, v2, { recurso: 'MLA1', variacion: '', supersedeA: d1 }); // supera a d1, ok
+    // Ahora d1 ya está superada: un tercer INSERT que la vuelva a nombrar tiene que fallar.
+    await expect(decisionConSupersede(db, e, c3, v3, { recurso: 'MLA1', variacion: '', supersedeA: d1 }))
+      .rejects.toThrow(/ya estaba superada/i);
+    void d2;
+  });
+
+  it('supersede_a de otra empresa se rechaza', async () => {
+    const db = await admin();
+    const eA = await sembrar(db); const eB = await sembrar(db);
+    const mA = await modelo(db, eA); const vA = await variante(db, eA.empresa, mA); const cA = await caso(db, eA, vA);
+    const mB = await modelo(db, eB); const vB = await variante(db, eB.empresa, mB); const cB = await caso(db, eB, vB);
+    const dA = await decisionHumana(db, eA, cA, vA, { recurso: 'MLA1', variacion: '' });
+    await expect(decisionConSupersede(db, eB, cB, vB, { recurso: 'MLA1', variacion: '', supersedeA: dA }))
+      .rejects.toThrow(/otra clave o empresa/i);
   });
 });
