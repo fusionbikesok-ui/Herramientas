@@ -137,9 +137,6 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
       if (!v || v.company_id !== caso.company_id || v.archivado_en) return { ok: false, code: 'variante_invalida' };
     }
 
-    // Paso 6: revertir es cosa de administración.
-    if (p.revierte && !p.esAdmin) return { ok: false, code: 'solo_admin' };
-
     // Paso 7: la decisión vigente actual de esa clave (para supersede_a — la propia tabla trae el trigger
     // que la marca superada; acá sólo hace falta apuntarle). Si `p.revierte` viene informado, tiene que SER
     // esa vigente: el trigger `identity_decisions_superar_anterior` valida lo mismo y aborta el INSERT con
@@ -150,6 +147,24 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
         WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND efecto = 'aplicar' AND superada_en IS NULL`,
       [rep.channel_account_id, rep.recurso, rep.variacion_normalizada])).rows[0];
     if (p.revierte && p.revierte !== vigente?.id) return { ok: false, code: 'revierte_no_vigente' };
+
+    // Paso 6: revertir es de administración, SALVO deshacer lo propio (decisión de José, enmienda de
+    // interfaz 2026-09-24): un no-admin puede revertir su PROPIA decisión si se cumplen las 4 condiciones
+    // exactas — si falta cualquiera, solo_admin. La condición 1 (que sea la vigente) ya la validó el
+    // chequeo de arriba (revierte_no_vigente es más específico y prevalece); acá sólo faltan actor, tiempo
+    // y versión.
+    if (p.revierte && !p.esAdmin) {
+      const propia = (await tx.query<{ actor: string; creado_en: Date }>(
+        'SELECT actor, creado_en FROM catalog.identity_decisions WHERE id = $1', [p.revierte])).rows[0];
+      const resultadoPropia = (await tx.query<{ version: number }>(
+        'SELECT version FROM catalog.identity_decision_results WHERE decision_id = $1', [p.revierte])).rows[0];
+      const segundosTranscurridos = propia ? (Date.now() - propia.creado_en.getTime()) / 1000 : Infinity;
+      const puedeDeshacerLoPropio = !!propia && !!resultadoPropia
+        && propia.actor === p.actor                              // 2. mismo actor
+        && segundosTranscurridos < 60                             // 3. menos de 60 s (reloj del servidor)
+        && resultadoPropia.version === bloqueado.version;         // 4. la versión del caso es la que dejó esa decisión
+      if (!puedeDeshacerLoPropio) return { ok: false, code: 'solo_admin' };
+    }
     const decisionId = (await tx.query<{ id: string }>(
       `INSERT INTO catalog.identity_decisions
          (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id,

@@ -147,13 +147,14 @@ describe('E3-DEC-01 decidirCaso', () => {
     expect(r).toMatchObject({ ok: false, code: 'variante_invalida' });
   });
 
-  it('(g) revertir sin admin: solo_admin', async () => {
+  it('(g) revertir sin admin lo de OTRO actor: solo_admin (deshacer lo propio no aplica)', async () => {
     const { variante: destino } = await variantePendienteConSku('FB-7');
     const { caso } = await casoPendiente('MLA7');
-    const original = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+    const original = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino, actor: 'jose' }));
     expect(original.ok).toBe(true);
     if (!original.ok) return;
-    const r = await decidir(pedido({ caseId: caso, expectedVersion: 2, eleccion: 'sin_candidato', esAdmin: false, revierte: original.decisionId }));
+    const r = await decidir(pedido({
+      caseId: caso, expectedVersion: 2, eleccion: 'sin_candidato', actor: 'maria', esAdmin: false, revierte: original.decisionId }));
     expect(r).toMatchObject({ ok: false, code: 'solo_admin' });
   });
 
@@ -175,6 +176,60 @@ describe('E3-DEC-01 decidirCaso', () => {
     const vActual = await vinculo('MLA8');
     expect(vActual).not.toBe(destino);
     void pendienteOriginal;
+  });
+
+  describe('deshacer lo propio sin ser admin (enmienda de interfaz 2026-09-24, decisión de José)', () => {
+    /** Corre `original` un par de segundos atrás y le fuerza `creado_en` a `hace` segundos, para no depender del reloj real. */
+    async function decisionHaceSegundos(caso: string, destino: string, actor: string, hace: number) {
+      const original = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino, actor }));
+      expect(original.ok).toBe(true);
+      if (!original.ok) throw new Error('setup: la decisión original falló');
+      await admin.query(
+        "UPDATE catalog.identity_decisions SET creado_en = now() - ($2 || ' seconds')::interval WHERE id = $1",
+        [original.decisionId, hace]);
+      return original;
+    }
+
+    it('deshacer lo propio a los 5 s: ok', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-10');
+      const { caso } = await casoPendiente('MLA10');
+      const original = await decisionHaceSegundos(caso, destino, 'jose', 5);
+      const r = await decidir(pedido({
+        caseId: caso, expectedVersion: 2, eleccion: 'sin_candidato', actor: 'jose', esAdmin: false, revierte: original.decisionId }));
+      expect(r.ok).toBe(true);
+    });
+
+    it('deshacer lo propio a los 61 s: solo_admin (pasó la tolerancia del servidor)', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-11');
+      const { caso } = await casoPendiente('MLA11');
+      const original = await decisionHaceSegundos(caso, destino, 'jose', 61);
+      const r = await decidir(pedido({
+        caseId: caso, expectedVersion: 2, eleccion: 'sin_candidato', actor: 'jose', esAdmin: false, revierte: original.decisionId }));
+      expect(r).toMatchObject({ ok: false, code: 'solo_admin' });
+    });
+
+    it('deshacer lo de OTRO actor, aunque sea reciente: solo_admin', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-12');
+      const { caso } = await casoPendiente('MLA12');
+      const original = await decisionHaceSegundos(caso, destino, 'jose', 5);
+      const r = await decidir(pedido({
+        caseId: caso, expectedVersion: 2, eleccion: 'sin_candidato', actor: 'maria', esAdmin: false, revierte: original.decisionId }));
+      expect(r).toMatchObject({ ok: false, code: 'solo_admin' });
+    });
+
+    it('con el caso tocado después (versión avanzó sin pasar por otra decisión de esta clave): solo_admin, aunque `original` siga siendo la vigente', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-13');
+      const { caso } = await casoPendiente('MLA13');
+      const original = await decisionHaceSegundos(caso, destino, 'jose', 5);
+      // Alguien tocó el caso después de esta decisión (p.ej. una nota, otro campo de identity_cases) sin
+      // pasar por decidirCaso de nuevo: la versión avanzó más allá de la que `original` dejó en
+      // identity_decision_results, así que la condición 4 ("nadie lo tocó después") ya no se cumple —
+      // aunque `original` siga siendo, técnicamente, la decisión vigente de la clave (no hay otra encima).
+      await admin.query('UPDATE catalog.identity_cases SET version = version + 1 WHERE id = $1', [caso]);
+      const r = await decidir(pedido({
+        caseId: caso, expectedVersion: 3, eleccion: 'sin_candidato', actor: 'jose', esAdmin: false, revierte: original.decisionId }));
+      expect(r).toMatchObject({ ok: false, code: 'solo_admin' });
+    });
   });
 
   it('(i) bandeja:false devuelve bandeja_apagada y no escribe ninguna fila', async () => {
