@@ -123,6 +123,11 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     }
     expect(juntas).toEqual(esperado);
     expect((await get(`${PREFIJO_IDENTIDAD}/casos?cursor=basura`)).status).toBe(422);
+    // Filtro por grupo (chips de la pantalla): sólo ese grupo, contadores intactos, y grupo inválido → 422.
+    const soloD5 = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=1`);
+    expect(soloD5.body.casos.map((c: any) => c.id)).toEqual([d5.id]);
+    expect(soloD5.body.contadores.resto).toBe(1);
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos?grupo=9`)).status).toBe(422);
   });
 
   it('un caso abierto sin publicación única no sale en la cola pero se cuenta en no_decidibles', async () => {

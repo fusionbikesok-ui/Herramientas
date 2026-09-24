@@ -1,7 +1,7 @@
 /*
  * src/api/identidad-interna.ts — E3 corte 1 tarea 5: la API interna de la bandeja de identidad.
  *
- *   GET  /internal/v1/identidad/casos?tipo&estado&cursor&limit   cola priorizada (paginada por cursor)
+ *   GET  /internal/v1/identidad/casos?tipo&estado&grupo&cursor&limit   cola priorizada (paginada por cursor)
  *   GET  /internal/v1/identidad/casos/:id                        detalle de un caso
  *   POST /internal/v1/identidad/casos/:id/decisiones             decidir (Idempotency-Key obligatoria)
  *   GET  /internal/v1/identidad/variantes?q=                     buscar "otra variante" (SKU exacto o título)
@@ -43,7 +43,7 @@ const Decision = z.strictObject({
   actor: z.strictObject({ usuario: z.string().min(1).max(200), es_admin: z.boolean() }),
 });
 const ConsultaCola = z.strictObject({
-  tipo: z.string().max(64).optional(), estado: z.string().max(32).optional(),
+  tipo: z.string().max(64).optional(), estado: z.string().max(32).optional(), grupo: z.coerce.number().int().min(0).max(4).optional(),
   cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(LIMITE_MAXIMO).default(LIMITE_POR_DEFECTO),
 });
 const ConsultaVariantes = z.strictObject({ q: z.string().trim().min(1).max(200) });
@@ -166,9 +166,10 @@ export function registrarIdentidadInterna(
             WHERE c.company_id = $1 AND c.cerrado_en IS NULL AND r.id IS NOT NULL
               AND ($2::text IS NULL OR c.tipo = $2) AND ($3::text IS NULL OR c.estado = $3))
          SELECT *, to_char(abierto_en AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS abierto_iso FROM cola
-          WHERE $4::int IS NULL OR (g, abierto_en, id) > ($4::int, $5::timestamptz, $6::uuid)
+          WHERE ($8::int IS NULL OR g = $8::int)
+            AND ($4::int IS NULL OR (g, abierto_en, id) > ($4::int, $5::timestamptz, $6::uuid))
           ORDER BY g, abierto_en, id LIMIT $7`,
-        [auth.empresa, q.data.tipo ?? null, q.data.estado ?? null, cur?.g ?? null, cur?.a ?? null, cur?.id ?? null, q.data.limit + 1]);
+        [auth.empresa, q.data.tipo ?? null, q.data.estado ?? null, cur?.g ?? null, cur?.a ?? null, cur?.id ?? null, q.data.limit + 1, q.data.grupo ?? null]);
       // Contadores para los chips de la cabecera (spec §6): mismos filtros de empresa y abiertos, SIN cursor ni
       // tipo/estado, para que los números sean los de toda la bandeja. `no_decidibles` (A): abiertos sin publicación
       // única — no salen en la cola, pero se cuentan para que no se pierdan de vista.
