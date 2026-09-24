@@ -332,6 +332,7 @@
     // P3: el revierte necesita el decision_id, que llega con el 200; si el guardado sigue en vuelo, se espera.
     u.entry.promise.then(function (e) {
       if (e.estado !== 'ok') return; // ya se avisó el rechazo y se volvió a ese caso
+      if (Date.now() - u.ts > L.VENTANA_DESHACER_MS) { aviso('rechazo', 'No se pudo deshacer: el guardado tardó más que el tiempo para deshacer.'); return; }
       return http('POST', '/casos/' + encodeURIComponent(e.casoId) + '/decisiones',
         { expected_version: e.versionNueva, eleccion: 'sin_candidato', revierte: e.decisionId }, crypto.randomUUID())
         .then(function (r) {

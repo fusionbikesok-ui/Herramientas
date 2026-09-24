@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
+import Fastify from '../plataforma/node_modules/fastify/fastify.js';
 import { bandejaIdentidadRouter } from '../routes/bandejaIdentidad.js';
 import { resolvePermiso, permiteAcceso } from '../lib/permisos.js';
 import { crearOrigenes, verificarInterna } from '../plataforma/src/seguridad/interna.ts';
@@ -91,6 +92,23 @@ describe('E3 T6 proxy de la bandeja de identidad', () => {
     await request(app({ user: operador, fetch: p.fetch })).get('/api/bandeja-identidad/casos').query({ grupo: '1', limit: '50' });
     expect(new URL(p.recibidos[0].ruta, 'http://x').searchParams.get('grupo')).toBe('1');
     expect(p.recibidos[0].firmaValida).toBe(true);
+  });
+
+  it('contra un Fastify real: la firma de un GET con query especial la acepta verificarInterna con el req.url que ve Fastify', async () => {
+    const visto = [];
+    const f = Fastify();
+    f.get('/internal/v1/identidad/variantes', async (req) => {
+      const v = verificarInterna({ keyring, origenes, direccion: '127.0.0.1', headers: req.headers, metodo: 'GET', path: req.url, cuerpo: Buffer.alloc(0), ahoraMs: Date.now() });
+      visto.push({ ok: v.ok, q: req.query.q });
+      return { variantes: [] };
+    });
+    await f.listen({ port: 0, host: '127.0.0.1' });
+    try {
+      const url = `http://127.0.0.1:${f.server.address().port}`;
+      const r = await request(app({ user: operador, fetch: globalThis.fetch, url })).get('/api/bandeja-identidad/variantes').query({ q: 'casco ñandú 50% a_b' });
+      expect(r.status).toBe(200);
+      expect(visto).toEqual([{ ok: true, q: 'casco ñandú 50% a_b' }]);
+    } finally { await f.close(); }
   });
 
   it('el detalle valida el id y firma el GET', async () => {
