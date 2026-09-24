@@ -31,8 +31,8 @@ describe('paridad del matching ML → Woo (muestra-30.json, 30 pares reales)', (
         puntaje: x.score,
         explicacion: {
           atributos: [
-            { nombre: 'color', marca: marca(x.color_ok, valorMlColor, valorCandColor), valorMl: valorMlColor, valorCandidato: valorCandColor },
-            { nombre: 'talle', marca: marca(x.talle_ok, valorMlTalle, valorCandTalle), valorMl: valorMlTalle, valorCandidato: valorCandTalle },
+            { nombre: 'color', marca: marca(x.color_ok, valorMlColor, valorCandColor), valorMl: valorMlColor, valorCandidato: valorCandColor, valorMlOriginal: ml.color ?? ml.ml_variations ?? '', valorCandidatoOriginal: wItem.colorOriginal },
+            { nombre: 'talle', marca: marca(x.talle_ok, valorMlTalle, valorCandTalle), valorMl: valorMlTalle, valorCandidato: valorCandTalle, valorMlOriginal: ml.talle ?? ml.ml_variations ?? '', valorCandidatoOriginal: wItem.talleOriginal },
           ],
         },
       };
@@ -73,5 +73,16 @@ describe('candidatosDe usa la posición del ítem, no busca por SKU (SKU repetid
     const [c] = candidatosDe(ml, [], idx, 1);
     expect(c!.explicacion.atributos.find((a) => a.nombre === 'color')!.valorCandidato).toBe(
       [...idx.wcItems.find((w) => w.nombre.includes('Negro'))!.colorToks].join(' '));
+  });
+});
+
+describe('texto original de cada lado (para mostrar lo que dice la publicación, no sólo los tokens)', () => {
+  it('ML: el color/talle crudo; Woo: la opción del atributo tal cual', () => {
+    const idx = construirWCIndex([{ sku: 'FB-5', nombre: 'Casco Bell', tipo: 'variation',
+      atributos_json: [{ name: 'Color', option: 'Negro Mate' }, { name: 'Talle', option: 'M/L' }] }]);
+    const ml: ItemMl = { ml_title: 'Casco Bell', ml_es_variante: true, color: 'Negro', talle: 'M', _ct: ctDesdeApi('Negro', 'M') };
+    const [c] = candidatosDe(ml, [], idx, 1);
+    expect(c!.explicacion.atributos[0]).toMatchObject({ nombre: 'color', valorMlOriginal: 'Negro', valorCandidatoOriginal: 'Negro Mate' });
+    expect(c!.explicacion.atributos[1]).toMatchObject({ nombre: 'talle', valorMlOriginal: 'M', valorCandidatoOriginal: 'M/L' });
   });
 });

@@ -65,7 +65,10 @@ const PUBLICACION = `LEFT JOIN LATERAL (
      WHERE r0.id = c.representation_id
         OR (c.representation_id IS NULL AND c.variant_id IS NOT NULL AND r0.variant_id = c.variant_id
             AND r0.canal = 'mercadolibre' AND r0.archivado_en IS NULL)) x
-   WHERE x.n = 1) r ON true`;
+   -- Las mismas condiciones que decidirCaso valida sobre la representación resuelta (en las DOS ramas): si no
+   -- las cumple, el POST daría caso_sin_publicacion, así que el caso cae en no_decidibles y no en la cola.
+   WHERE x.n = 1 AND x.canal = 'mercadolibre' AND x.tipo = 'vendible' AND x.archivado_en IS NULL
+     AND x.company_id = c.company_id) r ON true`;
 
 interface Cursor { g: number; a: string; id: string }
 const codificar = (c: Cursor) => Buffer.from(JSON.stringify(c)).toString('base64url');

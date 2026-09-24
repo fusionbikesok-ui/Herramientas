@@ -1,5 +1,5 @@
-export interface ItemMl { ml_title: string; ml_es_variante: boolean; ml_variations?: string; _ct?: Atributos; }
-export interface ItemWoo { sku: string; nombre: string; tipo: string; color: string; talle: string; img: string; baseNorm: string; colorToks: Set<string>; talleToks: Set<string>; }
+export interface ItemMl { ml_title: string; ml_es_variante: boolean; ml_variations?: string; color?: string; talle?: string; _ct?: Atributos; }
+export interface ItemWoo { sku: string; nombre: string; tipo: string; color: string; talle: string; img: string; baseNorm: string; colorToks: Set<string>; talleToks: Set<string>; colorOriginal: string; talleOriginal: string; }
 export interface IndiceWoo { wcItems: ItemWoo[]; indice: Record<string, number[]>; }
 interface Atributos { colores: Set<string>; talles: Set<string>; }
 interface Resultado { pos: number; score: number; color_ok: boolean | null; talle_ok: boolean | null; wc_sku: string; wc_nombre: string; wc_tipo: string; wc_color: string; wc_talle: string; wc_img: string; }
@@ -8,7 +8,7 @@ interface Resultado { pos: number; score: number; color_ok: boolean | null; tall
 // color_ok/talle_ok: intersecta() ya normaliza vía norm()/COLORES, así que dos valores que matchean acá
 // pueden no ser textualmente idénticos, p.ej. "negro" ML contra "negro mate" candidato comparten el
 // token "negro" — 'equivalente', no 'coincide' a secas, cuando el texto crudo difiere).
-export interface AtributoComparado { nombre: 'color' | 'talle'; marca: 'coincide' | 'difiere' | 'falta' | 'equivalente'; valorMl: string; valorCandidato: string }
+export interface AtributoComparado { nombre: 'color' | 'talle'; marca: 'coincide' | 'difiere' | 'falta' | 'equivalente'; valorMl: string; valorCandidato: string; valorMlOriginal: string; valorCandidatoOriginal: string }
 export interface Candidato { variantId: string; rank: number; puntaje: number; explicacion: { atributos: AtributoComparado[] } }
 
 const EQUIV: Record<string, string> = { gray: 'gris', grey: 'gris', black: 'negro', white: 'blanco', red: 'rojo', blue: 'azul', green: 'verde', yellow: 'amarillo', orange: 'naranja', purple: 'violeta', pink: 'rosa', brown: 'marron' };
@@ -26,7 +26,16 @@ export function lcsLen(a: string, b: string): number { const m=a.length,n=b.leng
 export function ratio(a:string,b:string):number{const x=a.length,y=b.length;if(!x&&!y)return 1;if(!x||!y)return 0;return 2*lcsLen(a,b)/(x+y)}
 export function tsr(a:string,b:string):number{const A=new Set(a.split(' ').filter(Boolean)),B=new Set(b.split(' ').filter(Boolean)),i=[...A].filter(x=>B.has(x)).sort(),da=[...A].filter(x=>!B.has(x)).sort(),db=[...B].filter(x=>!A.has(x)).sort(),t0=i.join(' '),t1=i.concat(da).join(' ').trim(),t2=i.concat(db).join(' ').trim();return Math.max(ratio(t0,t1),ratio(t0,t2),ratio(t1,t2))}
 export function intersecta(a:Set<string>,b:Set<string>):boolean{for(const x of a)if(b.has(x))return true;return false}
-export function construirWC(items: any[]): IndiceWoo { const wcItems:ItemWoo[]=[];const indice:Record<string,number[]>={};for(const r of items){if(!r.sku||!String(r.sku).trim())continue;const attrs=extraerAtributosDeAttrsWC(r.atributos_json)||extraerAtributosWC(String(r.nombre||''));const w={sku:String(r.sku).trim(),nombre:String(r.nombre||''),tipo:String(r.tipo||'simple'),color:[...attrs.colores].join(' '),talle:[...attrs.talles].join('/'),img:String(r.img||''),baseNorm:norm(r.nombre),colorToks:attrs.colores,talleToks:attrs.talles};const n=wcItems.push(w)-1;for(const t of new Set(w.baseNorm.split(' ').filter(Boolean)))(indice[t]||(indice[t]=[])).push(n)}return{wcItems,indice} }
+/** Lo que dice el catálogo Woo, sin normalizar (para mostrarlo tal cual): las opciones de atributo de color/talle, o
+ *  el sufijo del título si no hay atributos. Nunca decide el matching: eso lo hacen los tokens de arriba. */
+function originalesWC(json: unknown, nombre: string): { colorOriginal: string; talleOriginal: string } {
+  let arr: any = null; try { arr = typeof json === 'string' ? JSON.parse(json) : json; } catch { arr = null; }
+  const c: string[] = [], t: string[] = [];
+  if (Array.isArray(arr)) for (const a of arr) { const nm = norm(a?.name || ''), op = String(a?.option ?? '').trim(); if (!op || ATRIBUTOS_NO_VARIANTE.has(nm)) continue; if (/\bcolor\b/.test(nm)) c.push(op); else if (/\b(talle|talla|size|medida)\b/.test(nm)) t.push(op); }
+  if (!c.length && !t.length) { const i = Math.max(nombre.lastIndexOf('—'), nombre.lastIndexOf(' - ')); const suf = i > 0 ? nombre.slice(i + 1).replace(/^[\s-]+/, '').trim() : ''; return { colorOriginal: suf, talleOriginal: suf }; }
+  return { colorOriginal: c.join(' / '), talleOriginal: t.join(' / ') };
+}
+export function construirWC(items: any[]): IndiceWoo { const wcItems:ItemWoo[]=[];const indice:Record<string,number[]>={};for(const r of items){if(!r.sku||!String(r.sku).trim())continue;const attrs=extraerAtributosDeAttrsWC(r.atributos_json)||extraerAtributosWC(String(r.nombre||''));const w={sku:String(r.sku).trim(),nombre:String(r.nombre||''),tipo:String(r.tipo||'simple'),color:[...attrs.colores].join(' '),talle:[...attrs.talles].join('/'),img:String(r.img||''),baseNorm:norm(r.nombre),colorToks:attrs.colores,talleToks:attrs.talles,...originalesWC(r.atributos_json,String(r.nombre||''))};const n=wcItems.push(w)-1;for(const t of new Set(w.baseNorm.split(' ').filter(Boolean)))(indice[t]||(indice[t]=[])).push(n)}return{wcItems,indice} }
 export function construirWCIndex(items:any[]):IndiceWoo{return construirWC(items)}
 // NOTA: contradiccionAtributo (lib/matcherEngine.js) no se portó acá — es de Recepción
 // (lib/ingresoMatcher.js), compara contra lo declarado en un documento con canonToken()
@@ -45,15 +54,16 @@ export function djb2(str:string):number{let h=5381;for(let i=0;i<str.length;i++)
  * exacto) de 'equivalente' (intersectan pero no son el mismo conjunto — p.ej. "negro" contra
  * "negro mate").
  */
-function marcarAtributo(nombre: 'color' | 'talle', ml: Set<string>, wc: Set<string>): AtributoComparado {
+function marcarAtributo(nombre: 'color' | 'talle', ml: Set<string>, wc: Set<string>, mlOriginal: string, wcOriginal: string): AtributoComparado {
   // Mismo criterio que color_ok/talle_ok de getCandidatos: null (acá 'falta') sólo cuando el lado ML
   // no declaró nada para este atributo — si ML declaró y el candidato no, intersecta() contra un
   // conjunto vacío da false ('difiere'), no 'falta' (un candidato sin el dato no es lo mismo que un
   // dato que coincide, y hay que verlo como diferencia para que salte a la vista).
   const valorMl = [...ml].sort().join(' '), valorCandidato = [...wc].sort().join(' ');
-  if (!ml.size) return { nombre, marca: 'falta', valorMl, valorCandidato };
-  if (!intersecta(ml, wc)) return { nombre, marca: 'difiere', valorMl, valorCandidato };
-  return { nombre, marca: valorMl === valorCandidato ? 'coincide' : 'equivalente', valorMl, valorCandidato };
+  const o = { valorMlOriginal: mlOriginal, valorCandidatoOriginal: wcOriginal };
+  if (!ml.size) return { nombre, marca: 'falta', valorMl, valorCandidato, ...o };
+  if (!intersecta(ml, wc)) return { nombre, marca: 'difiere', valorMl, valorCandidato, ...o };
+  return { nombre, marca: valorMl === valorCandidato ? 'coincide' : 'equivalente', valorMl, valorCandidato, ...o };
 }
 
 export function candidatosDe(ml:ItemMl,woo:any[],indice:IndiceWoo,n=3):Candidato[]{
@@ -61,7 +71,8 @@ export function candidatosDe(ml:ItemMl,woo:any[],indice:IndiceWoo,n=3):Candidato
   return candidatosDeItem(ml,indice.wcItems,indice.indice).slice(0,n).map((x,i)=>{
     const w = indice.wcItems[x.pos]; // por posición: un SKU repetido en wcItems no puede confundir el ítem.
     const atributos: AtributoComparado[] = w
-      ? [marcarAtributo('color', ct.colores, w.colorToks), marcarAtributo('talle', ct.talles, w.talleToks)]
+      ? [marcarAtributo('color', ct.colores, w.colorToks, ml.color ?? ml.ml_variations ?? '', w.colorOriginal),
+         marcarAtributo('talle', ct.talles, w.talleToks, ml.talle ?? ml.ml_variations ?? '', w.talleOriginal)]
       : [];
     return { variantId: x.wc_sku, rank: i + 1, puntaje: x.score, explicacion: { atributos } };
   });

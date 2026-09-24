@@ -133,6 +133,17 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(r.body.contadores).toMatchObject({ no_decidibles: 1, resto: 0 });
   });
 
+  it('un caso con representation_id hacia una representación archivada no sale en la cola y suma en no_decidibles', async () => {
+    const { modelo, variante: v } = await variante('Archivada');
+    const rep = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, archivado_en, motivo_archivo)
+       VALUES ($1, $2, 'mercadolibre', 'vendible', 'MLA99', '', $3, $4, now(), 'test') RETURNING id`, [empresa, ml, v, modelo])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.identity_cases (company_id, tipo, representation_id) VALUES ($1, 'sku_pendiente', $2)`, [empresa, rep]);
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos).toEqual([]);
+    expect(r.body.contadores).toMatchObject({ no_decidibles: 1, resto: 0 });
+  });
+
   it('una cuenta configurada que no existe en la base: 409 cuenta_no_configurada (no 500)', async () => {
     const url = `${PREFIJO_IDENTIDAD}/casos`;
     const app = crearApi({ pool, logger: crearLogger('test'), estadoPgDir: '/nada', bandejaCatalogo: true,
