@@ -1163,6 +1163,10 @@ export function openDb(dbPath) {
     logistic_type  TEXT,
     actualizado_en TEXT NOT NULL
   )`); } catch (_) {}
+  // substatus (migrations/113_ml_shipment_estado_substatus.sql): status por sí solo se queda
+  // desactualizado en 'ready_to_ship' para paquetes que ya se entregaron en el punto de
+  // despacho (dropped_off) — ver lib/preparacion.js#envioMlYaSalio.
+  try { db.exec('ALTER TABLE ml_shipment_estado ADD COLUMN substatus TEXT'); } catch (_) {}
 
   // Insumos con los que se tomó la decisión de frenar una reactivación por precio (ver
   // migrations/005_reactivacion_frenada_insumos.sql): permiten re-evaluar localmente sin

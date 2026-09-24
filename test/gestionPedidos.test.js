@@ -14,7 +14,7 @@ function dbPrueba() {
   db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '100_gestion_pedidos_shipment_ml.sql'), 'utf8'));
   db.exec(fs.readFileSync(path.join(root, '..', 'migrations', '101_gestion_pedidos_datos_ml.sql'), 'utf8'));
   db.exec(`CREATE TABLE IF NOT EXISTS ml_shipment_estado (
-    shipment_id TEXT PRIMARY KEY, status TEXT, logistic_type TEXT, actualizado_en TEXT)`);
+    shipment_id TEXT PRIMARY KEY, status TEXT, substatus TEXT, logistic_type TEXT, actualizado_en TEXT)`);
   return db;
 }
 

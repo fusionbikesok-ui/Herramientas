@@ -12,7 +12,7 @@ import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
-  clasificarElegibilidadMl, pedidosElegiblesOrdenados,
+  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
@@ -596,7 +596,7 @@ function preparacionEstaVerificada(db, prep) {
 // falta para el caso simple).
 // `woo_paso2_pendiente` se limpia siempre (es un flag del lado Woo, no del de
 // verificación) — incluso si la preparación resultó ser 'cerrada_sin_evidencia'.
-export function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
+export function marcarPreparacionEnviada(db, clave, { usuario = null, detalle = {} } = {}) {
   db.prepare('UPDATE preparaciones SET woo_paso2_pendiente=0 WHERE clave=?').run(clave);
   const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(clave);
   if (!prep || prep.estado === 'cerrada_sin_evidencia') return null;
@@ -608,7 +608,7 @@ export function marcarPreparacionEnviada(db, clave, { usuario = null } = {}) {
   if (!cambio.changes) return null; // se cerró sin evidencia justo entre el SELECT y el UPDATE
 
   if (estadoFinal === 'despachada_sin_verificar') {
-    registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'despachado_sin_verificar', usuario, detalle: {} });
+    registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'despachado_sin_verificar', usuario, detalle });
   }
   return estadoFinal;
 }
@@ -889,13 +889,14 @@ export function estadoDelCanal(db, prep) {
     const g = db.prepare(`SELECT estado_canal, estado_comercial, ml_shipment_id FROM gestion_pedidos
       WHERE external_id=? AND fuente=? LIMIT 1`).get(ext, prep.canal === 'ml' ? 'mercadolibre' : 'woocommerce');
     if (!g) return null;
-    let envio = null;
+    let envioRow = null;
     try {
-      envio = g.ml_shipment_id
-        ? db.prepare('SELECT status FROM ml_shipment_estado WHERE shipment_id=?').get(String(g.ml_shipment_id))?.status || null
+      envioRow = g.ml_shipment_id
+        ? db.prepare('SELECT status, substatus FROM ml_shipment_estado WHERE shipment_id=?').get(String(g.ml_shipment_id)) || null
         : null;
-    } catch { envio = null; }
-    const despachado = ['shipped', 'delivered'].includes(envio)
+    } catch { envioRow = null; }
+    const envio = envioRow?.status || null;
+    const despachado = envioMlYaSalio(envioRow)
       || ['enviadoandreani', 'retiradoenfusion', 'completed'].includes(String(g.estado_canal || '').toLowerCase());
     const cancelado = ['cancelado', 'fallido', 'reembolsado'].includes(String(g.estado_comercial || ''));
     return { estado_canal: g.estado_canal, envio_ml: envio, despachado, cancelado };
@@ -3307,13 +3308,28 @@ async function pendientesMl(db, mlCfg) {
       continue;
     }
     db.prepare(`
-      INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
-    `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
+      INSERT INTO ml_shipment_estado (shipment_id, status, substatus, logistic_type, actualizado_en)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, substatus=excluded.substatus, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
+    `).run(String(shipmentId), envio.status, envio.substatus || null, envio.logistic_type || null, now());
+
+    // El paquete ya salió (status shipped/delivered, o ready_to_ship con substatus adelantado
+    // -- ver envioMlYaSalio) mientras una preparación seguía abierta acá adentro: mismo
+    // camino que ya usa Woo para esto (marcarPreparacionEnviada, disparado hoy desde
+    // /seguimientos), disparado ahora también desde el sync de ML. Sólo se toca una
+    // preparación 'en_preparacion' -- otros estados (cancelada_pendiente_devolucion,
+    // cerrada_sin_evidencia) tienen su propio circuito y no se pisan acá.
+    if (prep?.estado === 'en_preparacion' && envioMlYaSalio(envio)) {
+      marcarPreparacionEnviada(db, `ml:${orden.id}`, {
+        usuario: 'sistema',
+        detalle: { origen: 'sync_ml', status: envio.status, substatus: envio.substatus || null },
+      });
+    }
+
     // Ya refrescamos el estado del envío, que era el objetivo de no saltearla. A la cola de
     // pendientes no vuelve: la preparación está confirmada del lado local.
     if (yaPreparado) continue;
+    if (envioMlYaSalio(envio)) continue;
     if (envio.status !== 'ready_to_ship') continue;
     const elegibilidad = clasificarElegibilidadMl(orden, envio);
     if (elegibilidad.estado !== 'elegible') {
@@ -3631,10 +3647,10 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
   }
   const elegibilidad = clasificarElegibilidadMl(orden, envio);
   if (shipmentId && envio?.status) db.prepare(`
-    INSERT INTO ml_shipment_estado (shipment_id, status, logistic_type, actualizado_en)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
-  `).run(String(shipmentId), envio.status, envio.logistic_type || null, now());
+    INSERT INTO ml_shipment_estado (shipment_id, status, substatus, logistic_type, actualizado_en)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, substatus=excluded.substatus, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
+  `).run(String(shipmentId), envio.status, envio.substatus || null, envio.logistic_type || null, now());
   if (elegibilidad.estado === 'no_elegible') {
     invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, envio?.logistic_type);
     return;

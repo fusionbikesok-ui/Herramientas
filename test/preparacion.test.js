@@ -7,7 +7,7 @@ import { openDb } from '../db/index.js';
 import {
   splitDireccion, splitTelefonoAr, normalizarEnvio, nombreProvincia, direccionesDifieren,
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
-  clasificarElegibilidadMl, pedidosElegiblesOrdenados,
+  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
 } from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
 // Las tablas de ubicaciones las crea el router de inventario al construirse (ensureTables).
@@ -1847,7 +1847,7 @@ describe('preparacion flujo', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM preparacion_fotos WHERE preparacion_id=?').get(id).n).toBe(1);
   });
 
-  it('purgarFotosBorradas borra archivo y fila si borrado_en tiene más de 180 días; conserva las más recientes', async () => {
+  it('purga fotos de preparaciones de más de 30 días aunque sigan activas y conserva las recientes', async () => {
     const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
@@ -1855,9 +1855,13 @@ describe('preparacion flujo', () => {
     const vieja = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'vieja.jpg');
     const reciente = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'reciente.jpg');
 
-    const hace190dias = new Date(Date.now() - 190 * 24 * 3600 * 1000).toISOString();
-    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(hace190dias, vieja.body.foto.id);
-    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(new Date().toISOString(), reciente.body.foto.id);
+    const hace31dias = new Date(Date.now() - 31 * 24 * 3600 * 1000).toISOString();
+    db.prepare('UPDATE preparaciones SET creado_en=? WHERE id=?').run(hace31dias, id);
+
+    const idReciente = crearPreparacion(db, {
+      canal: 'web', wcOrderId: 501, numeroPedido: '501', comprador: 'Beto', items: [],
+    });
+    db.prepare('UPDATE preparacion_fotos SET preparacion_id=? WHERE id=?').run(idReciente, reciente.body.foto.id);
 
     const rutaVieja = rutaAbsoluta(vieja.body.foto.url);
     expect(fs.existsSync(rutaVieja)).toBe(true);
@@ -1869,13 +1873,13 @@ describe('preparacion flujo', () => {
     expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(vieja.body.foto.id)).toBeUndefined();
     expect(db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(reciente.body.foto.id)).toBeTruthy();
   });
-  it('purgarFotosBorradas conserva fotos vencidas cuando la preparación tiene un hold activo', async () => {
+  it('conserva fotos de preparaciones antiguas cuando existe un hold activo', async () => {
     const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'blue' } }).jpeg().toBuffer();
     const subida = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'hold.jpg');
     const fotoId = subida.body.foto.id;
-    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(new Date(Date.now() - 190 * 24 * 3600 * 1000).toISOString(), fotoId);
+    db.prepare('UPDATE preparaciones SET creado_en=? WHERE id=?').run(new Date(Date.now() - 31 * 24 * 3600 * 1000).toISOString(), id);
     db.prepare('INSERT INTO preparacion_fotos_holds (preparacion_id,motivo,creado_por,creado_en) VALUES (?,?,?,?)').run(id, 'reclamo', 'tester', new Date().toISOString());
     expect(purgarFotosBorradas(db)).toBe(0);
     expect(db.prepare('SELECT id FROM preparacion_fotos WHERE id=?').get(fotoId)).toBeTruthy();
@@ -2031,7 +2035,8 @@ describe('preparacion flujo', () => {
 
       const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(r.body.foto.id);
       expect(foto.estado_proceso).toBe('listo');
-      expect(foto.url_liviana).toMatch(/-liviana\.jpg$/);
+      expect(foto.url).toMatch(/-reducida\.jpg$/);
+      expect(foto.url_liviana).toBe(foto.url);
     });
   });
 
@@ -2399,6 +2404,81 @@ describe('syncPedidosCache', () => {
     // Y no vuelve a la cola de pendientes: la preparación ya está confirmada.
     expect((r?.pendientes || []).find((p) => String(p.ml_order_id) === '5001')).toBeUndefined();
     expect(db.prepare("SELECT COUNT(*) AS n FROM pedidos_cache WHERE clave='ml:5001' AND estado_envio='pendiente'").get().n).toBe(0);
+  });
+
+  it('dropped_off con status ready_to_ship queda fuera de la cola de pendientes (pack ya despachado)', async () => {
+    // Incidente real: pack 2000015175820985 (orden 2000018610145024, xd_drop_off) ya se había
+    // entregado en el punto de despacho pero ML seguía devolviendo status='ready_to_ship'.
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 6001, status: 'paid',
+        date_created: '2026-09-20T00:00:00Z', shipping: { id: 88001 }, buyer: {}, payments: [], order_items: [] }] } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', substatus: 'dropped_off', logistic_type: 'xd_drop_off' } });
+
+    await syncPedidosCache(db, CFG);
+
+    expect(db.prepare("SELECT clave FROM pedidos_cache WHERE clave='ml:6001' AND estado_envio='pendiente'").get()).toBeUndefined();
+    expect(db.prepare('SELECT status, substatus FROM ml_shipment_estado WHERE shipment_id=?').get('88001'))
+      .toEqual({ status: 'ready_to_ship', substatus: 'dropped_off' });
+  });
+
+  it('substatus ready_for_dropoff/printed/ready_to_print siguen en la cola: el paquete no salió', async () => {
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+    await syncPedidosCache(db, CFG);
+    for (const substatus of ['ready_for_dropoff', 'printed', 'ready_to_print']) {
+      db.exec('DELETE FROM ml_shipment_estado; DELETE FROM pedidos_cache; DELETE FROM preparaciones;');
+      wooFetch.mockResolvedValue({ data: [] });
+      mlFetch
+        .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 6002, status: 'paid',
+          date_created: '2026-09-20T00:00:00Z', shipping: { id: 88002 }, buyer: {}, payments: [], order_items: [] }] } })
+        .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', substatus, logistic_type: 'self_service' } });
+
+      await syncPedidosCache(db, CFG);
+
+      expect(db.prepare("SELECT estado_envio FROM pedidos_cache WHERE clave='ml:6002'").get())
+        .toEqual({ estado_envio: 'pendiente' });
+    }
+  });
+
+  it('una preparación en_preparacion cuyo envío ML ya salió (dropped_off) pasa a despachada_sin_verificar', async () => {
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+    await syncPedidosCache(db, CFG);
+    const id = crearPreparacion(db, {
+      canal: 'ml', mlOrderId: 6003, numeroPedido: '6003', comprador: 'Comprador ML', items: [],
+    });
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
+
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 6003, status: 'paid',
+        date_created: '2026-09-20T00:00:00Z', shipping: { id: 88003 }, buyer: {}, payments: [], order_items: [] }] } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', substatus: 'dropped_off', logistic_type: 'xd_drop_off' } });
+
+    await syncPedidosCache(db, CFG);
+
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('despachada_sin_verificar');
+    const evento = db.prepare("SELECT * FROM preparacion_eventos WHERE preparacion_id=? AND tipo='despachado_sin_verificar'").get(id);
+    expect(evento).toBeTruthy();
+    expect(evento.usuario).toBe('sistema');
+    expect(JSON.parse(evento.detalle_json)).toMatchObject({ origen: 'sync_ml', substatus: 'dropped_off' });
+  });
+
+  it('una preparación completada no se toca aunque el envío ML aparezca dropped_off', async () => {
+    wooFetch.mockResolvedValue({ data: [] });
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { results: [] } });
+    await syncPedidosCache(db, CFG);
+    db.prepare(`INSERT INTO preparaciones (canal, clave, estado, etiqueta_lista, creado_en, completado_en, preparado_por)
+      VALUES ('ml','ml:6004','completada',1,'2026-09-01T00:00:00Z','2026-09-01T01:00:00Z','Joaco')`).run();
+
+    mlFetch
+      .mockResolvedValueOnce({ status: 200, data: { results: [{ id: 6004, status: 'paid',
+        date_created: '2026-09-01T00:00:00Z', shipping: { id: 88004 }, buyer: {}, payments: [], order_items: [] }] } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'ready_to_ship', substatus: 'dropped_off', logistic_type: 'xd_drop_off' } });
+
+    await syncPedidosCache(db, CFG);
+
+    expect(db.prepare("SELECT estado FROM preparaciones WHERE clave='ml:6004'").get().estado).toBe('completada');
   });
 
   it('un pedido ML no tiene equivalente de nota — queda vacía, no inventada', async () => {
@@ -3225,6 +3305,19 @@ describe('syncPedidoMlPuntual', () => {
     expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship', logistic_type: 'fulfillment' }).estado).toBe('no_elegible');
     expect(clasificarElegibilidadMl({ status: 'paid' }, null).estado).toBe('inconcluso');
     expect(clasificarElegibilidadMl({ status: 'paid', shipping: { id: 1 } }, { status: 'ready_to_ship' }).estado).toBe('inconcluso');
+  });
+
+  it('envioMlYaSalio: dropped_off/picked_up/in_hub/authorized_by_carrier con ready_to_ship cuentan como salido, ready_for_dropoff no', () => {
+    for (const substatus of ['dropped_off', 'picked_up', 'in_hub', 'authorized_by_carrier']) {
+      expect(envioMlYaSalio({ status: 'ready_to_ship', substatus })).toBe(true);
+    }
+    for (const substatus of ['ready_for_dropoff', 'printed', 'ready_to_print', undefined]) {
+      expect(envioMlYaSalio({ status: 'ready_to_ship', substatus })).toBe(false);
+    }
+    expect(envioMlYaSalio({ status: 'shipped' })).toBe(true);
+    expect(envioMlYaSalio({ status: 'delivered' })).toBe(true);
+    expect(envioMlYaSalio({ status: 'cancelled' })).toBe(false);
+    expect(envioMlYaSalio(null)).toBe(false);
   });
 
   it('sync puntual conserva como pendiente una orden paga sin shipping.id (inconclusa)', async () => {
