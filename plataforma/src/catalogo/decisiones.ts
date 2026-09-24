@@ -87,9 +87,13 @@ export async function reconciliarClave(
   const cerrarDeVariante = (variante: string, tipos: string[], m: string) => tx.query(
     `UPDATE catalog.identity_cases SET cerrado_en = now(), motivo_cierre = $3
       WHERE variant_id = $1 AND tipo = ANY($2) AND cerrado_en IS NULL`, [variante, tipos, m]);
+  // D5 (revisión (b) de opt-16 sobre decidir.ts, 2026-09-24, extendida acá): un caso marcado d5 existe
+  // justamente para que una persona lo mire aparte — no se cierra solo porque la decisión de la
+  // publicación cambió por otro lado.
   const cerrarOmitida = () => tx.query(
     `UPDATE catalog.identity_cases SET cerrado_en = now(), motivo_cierre = $2
-      WHERE representation_id = $1 AND tipo = 'omitida_revisar' AND cerrado_en IS NULL`, [rep.id, `la decisión cambió: ${motivo}`]);
+      WHERE representation_id = $1 AND tipo = 'omitida_revisar' AND cerrado_en IS NULL
+        AND COALESCE((detalle->>'d5')::boolean, false) IS NOT TRUE`, [rep.id, `la decisión cambió: ${motivo}`]);
 
   // ¿Ya está donde tiene que estar?
   if (deseado.tipo === 'variante' && rep.variant_id === deseado.variante) return 'sin_cambios';

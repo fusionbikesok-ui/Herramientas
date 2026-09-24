@@ -186,6 +186,20 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
         ${p.revierte ? ', cerrado_en = NULL, motivo_cierre = NULL' : ''} WHERE id = $1`,
       [p.caseId, version, repId]);
 
+    // Revierte: los casos hermanos que esta MISMA decisión había cerrado en su momento (ver más abajo,
+    // marcados con el id de esa decisión en motivo_cierre) se reabren también — si no, quedan cerrados
+    // para siempre aunque la decisión que los cerró ya no valga (hallazgo (c) de opt-16, 2026-09-24).
+    // version también les sube, para que una decisión futura sobre ellos no choque con expected_version
+    // desactualizado.
+    const reabiertos: string[] = [];
+    if (p.revierte) {
+      const r = await tx.query<{ id: string }>(
+        `UPDATE catalog.identity_cases SET cerrado_en = NULL, motivo_cierre = NULL, estado = 'actionable', version = version + 1
+          WHERE motivo_cierre = $1 RETURNING id`,
+        [`decidido en bandeja (hermano de ${p.revierte})`]);
+      reabiertos.push(...r.rows.map((x) => x.id));
+    }
+
     // Paso 9: el vínculo real lo mueve E2, con la bandeja del contexto (nunca en false acá: si lo estuviera,
     // ya se salió en el paso 0 con bandeja_apagada; pasar `true` fijo en vez de `o.bandeja` funcionaba igual
     // en la práctica, pero atarlo al parámetro es lo correcto — hallazgo de la segunda opinión de Codex).
@@ -247,11 +261,19 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
     // (p.ej. sku_pendiente y user_product_divergente) pueden estar abiertos a la vez sobre la MISMA
     // publicación. Decidir uno no tocaba al otro, y José terminaba decidiendo la misma publicación dos
     // veces. No es un caso "decidido": no hay identity_decisions para él, se cierra como resuelto por la
-    // decisión de su hermano.
+    // decisión de su hermano — mismo estado final que el propio (revisión (a) de opt-16), version sube
+    // igual (para no dejar un expected_version desactualizado si alguien reabre después), y motivo_cierre
+    // lleva el id de ESTA decisión (no el genérico) para poder reabrirlos si ésta se revierte (ver arriba).
+    // Excluye explícitamente 'conflict' y D5 (revisión (b) de opt-16): esos casos existen justamente para
+    // que una persona los mire aparte, y cerrarlos solos porque el hermano se decidió sería perder esa
+    // revisión por diseño.
+    // Si esta misma decisión es un revierte que acaba de reabrir hermanos (arriba), no los vuelve a cerrar
+    // acá: el punto de revertir es justamente devolverlos a la cola.
     await tx.query(
-      `UPDATE catalog.identity_cases SET cerrado_en = now(), motivo_cierre = $2
-        WHERE representation_id = $1 AND cerrado_en IS NULL AND id <> $3`,
-      [repId, motivoCierre, p.caseId]);
+      `UPDATE catalog.identity_cases SET estado = $2, cerrado_en = now(), motivo_cierre = $3, version = version + 1
+        WHERE representation_id = $1 AND cerrado_en IS NULL AND id <> $4 AND NOT (id = ANY($5))
+          AND estado <> 'conflict' AND COALESCE((detalle->>'d5')::boolean, false) IS NOT TRUE`,
+      [repId, estadoFinal, `decidido en bandeja (hermano de ${decisionId})`, p.caseId, reabiertos]);
 
     // El resultado se INSERTA (nunca UPDATE) en su propia tabla append-only: un reintento con la misma
     // idempotency_key lo lee de ahí, tal cual, sin recalcular nada (hallazgo de la segunda opinión de Codex

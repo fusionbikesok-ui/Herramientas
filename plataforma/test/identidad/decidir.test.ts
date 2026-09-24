@@ -405,10 +405,18 @@ describe('E3-DEC-01 decidirCaso', () => {
       const r = await decidir(pedido({ caseId: casoSku, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
       expect(r).toMatchObject({ ok: true, version: 2, vinculo: 'vinculada' });
 
-      const hermano = (await q<{ estado: string; cerrado_en: Date | null; motivo_cierre: string | null }>(
-        'SELECT estado, cerrado_en, motivo_cierre FROM catalog.identity_cases WHERE id = $1', [casoHermano]))[0]!;
+      if (!r.ok) return;
+      const hermano = (await q<{ estado: string; version: number; cerrado_en: Date | null; motivo_cierre: string | null }>(
+        'SELECT estado, version, cerrado_en, motivo_cierre FROM catalog.identity_cases WHERE id = $1', [casoHermano]))[0]!;
       expect(hermano.cerrado_en).not.toBeNull();
-      expect(hermano.motivo_cierre).toMatch(/decidido en bandeja/);
+      // (a), revisión de opt-16: mismo estado final que el propio caso (verified acá), y version sube —
+      // no se queda en su version=1 original, que dejaría un expected_version desactualizado si alguien
+      // lo reabriera sin pasar por el mecanismo de revierte.
+      expect(hermano.estado).toBe('verified');
+      expect(hermano.version).toBe(2);
+      // motivo_cierre referencia la decisión que lo cerró (no un texto genérico): es lo que permite
+      // reabrirlo si esa decisión se revierte (ver el test de reapertura más abajo).
+      expect(hermano.motivo_cierre).toBe(`decidido en bandeja (hermano de ${r.decisionId})`);
 
       // No queda como si alguien lo hubiera decidido a propósito: no hay una fila de identity_decisions
       // para el caso hermano.
@@ -417,6 +425,59 @@ describe('E3-DEC-01 decidirCaso', () => {
 
       expect((await q<{ archivado_en: Date | null }>('SELECT archivado_en FROM catalog.sellable_variants WHERE id = $1', [pendiente]))[0]!.archivado_en)
         .not.toBeNull();
+    });
+
+    it('(b) NO cierra un hermano en conflict ni un hermano marcado D5: esos casos exigen revisión propia', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-605');
+      const { caso: casoSku } = await casoPendiente('MLA605');
+      const repId = (await q<{ id: string }>(
+        `SELECT id FROM catalog.external_representations WHERE channel_account_id = $1 AND recurso = $2`,
+        [ml, 'MLA605']))[0]!.id;
+      const casoConflicto = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id, estado, detalle)
+         VALUES ($1, 'user_product_divergente', $2, 'conflict', '{}'::jsonb) RETURNING id`, [empresa, repId])).rows[0]!.id;
+      const casoD5 = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id, detalle)
+         VALUES ($1, 'omitida_revisar', $2, '{"d5":true}'::jsonb) RETURNING id`, [empresa, repId])).rows[0]!.id;
+
+      const r = await decidir(pedido({ caseId: casoSku, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+      expect(r.ok).toBe(true);
+
+      const [conflicto, d5] = await Promise.all([
+        q<{ cerrado_en: Date | null }>('SELECT cerrado_en FROM catalog.identity_cases WHERE id = $1', [casoConflicto]),
+        q<{ cerrado_en: Date | null }>('SELECT cerrado_en FROM catalog.identity_cases WHERE id = $1', [casoD5]),
+      ]);
+      expect(conflicto[0]!.cerrado_en).toBeNull();
+      expect(d5[0]!.cerrado_en).toBeNull();
+    });
+
+    it('(c) revertir la decisión que cerró un hermano lo reabre también', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-606');
+      const { caso: casoSku } = await casoPendiente('MLA606');
+      const repId = (await q<{ id: string }>(
+        `SELECT id FROM catalog.external_representations WHERE channel_account_id = $1 AND recurso = $2`,
+        [ml, 'MLA606']))[0]!.id;
+      const casoHermano = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id, detalle)
+         VALUES ($1, 'user_product_divergente', $2, '{}'::jsonb) RETURNING id`, [empresa, repId])).rows[0]!.id;
+
+      const r1 = await decidir(pedido({ caseId: casoSku, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+      expect(r1.ok).toBe(true);
+      if (!r1.ok) return;
+      const hermanoAntes = (await q<{ cerrado_en: Date | null; version: number }>(
+        'SELECT cerrado_en, version FROM catalog.identity_cases WHERE id = $1', [casoHermano]))[0]!;
+      expect(hermanoAntes.cerrado_en).not.toBeNull();
+
+      const r2 = await decidir(pedido({
+        caseId: casoSku, expectedVersion: 2, eleccion: 'sin_candidato', esAdmin: true, revierte: r1.decisionId }));
+      expect(r2.ok).toBe(true);
+
+      const hermanoDespues = (await q<{ cerrado_en: Date | null; estado: string; motivo_cierre: string | null; version: number }>(
+        'SELECT cerrado_en, estado, motivo_cierre, version FROM catalog.identity_cases WHERE id = $1', [casoHermano]))[0]!;
+      expect(hermanoDespues.cerrado_en).toBeNull();
+      expect(hermanoDespues.estado).toBe('actionable');
+      expect(hermanoDespues.motivo_cierre).toBeNull();
+      expect(hermanoDespues.version).toBe(hermanoAntes.version + 1);
     });
 
     it('omitir un caso deja cerrado el caso hermano de la misma representación, no sólo el propio', async () => {
