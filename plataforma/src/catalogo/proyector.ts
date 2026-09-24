@@ -44,6 +44,8 @@ export interface OpcionesProyector {
   umbralErrorPorciento: number;
   /** Por defecto false. Falso: los atributos se capturan pero no se abre `atributo_divergente`. */
   compararAtributos?: boolean;
+  /** E3 corte 1: si la decisión humana de la bandeja manda sobre el legado. Por defecto false (apagado). */
+  bandeja?: boolean;
   /** 6b: dónde registrar que una clasificación falló tras aplicar la proyección. Por defecto, silencioso. */
   log?: RegistroProyector;
 }
@@ -93,7 +95,7 @@ export function crearProyector(o: OpcionesProyector): Proyector {
     const proyeccion = canal === 'woocommerce' ? proyectarProductoWoo(payload) : proyectarItemMl(payload);
     if (esRechazo(proyeccion)) throw new ErrorRechazoProyeccion(proyeccion.rechazo);
     const resumen = await aplicarProyeccion({ tx, cuenta: r.channelAccountId, canal, versionRemota: r.remoteVersion,
-      compararAtributos: o.compararAtributos ?? false }, proyeccion);
+      compararAtributos: o.compararAtributos ?? false, bandeja: o.bandeja ?? false }, proyeccion);
 
     // 6b: clasificar lo que esta proyección tocó, en la misma transacción, pero sin que un problema de taxonomía
     // (un mapeo colgado, un nombre de Woo duplicado) deshaga la proyección ya aplicada — eso sí es dato real.

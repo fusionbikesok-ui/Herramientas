@@ -20,6 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import { registrarEvento } from '../audit/auditoria.ts';
 import type { Consultable } from '../db/pool.ts';
+import { decisionVigente } from '../identidad/autoridad.ts';
 
 /**
  * Candado de las decisiones de una cuenta, hasta el fin de la transacción. Lo toman los eventos, las copias, el
@@ -44,6 +45,7 @@ const CASOS_DE_PENDIENTE = ['sku_pendiente', 'sku_inexistente_en_woo'];
 
 export async function reconciliarClave(
   tx: Consultable, cuenta: string, recurso: string, variacion: string, motivo: string,
+  o: { bandeja: boolean } = { bandeja: false },
 ): Promise<Reconciliacion> {
   const rep = (await tx.query<{ id: string; company_id: string; variant_id: string | null; omitida_por_decision: boolean }>(
     `SELECT id, company_id, variant_id, omitida_por_decision FROM catalog.external_representations
@@ -53,13 +55,18 @@ export async function reconciliarClave(
   if (!rep) return 'sin_representacion';
   const empresa = rep.company_id;
 
-  const dec = (await tx.query<{ accion: string; sku: string | null }>(
-    `SELECT accion, sku FROM catalog.matcher_decisions
-      WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND vigente_hasta IS NULL`,
-    [cuenta, recurso, variacion])).rows[0];
+  const dec = await decisionVigente(tx, cuenta, recurso, variacion, o);
   let deseado: Deseado;
-  if (dec?.accion === 'omitir') deseado = { tipo: 'omitida' };
-  else if ((dec?.accion === 'confirmar' || dec?.accion === 'asignar') && dec.sku) {
+  if (dec?.fuente === 'humano' && dec.eleccion === 'vincular') {
+    deseado = { tipo: 'variante', variante: dec.variantId };
+  } else if (dec?.fuente === 'humano' && (dec.eleccion === 'omitir' || dec.eleccion === 'mantener_omision')) {
+    deseado = { tipo: 'omitida' };
+  } else if (dec?.fuente === 'humano' && dec.eleccion === 'sin_candidato') {
+    deseado = { tipo: 'pendiente', caso: 'sku_pendiente', sku: null };
+  } else if (dec?.fuente === 'legado' && dec.accion === 'omitir') {
+    deseado = { tipo: 'omitida' };
+  } else if (dec?.fuente === 'legado' && (dec.accion === 'confirmar' || dec.accion === 'asignar')) {
+    // Fallback al legado EXACTO como hoy: sin filtrar archivadas (ver autoridad.ts).
     const destino = (await tx.query<{ id: string }>(
       'SELECT id FROM catalog.sellable_variants WHERE company_id = $1 AND sku = $2 FOR UPDATE', [empresa, dec.sku])).rows[0];
     deseado = destino ? { tipo: 'variante', variante: destino.id } : { tipo: 'pendiente', caso: 'sku_inexistente_en_woo', sku: dec.sku };

@@ -13,6 +13,7 @@
  *     una fusión o una revocación, y eso lo hace `decisiones.ts` (tarea 8), con su evento y su auditoría.
  */
 import type { Consultable } from '../db/pool.ts';
+import { decisionVigente } from '../identidad/autoridad.ts';
 import { valoresRelacionados } from './atributos.ts';
 import { bloquearDecisiones, reconciliarSku } from './decisiones.ts';
 import type { OrigenModelo, Proyeccion, RepresentacionObservada, SkuObservado } from './intenciones.ts';
@@ -27,6 +28,9 @@ export interface ContextoAplicacion {
   versionRemota: string;
   /** Abrir `atributo_divergente`. Por defecto NO (se despliega capturando, se enciende después de medir). */
   compararAtributos?: boolean;
+  /** E3_BANDEJA: si una decisión humana de la bandeja manda sobre la copiada del legado. Por defecto NO
+   *  (comportamiento idéntico a antes de E3, bit a bit: decisionVigente ni consulta identity_decisions). */
+  bandeja?: boolean;
 }
 
 export interface ResumenAplicacion {
@@ -212,18 +216,31 @@ async function vincularMl(
   // Mismo candado que los eventos: si no, un evento que llega mientras esta publicación nueva todavía no está
   // confirmada no la encuentra, y acá se lee "sin decisión": quedaría pendiente con una decisión vigente.
   await bloquearDecisiones(tx, ctx.cuenta);
-  const decision = (await tx.query<{ accion: string; sku: string | null }>(
-    `SELECT accion, sku FROM catalog.matcher_decisions
-      WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND vigente_hasta IS NULL`,
-    [ctx.cuenta, obs.recurso, obs.variacion])).rows[0];
+  const decision = await decisionVigente(tx, ctx.cuenta, obs.recurso, obs.variacion, { bandeja: ctx.bandeja ?? false });
 
-  if (decision?.accion === 'omitir') {
+  if (decision?.fuente === 'humano' && decision.eleccion === 'vincular') {
+    return { modelo: null, variante: decision.variantId, omitida: false };
+  }
+  if (decision?.fuente === 'humano' && (decision.eleccion === 'omitir' || decision.eleccion === 'mantener_omision')) {
     return {
       modelo: null, variante: null, omitida: true,
       casoSobreRepresentacion: { tipo: 'omitida_revisar', detalle: {}, prioridad: 'baja' },
     };
   }
-  if ((decision?.accion === 'confirmar' || decision?.accion === 'asignar') && decision.sku) {
+  if (decision?.fuente === 'humano' && decision.eleccion === 'sin_candidato') {
+    const pendiente = await crearPendiente(tx, empresa, await obtenerModelo());
+    await abrir('sku_pendiente', { variante: pendiente });
+    return { modelo: null, variante: pendiente, omitida: false };
+  }
+  if (decision?.fuente === 'legado' && decision.accion === 'omitir') {
+    return {
+      modelo: null, variante: null, omitida: true,
+      casoSobreRepresentacion: { tipo: 'omitida_revisar', detalle: {}, prioridad: 'baja' },
+    };
+  }
+  if (decision?.fuente === 'legado' && (decision.accion === 'confirmar' || decision.accion === 'asignar')) {
+    // Fallback al legado EXACTO como hoy: sin filtrar archivadas (ver autoridad.ts). No es un cambio de
+    // comportamiento, es el mismo SELECT que había acá antes, ahora dentro de decisionVigente.
     const destino = (await tx.query<{ id: string }>(
       'SELECT id FROM catalog.sellable_variants WHERE company_id = $1 AND sku = $2', [empresa, decision.sku])).rows[0];
     if (destino) return { modelo: null, variante: destino.id, omitida: false };
