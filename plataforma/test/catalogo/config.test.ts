@@ -97,7 +97,7 @@ describe('E2-CFG-01 plan de keyrings del worker', () => {
   const catalogo = (extra: Partial<ConfigCatalogo> = {}): ConfigCatalogo => ({
     proyector: true, bootstrap: false, keyringFile: '/run/catalogo.json',
     lote: 20, pausaMs: 1000, canario: 0, bootstrapRpm: 10, bootstrapCedeSenales: 20, umbralErrorPorciento: 10,
-    compararAtributos: false, bandeja: false,
+    compararAtributos: false,
     ...extra,
   });
   const barridos = { registroFile: '/run/registro.json', keyringFile: '/run/sobres.json' };
@@ -184,19 +184,52 @@ describe('E2-CFG-02 CATALOGO_COMPARAR_ATRIBUTOS', () => {
 
 /**
  * E3 corte 1, hallazgo ALTO de revisión (commit b3e72186): el flag no estaba conectado a nada en producción.
- * Mismo parseo estricto que CATALOGO_COMPARAR_ATRIBUTOS — worker y API leen `config.catalogo.bandeja`, el
- * mismo valor, nunca cada uno el suyo.
+ *
+ * `bandeja` es TOP-LEVEL en `Config` (hallazgo de revisión sobre 447126b6, no dentro de `ConfigCatalogo`):
+ * si viviera ahí, un servicio con el catálogo entero apagado (`catalogo` queda `undefined`) leería
+ * `bandeja` como `false` sin que nadie lo pusiera ahí, mientras otro servicio con `E3_BANDEJA=1` real
+ * quedaría en `true` — dos autoridades distintas por dónde vive el campo, no por lo que alguien configuró.
  */
 describe('E3-CFG-01 E3_BANDEJA', () => {
   const con = (v: string) => cargarConfig({
-    ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_BANDEJA: v }).catalogo!.bandeja;
+    ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_BANDEJA: v }).bandeja;
   it('por defecto está APAGADO; sólo "1" lo enciende', () => {
-    expect(cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json' }).catalogo!.bandeja).toBe(false);
+    expect(cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json' }).bandeja).toBe(false);
     expect(con('0')).toBe(false);
     expect(con('1')).toBe(true);
   });
   it('cualquier valor fuera de "0"/"1" rechaza el arranque', () => {
     expect(() => con('true')).toThrow();
+  });
+  it('vive top-level en Config, no dentro de catalogo', () => {
+    const c = cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_BANDEJA: '1' });
+    expect(c.bandeja).toBe(true);
+    expect(c.catalogo).not.toHaveProperty('bandeja');
+  });
+
+  /**
+   * El worker es quien vincula publicaciones nuevas con la autoridad de la bandeja, dentro del proyector.
+   * Si el proyector no corre en este worker pero E3_BANDEJA=1 igual, la bandeja queda "prendida" de nombre
+   * y no se aplica en ningún lado del worker: mejor que el arranque falle a que quede en silencio.
+   */
+  it('en el worker, bandeja encendida sin CATALOGO_PROYECTOR rechaza el arranque', () => {
+    expect(() => cargarConfig({ ...base, SERVICIO: 'worker', E3_BANDEJA: '1' })).toThrow(/CATALOGO_PROYECTOR/);
+    // Con el catálogo encendido pero sólo bootstrap (sin proyector), sigue sin haber quién aplique la bandeja.
+    expect(() => cargarConfig({ ...base, SERVICIO: 'worker', CATALOGO_BOOTSTRAP: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_BANDEJA: '1' }))
+      .toThrow(/CATALOGO_PROYECTOR/);
+  });
+  it('en el worker, bandeja encendida CON CATALOGO_PROYECTOR arranca normalmente', () => {
+    const c = cargarConfig({ ...base, SERVICIO: 'worker', CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_BANDEJA: '1' });
+    expect(c.bandeja).toBe(true);
+  });
+  /**
+   * La API no corre el proyector: aplicar o confirmar eventos del legado no depende de CATALOGO_KEYRING_FILE
+   * ni de ningún otro campo de ConfigCatalogo, así que puede tener la bandeja encendida sin el catálogo.
+   */
+  it('en la API, bandeja encendida SIN catálogo configurado arranca igual', () => {
+    const c = cargarConfig({ ...base, SERVICIO: 'api', E3_BANDEJA: '1' });
+    expect(c.bandeja).toBe(true);
+    expect(c.catalogo).toBeUndefined();
   });
 });
 

@@ -56,13 +56,6 @@ export interface ConfigCatalogo {
   umbralErrorPorciento: number;
   /** Abrir `atributo_divergente` al comparar canales. Apagado, los atributos se capturan igual. */
   compararAtributos: boolean;
-  /**
-   * E3 corte 1: si una decisión humana de la bandeja manda sobre la copiada del legado. Apagado por
-   * omisión — sin esto, `vincularMl`/`reconciliarClave` se comportan bit a bit como antes de E3. Worker y
-   * API leen el mismo valor (`E3_BANDEJA`): si difirieran, el proyector podría vincular con la humana y la
-   * API de eventos del legado seguir pisándola, o viceversa.
-   */
-  bandeja: boolean;
 }
 export interface Config {
   servicio: Servicio; instancia: string; version: string; pgUrl: string; apiPuerto: number;
@@ -71,6 +64,20 @@ export interface Config {
   senales?: ConfigSenales;
   informes?: ConfigInformes;
   catalogo?: ConfigCatalogo;
+  /**
+   * E3 corte 1: si una decisión humana de la bandeja manda sobre la copiada del legado. Apagado por
+   * omisión — sin esto, `vincularMl`/`reconciliarClave` se comportan bit a bit como antes de E3.
+   *
+   * TOP-LEVEL y no dentro de `catalogo` (hallazgo de revisión sobre 447126b6): si viviera en
+   * `ConfigCatalogo`, un servicio sin CATALOGO_PROYECTOR/CATALOGO_BOOTSTRAP encendidos (el catálogo entero
+   * apagado, `catalogo` queda `undefined`) leería `bandeja` como `false` sin que nadie lo pusiera ahí —
+   * mientras otro servicio con el catálogo sí encendido y `E3_BANDEJA=1` real quedaría en `true`. Worker y
+   * API tienen que leer EL MISMO valor siempre, esté o no el catálogo configurado en ese servicio en
+   * particular, así que `bandeja` se parsea independiente de `catalogo` y `cargarConfig` valida además que
+   * no pueda quedar encendida sin catálogo (ver más abajo): una autoridad sin proyector es un error de
+   * despliegue, no un estado válido en silencio.
+   */
+  bandeja: boolean;
 }
 export class ErrorConfig extends Error { override name = 'ErrorConfig'; }
 
@@ -164,7 +171,6 @@ function leerCatalogo(v: z.infer<typeof Esquema>): ConfigCatalogo | undefined {
     bootstrapRpm: v.CATALOGO_BOOTSTRAP_RPM, bootstrapCedeSenales: v.CATALOGO_BOOTSTRAP_CEDE_SENALES,
     umbralErrorPorciento: v.CATALOGO_UMBRAL_ERROR,
     compararAtributos: v.CATALOGO_COMPARAR_ATRIBUTOS === '1',
-    bandeja: v.E3_BANDEJA === '1',
   };
 }
 
@@ -245,10 +251,23 @@ export function cargarConfig(envCrudo: NodeJS.ProcessEnv, leerArchivo: (ruta: st
   const senales = leerSenales(env);
   const informes = leerInformes(env, leerArchivo);
   const catalogo = leerCatalogo(e);
+  const bandeja = e.E3_BANDEJA === '1';
+  // El worker es quien VINCULA publicaciones nuevas con la autoridad de la bandeja, en vincularMl dentro
+  // del proyector (src/catalogo/proyector.ts): si el proyector no corre en este worker (catalogo apagado, o
+  // sin CATALOGO_PROYECTOR encendido) pero E3_BANDEJA=1 igual, la bandeja "está prendida" de nombre y no
+  // aplica en ningún lado — la API, mientras tanto, seguiría abriendo decision_en_conflicto y NO
+  // revinculando eventos del legado como si la autoridad estuviera activa, mientras las publicaciones
+  // nuevas nacen sin consultarla nunca. Dos autoridades distintas, por un typo en el compose del worker.
+  // La API no necesita el catálogo encendido para leer `bandeja`: no corre el proyector, y aplicar/confirmar
+  // eventos del legado no depende de CATALOGO_KEYRING_FILE ni de ningún otro campo de `ConfigCatalogo`.
+  if (bandeja && e.SERVICIO === 'worker' && !catalogo?.proyector) {
+    throw new ErrorConfig('E3_BANDEJA=1 en el worker requiere CATALOGO_PROYECTOR=1: sin el proyector corriendo, la bandeja no se aplica al vincular publicaciones nuevas');
+  }
   return {
     servicio: e.SERVICIO, instancia: e.INSTANCIA, version: e.VERSION,
     pgUrl: `postgres://${encodeURIComponent(e.PG_USER)}:${encodeURIComponent(clave)}@${e.PG_HOST}:${e.PG_PORT}/${e.PG_DATABASE}`,
     apiPuerto: e.API_PUERTO, estadoPgDir: e.ESTADO_PG_DIR, heartbeatMaxS: e.HEARTBEAT_MAX_S, heartbeatIntervalMs: e.HEARTBEAT_INTERVAL_MS,
+    bandeja,
     ...(barridos ? { barridos } : {}),
     ...(senales ? { senales } : {}),
     ...(informes ? { informes } : {}),
