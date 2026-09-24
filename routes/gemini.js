@@ -6,20 +6,33 @@ import { guardarArchivo } from '../utils/storage.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent';
+const urlModelo = (m) => `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
+// 2026-09-24: gemini-3.1-flash-lite quedó devolviendo 503 sostenido (medido: 3 cargas de stock seguidas
+// fallidas) mientras gemini-2.5-flash-lite respondía 200 con la misma clave. Si el principal agota sus
+// reintentos por un error transitorio, se prueba el de respaldo antes de rendirse.
+const MODELOS_GEMINI = ['gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
 
 // BUG5 (piloto Pedalar #205): dos 503 seguidos de Gemini tiraban abajo la extracción entera sin
 // reintento. Solo se reintentan errores transitorios (5xx/429 y errores de red sin response, p.
 // ej. ECONNRESET) — nunca un 4xx de payload (400/401/403), que es un error real del request.
 const ESTADOS_REINTENTABLES = new Set([429, 500, 502, 503, 504]);
-// 2026-09-24: con 3 intentos en ~4s, un 503 de Google ("modelo saturado") seguía llegando al operador
-// en la carga de stock. Ahora son 5 intentos en ~20s de espera total: alcanza para los picos cortos de
-// saturación sin pasar el timeout del proxy (las esperas + las llamadas quedan bien debajo de 60s).
-const REINTENTOS_GEMINI = [1000, 3000, 6000, 10000]; // delays entre intentos: 5 intentos en total
+const REINTENTOS_GEMINI = [1000, 3000]; // delays entre intentos: 3 intentos por modelo
 
 function esperar(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 export async function llamarGemini(key, payload) {
+  let ultimo;
+  for (const modelo of MODELOS_GEMINI) {
+    try { return await llamarModelo(modelo, key, payload); }
+    catch (err) {
+      ultimo = err;
+      if (!err.transitorio) throw err; // 4xx o safety filter: otro modelo no lo arregla
+    }
+  }
+  throw ultimo;
+}
+
+async function llamarModelo(modelo, key, payload) {
   const body = {
     ...payload,
     generationConfig: { ...payload.generationConfig, responseMimeType: 'application/json' }
@@ -27,7 +40,7 @@ export async function llamarGemini(key, payload) {
   let ultimoError;
   for (let intento = 0; intento <= REINTENTOS_GEMINI.length; intento++) {
     try {
-      const resp = await axios.post(`${GEMINI_URL}?key=${key}`, body, {
+      const resp = await axios.post(`${urlModelo(modelo)}?key=${key}`, body, {
         headers: { 'Content-Type': 'application/json' },
         validateStatus: () => true
       });
@@ -40,7 +53,7 @@ export async function llamarGemini(key, payload) {
         // Al agotar los reintentos de un error transitorio, el mensaje le dice al operador qué hacer. Conserva el
         // prefijo "Gemini API error <status>" porque el catch de abajo lo usa para no reintentar de nuevo.
         if (ESTADOS_REINTENTABLES.has(resp.status)) {
-          throw new Error(`Gemini API error ${resp.status}: el servicio de Google está saturado. Probá de nuevo en un minuto; no se grabó nada.`);
+          throw Object.assign(new Error(`Gemini API error ${resp.status}: el servicio de Google está saturado. Probá de nuevo en un minuto; no se grabó nada.`), { transitorio: true });
         }
         throw new Error(`Gemini API error ${resp.status}`);
       }
@@ -56,6 +69,7 @@ export async function llamarGemini(key, payload) {
         await esperar(REINTENTOS_GEMINI[intento]);
         continue;
       }
+      if (esErrorDeRed) err.transitorio = true;
       throw err;
     }
   }

@@ -41,13 +41,15 @@ describe('llamarGemini', () => {
     expect(axios.post).toHaveBeenCalledTimes(2);
   });
 
-  it('reintenta hasta 5 intentos y después de agotarlos lanza un error que dice qué hacer', async () => {
+  it('reintenta 3 veces por modelo, prueba el de respaldo y al agotar todo lanza un error que dice qué hacer', async () => {
     axios.post.mockResolvedValue({ status: 503, data: {} });
     const p = llamarGemini('KEY123', { contents: [] });
     const assertion = expect(p).rejects.toThrow(/Gemini API error 503: .*saturado.*Probá de nuevo en un minuto/);
     await vi.runAllTimersAsync();
     await assertion;
-    expect(axios.post).toHaveBeenCalledTimes(5);
+    expect(axios.post).toHaveBeenCalledTimes(6);
+    expect(axios.post.mock.calls[0][0]).toContain('gemini-3.1-flash-lite');
+    expect(axios.post.mock.calls[3][0]).toContain('gemini-2.5-flash-lite');
   });
 
   it('reintenta ante un error de red (sin response)', async () => {
@@ -59,6 +61,16 @@ describe('llamarGemini', () => {
     const result = await p;
     expect(result).toBe('ok');
     expect(axios.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('si el modelo principal sigue con 503, responde el de respaldo', async () => {
+    axios.post
+      .mockResolvedValueOnce({ status: 503, data: {} }).mockResolvedValueOnce({ status: 503, data: {} }).mockResolvedValueOnce({ status: 503, data: {} })
+      .mockResolvedValueOnce({ status: 200, data: { candidates: [{ content: { parts: [{ text: 'respaldo' }] } }] } });
+    const p = llamarGemini('KEY123', { contents: [] });
+    await vi.runAllTimersAsync();
+    expect(await p).toBe('respaldo');
+    expect(axios.post.mock.calls[3][0]).toContain('gemini-2.5-flash-lite');
   });
 
   it('NO reintenta un 400 (error de payload, no transitorio)', async () => {
