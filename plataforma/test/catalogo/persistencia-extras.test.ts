@@ -106,44 +106,6 @@ describe('E2-PER-01 persistencia', () => {
   });
 });
 
-describe('E3 punto B: el título de un ítem ML sin variaciones no se pierde al vincularse a Woo', () => {
-  // Reproduce el caso de aplicar.ts vincularMl(): un ítem de ML SIN variaciones (proyectarItemMl arma UNA
-  // representación 'vendible', nunca un 'contenedor') que YA está vinculado a una variante de Woo por una
-  // decisión — la rama más común en producción. Antes de este fix, esa rama devolvía modelo:null sin llamar
-  // obtenerModelo(), así que el título que trae el payload de ML nunca se guardaba en product_models: ni
-  // model_id propio, ni contenedor (no existe uno para un ítem sin variaciones), ni la variante (que es
-  // woo_*, y modeloMlSql la descarta a propósito para no fugar el título nuestro). modelo-ml.ts devolvía null
-  // → sin_titulo_ml para el 52% medido en catalog.external_representations (evidencia de punto B).
-  const modeloMlDeLaRepresentacion = async () => (await admin.query<{ titulo: string | null; origen: string | null }>(
-    `SELECT pm.titulo, pm.origen FROM catalog.external_representations r
-       LEFT JOIN catalog.product_models pm ON pm.id = COALESCE(
-         (SELECT id FROM catalog.product_models WHERE id = r.model_id AND origen LIKE 'ml\\_%'),
-         (SELECT pm2.id FROM catalog.sellable_variants v JOIN catalog.product_models pm2 ON pm2.id = v.model_id
-           WHERE v.id = r.variant_id AND pm2.origen LIKE 'ml\\_%'))
-      WHERE r.canal = 'mercadolibre' AND r.tipo = 'vendible' AND r.recurso = 'MLA1'`)).rows[0];
-
-  it('ítem ML sin variaciones ya vinculado a Woo: el título queda en un product_models ml_simple propio', async () => {
-    await aplicar('woocommerce', wooSimple([]));
-    await decidirMl();
-    await aplicar('mercadolibre', mlItem([], { title: 'Cubierta Maxxis 29x2.10' }));
-    const m = await modeloMlDeLaRepresentacion();
-    expect(m).toMatchObject({ titulo: 'Cubierta Maxxis 29x2.10', origen: 'ml_simple' });
-  });
-
-  it('una segunda observación con otro título actualiza el mismo product_models (no crea uno nuevo)', async () => {
-    await aplicar('woocommerce', wooSimple([]));
-    await decidirMl();
-    await aplicar('mercadolibre', mlItem([], { title: 'Título viejo' }));
-    const antes = await modeloMlDeLaRepresentacion();
-    await aplicar('mercadolibre', mlItem([], { title: 'Título nuevo' }));
-    const despues = await modeloMlDeLaRepresentacion();
-    expect(despues!.titulo).toBe('Título nuevo');
-    const conteo = await admin.query(`SELECT count(*)::int n FROM catalog.product_models WHERE origen = 'ml_simple' AND clave_origen = 'MLA1'`);
-    expect(conteo.rows[0]!.n).toBe(1);
-    void antes;
-  });
-});
-
 describe('E2-PER-02 atributo_divergente', () => {
   it('dos canales con valores distintos abren UN caso; un segundo atributo lo actualiza en vez de violar el índice', async () => {
     await aplicar('woocommerce', wooSimple([{ name: 'Marca', option: 'Maxxis' }, { name: 'Color', option: 'Negro' }]));

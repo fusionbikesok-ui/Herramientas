@@ -125,20 +125,14 @@ describe('E2-PRY-10 proyector del catálogo', () => {
       expect(await casos()).toEqual([{ tipo: 'sku_pendiente', prioridad: 'normal' }]);
     });
 
-    it('con decisión a un SKU que existe: cuelga de la variante de Woo, y guarda su propio ml_simple con el título de ML (punto B)', async () => {
+    it('con decisión a un SKU que existe: cuelga de la variante de Woo, sin modelo propio', async () => {
       await encolar(woo, 'woo.products', '500', { id: 500, type: 'simple', sku: 'FB-500', name: 'Pedal' });
       await proyector().unaVuelta();
       await decision('MLA5', '', 'confirmar', 'FB-500');
       await encolar(ml, 'ml.items', 'MLA5', { id: 'MLA5', title: 'Pedal ML', status: 'active' });
       await proyector().unaVuelta();
-      // Punto B (2026-09-24): antes de este fix, la representación ML vinculada a Woo quedaba con model_id
-      // NULL y el título 'Pedal ML' se perdía para siempre — ni contenedor (un ítem sin variaciones nunca
-      // genera uno) ni model_id propio. Ahora persiste su ml_simple igual, sin cambiar a qué variante queda
-      // vinculada la representación ni el modelo que usan atributos/imágenes/comparación (sigue siendo el de
-      // la variante Woo — ver el COALESCE(v.model_id, r.model_id) de persistirExtras).
-      expect((await q<{ origen: string }>('SELECT origen FROM catalog.product_models ORDER BY origen')).map((r) => r.origen))
-        .toEqual(['ml_simple', 'woo_simple']);
-      expect(await q('SELECT count(DISTINCT variant_id)::int n FROM catalog.external_representations')).toEqual([{ n: 1 }]);
+      expect(await q('SELECT origen FROM catalog.product_models')).toEqual([{ origen: 'woo_simple' }]);
+      expect(await q(`SELECT count(DISTINCT variant_id)::int n FROM catalog.external_representations`)).toEqual([{ n: 1 }]);
       expect(await casos()).toEqual([]);
     });
 

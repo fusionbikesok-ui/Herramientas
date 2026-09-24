@@ -209,13 +209,8 @@ async function vincularMl(
   tx: Consultable, empresa: string, ctx: ContextoAplicacion, obs: RepresentacionObservada,
   existente: RepExistente | undefined, obtenerModelo: () => Promise<string>, abrir: Abrir,
 ): Promise<Vinculo> {
-  // Ya vinculada: el re-vínculo es trabajo de decisiones.ts. Igual se llama obtenerModelo() (punto B, hallazgo
-  // de José 2026-09-24: 52% de las representaciones vendibles de ML sin título observable) — un ítem de ML SIN
-  // variaciones nunca genera un 'contenedor' aparte (ver ml.ts proyectarItemMl), así que si esta rama no
-  // persiste su modelo ml_simple, el título que trae el payload se pierde para siempre: no hay otra fila que
-  // lo guarde. `upsertModelo` es idempotente por (cuenta, origen, clave_origen), así que esto no crea
-  // duplicados ni cambia a qué variante queda vinculada la representación.
-  if (existente?.variant_id) return { modelo: await obtenerModelo(), variante: existente.variant_id, omitida: false };
+  // Ya vinculada: el re-vínculo es trabajo de decisiones.ts. Acá sólo se refrescan los datos observados.
+  if (existente?.variant_id) return { modelo: null, variante: existente.variant_id, omitida: false };
   if (existente?.omitida_por_decision) return { modelo: null, variante: null, omitida: true };
 
   // Mismo candado que los eventos: si no, un evento que llega mientras esta publicación nueva todavía no está
@@ -224,7 +219,7 @@ async function vincularMl(
   const decision = await decisionVigente(tx, ctx.cuenta, obs.recurso, obs.variacion, { bandeja: ctx.bandeja ?? false });
 
   if (decision?.fuente === 'humano' && decision.eleccion === 'vincular') {
-    return { modelo: await obtenerModelo(), variante: decision.variantId, omitida: false };
+    return { modelo: null, variante: decision.variantId, omitida: false };
   }
   if (decision?.fuente === 'humano' && (decision.eleccion === 'omitir' || decision.eleccion === 'mantener_omision')) {
     return {
@@ -248,7 +243,7 @@ async function vincularMl(
     // comportamiento, es el mismo SELECT que había acá antes, ahora dentro de decisionVigente.
     const destino = (await tx.query<{ id: string }>(
       'SELECT id FROM catalog.sellable_variants WHERE company_id = $1 AND sku = $2', [empresa, decision.sku])).rows[0];
-    if (destino) return { modelo: await obtenerModelo(), variante: destino.id, omitida: false };
+    if (destino) return { modelo: null, variante: destino.id, omitida: false };
     // La decisión apunta a un SKU que todavía no está (o nunca va a estar) en Woo. Si después aparece, la
     // fusión de la variante pendiente con la del SKU la hace decisiones.ts.
     const pendiente = await crearPendiente(tx, empresa, await obtenerModelo());
@@ -363,16 +358,8 @@ export async function persistirExtras(
 ): Promise<void> {
   // Aun sin `crudo` conviene registrar a qué modelo pertenece esta representación (6b): el proyector clasifica
   // por modelo tocado, y una representación sin extras igual pudo cambiar de variante/modelo.
-  //
-  // COALESCE(v.model_id, r.model_id) — variante primero, no al revés (punto B, 2026-09-24): desde que
-  // vincularMl() persiste un ml_simple propio también para representaciones YA vinculadas a una variante
-  // (para no perder el título de ML, ver el comentario ahí), `r.model_id` puede estar seteado AL MISMO TIEMPO
-  // que `r.variant_id`. Los atributos/imágenes/comparación de aquí siguen colgando del modelo de LA VARIANTE
-  // (compartido entre canales, donde `compararAtributos` puede ver lo que dice Woo) — el `ml_simple` es sólo
-  // para el título observado (modelo-ml.ts), nunca el modelo "activo" de una representación ya vinculada.
-  // Sin variante (contenedor, pendiente, omitida) sigue cayendo en `r.model_id` como siempre.
   const modeloFila = (await tx.query<{ model_id: string | null }>(
-    `SELECT COALESCE(v.model_id, r.model_id) AS model_id FROM catalog.external_representations r
+    `SELECT COALESCE(r.model_id, v.model_id) AS model_id FROM catalog.external_representations r
        LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [repId])).rows[0]?.model_id;
   // Una publicación omitida por decisión no tiene modelo ni variante: no hay a quién colgarle nada.
   if (!modeloFila) return;
