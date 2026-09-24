@@ -7,6 +7,7 @@ import { correlacionDe } from '../comun/correlacion.ts';
 import { sinSesion, type ProveedorSesion } from '../auth/sesion.ts';
 import { registrarCatalogo } from './catalogo.ts';
 import { registrarCatalogoInterno } from './catalogo-interna.ts';
+import { registrarIdentidadInterna } from './identidad-interna.ts';
 import { registrarSenales, type OpcionesSenales } from './senales.ts';
 import { registrarEstadoInformes } from './informes.ts';
 import { registrarPasskeys, type OpcionesPasskeys } from './passkeys.ts';
@@ -146,6 +147,8 @@ export function crearApi(opciones: OpcionesApi) {
     // Igual el catálogo interno (E2 T1): sólo escribe en catalog.matcher_decisions e identity_cases, y sin
     // la outbox del legado encendida nadie lo llama.
     registrarCatalogoInterno(app, opciones.pool, opciones.logger, opciones.senales, ahora, opciones.bandejaCatalogo ?? false);
+    // La bandeja de identidad (E3 T5): misma firma y orígenes; decidir además exige E3_BANDEJA (503 si está apagada).
+    registrarIdentidadInterna(app, opciones.pool, opciones.logger, opciones.senales, ahora, opciones.bandejaCatalogo ?? false);
   }
   return app;
 }
