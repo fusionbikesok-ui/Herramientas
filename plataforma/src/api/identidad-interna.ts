@@ -18,7 +18,7 @@
  * La marca por atributo (`explicacion.atributos`) la calcula el motor y se devuelve tal cual; los atributos
  * que el motor no compara (`otros_atributos`) se marcan acá por igualdad normalizada, sin pretender más.
  */
-import { modeloMlSql } from '../identidad/modelo-ml.ts';
+import { tituloMlSql } from '../identidad/modelo-ml.ts';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
@@ -74,15 +74,17 @@ const linkMl = (recurso: string) => 'https://articulo.mercadolibre.com.ar/' + re
  *  un caso activo con stock pero sin título (o ya confirmable) se queda en el grupo 3 y nunca llega a su
  *  chip propio — exactamente la regla de José que el hallazgo HIGH 1 de opt-16 encontró rota en a8bda579
  *  (activa con stock ganaba SIEMPRE, sin importar si tenía título o ya estaba resuelto).
- *  Requiere que la consulta traiga `m.titulo` (LEFT JOIN product_models) y `cv.sku` (LEFT JOIN
- *  sellable_variants por `c.variant_id`, sólo vivas). */
+ *  "Sin título" usa tituloMlSql('r') (no `m.titulo` solo): un ítem de ML sin variaciones ya vinculado a Woo
+ *  no tiene modelo propio (E3 punto B, revisión de opt-16 sobre 5cb02ef5), pero sí puede tener
+ *  `r.titulo_observado` — ese caso NO es "sin título", va por confirmable/activa/resto según corresponda.
+ *  Requiere que la consulta traiga `cv.sku` (LEFT JOIN sellable_variants por `c.variant_id`, sólo vivas). */
 const GRUPO_CASE = `CASE WHEN c.estado = 'conflict' THEN 0
                        WHEN (c.detalle->>'d5')::boolean IS TRUE THEN 1
                        WHEN EXISTS (SELECT 1 FROM catalog.identity_decisions d
                                      WHERE d.channel_account_id = r.channel_account_id AND d.recurso = r.recurso
                                        AND d.variacion_normalizada = r.variacion_normalizada
                                        AND d.origen = 'auto_sku' AND d.efecto = 'sombra' AND d.superada_en IS NULL) THEN 2
-                       WHEN m.titulo IS NULL THEN 6
+                       WHEN ${tituloMlSql('r')} IS NULL THEN 6
                        WHEN cv.sku IS NOT NULL THEN 5
                        WHEN r.estado_remoto = 'active' AND COALESCE(r.stock_canal, 0) > 0 THEN 3
                        ELSE 4 END`;
@@ -183,10 +185,9 @@ export function registrarIdentidadInterna(
         `WITH cola AS (
            SELECT c.id, c.tipo, c.estado, c.prioridad, c.version, c.abierto_en, c.detalle, c.variant_id,
                   r.recurso, r.variacion_normalizada, r.sku_observado, r.estado_remoto, r.stock_canal, r.precio, r.moneda,
-                  m.titulo, cv.sku AS confirmar_sku, ${GRUPO_CASE} AS g
+                  ${tituloMlSql('r')} AS titulo, cv.sku AS confirmar_sku, ${GRUPO_CASE} AS g
              FROM catalog.identity_cases c
              ${PUBLICACION}
-             LEFT JOIN catalog.product_models m ON m.id = ${modeloMlSql('r')}
              LEFT JOIN catalog.sellable_variants cv ON cv.id = c.variant_id AND cv.archivado_en IS NULL
             WHERE c.company_id = $1 AND c.cerrado_en IS NULL AND r.id IS NOT NULL
               AND ($2::text IS NULL OR c.tipo = $2) AND ($3::text IS NULL OR c.estado = $3))
@@ -201,7 +202,6 @@ export function registrarIdentidadInterna(
       const cnt = (await pool.query<{ g: number | null; n: number }>(
         `SELECT CASE WHEN r.id IS NULL THEN NULL ELSE ${GRUPO_CASE} END AS g, count(*)::int AS n
            FROM catalog.identity_cases c ${PUBLICACION}
-           LEFT JOIN catalog.product_models m ON m.id = ${modeloMlSql('r')}
            LEFT JOIN catalog.sellable_variants cv ON cv.id = c.variant_id AND cv.archivado_en IS NULL
           WHERE c.company_id = $1 AND c.cerrado_en IS NULL GROUP BY 1`, [auth.empresa])).rows;
       const en = (g: number | null) => cnt.find((f) => f.g === g)?.n ?? 0;
@@ -232,10 +232,9 @@ export function registrarIdentidadInterna(
       const c = (await pool.query<Fila>(
         `SELECT c.id, c.tipo, c.estado, c.prioridad, c.version, c.detalle, c.abierto_en, c.cerrado_en, c.motivo_cierre,
                 r.id AS rep_id, r.channel_account_id, r.recurso, r.variacion_normalizada, r.sku_observado, r.estado_remoto,
-                r.stock_canal, r.precio, r.moneda, r.model_id, m.titulo
+                r.stock_canal, r.precio, r.moneda, r.model_id, ${tituloMlSql('r')} AS titulo
            FROM catalog.identity_cases c
            ${PUBLICACION}
-           LEFT JOIN catalog.product_models m ON m.id = ${modeloMlSql('r')}
           WHERE c.id = $1 AND c.company_id = $2`, [req.params.id, auth.empresa])).rows[0];
       if (!c) return error(req, reply, 404, 'caso_inexistente', 'No existe el caso.');
 

@@ -120,7 +120,11 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
     const vinculo = ctx.canal === 'woocommerce'
       ? await vincularWoo(tx, empresa, ctx, obs, existente, obtenerModelo, abrir, cerrar)
       : await vincularMl(tx, empresa, ctx, obs, existente, obtenerModelo, abrir);
-    const repId = await upsertRepresentacion(tx, empresa, ctx, obs, vinculo, p.archivar);
+    // E3 punto B (revisión de opt-16 sobre 5cb02ef5): cuando ML no genera modelo propio (ya cuelga de una
+    // variante de Woo), el título del payload no se pierde: se guarda en la representación misma, nunca en
+    // un product_models nuevo. modeloMlSql lo usa como último fallback; hashCatalogo no lo lee.
+    const tituloObservado = ctx.canal === 'mercadolibre' && !vinculo.modelo ? p.modelo.titulo : null;
+    const repId = await upsertRepresentacion(tx, empresa, ctx, obs, vinculo, p.archivar, tituloObservado);
     resumen.representaciones++;
     await persistirExtras(tx, ctx, repId, obs, resumen, empresa);
 
@@ -304,15 +308,16 @@ async function upsertModelo(
 async function upsertRepresentacion(
   tx: Consultable, empresa: string, ctx: ContextoAplicacion, obs: RepresentacionObservada,
   v: { modelo: string | null; variante: string | null; omitida: boolean }, archivar: string | null,
+  tituloObservado: string | null = null,
 ): Promise<string> {
   return (await tx.query<{ id: string }>(
     `INSERT INTO catalog.external_representations
        (company_id, channel_account_id, canal, recurso, variacion_normalizada, tipo, model_id, variant_id,
         omitida_por_decision, sku_observado, user_product_id, estado_remoto, version_remota, archivado_en, motivo_archivo,
-        atributos_crudos, comercial_crudo, capturado_en, precio, moneda, stock_canal, gtin)
+        atributos_crudos, comercial_crudo, capturado_en, precio, moneda, stock_canal, gtin, titulo_observado)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CASE WHEN $14::text IS NULL THEN NULL ELSE now() END, $14,
         $15::jsonb, $16::jsonb, CASE WHEN $15::jsonb IS NOT NULL OR $16::jsonb IS NOT NULL THEN now() END,
-        $17::numeric, $18, $19::integer, $20)
+        $17::numeric, $18, $19::integer, $20, $21)
      ON CONFLICT (channel_account_id, recurso, variacion_normalizada) DO UPDATE SET
        tipo = EXCLUDED.tipo, model_id = EXCLUDED.model_id, variant_id = EXCLUDED.variant_id,
        omitida_por_decision = EXCLUDED.omitida_por_decision,
@@ -329,13 +334,17 @@ async function upsertRepresentacion(
        precio = COALESCE(EXCLUDED.precio, external_representations.precio),
        moneda = COALESCE(EXCLUDED.moneda, external_representations.moneda),
        stock_canal = COALESCE(EXCLUDED.stock_canal, external_representations.stock_canal),
-       gtin = COALESCE(EXCLUDED.gtin, external_representations.gtin)
+       gtin = COALESCE(EXCLUDED.gtin, external_representations.gtin),
+       -- Igual criterio que lo capturado: EXCLUDED.titulo_observado es NULL cuando el vínculo sí tiene modelo
+       -- propio (nada que guardar acá), y ahí no se debe borrar un título de una observación anterior sin modelo.
+       titulo_observado = COALESCE(EXCLUDED.titulo_observado, external_representations.titulo_observado)
      RETURNING id`,
     [empresa, ctx.cuenta, ctx.canal, obs.recurso, obs.variacion, obs.tipo, v.modelo, v.variante, v.omitida,
       textoSku(obs.sku), obs.userProductId, obs.estadoRemoto, ctx.versionRemota || null, archivar,
       obs.crudo ? JSON.stringify(obs.crudo.atributos ?? null) : null, obs.crudo ? JSON.stringify(obs.crudo.comercial ?? null) : null,
       numeroAcotado(obs.comercial?.precio, 1e10), obs.comercial?.moneda ?? null,
-      numeroAcotado(obs.comercial?.stock, 2 ** 31) === null ? null : Math.trunc(obs.comercial!.stock!), obs.comercial?.gtin ?? null])).rows[0]!.id;
+      numeroAcotado(obs.comercial?.stock, 2 ** 31) === null ? null : Math.trunc(obs.comercial!.stock!), obs.comercial?.gtin ?? null,
+      tituloObservado])).rows[0]!.id;
 }
 
 /**

@@ -195,6 +195,23 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(r.body.contadores).toMatchObject({ activas_con_stock: 0, sin_titulo: 1, confirmable: 1 });
   });
 
+  it('E3 punto B: con titulo_observado, un caso sin modelo ml_* NO cae en sin_titulo (usa el título de la representación)', async () => {
+    // Misma situación que "sin_titulo" (variante ya vinculada a woo_*, sin modelo ml_* propio/contenedor), pero
+    // la representación trae titulo_observado (lo que aplicar.ts guarda desde E3 punto B en vez de crear un
+    // ml_simple nuevo). Grupo esperado: 4 (resto), no 6, y el título sale del fallback.
+    const c = await caso('MLA26', { abierto: '2026-01-01T00:00:00Z' });
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W26', 'Título Woo') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, c.variante]);
+    await admin.query('UPDATE catalog.external_representations SET titulo_observado = $1 WHERE variant_id = $2', ['Título observado de ML', c.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    const fila = r.body.casos.find((x: any) => x.id === c.id);
+    expect(fila.grupo).toBe(4);
+    expect(fila.publicacion.titulo).toBe('Título observado de ML');
+    expect(r.body.contadores).toMatchObject({ resto: 1, sin_titulo: 0 });
+  });
+
   it('confirmar: 422 confirmar_invalido si eleccion no es vincular', async () => {
     const c = await caso('MLA32');
     await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-4000', c.variante]);

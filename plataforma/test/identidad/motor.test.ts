@@ -192,6 +192,21 @@ describe('E3-MOTOR-01 correrMotor', () => {
       expect(resumen().sin_titulo_ml).toBe(1);
     });
 
+    it('con titulo_observado (E3 punto B): NO cae en sin_titulo_ml, usa ese título como último fallback', async () => {
+      await destinoParaTitulo('Casco Bell Super Negro', 'FB-8009');
+      const { variante, rep } = await casoConSkuObservado('MLC1b', null, 'irrelevante');
+      // Misma situación que el test "no-fuga" de arriba (variante ya vinculada a woo_*, sin contenedor), pero
+      // la representación trae titulo_observado (lo que aplicar.ts guarda cuando ML no genera modelo propio).
+      const woo = (await q<{ id: string }>(
+        `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W-x2', 'Casco Bell Super Negro') RETURNING id`, [empresa, ml]))[0]!.id;
+      await q('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, variante]);
+      await q('UPDATE catalog.external_representations SET titulo_observado = $1 WHERE id = $2', ['Casco Bell Super Negro', rep]);
+      await correrMotor(app, { empresa, limite: 500, log: logCaptura });
+      expect((await candidatos())[0]!.n).toBeGreaterThan(0);
+      expect(registros.some((r) => r.meta?.codigo === 'sin_titulo_ml')).toBe(false);
+      expect(resumen().fuente_titulo).toEqual({ observado: 1 });
+    });
+
     it('sin representación de modelo propio: el título sale de la variante ml_* y se calculan candidatos', async () => {
       await destinoParaTitulo('Casco Bell Super Negro', 'FB-8002');
       await casoConSkuObservado('MLC2', null, 'Casco Bell Super Negro');

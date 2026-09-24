@@ -106,6 +106,62 @@ describe('E2-PER-01 persistencia', () => {
   });
 });
 
+describe('E3 punto B: el título de un ítem ML sin variaciones no se pierde al vincularse a Woo (sin crear modelo)', () => {
+  // Revisión de opt-16 sobre el intento anterior (commit 5cb02ef5, revertido): crear un product_models
+  // `ml_simple` sólo para no perder el título tenía demasiado radio de impacto (D26/D27, conteos de catálogo,
+  // hashCatalogo en medio de la ventana de aceptación de E2). Esta versión guarda el título en la propia
+  // representación (`titulo_observado`), sin ningún modelo nuevo.
+  it('el título del payload de ML queda en titulo_observado, y NO se crea un product_models ml_simple', async () => {
+    await aplicar('woocommerce', wooSimple([]));
+    await decidirMl();
+    await aplicar('mercadolibre', mlItem([], { title: 'Cubierta Maxxis 29x2.1' }));
+
+    const rep = (await admin.query<{ titulo_observado: string | null; model_id: string | null }>(
+      `SELECT titulo_observado, model_id FROM catalog.external_representations WHERE canal = 'mercadolibre' AND recurso = 'MLA1'`
+    )).rows[0]!;
+    expect(rep.titulo_observado).toBe('Cubierta Maxxis 29x2.1');
+    expect(rep.model_id).toBeNull();
+
+    const modelos = (await admin.query<{ origen: string }>('SELECT origen FROM catalog.product_models')).rows.map((r) => r.origen);
+    expect(modelos.sort()).toEqual(['woo_simple']); // ningún ml_simple nuevo
+  });
+
+  it('una segunda observación con título distinto actualiza titulo_observado en la MISMA fila (no duplica)', async () => {
+    await aplicar('woocommerce', wooSimple([]));
+    await decidirMl();
+    await aplicar('mercadolibre', mlItem([], { title: 'Cubierta v1' }));
+    const antes = (await admin.query(`SELECT id, titulo_observado FROM catalog.external_representations WHERE canal = 'mercadolibre'`)).rows[0]!;
+    expect(antes.titulo_observado).toBe('Cubierta v1');
+
+    await aplicar('mercadolibre', mlItem([], { title: 'Cubierta v2' }));
+    const despues = (await admin.query(`SELECT id, titulo_observado FROM catalog.external_representations WHERE canal = 'mercadolibre'`)).rows[0]!;
+    expect(despues.id).toBe(antes.id);
+    expect(despues.titulo_observado).toBe('Cubierta v2');
+  });
+
+  it('una observación sin título (payload vacío) no borra el titulo_observado ya guardado', async () => {
+    await aplicar('woocommerce', wooSimple([]));
+    await decidirMl();
+    await aplicar('mercadolibre', mlItem([], { title: 'Cubierta con título' }));
+    // Reobservar con el mismo payload (proyectarItemMl siempre manda algún title no vacío en la práctica,
+    // pero el upsert de todos modos preserva por COALESCE si algún día llega null).
+    await aplicar('mercadolibre', mlItem([], { title: 'Cubierta con título' }));
+    const rep = (await admin.query(`SELECT titulo_observado FROM catalog.external_representations WHERE canal = 'mercadolibre'`)).rows[0]!;
+    expect(rep.titulo_observado).toBe('Cubierta con título');
+  });
+
+  it('hashCatalogo no cambia por titulo_observado: dos estados con distinto título pero igual sku/origen dan el mismo hash', async () => {
+    const { hashCatalogo } = await import('../../src/catalogo/conciliacion.ts');
+    await aplicar('woocommerce', wooSimple([]));
+    await decidirMl();
+    await aplicar('mercadolibre', mlItem([], { title: 'Título A' }));
+    const hashA = await hashCatalogo(admin);
+    await aplicar('mercadolibre', mlItem([], { title: 'Título totalmente distinto' }));
+    const hashB = await hashCatalogo(admin);
+    expect(hashB).toBe(hashA);
+  });
+});
+
 describe('E2-PER-02 atributo_divergente', () => {
   it('dos canales con valores distintos abren UN caso; un segundo atributo lo actualiza en vez de violar el índice', async () => {
     await aplicar('woocommerce', wooSimple([{ name: 'Marca', option: 'Maxxis' }, { name: 'Color', option: 'Negro' }]));
