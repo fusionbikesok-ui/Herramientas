@@ -134,6 +134,10 @@
   .ped-items{font-size:11.5px;color:var(--muted);margin-top:8px;line-height:1.5;}
   .ped-nota{font-size:11.5px;color:var(--text);background:var(--amber-bg);border-left:2px solid var(--amber);padding:4px 8px;margin-top:8px;border-radius:4px;}
   .ped-foot{display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap;}
+  .ped.oculto{display:none;}
+  .pend-buscador{width:100%;padding:10px 13px;border-radius:10px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-size:14px;margin:0 0 16px;}
+  .pend-buscador:focus{outline:none;border-color:var(--azul);}
+  .pend-buscador:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px;}
 
   /* Jornada operativa: componente local de esta pantalla, con los mismos tokens de la página. */
   .jornada-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin:0 0 16px;}
@@ -321,6 +325,13 @@
   @media(min-width:640px){.desp-summary{grid-template-columns:repeat(4,1fr)}.desp-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
   @media(min-width:1100px){.desp-list{display:grid}.desp-table-wrap{display:block}.desp-toolbar select{min-width:145px}}
   .desp-stat:focus-visible,.desp-filtros input:focus-visible,.desp-filtros select:focus-visible,.desp-scan input:focus-visible,.desp-toolbar input:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px}
+  /* Optimización para viewports de 360px: reducir márgenes del header del detalle */
+  @media(max-width:360px){
+    h1{font-size:1.25rem;margin:4px 0 2px;}
+    .sub{font-size:12px;margin:0 0 12px;}
+    .wrap{padding:16px 14px 80px;}
+    .btn.sec.mini{min-height:40px;font-size:12px;padding:0 10px;}
+  }
 </style>
 </head>
 <body>
@@ -438,6 +449,9 @@
 var VISTA='pendientes', PREP=null, PEND_CACHE=[], USERNAME=null;
 var PEND_STATUS='idle';
 var PEND_BASELINE_LISTA=false, PEND_NUEVOS={};
+var ULTIMA_INTERACCION_LISTA=0; // Timestamp del último touch/scroll en la lista de pendientes
+var PEND_FILTRO=''; // Búsqueda en cliente en la lista de pendientes
+var PEND_CAMBIOS_PENDIENTES=null; // Guarda los nuevos cambios si hay lockout por interacción
 // fotoId (o id temporal mientras sube) -> object URL local. Vive fuera de PREP a propósito:
 // sobrevive a los refrescos completos de PREP (refrescarDetalle) mientras el servidor todavía
 // no tiene la versión liviana lista, así la miniatura no parpadea a una URL rota en el medio.
@@ -910,12 +924,16 @@ function renderPendientes(){
   }
   html+=renderDevoluciones();
   html+=renderAbiertas();
-  if(PEND_STATUS==='ready')html+=renderListaRecoleccion(visibles);
+  if(PEND_STATUS==='ready'){
+    html+='<input type="search" class="seg-search pend-buscador" placeholder="Buscá por número, pack o comprador…" value="'+esc(PEND_FILTRO)+'" onchange="PEND_FILTRO=this.value;aplicarFiltroPendientes()" oninput="PEND_FILTRO=this.value;aplicarFiltroPendientes()">';
+    html+=renderListaRecoleccion(visibles);
+  }
   if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
   else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini" style="min-height:44px" onclick="cargarPendientes()">Reintentar</button></div>';
   else if(!visibles.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
   else html+='<div class="ped-grid">'+visibles.map(cardPendiente).join('')+'</div>';
   c.innerHTML=html;
+  aplicarFiltroPendientes();
 }
 function renderPendientesSinInterrumpir(){
   var activo=document.activeElement, seleccion=activo&&typeof activo.selectionStart==='number'?{inicio:activo.selectionStart,fin:activo.selectionEnd}:null;
@@ -926,6 +944,7 @@ function renderPendientesSinInterrumpir(){
     for(var i=0;i<equivalentes.length;i++)if(equivalentes[i]===activo){foco.index=i;break;}
   }
   renderPendientes();
+  // El filtro ya se aplica en renderPendientes() al final
   var restaurado=foco.id?document.getElementById(foco.id):null;
   if(!restaurado&&foco.tag){
     var equivalentesNuevos=document.querySelectorAll(foco.tag+(foco.name?'[name="'+CSS.escape(foco.name)+'"]':'')+(foco.type?'[type="'+CSS.escape(foco.type)+'"]':''));
@@ -933,9 +952,63 @@ function renderPendientesSinInterrumpir(){
   }
   if(restaurado){restaurado.focus();if(seleccion&&typeof restaurado.setSelectionRange==='function')restaurado.setSelectionRange(seleccion.inicio,seleccion.fin);}
 }
+
+function aplicarFiltroPendientes(){
+  // Filtra las tarjetas de pendientes según PEND_FILTRO
+  // Busca en: número, pack, numero_pedido, comprador (case-insensitive)
+  var filtro=(PEND_FILTRO||'').toLowerCase();
+  if(!filtro){
+    document.querySelectorAll('.ped-grid .ped').forEach(function(card){card.classList.remove('oculto');});
+    return;
+  }
+  document.querySelectorAll('.ped-grid .ped').forEach(function(card){
+    var search=(card.getAttribute('data-search')||'').toLowerCase();
+    if(search.indexOf(filtro)>=0){ card.classList.remove('oculto'); }
+    else{ card.classList.add('oculto'); }
+  });
+}
+
+function renderPendientesAvisoNuevos(){
+  // Muestra un aviso sticky de pedidos nuevos con opción de actualizar
+  var c=document.getElementById('cuerpo');
+  var html='<section class="jornada-panel cola-directa" aria-labelledby="cola-title"><div class="jornada-head"><div><h2 id="cola-title">Pedidos para preparar</h2><div class="jornada-meta">Abrí un pedido y verificá cada unidad con su código.</div></div><button class="btn sec mini" onclick="cargarPendientes()">Actualizar</button></div><p class="jornada-note">La cola se actualiza automáticamente. MercadoLibre aparece primero y luego los pedidos más antiguos.</p></section>';
+  html+='<div class="flash warn" style="display:block;cursor:pointer" onclick="actualizarPendientesDesdeCambios()" role="button" tabindex="0" onkeypress="if(event.key===\'Enter\')actualizarPendientesDesdeCambios()">Hay <b>'+PEND_CAMBIOS_PENDIENTES.length+'</b> pedidos nuevos. Toca para actualizar.</div>';
+  c.innerHTML=html;
+}
+
+function actualizarPendientesDesdeCambios(){
+  // Aplica los cambios guardados durante el lockout
+  if(PEND_CAMBIOS_PENDIENTES){
+    var pedidos=PEND_CAMBIOS_PENDIENTES;
+    registrarPendientesNuevos(pedidos,true);
+    PEND_CACHE=pedidos;
+    PEND_CAMBIOS_PENDIENTES=null;
+    ULTIMA_INTERACCION_LISTA=0; // Reset la ventana
+    renderPendientes();
+  }
+}
+
 var pendientesTimer=null, pendientesEnVuelo=false;
+
+function debeLockearRefreshPendientes(){
+  // Bloquea el refresco si hay interacción táctil reciente (últimos 10 segundos)
+  var ahora=Date.now();
+  return (ahora - ULTIMA_INTERACCION_LISTA) < 10000;
+}
+
+function registrarInteraccionLista(){
+  ULTIMA_INTERACCION_LISTA=Date.now();
+}
+
 function iniciarPollingPendientes(){
   detenerPollingPendientes();
+  // Registra touches/scrolls en la lista para evitar reordenamientos bajo el dedo
+  var c=document.getElementById('cuerpo');
+  if(c){
+    c.addEventListener('touchstart', registrarInteraccionLista);
+    c.addEventListener('touchmove', registrarInteraccionLista);
+    c.addEventListener('scroll', registrarInteraccionLista);
+  }
   pendientesTimer=setInterval(function(){
     if(VISTA==='pendientes'&&!pendientesEnVuelo)cargarDatosSilenciosos();
   }, 25000);
@@ -960,6 +1033,25 @@ async function cargarDatosSilenciosos(){
     var pr=await api('/pendientes');
     if(!pr.body.ok)throw new Error(pr.body.error||'No se pudo actualizar la cola');
     var pedidos=pr.body.data||[];
+
+    // Si hay interacción reciente y cambió el conjunto, congela la vista
+    if(debeLockearRefreshPendientes()){
+      var nuevasClaves={}, viejasClaves={};
+      PEND_CACHE.forEach(function(p){ viejasClaves[clavePendiente(p)]=true; });
+      pedidos.forEach(function(p){ nuevasClaves[clavePendiente(p)]=true; });
+      // Compara las claves para detectar cambios (órdenes nuevas o desapariciones)
+      var cambiaron=false;
+      if(Object.keys(nuevasClaves).length !== Object.keys(viejasClaves).length){ cambiaron=true; }
+      else { for(var k in nuevasClaves){ if(!viejasClaves[k]){ cambiaron=true; break; } } }
+      if(cambiaron){
+        // Guarda los cambios pendientes pero NO actualiza el cache ni re-renderiza
+        PEND_CAMBIOS_PENDIENTES=pedidos;
+        renderPendientesAvisoNuevos();
+        return;
+      }
+    }
+
+    // Sin interacción reciente, o sin cambios: actualiza todo normalmente
     registrarPendientesNuevos(pedidos,true);PEND_CACHE=pedidos;PEND_META={actualizado_en:pr.body.actualizado_en,sync_error:pr.body.sync_error};
     // Una cancelación puede llegar en cualquier momento: si el refresco de fondo no las
     // trajera, la tarea de devolución sólo aparecería al recargar la pantalla entera.
@@ -1045,7 +1137,9 @@ function cardPendiente(p){
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
   var despacho=despachoSla(p)||(p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(fecha(p.fecha_despacho))+'</b></div>':'');
-  return '<div class="ped'+(marcaNuevo?' nuevo':'')+'" onclick="prepararClave(\''+esc(clavePendiente(p)).replace(/'/g,'&#39;')+'\')">'
+  // data-search: para filtrado en cliente por número, pack, comprador
+  var searchData=numMostrar(p)+' '+p.pack_id+' '+p.numero_pedido+' '+(p.comprador||'');
+  return '<div class="ped'+(marcaNuevo?' nuevo':'')+'" data-search="'+esc(searchData)+'" onclick="prepararClave(\''+esc(clavePendiente(p)).replace(/'/g,'&#39;')+'\')">'
     +'<div class="ped-top"><span class="ped-num">#'+esc(numMostrar(p))+'</span><span style="display:flex;align-items:center;gap:6px">'+marcaNuevo+canal+'</span></div>'
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'

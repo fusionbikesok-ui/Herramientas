@@ -145,3 +145,64 @@ describe('preparacion/index.html — render de pedidos nuevos', () => {
     expect(html).toContain('--focus-ring:#67e8f9');
   });
 });
+
+describe('preparacion/index.html — estabilidad ante touch reciente', () => {
+  it('mantiene variable ULTIMA_INTERACCION_LISTA para rastrear tocadas recientes', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('ULTIMA_INTERACCION_LISTA');
+    expect(html).toContain('touchstart');
+    expect(html).toContain('touchmove');
+    expect(html).toContain('scroll');
+  });
+
+  it('implementa debeLockearRefreshPendientes para congelar en ventana reciente', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('function debeLockearRefreshPendientes()');
+    expect(html).toContain('10000'); // 10s en ms
+  });
+
+  it('muestra aviso de pedidos nuevos si cambian durante ventana de interacción', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('pedidos nuevos');
+    expect(html).toContain('actualizar');
+  });
+});
+
+describe('preparacion/index.html — buscador de pendientes', () => {
+  it('renderiza un buscador en la lista de pendientes', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('type="search"');
+    expect(html).toContain('PEND_FILTRO');
+    expect(html).toContain('pend-buscador');
+  });
+
+  it('agrega data-search a las tarjetas para filtrar en cliente', () => {
+    const pedidos = [
+      { canal: 'ml', ml_order_id: '12345', pack_id: '12345', numero_pedido: '12345', comprador: 'Ana', fecha: '2026-08-28T12:00:00Z', items: [] },
+    ];
+    ctx.PEND_CACHE = pedidos;
+    ctx.PEND_STATUS = 'ready';
+    ctx.PEND_NUEVOS = {};
+    ctx.PEND_META = { actualizado_en: '2026-08-28T12:05:00Z', sync_error: null };
+    ctx.PEND_FILTRO = '';
+
+    ctx.renderPendientes();
+    const html = ctx.document.getElementById('cuerpo').innerHTML;
+
+    expect(html).toContain('data-search=');
+  });
+
+  it('aplica el filtro después de cada render automático', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('aplicarFiltroPendientes');
+  });
+});
+
+describe('preparacion/index.html — header visible a 360px', () => {
+  it('mantiene el número de pedido y comprador visibles sin scroll inicial', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    // Debe haber estilos que reducen tamaños/márgenes para viewport estrecho
+    expect(html).toContain('@media');
+    expect(html).toContain('360px');
+  });
+});
