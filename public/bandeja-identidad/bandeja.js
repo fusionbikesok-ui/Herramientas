@@ -524,14 +524,15 @@
         r.value = o.variant_id; r.checked = S.sel === o.variant_id;
         h.appendChild(r);
         var lb = el('label', null, null, { for: rid });
-        lb.appendChild(el('span', 'cand-rank', i < (d.candidatos || []).length ? (i + 1) + '.º sugerido' : 'De la búsqueda'));
+        var esSkuMl = !!(d.auto_sku_en_sombra && d.auto_sku_en_sombra.sku && d.auto_sku_en_sombra.sku === o.sku);
+        lb.appendChild(el('span', 'cand-rank', esSkuMl ? 'SKU de ML coincide' : (i < (d.candidatos || []).length ? (i + 1) + '.º sugerido' : 'De la búsqueda')));
         lb.appendChild(el('br'));
         lb.appendChild(el('span', 'cand-titulo', o.titulo || 'Sin título'));
         lb.appendChild(el('br'));
         lb.appendChild(el('code', 'sku', o.sku || 'Sin SKU'));
         lb.appendChild(el('span', 'cand-sel', ' — Seleccionado'));
         h.appendChild(lb); box.appendChild(h);
-        if (d.auto_sku_en_sombra && d.auto_sku_en_sombra.sku && d.auto_sku_en_sombra.sku === o.sku) {
+        if (esSkuMl) {
           box.appendChild(el('p', 'sugerencia-sistema', '✓ Sugerencia del sistema (SKU exacto en sombra)'));
         }
         fs.appendChild(box);

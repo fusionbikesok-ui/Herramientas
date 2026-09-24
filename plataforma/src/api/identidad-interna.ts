@@ -269,13 +269,41 @@ export function registrarIdentidadInterna(
       }
 
       const historial = c.recurso === null || c.recurso === undefined ? [] : (await pool.query<Fila>(
-        `SELECT d.id, d.origen, d.efecto, d.eleccion, d.actor, d.motivo, d.creado_en, d.superada_en, d.supersede_a, v.sku
+        `SELECT d.id, d.origen, d.efecto, d.eleccion, d.actor, d.motivo, d.creado_en, d.superada_en, d.supersede_a, d.variant_id, v.sku
            FROM catalog.identity_decisions d LEFT JOIN catalog.sellable_variants v ON v.id = d.variant_id
           WHERE d.channel_account_id = $1 AND d.recurso = $2 AND d.variacion_normalizada = $3
           ORDER BY d.creado_en DESC, d.id DESC LIMIT 50`, [c.channel_account_id, c.recurso, c.variacion_normalizada])).rows;
       const sombra = historial.find((d) => d.origen === 'auto_sku' && d.efecto === 'sombra' && d.superada_en === null);
       const evidencia = (await pool.query<Fila>(
         'SELECT fuente, observado_en, hash, campos FROM catalog.identity_evidence WHERE case_id = $1 ORDER BY observado_en DESC LIMIT 20', [c.id])).rows;
+
+      // Hallazgo de opt-16 (2026-09-24): el motor resuelve sku_observado a una variante única (paso 2 de
+      // correrMotor) SIN depender del título ML — corre incluso cuando el paso 1 (candidatos por título) no
+      // tuvo con qué calcular nada. Sin esto, esa variante quedaba anotada sólo como auto_sku_en_sombra
+      // (id + sku, sin nombre/foto/precio) y la UI la mostraba nada más si YA estaba en `candidatos` por
+      // coincidencia — si no, José nunca la veía, aunque el sistema ya la hubiera resuelto. Se agrega como
+      // rank 0 (primer lugar) cuando no está entre los candidatos del motor, con los mismos datos de Woo
+      // que cualquier candidato.
+      if (sombra?.variant_id && !candidatos.some((cnd) => cnd.variant_id === sombra.variant_id)) {
+        const v = (await pool.query<Fila>(
+          `SELECT v.id AS variant_id, v.sku, v.model_id, m.titulo,
+                  (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
+                    ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto,
+                  w.precio, w.moneda, w.stock_canal AS stock
+             FROM catalog.sellable_variants v JOIN catalog.product_models m ON m.id = v.model_id
+             LEFT JOIN LATERAL (SELECT precio, moneda, stock_canal FROM catalog.external_representations
+                                 WHERE variant_id = v.id AND canal = 'woocommerce' AND archivado_en IS NULL
+                                 ORDER BY observado_en DESC LIMIT 1) w ON true
+            WHERE v.id = $1 AND v.archivado_en IS NULL`, [sombra.variant_id])).rows[0];
+        if (v) {
+          const atrCand = await atributosDe(pool, 'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE model_id = $1 AND vigente_hasta IS NULL', String(v.model_id));
+          candidatos.unshift({
+            rank: 0, variant_id: v.variant_id, sku: v.sku ?? null, titulo: v.titulo, foto: v.foto ?? null,
+            precio: v.precio ?? null, moneda: v.moneda ?? null, stock: v.stock ?? null,
+            explicacion: { atributos: [], otros_atributos: otrosAtributos(atributosMl, atrCand) },
+          });
+        }
+      }
 
       return {
         id: c.id, tipo: c.tipo, estado: c.estado, prioridad: c.prioridad, version: c.version, abierto_en: c.abierto_en,

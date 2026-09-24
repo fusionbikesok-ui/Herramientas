@@ -300,6 +300,46 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${randomUUID()}`)).status).toBe(404);
   });
 
+  /*
+   * Bug reportado por opt-16 (2026-09-24, revisión de las decisiones de José): sin título ML (representación
+   * ya colgada de una variante woo_*, sin ml_simple/ml_clasico propio ni titulo_observado), el motor no
+   * calcula candidatos (paso 1 de correrMotor necesita itemMlDe) pero SÍ resuelve sku_observado a una única
+   * variante viva y anota la auto_sku en sombra (paso 2, independiente del título). El bug es que esa
+   * variante nunca llega a `candidatos`: la UI sólo usa auto_sku_en_sombra para marcar una fila que YA esté
+   * en candidatos por SKU — si candidatos está vacío, José nunca ve la opción, aunque el sistema la haya
+   * resuelto. José reportó justo esto: "no se veía" (sin título/foto) y hasta omitió publicaciones cuyo SKU
+   * resolvía único a una variante viva de Woo.
+   */
+  it('sin candidatos del motor (sin título ML) pero con auto_sku en sombra: la variante de la sombra aparece igual como opción, con datos de Woo', async () => {
+    const c = await caso('MLA_SIN_TITULO');
+    // La representación queda sin fuente de título ML: su variante pasa a colgar de un modelo woo_simple
+    // (no ml_*), como en producción cuando ya no tiene modelo propio ni contenedor ni titulo_observado.
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'woo_simple', 'W-SIN-TITULO', 'Bici Sin Título ML (no debería mostrarse)') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, c.variante]);
+
+    // La variante destino que sku_observado resuelve — tiene SKU, título y precio de Woo (evidencia real
+    // disponible aunque el ML no traiga título).
+    const destino = await variante('Casco Bell Rojo Talle M', 'FB-2654');
+    await admin.query(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, precio, moneda)
+       VALUES ($1, $2, 'woocommerce', 'vendible', 'W-2654', '', $3, $4, 45000, 'ARS')`, [empresa, ml, destino.variante, destino.modelo]);
+    await admin.query(
+      `INSERT INTO catalog.identity_decisions (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
+       VALUES ($1, $2, $3, 'MLA_SIN_TITULO', '', 'vincular', $4, 'auto_sku', 'motor', 'sombra')`,
+      [empresa, c.id, ml, destino.variante]);
+
+    const d = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(d.status).toBe(200);
+    expect(d.body.publicacion.titulo).toBeNull(); // el caso sigue sin título ML: eso no se inventa
+    expect(d.body.auto_sku_en_sombra).toMatchObject({ sku: 'FB-2654' });
+    expect(d.body.candidatos).toHaveLength(1);
+    expect(d.body.candidatos[0]).toMatchObject({
+      variant_id: destino.variante, sku: 'FB-2654', titulo: 'Casco Bell Rojo Talle M', precio: '45000.00', moneda: 'ARS',
+    });
+  });
+
   it('el título de la publicación es el observado de ML (contenedor), nunca el de la variante woo_* vinculada', async () => {
     const c = await caso('MLA8');
     const woo = (await admin.query<{ id: string }>(
