@@ -184,4 +184,108 @@ describe('E3-DEC-01 decidirCaso', () => {
       [empresaId, modelo, sku])).rows[0]!.id;
     return { variante };
   }
+
+  /*
+   * Hallazgo ALTO de la revisión de opt-62 sobre ed1d226a: cuando `reconciliarClave` devuelve 'sin_cambios'
+   * (ya estaba exactamente donde la decisión pedía), el caso tiene que cerrarse igual — antes se quedaba
+   * 'decided' abierto para siempre. Un caso por cada una de las 4 elecciones.
+   */
+  describe('cierre correcto cuando reconciliarClave devuelve sin_cambios', () => {
+    it('vincular al mismo destino que ya tenía: cierra verified', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-201');
+      const { caso } = await casoPendiente('MLA201');
+      const r1 = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+      expect(r1.ok).toBe(true);
+      // Un caso NUEVO sobre la misma clave, ya vinculada exactamente ahí: reconciliarClave no tiene nada
+      // que mover (sin_cambios), pero decidirCaso igual tiene que cerrar este segundo caso.
+      const caso2 = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id)
+         SELECT company_id, 'decision_en_conflicto', id FROM catalog.external_representations WHERE recurso = 'MLA201' RETURNING id`)).rows[0]!.id;
+      const r2 = await decidir(pedido({ caseId: caso2, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+      expect(r2).toMatchObject({ ok: true, vinculo: 'sin_cambios' });
+      expect((await q<{ estado: string; cerrado_en: Date | null }>(
+        'SELECT estado, cerrado_en FROM catalog.identity_cases WHERE id = $1', [caso2]))[0])
+        .toMatchObject({ estado: 'verified', cerrado_en: expect.any(Date) });
+    });
+
+    it('omitir ya omitida: cierra verified', async () => {
+      const { caso } = await casoPendiente('MLA202');
+      const r1 = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'omitir' }));
+      expect(r1.ok).toBe(true);
+      // Un caso NUEVO con otro tipo (para no chocar con el 'omitida_revisar' que decidirCaso ya dejó abierto
+      // vía reconciliarClave, que se cierra en el paso 10 del PRIMER caso, no de éste).
+      const caso2 = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id)
+         SELECT company_id, 'decision_en_conflicto', id FROM catalog.external_representations WHERE recurso = 'MLA202' RETURNING id`)).rows[0]!.id;
+      const r2 = await decidir(pedido({ caseId: caso2, expectedVersion: 1, eleccion: 'omitir' }));
+      expect(r2).toMatchObject({ ok: true, vinculo: 'sin_cambios' });
+      expect((await q<{ estado: string; cerrado_en: Date | null }>(
+        'SELECT estado, cerrado_en FROM catalog.identity_cases WHERE id = $1', [caso2]))[0])
+        .toMatchObject({ estado: 'verified', cerrado_en: expect.any(Date) });
+    });
+
+    it('mantener_omision sobre una ya omitida (omitida_revisar): cierra verified', async () => {
+      const { caso } = await casoPendiente('MLA203');
+      const r1 = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'omitir' }));
+      expect(r1.ok).toBe(true);
+      const caso2 = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id)
+         SELECT company_id, 'decision_en_conflicto', id FROM catalog.external_representations WHERE recurso = 'MLA203' RETURNING id`)).rows[0]!.id;
+      const r2 = await decidir(pedido({ caseId: caso2, expectedVersion: 1, eleccion: 'mantener_omision' }));
+      expect(r2).toMatchObject({ ok: true, vinculo: 'sin_cambios' });
+      expect((await q<{ estado: string; cerrado_en: Date | null }>(
+        'SELECT estado, cerrado_en FROM catalog.identity_cases WHERE id = $1', [caso2]))[0])
+        .toMatchObject({ estado: 'verified', cerrado_en: expect.any(Date) });
+    });
+
+    it('sin_candidato sobre un caso sku_pendiente ya pendiente sin sku: cierra decided, sin reabrir sku_pendiente en otra variante', async () => {
+      const { caso } = await casoPendiente('MLA204');
+      const r = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'sin_candidato' }));
+      expect(r).toMatchObject({ ok: true, vinculo: 'sin_cambios' });
+      expect((await q<{ estado: string; cerrado_en: Date | null; motivo_cierre: string | null }>(
+        'SELECT estado, cerrado_en, motivo_cierre FROM catalog.identity_cases WHERE id = $1', [caso]))[0])
+        .toMatchObject({ estado: 'decided', cerrado_en: expect.any(Date), motivo_cierre: 'sin candidato en catálogo' });
+      // Ningún sku_pendiente nuevo quedó abierto sobre la variante pendiente (reconciliarClave no tuvo que
+      // moverla, seguía pendiente): un solo caso, el mismo, cerrado.
+      expect((await q<{ n: number }>(
+        "SELECT count(*)::int n FROM catalog.identity_cases WHERE tipo = 'sku_pendiente' AND cerrado_en IS NULL"))[0]!.n).toBe(0);
+    });
+  });
+
+  it('revertir una decisión que no es la vigente de la clave: revierte_no_vigente', async () => {
+    const v1 = await variantePendienteConSku('FB-301'); const v2 = await variantePendienteConSku('FB-302');
+    const { caso } = await casoPendiente('MLA301');
+    const r1 = await decidir(pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: v1.variante }));
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) return;
+    // Una segunda decisión SOBRE LA MISMA CLAVE la supera (un revert admin a v2): r1.decisionId deja de ser
+    // la vigente, y de paso reabre el caso que r1 había cerrado.
+    const r2 = await decidir(pedido({
+      caseId: caso, expectedVersion: 2, eleccion: 'vincular', variantId: v2.variante, esAdmin: true, revierte: r1.decisionId }));
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    // Intentar revertir apuntando a la YA SUPERADA (r1), en vez de a la vigente (r2): revierte_no_vigente.
+    const r3 = await decidir(pedido({
+      caseId: caso, expectedVersion: 3, eleccion: 'sin_candidato', esAdmin: true, revierte: r1.decisionId }));
+    expect(r3).toMatchObject({ ok: false, code: 'revierte_no_vigente' });
+    // No dejó ninguna fila nueva ni movió nada: sigue en la variante que puso r2.
+    expect((await q<{ n: number }>('SELECT count(*)::int n FROM catalog.identity_decisions WHERE case_id = $1', [caso]))[0]!.n).toBe(2);
+    expect(await vinculo('MLA301')).toBe(v2.variante);
+  });
+
+  it('dos decidirCaso concurrentes con la MISMA idempotency-key: los dos ok, mismo decisionId, una sola fila (no un 500 por el UNIQUE)', async () => {
+    const { variante: destino } = await variantePendienteConSku('FB-401');
+    const { caso } = await casoPendiente('MLA401');
+    const p = pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino });
+    const [r1, r2] = await Promise.all([decidir(p), decidir(p)]);
+    expect(r1.ok).toBe(true); expect(r2.ok).toBe(true);
+    if (!r1.ok || !r2.ok) return;
+    expect(r1.decisionId).toBe(r2.decisionId);
+    expect((await q<{ n: number }>('SELECT count(*)::int n FROM catalog.identity_decisions WHERE case_id = $1', [caso]))[0]!.n).toBe(1);
+  });
+
+  it('un caso inexistente: caso_inexistente', async () => {
+    const r = await decidir(pedido({ caseId: randomUUID(), expectedVersion: 1, eleccion: 'sin_candidato' }));
+    expect(r).toMatchObject({ ok: false, code: 'caso_inexistente' });
+  });
 });

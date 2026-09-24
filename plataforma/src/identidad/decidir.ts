@@ -29,7 +29,7 @@ export interface PedidoDecision {
 export type ResultadoDecision =
   | { ok: true; decisionId: string; version: number; vinculo: Reconciliacion }
   | { ok: false; code: 'version_conflict' | 'idempotency_mismatch' | 'variante_invalida' | 'caso_cerrado'
-      | 'caso_sin_publicacion' | 'solo_admin' | 'bandeja_apagada'; details?: object };
+      | 'caso_sin_publicacion' | 'caso_inexistente' | 'solo_admin' | 'bandeja_apagada' | 'revierte_no_vigente'; details?: object };
 
 /** El hash canónico del pedido, sin la clave de idempotencia: es la clave la que identifica el reintento, no
  *  al revés — dos pedidos con distinta clave pero mismo cuerpo son decisiones DISTINTAS, no la misma. */
@@ -41,26 +41,35 @@ function hashPedido(p: PedidoDecision): string {
 export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja: boolean }): Promise<ResultadoDecision> {
   if (!o.bandeja) return { ok: false, code: 'bandeja_apagada' };
 
-  return enTransaccion(pool, async (tx) => {
-    // Paso 1: idempotencia. Si la clave ya existe, el hash del pedido decide si es un reintento (devolver lo
-    // mismo) o un choque (otro cuerpo bajo la misma clave).
+  const hash = hashPedido(p);
+
+  /** Busca una decisión previa con esta clave de idempotencia y arma el resultado de reintento. */
+  const buscarPrevia = async (tx: Consultable): Promise<ResultadoDecision | null> => {
     const previa = (await tx.query<{ id: string; hash_peticion: string; case_id: string }>(
       'SELECT id, hash_peticion, case_id FROM catalog.identity_decisions WHERE idempotency_key = $1', [p.idempotencyKey])).rows[0];
-    const hash = hashPedido(p);
-    if (previa) {
-      if (previa.hash_peticion !== hash) return { ok: false, code: 'idempotency_mismatch' };
-      const caso = (await tx.query<{ version: number }>('SELECT version FROM catalog.identity_cases WHERE id = $1', [previa.case_id])).rows[0]!;
-      // El resultado de un reintento reporta el estado actual (no el `vinculo` original, que no se guardó):
-      // 'sin_cambios' es correcto porque, de haber cambiado algo, ya cambió en el intento original.
-      return { ok: true, decisionId: previa.id, version: caso.version, vinculo: 'sin_cambios' };
-    }
+    if (!previa) return null;
+    if (previa.hash_peticion !== hash) return { ok: false, code: 'idempotency_mismatch' };
+    const caso = (await tx.query<{ version: number }>('SELECT version FROM catalog.identity_cases WHERE id = $1', [previa.case_id])).rows[0]!;
+    // El resultado de un reintento reporta el estado actual (no el `vinculo` original, que no se guardó):
+    // 'sin_cambios' es correcto porque, de haber cambiado algo, ya cambió en el intento original.
+    return { ok: true, decisionId: previa.id, version: caso.version, vinculo: 'sin_cambios' };
+  };
+
+  return enTransaccion(pool, async (tx) => {
+    // Paso 1 (primera pasada, sin candado): resuelve la mayoría de los reintentos rápido, sin bloquear nada.
+    // Todavía puede haber una carrera con OTRO decidirCaso concurrente con la MISMA clave (los dos pasan
+    // esta lectura antes de que ninguno tome el candado) — por eso se repite el chequeo en el paso 3, ya
+    // adentro del candado de cuenta, en vez de dejar que el segundo choque contra el UNIQUE con un 500
+    // (hallazgo MEDIO de la segunda opinión de Codex).
+    const previa1 = await buscarPrevia(tx);
+    if (previa1) return previa1;
 
     // Paso 2: el caso y la clave de la publicación que gobierna (por representation_id, o la única
     // representación de ML de la variante si el caso cuelga de variant_id).
     const caso = (await tx.query<{
       id: string; company_id: string; variant_id: string | null; representation_id: string | null; estado: string;
     }>('SELECT id, company_id, variant_id, representation_id, estado FROM catalog.identity_cases WHERE id = $1', [p.caseId])).rows[0];
-    if (!caso) return { ok: false, code: 'caso_sin_publicacion' };
+    if (!caso) return { ok: false, code: 'caso_inexistente' };
     const repId = caso.representation_id ?? await (async () => {
       if (!caso.variant_id) return null;
       const reps = (await tx.query<{ id: string }>(
@@ -73,8 +82,12 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
       'SELECT channel_account_id, recurso, variacion_normalizada FROM catalog.external_representations WHERE id = $1', [repId])).rows[0];
     if (!rep) return { ok: false, code: 'caso_sin_publicacion' };
 
-    // Paso 3: candado de cuenta y fila del caso.
+    // Paso 3: candado de cuenta, y ahí sí, de nuevo la idempotencia — esta vez con la garantía de que nadie
+    // más con la misma clave puede estar insertando en paralelo (mismo candado de cuenta que toma
+    // reconciliarClave/bloquearDecisiones para todo lo demás). Recién después el FOR UPDATE del caso.
     await bloquearDecisiones(tx, rep.channel_account_id);
+    const previa2 = await buscarPrevia(tx);
+    if (previa2) return previa2;
     const bloqueado = (await tx.query<{ version: number; estado: string; cerrado_en: Date | null }>(
       'SELECT version, estado, cerrado_en FROM catalog.identity_cases WHERE id = $1 FOR UPDATE', [p.caseId])).rows[0]!;
 
@@ -95,11 +108,15 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
     if (p.revierte && !p.esAdmin) return { ok: false, code: 'solo_admin' };
 
     // Paso 7: la decisión vigente actual de esa clave (para supersede_a — la propia tabla trae el trigger
-    // que la marca superada; acá sólo hace falta apuntarle).
+    // que la marca superada; acá sólo hace falta apuntarle). Si `p.revierte` viene informado, tiene que SER
+    // esa vigente: el trigger `identity_decisions_superar_anterior` valida lo mismo y aborta el INSERT con
+    // una excepción si no coincide (hallazgo ALTO de Codex: eso volvía un 500, en vez de un resultado
+    // tipado), así que se valida acá antes para devolver un código claro sin llegar a la excepción.
     const vigente = (await tx.query<{ id: string }>(
       `SELECT id FROM catalog.identity_decisions
         WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND efecto = 'aplicar' AND superada_en IS NULL`,
       [rep.channel_account_id, rep.recurso, rep.variacion_normalizada])).rows[0];
+    if (p.revierte && p.revierte !== vigente?.id) return { ok: false, code: 'revierte_no_vigente' };
     const decision = (await tx.query<{ id: string }>(
       `INSERT INTO catalog.identity_decisions
          (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id,
@@ -126,12 +143,55 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
     const vinculo = await reconciliarClave(
       tx as Consultable, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, `bandeja: ${p.actor}`, { bandeja: true });
 
-    // Paso 10: si el vínculo quedó donde la decisión mandaba, el caso pasa a verified.
-    if (vinculo === 'vinculada' || vinculo === 'omitida') {
-      await tx.query(
-        "UPDATE catalog.identity_cases SET estado = 'verified', cerrado_en = now(), motivo_cierre = 'decidido en bandeja' WHERE id = $1",
-        [p.caseId]);
+    // Paso 10: cerrar el caso, y sólo si el vínculo real quedó donde la decisión mandaba — no basta con que
+    // `reconciliarClave` haya corrido, porque devuelve 'sin_cambios' tanto cuando ya estaba bien (hay que
+    // cerrar igual, si no el caso queda 'decided' abierto para siempre y vuelve a la cola — hallazgo ALTO de
+    // Codex) como cuando falló en aplicar lo pedido (ahí NO hay que cerrar, y de hecho ni debería pasar:
+    // si no coincide con lo que la decisión mandaba, algo está roto y se aborta toda la transacción en vez
+    // de dejar un 'decided' a medio camino).
+    //
+    // Releo external_representations en vez de confiar en el string de `vinculo`, porque 'sin_cambios' no
+    // dice A QUÉ está sin cambios: puede ser que ya estuviera exactamente donde la decisión pedía (cerrar)
+    // o que la decisión no haya podido aplicarse (romper).
+    const repFinal = (await tx.query<{ variant_id: string | null; omitida_por_decision: boolean }>(
+      'SELECT variant_id, omitida_por_decision FROM catalog.external_representations WHERE id = $1', [repId])).rows[0]!;
+    let coincide: boolean;
+    let motivoCierre = 'decidido en bandeja';
+    let estadoFinal = 'verified';
+    if (p.eleccion === 'vincular') {
+      coincide = repFinal.variant_id === p.variantId && !repFinal.omitida_por_decision;
+    } else if (p.eleccion === 'omitir' || p.eleccion === 'mantener_omision') {
+      coincide = repFinal.omitida_por_decision;
+    } else {
+      // sin_candidato: la publicación tiene que haber quedado pendiente, sin SKU asociado a esa variante
+      // pendiente (una variante CON sku no es "sin candidato": es de Woo, sencillamente no se decidió).
+      const pend = repFinal.variant_id && !repFinal.omitida_por_decision
+        ? (await tx.query<{ sku: string | null }>('SELECT sku FROM catalog.sellable_variants WHERE id = $1', [repFinal.variant_id])).rows[0]
+        : null;
+      coincide = !!pend && pend.sku === null;
+      estadoFinal = 'decided'; // sin_candidato nunca pasa a verified: no hay nada verificado, es "no sé".
+      motivoCierre = 'sin candidato en catálogo';
     }
+    if (!coincide) {
+      // No debería pasar nunca en la práctica (reconciliarClave aplica exactamente lo que decisionVigente
+      // le manda, y la decisión recién insertada YA es la vigente de esa clave); si pasara, es mejor un
+      // rollback completo que un caso 'decided' abierto a medias sin que nadie se entere.
+      throw new Error(`decidirCaso: el vínculo de ${rep.recurso} no coincide con la decisión ${p.eleccion} tras reconciliar`);
+    }
+    // sin_candidato con reconciliarClave: si la publicación YA estaba pendiente sobre OTRA variante que sí
+    // tenía SKU, "sin_candidato" no la mueve (arriba `coincide` ya lo habría detectado). Pero si estaba
+    // vinculada u omitida y pasa a "pendiente", `reconciliarClave` puede abrir un `sku_pendiente` sobre la
+    // variante pendiente nueva: se cierra acá mismo con el mismo motivo, para no reabrir la cola con un caso
+    // que el propio decidirCaso ya resolvió como "sin candidato".
+    if (p.eleccion === 'sin_candidato' && repFinal.variant_id) {
+      await tx.query(
+        `UPDATE catalog.identity_cases SET cerrado_en = now(), motivo_cierre = $2
+          WHERE variant_id = $1 AND tipo = 'sku_pendiente' AND cerrado_en IS NULL AND id <> $3`,
+        [repFinal.variant_id, motivoCierre, p.caseId]);
+    }
+    await tx.query(
+      'UPDATE catalog.identity_cases SET estado = $2, cerrado_en = now(), motivo_cierre = $3 WHERE id = $1',
+      [p.caseId, estadoFinal, motivoCierre]);
 
     // Paso 11: auditoría con actor, antes/después y correlation_id.
     const correlationId = randomUUID();
