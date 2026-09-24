@@ -138,6 +138,12 @@
   .pend-buscador{width:100%;padding:10px 13px;border-radius:10px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-size:14px;margin:0 0 16px;}
   .pend-buscador:focus{outline:none;border-color:var(--azul);}
   .pend-buscador:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px;}
+  /* position:fixed a propósito: no puede empujar nada del flujo normal — es lo que antes
+     corría las tarjetas bajo el dedo al aparecer. Flota arriba, respeta el notch/status bar
+     con safe-area-inset-top, y no participa del layout de #cuerpo en absoluto. */
+  .pend-aviso-nuevos{position:fixed;top:calc(env(safe-area-inset-top,0px) + 8px);left:50%;transform:translateX(-50%);z-index:55;max-width:calc(100% - 24px);background:var(--amber-bg);color:var(--text);border:1px solid var(--amber);border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25);}
+  .pend-aviso-nuevos:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px;}
+  .pend-aviso-nuevos[hidden]{display:none;}
 
   /* Jornada operativa: componente local de esta pantalla, con los mismos tokens de la página. */
   .jornada-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin:0 0 16px;}
@@ -382,6 +388,11 @@
   </div>
 
   <div id="cuerpo"><div class="loading">Cargando…</div></div>
+  <!-- Fuera de #cuerpo a propósito: el aviso de pedidos nuevos vive acá para que nunca
+       lo toque un c.innerHTML=... de la lista — eso es lo que antes corría las tarjetas
+       bajo el dedo (y le cerraba el teclado a quien estaba escribiendo en el buscador). -->
+  <div id="pend-aviso-nuevos" class="pend-aviso-nuevos" hidden role="button" tabindex="0"
+    onclick="actualizarPendientesDesdeCambios()" onkeypress="if(event.key==='Enter')actualizarPendientesDesdeCambios()"></div>
   <div id="foto-live" class="sr-only" role="status" aria-live="polite"></div>
 </div>
 </main>
@@ -912,6 +923,11 @@ async function cargarRecoleccion(){
 }
 
 function renderPendientes(){
+  // Cualquier render completo deja la lista al día: el aviso de "pedidos nuevos" (si estaba
+  // mostrado) ya no tiene sentido, y el flag tiene que poder volver a dispararse la próxima
+  // vez que haya un alta durante un lock — si no, un solo aviso "gastado" deja mudo el resto
+  // del turno.
+  ocultarAvisoNuevosPendientes();
   var c=document.getElementById('cuerpo');
   var html='<section class="jornada-panel cola-directa" aria-labelledby="cola-title"><div class="jornada-head"><div><h2 id="cola-title">Pedidos para preparar</h2><div class="jornada-meta">Abrí un pedido y verificá cada unidad con su código.</div></div><button class="btn sec mini" onclick="cargarPendientes()">Actualizar</button></div><p class="jornada-note">La cola se actualiza automáticamente. MercadoLibre aparece primero y luego los pedidos más antiguos.</p></section>';
   var visibles=PEND_CACHE;
@@ -968,19 +984,25 @@ function aplicarFiltroPendientes(){
   });
 }
 
-// Ojo: NO usa c.innerHTML=... con contenido nuevo — eso es exactamente el bug que esto
-// corrige (arrasa las tarjetas que el operario tiene bajo el dedo). Se antepone el aviso
-// como texto plano al innerHTML existente, dejando la lista intacta debajo. Solo se muestra
-// una vez por ventana de bloqueo (pendAvisoActivo); refrescos silenciosos posteriores mientras
-// sigue tocando actualizan el conteo guardado pero no duplican ni tocan el aviso ya pintado.
+// El aviso es un elemento FIJO fuera de #cuerpo (ver el <div id="pend-aviso-nuevos"> del
+// body), nunca innerHTML de la lista: así no corre nada de layout bajo el dedo y no le
+// cierra el teclado a quien está escribiendo en el buscador. Solo se pinta una vez por
+// ventana de bloqueo (pendAvisoActivo); refrescos silenciosos posteriores mientras sigue
+// tocando actualizan el conteo guardado en PEND_CAMBIOS_PENDIENTES sin volver a tocar el DOM.
 var pendAvisoActivo=false;
 function mostrarAvisoNuevosPendientes(n){
   if(pendAvisoActivo)return;
-  var c=document.getElementById('cuerpo');
-  var texto='Hay <b>'+n+'</b> pedido'+(n===1?'':'s')+' nuevo'+(n===1?'':'s')+' — tocá para actualizar.';
-  var aviso='<div id="pend-aviso-nuevos" class="flash warn" style="display:block;cursor:pointer" role="button" tabindex="0" onclick="actualizarPendientesDesdeCambios()" onkeypress="if(event.key===\'Enter\')actualizarPendientesDesdeCambios()">'+texto+'</div>';
-  c.innerHTML=aviso+c.innerHTML;
+  var av=document.getElementById('pend-aviso-nuevos');
+  if(!av)return;
+  av.textContent='Hay '+n+' pedido'+(n===1?'':'s')+' nuevo'+(n===1?'':'s')+' — tocá para actualizar.';
+  av.hidden=false;
   pendAvisoActivo=true;
+}
+function ocultarAvisoNuevosPendientes(){
+  var av=document.getElementById('pend-aviso-nuevos');
+  if(av)av.hidden=true;
+  pendAvisoActivo=false;
+  PEND_CAMBIOS_PENDIENTES=null;
 }
 
 function actualizarPendientesDesdeCambios(){
@@ -989,10 +1011,8 @@ function actualizarPendientesDesdeCambios(){
     var pedidos=PEND_CAMBIOS_PENDIENTES;
     registrarPendientesNuevos(pedidos,true);
     PEND_CACHE=pedidos;
-    PEND_CAMBIOS_PENDIENTES=null;
-    pendAvisoActivo=false;
     ULTIMA_INTERACCION_LISTA=0; // Reset la ventana
-    renderPendientes();
+    renderPendientes(); // también oculta el aviso y resetea pendAvisoActivo
   }
 }
 
@@ -1011,15 +1031,17 @@ function registrarInteraccionLista(){
 var pendientesListenersListos=false;
 function iniciarPollingPendientes(){
   detenerPollingPendientes();
-  // Registra touches/scrolls en la lista para evitar reordenamientos bajo el dedo. Una sola
-  // vez por carga de página — ir('pendientes') puede llamar a esto muchas veces por turno y
-  // #cuerpo es el mismo nodo siempre, así que sin esta guarda se acumulaban listeners.
-  var c=document.getElementById('cuerpo');
-  if(c&&!pendientesListenersListos){
+  // En window, no en #cuerpo: 'scroll' no burbujea del contenedor que hace el scroll real
+  // (document/window en esta página, no #cuerpo) así que colgado de #cuerpo nunca disparaba.
+  // pointerdown cubre mouse/trackpad para quien prueba en desktop; touchstart+passive es el
+  // caso real del celular. Una sola vez por carga de página — ir('pendientes') puede llamar
+  // a esto muchas veces por turno y sin esta guarda se acumulaban listeners.
+  if(!pendientesListenersListos){
     pendientesListenersListos=true;
-    c.addEventListener('touchstart', registrarInteraccionLista);
-    c.addEventListener('touchmove', registrarInteraccionLista);
-    c.addEventListener('scroll', registrarInteraccionLista);
+    window.addEventListener('touchstart', registrarInteraccionLista, {passive:true});
+    window.addEventListener('touchmove', registrarInteraccionLista, {passive:true});
+    window.addEventListener('pointerdown', registrarInteraccionLista);
+    window.addEventListener('scroll', registrarInteraccionLista, {passive:true});
   }
   pendientesTimer=setInterval(function(){
     if(VISTA==='pendientes'&&!pendientesEnVuelo)cargarDatosSilenciosos();

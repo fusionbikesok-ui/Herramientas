@@ -225,18 +225,25 @@ describe('preparacion/index.html — refresco de fondo no toca la lista bajo el 
     expect(ctx.document.getElementById('cuerpo').innerHTML).toBe('<div class="ped-grid"><div class="ped" data-search="A">A</div><div class="ped" data-search="B">B</div></div>');
   });
 
-  it('con un pedido nuevo y touch reciente, antepone el aviso sin borrar las tarjetas existentes', async () => {
+  it('con un pedido nuevo y touch reciente, el aviso es un nodo aparte que no toca #cuerpo ni le saca el foco a nada', async () => {
     ctx.PEND_CACHE = [pA];
     ctx.PEND_STATUS = 'ready';
     ctx.ULTIMA_INTERACCION_LISTA = Date.now();
     const cuerpo = ctx.document.getElementById('cuerpo');
     const listaOriginal = '<div class="ped-grid"><div class="ped" data-search="A">A</div></div>';
     cuerpo.innerHTML = listaOriginal;
+    // Simula foco en el buscador: si mostrarAvisoNuevosPendientes tocara #cuerpo con innerHTML,
+    // esta referencia quedaría "colgada" de un nodo que ya no está en el documento.
+    const buscador = ctx.document.getElementById('pend-buscador-simulado');
+    buscador.focus = vi.fn();
     mockPendientes([pA, pB]); // entra un pedido nuevo
     await ctx.cargarDatosSilenciosos();
-    const html = ctx.document.getElementById('cuerpo').innerHTML;
-    expect(html).toContain(listaOriginal);
-    expect(html).toContain('pend-aviso-nuevos');
+    // #cuerpo no se tocó en absoluto — ni un carácter, no sólo "sigue conteniendo lo mismo".
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toBe(listaOriginal);
+    expect(buscador.focus).not.toHaveBeenCalled();
+    const aviso = ctx.document.getElementById('pend-aviso-nuevos');
+    expect(aviso.hidden).toBe(false);
+    expect(aviso.textContent).toContain('1 pedido nuevo');
     expect(ctx.PEND_CACHE).toEqual([pA]); // el cache visible no cambia hasta que el operario toca el aviso
   });
 
@@ -247,6 +254,38 @@ describe('preparacion/index.html — refresco de fondo no toca la lista bajo el 
     mockPendientes([pA, pB]);
     await ctx.cargarDatosSilenciosos();
     expect(ctx.PEND_CACHE).toEqual([pA, pB]);
+  });
+
+  it('el aviso mostrado se apaga en cualquier render completo, y puede volver a dispararse después', async () => {
+    ctx.PEND_CACHE = [pA];
+    ctx.PEND_STATUS = 'ready';
+    ctx.ULTIMA_INTERACCION_LISTA = Date.now();
+    ctx.document.getElementById('cuerpo').innerHTML = '<div class="ped-grid"><div class="ped" data-search="A">A</div></div>';
+    mockPendientes([pA, pB]);
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(false);
+
+    // Refresco normal (sin lock): renderPendientes() se ejecuta completo y apaga el aviso.
+    ctx.ULTIMA_INTERACCION_LISTA = 0;
+    mockPendientes([pA, pB]);
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(true);
+
+    // Nueva alta bajo un lock nuevo: el aviso tiene que poder volver a mostrarse.
+    ctx.ULTIMA_INTERACCION_LISTA = Date.now();
+    const pC = { canal: 'ml', ml_order_id: 'C', pack_id: 'C', numero_pedido: 'C', comprador: 'Caro', fecha: '2026-09-24T11:00:00Z', items: [] };
+    mockPendientes([pA, pB, pC]);
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(false);
+  });
+
+  it('registra la interacción con listeners en window (pointerdown/touch/scroll), no en #cuerpo', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    const bloque = html.slice(html.indexOf('function iniciarPollingPendientes'), html.indexOf('function iniciarPollingPendientes') + 1000);
+    expect(bloque).toContain('window.addEventListener(\'touchstart\'');
+    expect(bloque).toContain('window.addEventListener(\'pointerdown\'');
+    expect(bloque).toContain('window.addEventListener(\'scroll\'');
+    expect(bloque).toContain('passive:true');
   });
 });
 
