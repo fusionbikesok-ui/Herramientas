@@ -377,3 +377,41 @@ export async function calibrar(pool: pg.Pool, o: { desde: Date; hasta: Date; mue
 - `E3_BANDEJA=0`: `decisionVigente` vuelve al legado y las decisiones se conservan;
 - `E3_MOTOR=0`;
 - la imagen anterior queda etiquetada `fusion-plataforma:antes-e3c1`.
+
+---
+
+## Enmiendas tras la revisión de Codex (2026-09-24, `/tmp/claude-0/codex-plan-e3c1.txt`)
+
+Estas enmiendas **prevalecen** sobre el texto de las tareas.
+
+- **T2, autoridad en las dos rutas:** hay que reemplazar el SELECT de `matcher_decisions` en `vincularMl` **y** en `reconciliarClave`. Los tests (a)–(f) llaman a las dos rutas reales, con el flag encendido y apagado.
+- **T2, fallback del legado:** conserva exacto su comportamiento de hoy, incluida la búsqueda de destino sin filtrar variantes archivadas. La validación de «variante no archivada» es sólo para las decisiones humanas nuevas (T3). Esto se documenta en `autoridad.ts`.
+- **T5/T6, actor y admin (frontera de confianza):**
+  - Quien tiene la clave interna es el servidor del legado, con la misma confianza que ya tiene para escribir decisiones del matcher.
+  - La garantía de que `es_admin` es verdadero está en el proxy. El proxy toma el usuario y `es_admin` **sólo** de `req.session`/`usuarios`, y descarta lo que mande el cliente.
+  - Test obligatorio en T6: el cliente manda `es_admin:true` y `usuario:'otro'` → la plataforma recibe los de la sesión, y un no-admin que revierte recibe 403.
+  - En T5, `revierte` exige `es_admin:true`, y la plataforma registra el actor en la auditoría.
+- **T6, emisor de la firma:** el emisor de la firma se crea en `lib/internoHmac.js` o reutiliza el de `crearEnvioEventoCatalogo` (`lib/outboxPlataforma.js:190`):
+  - carga el keyring activo;
+  - genera el nonce;
+  - firma la ruta exacta, con la query string, y el `Buffer` exacto del cuerpo.
+
+  Hay un test cruzado JS→TS contra `verificarInterna`, con un GET con query y un POST con JSON no canónico.
+- **T5, cuerpo crudo:** se usa el mismo parser `application/json`→`Buffer` que `catalogo-interna.ts:71-72`, se verifica el HMAC **antes** de parsear y hay un test con JSON no canónico.
+- **T4, marca de las D5:**
+  - el motor escribe `detalle.d5=true` en el caso `omitida_revisar` de una clave con `omitir` vigente del legado y SKU observado único → `skuUnico`;
+  - la escritura va con un UPDATE idempotente;
+  - la marca se quita si el SKU deja de ser único.
+- **T5, cola priorizada:** sólo cuenta los casos **abiertos**. Una `auto_sku` en sombra ya superada, o una clave con humana vigente, no sube la prioridad. El test mezcla casos de los 5 grupos, incluidos casos ya decididos.
+- **T4, duplicados y desorden:** la corrida del motor es idempotente con la misma entrada. Se prueban dos corridas concurrentes (el lock) y casos reabiertos.
+- **T7, cobertura:** `cobertura-e3.test.ts` tiene dos listas.
+  - **C1:** los escenarios de este corte más «desorden y duplicados», que tienen que existir.
+  - **Diferidos al corte 3:** relectura con cambio, 5xx→parked y 401 aborta. Quedan como `it.todo` con el nombre exacto, y la ficha E3 no se puede dar por aceptada mientras quede un `todo`.
+- **T7, `tiempoMedianoDecisionS`:** mide la resolución, desde `identity_cases.abierto_en` hasta `identity_decisions.creado_en` de la humana. Se documenta como «tiempo de resolución», no de atención.
+- **T4, paridad del port:** el fixture incluye:
+  - `atributos_json` válido y ausente;
+  - el fallback por título;
+  - variantes hermanas;
+  - `color_ok` y `talle_ok`.
+
+  Se compara el top-3 **y** los campos de contradicción de cada candidato.
