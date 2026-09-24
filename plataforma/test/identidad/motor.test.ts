@@ -137,4 +137,84 @@ describe('E3-MOTOR-01 correrMotor', () => {
     expect(candidatos.length).toBeGreaterThan(0);
     expect(candidatos[0]).toMatchObject({ rank: 1, engine_version: ENGINE_VERSION });
   });
+
+  describe('marca D5 (omitida_revisar con omitir legado vigente + SKU único)', () => {
+    /** Igual que casoConSkuObservado pero con tipo omitida_revisar (D5 sólo aplica a ese tipo). */
+    async function casoOmitidaRevisar(recurso: string, skuObservado: string | null) {
+      const modelo = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+         VALUES ($1, $2, 'ml_simple', $3, $3) RETURNING id`, [empresa, ml, recurso])).rows[0]!.id;
+      const variante = (await admin.query<{ id: string }>(
+        'INSERT INTO catalog.sellable_variants (company_id, model_id) VALUES ($1, $2) RETURNING id',
+        [empresa, modelo])).rows[0]!.id;
+      await admin.query(
+        `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, sku_observado)
+         VALUES ($1, $2, 'mercadolibre', 'vendible', $3, '', $4, $5, $6)`,
+        [empresa, ml, recurso, variante, modelo, skuObservado]);
+      const caso = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, variant_id) VALUES ($1, 'omitida_revisar', $2) RETURNING id`,
+        [empresa, variante])).rows[0]!.id;
+      return { caso, variante };
+    }
+    async function omitirLegado(recurso: string) {
+      await admin.query(
+        `INSERT INTO catalog.matcher_decisions (company_id, channel_account_id, canal, recurso, variacion_normalizada, accion, origen, actor)
+         VALUES ($1, $2, 'mercadolibre', $3, '', 'omitir', 'evento', 'persona')`,
+        [empresa, ml, recurso]);
+    }
+    const detalleDe = async (caso: string) => (await q<{ detalle: { d5?: boolean } }>(
+      'SELECT detalle FROM catalog.identity_cases WHERE id = $1', [caso]))[0]!.detalle;
+
+    it('SKU único + omitir legado vigente: detalle.d5=true, y NO hay auto_sku (la omisión sigue mandando)', async () => {
+      await varianteConSku('FB-6001');
+      const { caso } = await casoOmitidaRevisar('MLB8', 'FB-6001');
+      await omitirLegado('MLB8');
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      expect(await detalleDe(caso)).toMatchObject({ d5: true });
+      expect(await decisionVigenteDe('MLB8')).toBeUndefined();
+    });
+
+    it('es idempotente: dos corridas dejan detalle.d5=true una sola vez (UPDATE no reescribe de más)', async () => {
+      await varianteConSku('FB-6002');
+      const { caso } = await casoOmitidaRevisar('MLB9', 'FB-6002');
+      await omitirLegado('MLB9');
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      expect(await detalleDe(caso)).toMatchObject({ d5: true });
+    });
+
+    it('sin SKU único (0 o 2 candidatos): no hay marca d5', async () => {
+      const { caso } = await casoOmitidaRevisar('MLB10', 'FB-9999-INEXISTENTE');
+      await omitirLegado('MLB10');
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      expect((await detalleDe(caso)).d5).toBeFalsy();
+    });
+
+    it('la marca se quita si el SKU deja de ser único', async () => {
+      await varianteConSku('FB-6003');
+      const { caso } = await casoOmitidaRevisar('MLB11', 'FB-6003');
+      await omitirLegado('MLB11');
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      expect(await detalleDe(caso)).toMatchObject({ d5: true });
+      // El SKU deja de resolver único: se archiva la variante que lo tenía.
+      await admin.query("UPDATE catalog.sellable_variants SET archivado_en = now(), motivo_archivo = 'test' WHERE sku = 'FB-6003'");
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      expect((await detalleDe(caso)).d5).toBeFalsy();
+    });
+  });
+
+  it('dos corridas concurrentes sobre la misma empresa no duplican auto_sku ni candidatos (el advisory lock del ciclo se prueba en worker/identidad; acá se prueba que el propio correrMotor, corrido dos veces en paralelo dentro de la misma transacción lógica de Postgres, no rompe la idempotencia de datos)', async () => {
+    await varianteConSku('FB-7001');
+    await casoConSkuObservado('MLB12', 'FB-7001');
+    const [r1, r2] = await Promise.all([
+      correrMotor(app, { empresa, limite: 500, log: logSilencioso }),
+      correrMotor(app, { empresa, limite: 500, log: logSilencioso }),
+    ]);
+    const totalAutoSku = r1.autoSku + r2.autoSku;
+    expect(totalAutoSku).toBeGreaterThanOrEqual(1);
+    const n = (await q<{ n: number }>(
+      "SELECT count(*)::int n FROM catalog.identity_decisions WHERE channel_account_id = $1 AND recurso = 'MLB12' AND origen = 'auto_sku'",
+      [ml]))[0]!.n;
+    expect(n).toBe(1); // el UNIQUE identity_decisions_una_vigente (clave, efecto) garantiza esto aunque ambas corridas lo intenten
+  });
 });

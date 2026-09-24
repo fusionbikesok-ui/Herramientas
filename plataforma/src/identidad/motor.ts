@@ -122,11 +122,23 @@ async function correrCaso(tx: Consultable, caso: CasoAbierto, empresa: string, i
 
   // Paso 2: auto-SKU en sombra.
   const skuNorm = normalizarSku(rep.sku_observado);
-  if (!skuNorm) return { autoSku: false };
-  const resuelto = await skuUnico(tx, empresa, skuNorm);
-  if (resuelto === 'ninguna' || resuelto === 'varias') return { autoSku: false };
-
+  const resuelto = skuNorm ? await skuUnico(tx, empresa, skuNorm) : 'ninguna';
   const vigente = await decisionVigente(tx, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, { bandeja: true });
+
+  // Marca D5 (enmienda de Codex sobre el plan): un caso omitida_revisar cuya clave tiene un `omitir`
+  // vigente del legado, con SKU observado que ahora resuelve único, es una omisión vieja que el motor
+  // no puede levantar solo (D2: sin auto-vínculo aplicado este corte) pero sí puede señalar para que
+  // una persona la revise con prioridad — `detalle.d5=true`. UPDATE idempotente (no reescribe si ya
+  // coincide) y se QUITA si el SKU deja de ser único (la marca no es un hecho permanente del caso).
+  if (caso.tipo === 'omitida_revisar') {
+    const esD5 = resuelto !== 'ninguna' && resuelto !== 'varias' && !!vigente && vigente.fuente === 'legado' && vigente.accion === 'omitir';
+    await tx.query(
+      `UPDATE catalog.identity_cases SET detalle = CASE WHEN $2 THEN detalle || '{"d5":true}'::jsonb ELSE detalle - 'd5' END
+        WHERE id = $1 AND COALESCE((detalle->>'d5')::boolean, false) IS DISTINCT FROM $2`,
+      [caso.id, esD5]);
+  }
+
+  if (resuelto === 'ninguna' || resuelto === 'varias') return { autoSku: false };
   if (vigente && (vigente.fuente === 'humano' || (vigente.fuente === 'legado' && vigente.accion === 'omitir'))) return { autoSku: false };
 
   if (await autoSkuYaVigente(tx, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, resuelto.variantId)) return { autoSku: false };
