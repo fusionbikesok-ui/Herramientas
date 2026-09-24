@@ -103,7 +103,38 @@ async function autoSkuVigente(tx: Consultable, cuenta: string, recurso: string, 
     [cuenta, recurso, variacion])).rows[0];
 }
 
-async function correrCaso(tx: Consultable, caso: CasoAbierto, empresa: string, indice: IndiceWoo, runId: string, log: Logger, cont: Contadores): Promise<{ autoSku: boolean }> {
+/**
+ * Marca el caso como procesado por esta versión del motor, HAYA O NO candidatos (un caso sin título o sin publicación
+ * también tiene que salir del frente de la cola). Un solo UPDATE con merge de jsonb: no toca version, estado ni
+ * abierto_en, así una decisión de la bandeja con expected_version tomada antes de la corrida no da version_conflict.
+ * `corrido_en` es texto ISO en UTC, que ordena igual que el tiempo.
+ */
+async function marcarCorrido(tx: Consultable, casoId: string): Promise<void> {
+  await tx.query(
+    `UPDATE catalog.identity_cases
+        SET detalle = detalle || jsonb_build_object('motor', jsonb_build_object(
+              'engine', $2::text, 'corrido_en', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
+      WHERE id = $1`, [casoId, ENGINE_VERSION]);
+}
+
+function estable(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(estable).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${estable((v as Record<string, unknown>)[k])}`).join(',')}}`;
+  return JSON.stringify(v);
+}
+
+/** ¿El top-3 de esta corrida es idéntico al de la última corrida guardada del caso (misma versión del motor)? */
+async function mismoTop3(tx: Consultable, casoId: string, nuevo: { variantId: string; rank: number; puntaje: number; explicacion: unknown }[]): Promise<boolean> {
+  const previas = (await tx.query<{ variant_id: string; rank: number; puntaje: string; explicacion: unknown; engine_version: string }>(
+    `SELECT variant_id, rank, puntaje, explicacion, engine_version FROM catalog.identity_candidates
+      WHERE case_id = $1 AND run_id = (SELECT run_id FROM catalog.identity_candidates WHERE case_id = $1 ORDER BY creado_en DESC, rank ASC LIMIT 1)
+      ORDER BY rank`, [casoId])).rows;
+  if (previas.length !== nuevo.length) return false;
+  return previas.every((p, i) => p.engine_version === ENGINE_VERSION && p.variant_id === nuevo[i]!.variantId && p.rank === nuevo[i]!.rank
+    && Number(p.puntaje) === Number(nuevo[i]!.puntaje) && estable(p.explicacion) === estable(JSON.parse(JSON.stringify(nuevo[i]!.explicacion))));
+}
+
+async function procesarCaso(tx: Consultable, caso: CasoAbierto, empresa: string, indice: IndiceWoo, runId: string, log: Logger, cont: Contadores): Promise<{ autoSku: boolean }> {
   const rep = await representacionDe(tx, caso);
   if (!rep) return { autoSku: false }; // sin publicación viva que gobierne: nada que el motor pueda anotar hoy.
 
@@ -116,9 +147,12 @@ async function correrCaso(tx: Consultable, caso: CasoAbierto, empresa: string, i
       const variantesPorSku = new Map((await tx.query<{ id: string; sku: string }>(
         `SELECT id, sku FROM catalog.sellable_variants WHERE company_id = $1 AND sku = ANY($2) AND archivado_en IS NULL`,
         [empresa, skus])).rows.map((v) => [v.sku, v.id]));
-      for (const c of candidatos) {
+      const aGuardar = candidatos.flatMap((c) => {
         const variantId = variantesPorSku.get(c.variantId);
-        if (!variantId) continue; // el candidato del motor Woo no tiene variante propia todavía (pendiente): no hay a qué apuntar el FK.
+        return variantId ? [{ ...c, variantId }] : []; // el candidato del motor Woo sin variante propia todavía (pendiente): no hay a qué apuntar el FK.
+      });
+      if (!(await mismoTop3(tx, caso.id, aGuardar))) for (const c of aGuardar) {
+        const variantId = c.variantId;
         await tx.query(
           `INSERT INTO catalog.identity_candidates (case_id, run_id, variant_id, rank, puntaje, explicacion, fuentes, engine_version)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -169,15 +203,17 @@ export async function correrMotor(pool: pg.Pool, o: { empresa: string; limite: n
     const casos = (await tx.query<CasoAbierto>(
       `SELECT id, company_id, variant_id, representation_id, tipo FROM catalog.identity_cases
         WHERE company_id = $1 AND cerrado_en IS NULL AND tipo = ANY($2)
-        ORDER BY abierto_en ASC LIMIT $3`,
-      [o.empresa, TIPOS_ABIERTOS, o.limite])).rows;
+        ORDER BY COALESCE(CASE WHEN detalle->'motor'->>'engine' = $4 THEN detalle->'motor'->>'corrido_en' END, '') ASC, abierto_en ASC
+        LIMIT $3`,
+      [o.empresa, TIPOS_ABIERTOS, o.limite, ENGINE_VERSION])).rows;
     if (!casos.length) return { casos: 0, autoSku: 0 };
 
     const indice = await indiceWoo(tx, o.empresa);
     let autoSku = 0;
     const cont: Contadores = { sinTituloMl: 0, contenedorDifiereVariante: 0, porFuente: {} };
     for (const caso of casos) {
-      const r = await correrCaso(tx, caso, o.empresa, indice, runId, o.log, cont);
+      const r = await procesarCaso(tx, caso, o.empresa, indice, runId, o.log, cont);
+      await marcarCorrido(tx, caso.id);
       if (r.autoSku) autoSku++;
     }
     o.log.info('identidad.motor: resumen de la corrida', { casos: casos.length, sin_titulo_ml: cont.sinTituloMl, contenedor_difiere_variante: cont.contenedorDifiereVariante, fuente_titulo: cont.porFuente });

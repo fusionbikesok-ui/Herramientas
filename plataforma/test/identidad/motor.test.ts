@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ENGINE_VERSION, correrMotor } from '../../src/identidad/motor.ts';
+import { decidirCaso } from '../../src/identidad/decidir.ts';
 import { crearPool } from '../../src/db/pool.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 
@@ -290,5 +291,97 @@ describe('E3-MOTOR-01 correrMotor', () => {
       "SELECT count(*)::int n FROM catalog.identity_decisions WHERE channel_account_id = $1 AND recurso = 'MLB12' AND origen = 'auto_sku'",
       [ml]))[0]!.n;
     expect(n).toBe(1); // el UNIQUE identity_decisions_una_vigente (clave, efecto) garantiza esto aunque ambas corridas lo intenten
+  });
+
+  describe('avance de la cola (marca por corrida en detalle.motor)', () => {
+    const marca = async (caso: string) => (await q<{ m: { engine: string; corrido_en: string } | null }>(
+      "SELECT detalle->'motor' AS m FROM catalog.identity_cases WHERE id = $1", [caso]))[0]!.m;
+    const filasDe = async (caso: string) => (await q<{ n: number; runs: number }>(
+      'SELECT count(*)::int n, count(DISTINCT run_id)::int runs FROM catalog.identity_candidates WHERE case_id = $1', [caso]))[0]!;
+
+    it('[esc:cola-avanza] dos vueltas con limite menor al total cubren todos los casos (no repite siempre los más viejos)', async () => {
+      await varianteConSku('FB-8001');
+      const casos = [];
+      for (let i = 0; i < 4; i++) casos.push((await casoConSkuObservado(`MLC${i}`, null, 'Bici FB-8001')).caso);
+      await correrMotor(app, { empresa, limite: 2, log: logSilencioso });
+      expect(await marca(casos[0]!)).toMatchObject({ engine: ENGINE_VERSION });
+      expect(await marca(casos[2]!)).toBeNull();
+      await correrMotor(app, { empresa, limite: 2, log: logSilencioso });
+      for (const c of casos) expect(await marca(c), `caso ${c}`).toMatchObject({ engine: ENGINE_VERSION });
+    });
+
+    it('un caso sin publicación (sin candidatos posibles) queda marcado y no bloquea la cola', async () => {
+      const sinPublicacion = await varianteConSku('FB-8002'); // variante sin representación de ML viva
+      const huerfano = (await admin.query<{ id: string }>(
+        "INSERT INTO catalog.identity_cases (company_id, tipo, variant_id) VALUES ($1, 'sku_pendiente', $2) RETURNING id", [empresa, sinPublicacion])).rows[0]!.id;
+      const { caso } = await casoConSkuObservado('MLC10', null, 'Bici FB-8002');
+      await correrMotor(app, { empresa, limite: 1, log: logSilencioso });
+      expect(await marca(huerfano)).toMatchObject({ engine: ENGINE_VERSION });
+      expect(await marca(caso)).toBeNull();
+      await correrMotor(app, { empresa, limite: 1, log: logSilencioso });
+      expect(await marca(caso)).toMatchObject({ engine: ENGINE_VERSION });
+      expect((await filasDe(caso)).n).toBeGreaterThan(0);
+    });
+
+    it('[esc:sin-duplicados] re-correr sin cambios no agrega candidatos y la última corrida sigue siendo la misma', async () => {
+      await varianteConSku('FB-8003');
+      const { caso } = await casoConSkuObservado('MLC20', null, 'Bici FB-8003');
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      const antes = await filasDe(caso);
+      const corridaAntes = (await q<{ run_id: string }>('SELECT DISTINCT run_id FROM catalog.identity_candidates WHERE case_id = $1', [caso]))[0]!.run_id;
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      expect(await filasDe(caso)).toEqual(antes);
+      expect((await q<{ run_id: string }>('SELECT DISTINCT run_id FROM catalog.identity_candidates WHERE case_id = $1', [caso]))[0]!.run_id).toBe(corridaAntes);
+    });
+
+    it('si el top-3 cambia entre corridas, se guarda la corrida nueva y la vieja se conserva', async () => {
+      await varianteConSku('FB-8004');
+      const { caso } = await casoConSkuObservado('MLC30', null, 'Bici FB-8004 FB-8005');
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      expect((await filasDe(caso)).runs).toBe(1);
+      await varianteConSku('FB-8005'); // entra un candidato nuevo al catálogo
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      expect((await filasDe(caso)).runs).toBe(2);
+    });
+
+    it('un caso marcado por otro ENGINE_VERSION vuelve a ser "nunca corrido" y se procesa antes que uno ya marcado con el actual', async () => {
+      await varianteConSku('FB-8006');
+      const a = (await casoConSkuObservado('MLC40', null, 'Bici FB-8006')).caso;
+      const b = (await casoConSkuObservado('MLC41', null, 'Bici FB-8006')).caso;
+      await correrMotor(app, { empresa, limite: 2, log: logSilencioso });
+      await admin.query(
+        `UPDATE catalog.identity_cases SET detalle = detalle || jsonb_build_object('motor', jsonb_build_object('engine','viejo','corrido_en','2099-01-01T00:00:00.000000Z')) WHERE id = $1`, [b]);
+      await admin.query(
+        `UPDATE catalog.identity_cases SET detalle = jsonb_set(detalle, '{motor,corrido_en}', '"2000-01-01T00:00:00.000000Z"') WHERE id = $1`, [a]);
+      await correrMotor(app, { empresa, limite: 1, log: logSilencioso });
+      expect((await marca(b))!.engine).toBe(ENGINE_VERSION); // b (engine viejo) va primero aunque a tenga corrido_en más viejo
+    });
+
+    it('la marca no toca version, estado ni abierto_en, y una decisión de la bandeja tomada antes de la corrida igual entra (sin version_conflict)', async () => {
+      const destino = await varianteConSku('FB-8007');
+      const { caso } = await casoConSkuObservado('MLC50', null, 'Bici FB-8007');
+      const antes = (await q<{ version: number; estado: string; abierto_en: Date }>(
+        'SELECT version, estado, abierto_en FROM catalog.identity_cases WHERE id = $1', [caso]))[0]!;
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      const despues = (await q<{ version: number; estado: string; abierto_en: Date }>(
+        'SELECT version, estado, abierto_en FROM catalog.identity_cases WHERE id = $1', [caso]))[0]!;
+      expect(despues).toEqual(antes);
+      const r = await decidirCaso(app, { caseId: caso, expectedVersion: antes.version, eleccion: 'vincular', variantId: destino,
+        actor: 'jose', esAdmin: false, idempotencyKey: randomUUID() }, { bandeja: true });
+      expect(r).toMatchObject({ ok: true });
+    });
+
+    it('la marca D5 y la marca del motor conviven en detalle (merge, ninguna pisa a la otra)', async () => {
+      await varianteConSku('FB-8008');
+      const { caso, rep } = await casoConSkuObservado('MLC60', 'FB-8008');
+      await admin.query("UPDATE catalog.identity_cases SET tipo = 'omitida_revisar', representation_id = $2 WHERE id = $1", [caso, rep]);
+      await admin.query(
+        `INSERT INTO catalog.matcher_decisions (company_id, channel_account_id, canal, recurso, variacion_normalizada, accion, origen, actor)
+         VALUES ($1, $2, 'mercadolibre', 'MLC60', '', 'omitir', 'evento', 'persona')`, [empresa, ml]);
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      const d = (await q<{ detalle: Record<string, unknown> }>('SELECT detalle FROM catalog.identity_cases WHERE id = $1', [caso]))[0]!.detalle;
+      expect(d).toMatchObject({ d5: true, motor: { engine: ENGINE_VERSION } });
+    });
   });
 });
