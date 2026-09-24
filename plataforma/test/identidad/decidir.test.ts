@@ -381,4 +381,74 @@ describe('E3-DEC-01 decidirCaso', () => {
     const r1reintento = await decidir(p);
     expect(r1reintento).toEqual(r1);
   });
+
+  /*
+   * Bug reportado por opt-16 (2026-09-24, revisión de las decisiones de José): la misma publicación de ML
+   * puede tener DOS casos abiertos de tipo distinto (p.ej. sku_pendiente y user_product_divergente) — la
+   * clave única es (representation_id, tipo), no representation_id solo, así que ambos coexisten. Un
+   * operador decide el primero, y el segundo sigue abierto sobre la MISMA representación: José lo decide
+   * de nuevo minutos después, creyendo que es otra publicación. No es un fallo del candado optimista (ese
+   * ya está probado en (b) más arriba): decidirCaso rechaza correctamente una segunda decisión con el
+   * mismo expected_version. El problema es que nada cierra el caso hermano cuando el primero se resuelve.
+   */
+  describe('dos casos abiertos sobre la MISMA publicación (opt-16, 2026-09-24)', () => {
+    it('decidir un caso sku_pendiente cierra el otro caso (distinto tipo) abierto sobre la misma representación', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-601');
+      const { variante: pendiente, caso: casoSku } = await casoPendiente('MLA601');
+      const repId = (await q<{ id: string }>(
+        `SELECT id FROM catalog.external_representations WHERE channel_account_id = $1 AND recurso = $2`,
+        [ml, 'MLA601']))[0]!.id;
+      const casoHermano = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id, detalle)
+         VALUES ($1, 'user_product_divergente', $2, '{}'::jsonb) RETURNING id`, [empresa, repId])).rows[0]!.id;
+
+      const r = await decidir(pedido({ caseId: casoSku, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+      expect(r).toMatchObject({ ok: true, version: 2, vinculo: 'vinculada' });
+
+      const hermano = (await q<{ estado: string; cerrado_en: Date | null; motivo_cierre: string | null }>(
+        'SELECT estado, cerrado_en, motivo_cierre FROM catalog.identity_cases WHERE id = $1', [casoHermano]))[0]!;
+      expect(hermano.cerrado_en).not.toBeNull();
+      expect(hermano.motivo_cierre).toMatch(/decidido en bandeja/);
+
+      // No queda como si alguien lo hubiera decidido a propósito: no hay una fila de identity_decisions
+      // para el caso hermano.
+      expect((await q<{ n: number }>(
+        'SELECT count(*)::int n FROM catalog.identity_decisions WHERE case_id = $1', [casoHermano]))[0]!.n).toBe(0);
+
+      expect((await q<{ archivado_en: Date | null }>('SELECT archivado_en FROM catalog.sellable_variants WHERE id = $1', [pendiente]))[0]!.archivado_en)
+        .not.toBeNull();
+    });
+
+    it('omitir un caso deja cerrado el caso hermano de la misma representación, no sólo el propio', async () => {
+      const { variante: pendiente, caso: casoSku } = await casoPendiente('MLA602');
+      const repId = (await q<{ id: string }>(
+        `SELECT id FROM catalog.external_representations WHERE channel_account_id = $1 AND recurso = $2`,
+        [ml, 'MLA602']))[0]!.id;
+      const casoHermano = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id, detalle)
+         VALUES ($1, 'user_product_divergente', $2, '{}'::jsonb) RETURNING id`, [empresa, repId])).rows[0]!.id;
+
+      const r = await decidir(pedido({ caseId: casoSku, expectedVersion: 1, eleccion: 'omitir' }));
+      expect(r.ok).toBe(true);
+
+      const hermano = (await q<{ cerrado_en: Date | null }>(
+        'SELECT cerrado_en FROM catalog.identity_cases WHERE id = $1', [casoHermano]))[0]!;
+      expect(hermano.cerrado_en).not.toBeNull();
+      void pendiente;
+    });
+
+    it('NO cierra un caso abierto sobre OTRA representación (aunque comparta variant_id vía la variante pendiente)', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-603');
+      const { caso: casoSku } = await casoPendiente('MLA603');
+      // Caso ajeno, sobre otra publicación cualquiera — no debe verse afectado.
+      const { caso: casoAjeno } = await casoPendiente('MLA604');
+
+      const r = await decidir(pedido({ caseId: casoSku, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+      expect(r.ok).toBe(true);
+
+      const ajeno = (await q<{ cerrado_en: Date | null }>(
+        'SELECT cerrado_en FROM catalog.identity_cases WHERE id = $1', [casoAjeno]))[0]!;
+      expect(ajeno.cerrado_en).toBeNull();
+    });
+  });
 });

@@ -242,6 +242,17 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
       'UPDATE catalog.identity_cases SET estado = $2, cerrado_en = now(), motivo_cierre = $3 WHERE id = $1',
       [p.caseId, estadoFinal, motivoCierre]);
 
+    // Hallazgo de opt-16 (2026-09-24, revisión de las decisiones de José): la clave única de
+    // identity_cases es (representation_id, tipo), no representation_id solo — dos tipos distintos
+    // (p.ej. sku_pendiente y user_product_divergente) pueden estar abiertos a la vez sobre la MISMA
+    // publicación. Decidir uno no tocaba al otro, y José terminaba decidiendo la misma publicación dos
+    // veces. No es un caso "decidido": no hay identity_decisions para él, se cierra como resuelto por la
+    // decisión de su hermano.
+    await tx.query(
+      `UPDATE catalog.identity_cases SET cerrado_en = now(), motivo_cierre = $2
+        WHERE representation_id = $1 AND cerrado_en IS NULL AND id <> $3`,
+      [repId, motivoCierre, p.caseId]);
+
     // El resultado se INSERTA (nunca UPDATE) en su propia tabla append-only: un reintento con la misma
     // idempotency_key lo lee de ahí, tal cual, sin recalcular nada (hallazgo de la segunda opinión de Codex
     // sobre 1a7ec9da: un UPDATE, aunque fuera sólo de estas dos columnas, dejaba a la app reescribir el
