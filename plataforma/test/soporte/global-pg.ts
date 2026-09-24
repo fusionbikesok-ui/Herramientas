@@ -16,8 +16,28 @@ declare module 'vitest' {
   }
 }
 
+let volumenes: string[] = [];
+
+// `-v` es imprescindible: la imagen de postgres declara VOLUME, y sin él `rm -f` (que le gana la carrera al
+// --rm) deja un volumen anónimo huérfano por corrida (383 acumulados, ~21 GB).
 function eliminarContenedor(): void {
-  try { docker('rm', '-f', NOMBRE); } catch { /* ya no existe */ }
+  try { docker('rm', '-f', '-v', NOMBRE); } catch { /* ya no existe */ }
+}
+
+/** Falla si los volúmenes de ESTE contenedor sobrevivieron (no cuenta los dangling de otros: no hay ruido ajeno). */
+export function volumenesHuerfanos(nombres: string[]): string[] {
+  const vivos = new Set(docker('volume', 'ls', '-q').split('\n'));
+  return nombres.filter((n) => vivos.has(n));
+}
+
+function limpiarYVerificar(): void {
+  eliminarContenedor();
+  const restantes = volumenesHuerfanos(volumenes);
+  if (restantes.length) {
+    for (const v of restantes) { try { docker('volume', 'rm', v); } catch { /* en uso */ } }
+    const aun = volumenesHuerfanos(volumenes);
+    if (aun.length) throw new Error(`volúmenes de prueba huérfanos: ${aun.join(', ')}`);
+  }
 }
 
 export default async function setup(project: TestProject): Promise<() => void> {
@@ -27,6 +47,7 @@ export default async function setup(project: TestProject): Promise<() => void> {
     for (let i = 0; i < 60; i++) {
       try { docker('exec', NOMBRE, 'pg_isready', '-U', 'postgres', '-q'); listo = true; break; } catch { await new Promise((r) => setTimeout(r, 1000)); }
     }
+    volumenes = docker('inspect', '-f', '{{range .Mounts}}{{.Name}} {{end}}', NOMBRE).split(' ').filter(Boolean);
     if (!listo) throw new Error('PostgreSQL de prueba no quedó listo en 60 s');
     await new Promise((r) => setTimeout(r, 1500));
     const puerto = docker('port', NOMBRE, '5432/tcp').split(':').pop() ?? '';
@@ -42,5 +63,5 @@ export default async function setup(project: TestProject): Promise<() => void> {
     eliminarContenedor();
     throw error;
   }
-  return eliminarContenedor;
+  return limpiarYVerificar;
 }
