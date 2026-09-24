@@ -23,7 +23,7 @@ describe('E3-CALIB-01 calibrar', () => {
   });
   afterAll(async () => { await admin.end(); await base.borrar(); });
 
-  it('sobre la muestra congelada, top1 ≤ top3 ≤ recall y todo es proporción [0,1]', async () => {
+  it('[esc:calibracion] sobre la muestra congelada, top1 ≤ top3 ≤ recall y todo es proporción [0,1]', async () => {
     const { muestra: m, ventana: v } = await calibrar(admin, { empresa, ...ventana, muestra, catalogo: fixture.catalogo });
     expect(v.n).toBe(0); // la ventana no se mezcla con la muestra
     const conVerdad = muestra.filter((v: any) => v.skuVerdad).length;

@@ -83,7 +83,7 @@ describe('E3-DEC-01 decidirCaso', () => {
       "SELECT count(*)::int n FROM audit.audit_events WHERE action = 'identidad.decision' AND aggregate_id = $1", [caso]))[0]!.n).toBe(1);
   });
 
-  it('(b) dos decidirCaso concurrentes con expectedVersion=1 sobre EL MISMO caso: exactamente un ok y un version_conflict, una sola fila en identity_decisions', async () => {
+  it('[esc:409-dos-operadores] (b) dos decidirCaso concurrentes con expectedVersion=1 sobre EL MISMO caso: exactamente un ok y un version_conflict, una sola fila en identity_decisions', async () => {
     const v1 = await variantePendienteConSku('FB-2001'); const v2 = await variantePendienteConSku('FB-2002');
     const { caso } = await casoPendiente('MLA2');
     const [r1, r2] = await Promise.all([
@@ -110,7 +110,7 @@ describe('E3-DEC-01 decidirCaso', () => {
     expect(r2).toMatchObject({ ok: false, code: 'version_conflict' });
   });
 
-  it('(c) la misma clave de idempotencia dos veces: el mismo decisionId y una sola fila', async () => {
+  it('[esc:idempotencia] (c) la misma clave de idempotencia dos veces: el mismo decisionId y una sola fila', async () => {
     const { variante: destino } = await variantePendienteConSku('FB-3');
     const { caso } = await casoPendiente('MLA3');
     const p = pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino });
@@ -232,7 +232,7 @@ describe('E3-DEC-01 decidirCaso', () => {
     });
   });
 
-  it('(i) bandeja:false devuelve bandeja_apagada y no escribe ninguna fila', async () => {
+  it('[esc:flag-apagado] (i) bandeja:false devuelve bandeja_apagada y no escribe ninguna fila', async () => {
     const { variante: destino } = await variantePendienteConSku('FB-9');
     const { caso } = await casoPendiente('MLA9');
     const r = await decidirCaso(app, pedido({ caseId: caso, expectedVersion: 1, eleccion: 'vincular', variantId: destino }), { bandeja: false });

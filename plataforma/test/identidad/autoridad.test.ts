@@ -119,7 +119,7 @@ describe('E3-AUT-01 autoridad de la decisión humana sobre el vínculo', () => {
     expect(await casosAbiertos('omitida_revisar')).toEqual([{ tipo: 'omitida_revisar' }]);
   });
 
-  it('(d) evento de legado sobre una clave con decisión humana vigente: el vínculo no cambia y abre un caso de conflicto; reenviar el mismo evento no duplica el caso', async () => {
+  it('[esc:legado-posterior-conflict] (d) evento de legado sobre una clave con decisión humana vigente: el vínculo no cambia y abre un caso de conflicto; reenviar el mismo evento no duplica el caso', async () => {
     await woos(40); // FB-40
     const vHumana = await variantePendiente('FB-41');
     await decisionHumana('MLA4', 'vincular', vHumana);

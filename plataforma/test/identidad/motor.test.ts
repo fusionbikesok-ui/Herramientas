@@ -59,7 +59,7 @@ describe('E3-MOTOR-01 correrMotor', () => {
     `SELECT origen, eleccion, variant_id FROM catalog.identity_decisions WHERE channel_account_id = $1 AND recurso = $2 AND superada_en IS NULL`,
     [ml, recurso]))[0];
 
-  it('SKU único: hay auto_sku en sombra y el vínculo de la representación NO cambia', async () => {
+  it('[esc:auto-sku-unico] SKU único: hay auto_sku en sombra y el vínculo de la representación NO cambia', async () => {
     const destino = await varianteConSku('FB-4001');
     const { caso, rep, variante } = await casoConSkuObservado('MLB1', 'FB-4001');
     const r = await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
@@ -70,7 +70,7 @@ describe('E3-MOTOR-01 correrMotor', () => {
     expect((await q<{ variant_id: string }>('SELECT variant_id FROM catalog.external_representations WHERE id = $1', [rep]))[0]!.variant_id).toBe(variante);
   });
 
-  it('empate de SKU (dos variantes vivas con el mismo sku, no debería pasar por el UNIQUE, se prueba con otra empresa): no hay auto_sku', async () => {
+  it('[esc:empate] empate de SKU (dos variantes vivas con el mismo sku, no debería pasar por el UNIQUE, se prueba con otra empresa): no hay auto_sku', async () => {
     // El UNIQUE de sellable_variants ya impide dos SKUs iguales en la misma empresa; el caso real de
     // "empate" que puede pasar es 0 candidatos vivos (ver siguiente test) — acá se prueba directamente
     // el contrato de skuUnico devolviendo 'varias' vía un sku_observado que no matchea ninguna variante,
@@ -119,7 +119,7 @@ describe('E3-MOTOR-01 correrMotor', () => {
     expect(n).toBe(1);
   });
 
-  it('GTIN igual y SKU distinto (o sea sku_observado no resuelve): no hay auto_sku', async () => {
+  it('[esc:gtin] GTIN igual y SKU distinto (o sea sku_observado no resuelve): no hay auto_sku', async () => {
     // El motor sólo mira sku_observado (no GTIN: eso es evidencia, no identidad — ver 0014). Con
     // sku_observado null (representación sin ese dato, GTIN es lo único que trajo el canal), skuUnico
     // ni se llama: normalizarSku(null) da null y el motor corta antes.
@@ -165,7 +165,7 @@ describe('E3-MOTOR-01 correrMotor', () => {
     const detalleDe = async (caso: string) => (await q<{ detalle: { d5?: boolean } }>(
       'SELECT detalle FROM catalog.identity_cases WHERE id = $1', [caso]))[0]!.detalle;
 
-    it('SKU único + omitir legado vigente: detalle.d5=true, y NO hay auto_sku (la omisión sigue mandando)', async () => {
+    it('[esc:las-17-bloqueadas] SKU único + omitir legado vigente: detalle.d5=true, y NO hay auto_sku (la omisión sigue mandando)', async () => {
       await varianteConSku('FB-6001');
       const { caso } = await casoOmitidaRevisar('MLB8', 'FB-6001');
       await omitirLegado('MLB8');
@@ -203,7 +203,7 @@ describe('E3-MOTOR-01 correrMotor', () => {
     });
   });
 
-  it('dos corridas concurrentes sobre la misma empresa no duplican auto_sku ni candidatos (el advisory lock del ciclo se prueba en worker/identidad; acá se prueba que el propio correrMotor, corrido dos veces en paralelo dentro de la misma transacción lógica de Postgres, no rompe la idempotencia de datos)', async () => {
+  it('[esc:desorden-y-duplicados] dos corridas concurrentes sobre la misma empresa no duplican auto_sku ni candidatos (el advisory lock del ciclo se prueba en worker/identidad; acá se prueba que el propio correrMotor, corrido dos veces en paralelo dentro de la misma transacción lógica de Postgres, no rompe la idempotencia de datos)', async () => {
     await varianteConSku('FB-7001');
     await casoConSkuObservado('MLB12', 'FB-7001');
     const [r1, r2] = await Promise.all([
