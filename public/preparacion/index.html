@@ -478,6 +478,10 @@ function setActAbierta(v){ sessionStorage.setItem('prep_actividad_abierta', v?'1
 
 function ir(v){
   modoPedido(false);
+  // El aviso vive fuera de #cuerpo (fixed), así que ninguna vista lo tapa solo por
+  // renderizar encima. Si no se apaga acá, sigue flotando sobre cualquier otra pantalla
+  // (el detalle de un pedido, por ejemplo) tapando su encabezado.
+  ocultarAvisoNuevosPendientes();
   if(pedidoDeLaUrl())history.pushState({},'',location.pathname.replace(/[?#].*$/,''));
   detenerHeartbeat();
   detenerPollFotos();
@@ -1006,7 +1010,11 @@ function ocultarAvisoNuevosPendientes(){
 }
 
 function actualizarPendientesDesdeCambios(){
-  // Aplica los cambios guardados durante el lockout
+  // Aplica los cambios guardados durante el lockout. Con el aviso viviendo fuera de #cuerpo
+  // (fixed), en teoría ya no debería estar visible ni tocable fuera de la vista de pendientes
+  // (ir()/abrirDetalle lo ocultan al salir) — pero esto es la red de seguridad: si por lo que
+  // sea llegara a dispararse desde otra pantalla, no puede reemplazarla por la lista.
+  if(VISTA!=='pendientes')return;
   if(PEND_CAMBIOS_PENDIENTES){
     var pedidos=PEND_CAMBIOS_PENDIENTES;
     registrarPendientesNuevos(pedidos,true);
@@ -1310,6 +1318,9 @@ function modoPedido(activo){
 
 async function abrirDetalle(id,empujar){
   modoPedido(true);
+  // Este camino no pasa por ir() (click en una card no lo llama), así que hay que apagar
+  // el aviso acá también — si no, queda flotando sobre el encabezado del detalle.
+  ocultarAvisoNuevosPendientes();
   // Sale del flujo de tabs (VISTA sigue siendo 'pendientes' si se llegó por click en una
   // card, ya que ese camino no pasa por ir()) — sin esto, el polling de Pendientes seguía
   // activo y pisaba el detalle en curso cada ~25s sin ningún aviso.

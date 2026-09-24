@@ -13,8 +13,9 @@ function documentoFake() {
   return {
     getElementById(id) {
       if (!elementos.has(id)) elementos.set(id, {
-        innerHTML: '', textContent: '', classList: { toggle() {}, add() {}, remove() {} },
+        innerHTML: '', textContent: '', style: {}, classList: { toggle() {}, add() {}, remove() {} },
         addEventListener() {}, removeEventListener() {}, focus() {}, contains() { return false; },
+        querySelector() { return { classList: { toggle() {}, add() {}, remove() {} } }; },
       });
       return elementos.get(id);
     },
@@ -286,6 +287,34 @@ describe('preparacion/index.html — refresco de fondo no toca la lista bajo el 
     expect(bloque).toContain('window.addEventListener(\'pointerdown\'');
     expect(bloque).toContain('window.addEventListener(\'scroll\'');
     expect(bloque).toContain('passive:true');
+  });
+
+  it('cambiar de vista con ir() apaga el aviso, aunque estuviera visible', () => {
+    ctx.document.getElementById('pend-aviso-nuevos').hidden = false;
+    ctx.PEND_CAMBIOS_PENDIENTES = [pB];
+    ctx.ir('recoleccion');
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(true);
+  });
+
+  it('abrir el detalle de un pedido apaga el aviso, aunque no se haya pasado por ir()', async () => {
+    ctx.document.getElementById('pend-aviso-nuevos').hidden = false;
+    ctx.fetch = vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({
+      ok: true, data: { id: 999, estado: 'en_preparacion', canal: 'ml', items: [], eventos: [] },
+    }) }));
+    await ctx.abrirDetalle(999, false);
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(true);
+    expect(ctx.VISTA).toBe('detalle');
+  });
+
+  it('tocar el aviso fuera de la vista de pendientes no reemplaza la pantalla actual', () => {
+    ctx.VISTA = 'detalle';
+    ctx.PEND_CAMBIOS_PENDIENTES = [pA, pB];
+    const cuerpo = ctx.document.getElementById('cuerpo');
+    const detalleActual = '<h1>Pedido #999</h1>';
+    cuerpo.innerHTML = detalleActual;
+    ctx.actualizarPendientesDesdeCambios();
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toBe(detalleActual);
+    expect(ctx.PEND_CAMBIOS_PENDIENTES).toEqual([pA, pB]); // no se consumió: el toque no contaba
   });
 });
 
