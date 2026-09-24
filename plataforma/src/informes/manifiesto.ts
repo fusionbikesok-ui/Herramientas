@@ -40,8 +40,13 @@ export async function armarManifiesto(pool: pg.Pool, fecha: string): Promise<Man
     );
     const { primero, ultimo, n } = dia.rows[0]!;
     // Sin eventos en el día, el extremo que se fija es el último hash conocido hasta el fin del día.
-    const hash = await cliente.query<{ hash: string | null; chain_seq: string | null }>(
-      `SELECT encode(hash, 'hex') AS hash, chain_seq::text AS chain_seq FROM audit.audit_events
+    // ORDER BY chain_seq (no `chain_seq::text AS chain_seq`) a propósito: con el alias casteado a
+    // texto, Postgres resolvía el ORDER BY contra ESE alias y ordenaba lexicográficamente, así que
+    // '9999' (empieza con '9') le ganaba en orden de texto a '10000' o más (empiezan con '1') y el
+    // LIMIT 1 devolvía el hash de un evento viejo en vez del último real (bug en producción
+    // 2026-09-19 a 2026-09-22, encontrado en la evidencia de aceptación de E2).
+    const hash = await cliente.query<{ hash: string | null; chain_seq_texto: string | null }>(
+      `SELECT encode(hash, 'hex') AS hash, chain_seq::text AS chain_seq_texto FROM audit.audit_events
         WHERE occurred_at < $1 ORDER BY chain_seq DESC LIMIT 1`,
       [hasta],
     );
@@ -54,7 +59,7 @@ export async function armarManifiesto(pool: pg.Pool, fecha: string): Promise<Man
     // (el mismo que se acaba de leer arriba). Si tampoco hay cadena previa (nada ocurrió todavía a esa
     // fecha), no hay nada que verificar: pasar hasta=NULL igual sería "sin tope" y volvería a mirar
     // eventos futuros, así que directamente no se llama a verify_chain.
-    const hastaVerificar = ultimo ?? hash.rows[0]?.chain_seq ?? null;
+    const hastaVerificar = ultimo ?? hash.rows[0]?.chain_seq_texto ?? null;
     const rotoEn = hastaVerificar === null ? null : (await cliente.query<{ roto: string | null }>(
       'SELECT audit.verify_chain(NULL::bigint, $1::bigint) AS roto', [hastaVerificar])).rows[0]?.roto ?? null;
     await cliente.query('COMMIT');

@@ -124,6 +124,40 @@ describe('armarManifiesto', () => {
     } finally { await p2.end(); await vacia.borrar(); }
   });
 
+  it('E1-AUD-04 ultimo_hash es el del chain_seq numérico máximo, aunque cruce de 9999 a 10000+', async () => {
+    // Bug real encontrado en producción 2026-09-23: manifiesto.ts ordenaba por el alias
+    // `chain_seq::text`, así que '9999' (empieza con '9') ganaba en orden de TEXTO a '10000',
+    // '10001', etc. (empiezan con '1'), y el manifiesto quedaba con el hash de un evento viejo en
+    // vez del último real. Se necesitan >9999 eventos en la cadena para reproducirlo: se insertan
+    // por lotes con INSERT...SELECT generate_series (dispara el trigger fila por fila, pero en un
+    // solo round-trip) en vez de 10000+ llamadas a registrarEvento.
+    const grande = await crearBaseDePrueba();
+    const app = crearPool(grande.urlApp);
+    try {
+      const semilla = await sembrar(app);
+      const total = 10005;
+      // Todos fechados el mismo día para que entren en la ventana de un único manifiesto.
+      await app.query(
+        `INSERT INTO audit.audit_events
+           (company_id, actor_type, actor_id, action, aggregate_type, aggregate_id, correlation_id, occurred_at)
+         SELECT $1, 'system', 'test', 'prueba.masiva', 'prueba', gs::text, gen_random_uuid(), '2026-09-16T15:00:00Z'
+           FROM generate_series(1, $2) AS gs`,
+        [semilla.companyId, total],
+      );
+      // Ordenado por la columna NUMÉRICA (sin castear antes del ORDER BY): esta es la consulta de control,
+      // a propósito distinta de la que tiene el bug en manifiesto.ts.
+      const ultimaFila = await app.query<{ chain_seq: string; hash: string }>(
+        `SELECT chain_seq::text AS chain_seq, encode(hash, 'hex') AS hash FROM audit.audit_events e
+          ORDER BY e.chain_seq DESC LIMIT 1`,
+      );
+      const m = await armarManifiesto(app, '2026-09-16');
+      expect(m.eventos).toBe(total);
+      expect(m.ultimo_chain_seq).toBe(ultimaFila.rows[0]!.chain_seq);
+      expect(Number(m.ultimo_chain_seq)).toBeGreaterThan(9999);
+      expect(m.ultimo_hash).toBe(ultimaFila.rows[0]!.hash);
+    } finally { await app.end(); await grande.borrar(); }
+  });
+
   it('E1-AUD-04 si la cadena está rota lo informa en lugar de fallar', async () => {
     const sucia = await crearBaseDePrueba();
     const admin = crearPool(sucia.urlAdmin); const app = crearPool(sucia.urlApp);
