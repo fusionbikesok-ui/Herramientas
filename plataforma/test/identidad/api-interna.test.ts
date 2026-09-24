@@ -69,7 +69,7 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     const { modelo, variante: v } = await variante(`Bici ${recurso}`);
     await admin.query(
       `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, estado_remoto, stock_canal)
-       VALUES ($1, $2, 'mercadolibre', 'vendible', $3, '', $4, $5, $6, $7)`, [empresa, ml, recurso, v, modelo, o.activa ? 'active' : 'paused', o.activa ? 3 : 0]);
+       VALUES ($1, $2, 'mercadolibre', 'vendible', $3, '', $4, NULL, $5, $6)`, [empresa, ml, recurso, v, o.activa ? 'active' : 'paused', o.activa ? 3 : 0]); // model_id NULL como en producción
     const id = (await admin.query<{ id: string }>(
       `INSERT INTO catalog.identity_cases (company_id, tipo, variant_id, estado, detalle, abierto_en)
        VALUES ($1, 'sku_pendiente', $2, $3, $4::jsonb, $5::timestamptz) RETURNING id`,

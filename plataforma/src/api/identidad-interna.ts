@@ -162,7 +162,7 @@ export function registrarIdentidadInterna(
                        ELSE 4 END AS g
              FROM catalog.identity_cases c
              ${PUBLICACION}
-             LEFT JOIN catalog.product_models m ON m.id = r.model_id
+             LEFT JOIN catalog.product_models m ON m.id = COALESCE(r.model_id, (SELECT sv.model_id FROM catalog.sellable_variants sv WHERE sv.id = r.variant_id))
             WHERE c.company_id = $1 AND c.cerrado_en IS NULL AND r.id IS NOT NULL
               AND ($2::text IS NULL OR c.tipo = $2) AND ($3::text IS NULL OR c.estado = $3))
          SELECT *, to_char(abierto_en AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS abierto_iso FROM cola
@@ -213,7 +213,7 @@ export function registrarIdentidadInterna(
                 r.stock_canal, r.precio, r.moneda, r.model_id, m.titulo
            FROM catalog.identity_cases c
            ${PUBLICACION}
-           LEFT JOIN catalog.product_models m ON m.id = r.model_id
+           LEFT JOIN catalog.product_models m ON m.id = COALESCE(r.model_id, (SELECT sv.model_id FROM catalog.sellable_variants sv WHERE sv.id = r.variant_id))
           WHERE c.id = $1 AND c.company_id = $2`, [req.params.id, auth.empresa])).rows[0];
       if (!c) return error(req, reply, 404, 'caso_inexistente', 'No existe el caso.');
 

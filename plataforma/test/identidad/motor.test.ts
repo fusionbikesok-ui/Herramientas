@@ -47,8 +47,8 @@ describe('E3-MOTOR-01 correrMotor', () => {
       [empresa, modelo])).rows[0]!.id;
     const rep = (await admin.query<{ id: string }>(
       `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, sku_observado)
-       VALUES ($1, $2, 'mercadolibre', 'vendible', $3, '', $4, $5, $6) RETURNING id`,
-      [empresa, ml, recurso, variante, modelo, skuObservado])).rows[0]!.id;
+       VALUES ($1, $2, 'mercadolibre', 'vendible', $3, '', $4, NULL, $5) RETURNING id`, // como en producción: el modelo vive en la variante
+      [empresa, ml, recurso, variante, skuObservado])).rows[0]!.id;
     const caso = (await admin.query<{ id: string }>(
       `INSERT INTO catalog.identity_cases (company_id, tipo, variant_id) VALUES ($1, 'sku_pendiente', $2) RETURNING id`,
       [empresa, variante])).rows[0]!.id;

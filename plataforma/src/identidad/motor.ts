@@ -68,17 +68,19 @@ async function itemMlDe(tx: Consultable, rep: RepresentacionCaso): Promise<ItemM
   return { ml_title: modelo.titulo, ml_es_variante: ct.colores.size > 0 || ct.talles.size > 0, ml_variations: '', _ct: ct };
 }
 
-/** La representación gobernante del caso: la propia si la tiene, o la única de ML viva de su variante. */
+/** La representación gobernante del caso (su modelo: el propio o, como en las publicaciones de ML de producción, el de su variante): la propia si la tiene, o la única de ML viva de su variante. */
 async function representacionDe(tx: Consultable, caso: CasoAbierto): Promise<RepresentacionCaso | null> {
   if (caso.representation_id) {
     return (await tx.query<RepresentacionCaso>(
-      `SELECT id, channel_account_id, recurso, variacion_normalizada, sku_observado, model_id
+      `SELECT id, channel_account_id, recurso, variacion_normalizada, sku_observado,
+             COALESCE(model_id, (SELECT sv.model_id FROM catalog.sellable_variants sv WHERE sv.id = variant_id)) AS model_id
          FROM catalog.external_representations WHERE id = $1 AND canal = 'mercadolibre' AND archivado_en IS NULL`,
       [caso.representation_id])).rows[0] ?? null;
   }
   if (!caso.variant_id) return null;
   const reps = (await tx.query<RepresentacionCaso>(
-    `SELECT id, channel_account_id, recurso, variacion_normalizada, sku_observado, model_id
+    `SELECT id, channel_account_id, recurso, variacion_normalizada, sku_observado,
+           COALESCE(model_id, (SELECT sv.model_id FROM catalog.sellable_variants sv WHERE sv.id = variant_id)) AS model_id
        FROM catalog.external_representations WHERE variant_id = $1 AND canal = 'mercadolibre' AND archivado_en IS NULL`,
     [caso.variant_id])).rows;
   return reps.length === 1 ? reps[0]! : null;
