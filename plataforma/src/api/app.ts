@@ -27,6 +27,8 @@ export interface OpcionesApi {
   senales?: OpcionesSenales;
   /** Passkeys: las rutas existen siempre, pero responden 503 salvo con las dos llaves encendidas. */
   passkeys?: OpcionesPasskeys;
+  /** E3 corte 1: si la decisión humana de la bandeja manda sobre el legado en /internal/v1/catalogo. */
+  bandejaCatalogo?: boolean;
 }
 
 const TOPICOS = new Set(['ml.orders', 'ml.shipments', 'ml.questions', 'ml.messages', 'ml.claims', 'ml.items', 'woo.orders', 'woo.products']);
@@ -143,7 +145,7 @@ export function crearApi(opciones: OpcionesApi) {
     registrarEstadoInformes(app, opciones.pool, opciones.logger, opciones.senales, ahora);
     // Igual el catálogo interno (E2 T1): sólo escribe en catalog.matcher_decisions e identity_cases, y sin
     // la outbox del legado encendida nadie lo llama.
-    registrarCatalogoInterno(app, opciones.pool, opciones.logger, opciones.senales, ahora);
+    registrarCatalogoInterno(app, opciones.pool, opciones.logger, opciones.senales, ahora, opciones.bandejaCatalogo ?? false);
   }
   return app;
 }

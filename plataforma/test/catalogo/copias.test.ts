@@ -24,7 +24,7 @@ describe('E2-CPY-01 copias del matcher', () => {
     const copia = await abrirCopia(app, { empresa, tipo: 'matcher', totalEsperado: filas.length, hashEsperado: hashFilas(filas), corte: opciones.corte ?? new Date().toISOString() });
     const tam = Math.max(1, Math.ceil(filas.length / (opciones.lotes ?? 1)));
     for (let i = 0, n = 1; i < filas.length || n === 1; i += tam, n++) await recibirLote(app, copia, n, filas.slice(i, i + tam));
-    return { copia, resultado: await enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml)) };
+    return { copia, resultado: await enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false })) };
   }
   const evento = (e: Partial<EventoDecision> & { recurso: string }): EventoDecision => ({
     evento_id: randomUUID(), variacion: '', accion: 'confirmar', sku: null, actor: 'persona', motivo: null, confirmado_por: 'jose',
@@ -78,25 +78,25 @@ describe('E2-CPY-01 copias del matcher', () => {
     const filas = [fila('MLA1', 'FB-1'), fila('MLA2', 'FB-2')];
     const copia = await abrirCopia(app, { empresa, tipo: 'matcher', totalEsperado: 2, hashEsperado: hashFilas(filas), corte: new Date().toISOString() });
     await recibirLote(app, copia, 1, [filas[0]]);
-    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml))).rejects.toMatchObject({ codigo: 'copia_incompleta' });
+    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false }))).rejects.toMatchObject({ codigo: 'copia_incompleta' });
     expect(await vigentes()).toEqual([]);
     // Se completa y ahora sí.
     await recibirLote(app, copia, 2, [filas[1]]);
-    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml))).resolves.toMatchObject({ abiertas: 2 });
+    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false }))).resolves.toMatchObject({ abiertas: 2 });
   });
 
   it('un hueco en la numeración de lotes también es copia incompleta', async () => {
     const filas = [fila('MLA1', 'FB-1')];
     const copia = await abrirCopia(app, { empresa, tipo: 'matcher', totalEsperado: 1, hashEsperado: hashFilas(filas), corte: new Date().toISOString() });
     await recibirLote(app, copia, 2, filas);
-    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml))).rejects.toMatchObject({ codigo: 'copia_incompleta' });
+    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false }))).rejects.toMatchObject({ codigo: 'copia_incompleta' });
   });
 
   it('confirmar con hash distinto falla sin efecto', async () => {
     const filas = [fila('MLA1', 'FB-1')];
     const copia = await abrirCopia(app, { empresa, tipo: 'matcher', totalEsperado: 1, hashEsperado: hashFilas([fila('MLA1', 'FB-999')]), corte: new Date().toISOString() });
     await recibirLote(app, copia, 1, filas);
-    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml))).rejects.toMatchObject({ codigo: 'hash_distinto' });
+    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false }))).rejects.toMatchObject({ codigo: 'hash_distinto' });
     expect(await vigentes()).toEqual([]);
   });
 
@@ -108,7 +108,7 @@ describe('E2-CPY-01 copias del matcher', () => {
 
   it('confirmar dos veces no duplica', async () => {
     const { copia } = await copiar([fila('MLA1', 'FB-1')]);
-    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml))).resolves.toMatchObject({ yaConfirmada: true });
+    await expect(enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false }))).resolves.toMatchObject({ yaConfirmada: true });
     expect(await vigentes()).toHaveLength(1);
   });
 
@@ -118,15 +118,15 @@ describe('E2-CPY-01 copias del matcher', () => {
     await recibirLote(app, copia, 1, filas);
     await expect(recibirLote(app, copia, 1, filas)).resolves.toBeUndefined();
     await expect(recibirLote(app, copia, 1, [fila('MLA1', 'FB-2')])).rejects.toMatchObject({ codigo: 'lote_repetido' });
-    await enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml));
+    await enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false }));
     await expect(recibirLote(app, copia, 2, filas)).rejects.toMatchObject({ codigo: 'copia_cerrada' });
   });
 
   it('LA REGLA DEL CORTE: una decisión por evento posterior al corte no la pisa ni la cierra la copia', async () => {
     const corte = new Date(Date.now() - 60_000).toISOString();
     // Después del corte, el operador cambió MLA1 y creó MLA5. La copia (foto de antes) no los conoce así.
-    await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA1', sku: 'FB-100' })));
-    await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA5', sku: 'FB-5' })));
+    await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA1', sku: 'FB-100' }), { bandeja: false }));
+    await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA5', sku: 'FB-5' }), { bandeja: false }));
     const { resultado } = await copiar([fila('MLA1', 'FB-1')], { corte });
     expect(resultado.masNuevasQueLaCopia).toBe(2);
     expect(await vigentes()).toEqual([
@@ -138,7 +138,7 @@ describe('E2-CPY-01 copias del matcher', () => {
   describe('eventos', () => {
     it('un evento cierra la vigencia anterior de su clave y abre la nueva', async () => {
       await copiar([fila('MLA1', 'FB-1')]);
-      expect(await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA1', sku: 'FB-2', actor: 'sistema', motivo: 'autoasignación por SKU' }))))
+      expect(await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA1', sku: 'FB-2', actor: 'sistema', motivo: 'autoasignación por SKU' }), { bandeja: false })))
         .toBe('aplicado');
       expect(await q('SELECT sku, actor, motivo FROM catalog.matcher_decisions WHERE vigente_hasta IS NULL'))
         .toEqual([{ sku: 'FB-2', actor: 'sistema', motivo: 'autoasignación por SKU' }]);
@@ -146,21 +146,21 @@ describe('E2-CPY-01 copias del matcher', () => {
 
     it('el mismo evento dos veces se aplica una sola', async () => {
       const e = evento({ recurso: 'MLA1', sku: 'FB-1' });
-      await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, e));
-      expect(await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, e))).toBe('repetido');
+      await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, e, { bandeja: false }));
+      expect(await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, e, { bandeja: false }))).toBe('repetido');
       expect(await q('SELECT count(*)::int n FROM catalog.matcher_decisions')).toEqual([{ n: 1 }]);
     });
 
     it('un evento más viejo que la decisión vigente no la vuelve atrás', async () => {
-      await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA1', sku: 'FB-2' })));
+      await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA1', sku: 'FB-2' }), { bandeja: false }));
       const viejo = evento({ recurso: 'MLA1', sku: 'FB-1', ocurrido_en: new Date(Date.now() - 3_600_000).toISOString() });
-      expect(await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, viejo))).toBe('viejo');
+      expect(await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, viejo, { bandeja: false }))).toBe('viejo');
       expect((await vigentes())[0]!.sku).toBe('FB-2');
     });
 
     it('revocar cierra la vigente sin abrir otra y deja el motivo', async () => {
       await copiar([fila('MLA1', 'FB-1')]);
-      await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA1', accion: 'revocar', motivo: 'vinculada por error' })));
+      await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento({ recurso: 'MLA1', accion: 'revocar', motivo: 'vinculada por error' }), { bandeja: false }));
       expect(await vigentes()).toEqual([]);
       expect(await q('SELECT motivo_cierre FROM catalog.matcher_decisions')).toEqual([{ motivo_cierre: 'revocada en el legado: vinculada por error' }]);
     });
@@ -172,7 +172,7 @@ describe('E2-CPY-01 copias del matcher', () => {
     async function copiarIdentidad(filas: FilaIdentidad[]) {
       const copia = await abrirCopia(app, { empresa, tipo: 'identidad', totalEsperado: filas.length, hashEsperado: hashFilas(filas), corte: new Date().toISOString() });
       await recibirLote(app, copia, 1, filas);
-      return enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml));
+      return enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false }));
     }
     async function representacion(recurso: string) {
       const m = (await admin.query<{ id: string }>(`INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1,$2,'ml_simple',$3,'t') RETURNING id`, [empresa, ml, recurso])).rows[0]!.id;

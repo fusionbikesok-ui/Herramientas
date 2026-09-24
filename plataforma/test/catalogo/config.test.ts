@@ -96,7 +96,8 @@ describe('E2-CFG-01 configuración del catálogo', () => {
 describe('E2-CFG-01 plan de keyrings del worker', () => {
   const catalogo = (extra: Partial<ConfigCatalogo> = {}): ConfigCatalogo => ({
     proyector: true, bootstrap: false, keyringFile: '/run/catalogo.json',
-    lote: 20, pausaMs: 1000, canario: 0, bootstrapRpm: 10, bootstrapCedeSenales: 20, umbralErrorPorciento: 10, compararAtributos: false,
+    lote: 20, pausaMs: 1000, canario: 0, bootstrapRpm: 10, bootstrapCedeSenales: 20, umbralErrorPorciento: 10,
+    compararAtributos: false, bandeja: false,
     ...extra,
   });
   const barridos = { registroFile: '/run/registro.json', keyringFile: '/run/sobres.json' };
@@ -178,6 +179,24 @@ describe('E2-CFG-02 CATALOGO_COMPARAR_ATRIBUTOS', () => {
     expect(con('')).toBe(false);
     expect(con('0')).toBe(false);
     expect(con('1')).toBe(true);
+  });
+});
+
+/**
+ * E3 corte 1, hallazgo ALTO de revisión (commit b3e72186): el flag no estaba conectado a nada en producción.
+ * Mismo parseo estricto que CATALOGO_COMPARAR_ATRIBUTOS — worker y API leen `config.catalogo.bandeja`, el
+ * mismo valor, nunca cada uno el suyo.
+ */
+describe('E3-CFG-01 E3_BANDEJA', () => {
+  const con = (v: string) => cargarConfig({
+    ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_BANDEJA: v }).catalogo!.bandeja;
+  it('por defecto está APAGADO; sólo "1" lo enciende', () => {
+    expect(cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json' }).catalogo!.bandeja).toBe(false);
+    expect(con('0')).toBe(false);
+    expect(con('1')).toBe(true);
+  });
+  it('cualquier valor fuera de "0"/"1" rechaza el arranque', () => {
+    expect(() => con('true')).toThrow();
   });
 });
 

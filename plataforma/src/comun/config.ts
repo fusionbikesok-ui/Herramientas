@@ -56,6 +56,13 @@ export interface ConfigCatalogo {
   umbralErrorPorciento: number;
   /** Abrir `atributo_divergente` al comparar canales. Apagado, los atributos se capturan igual. */
   compararAtributos: boolean;
+  /**
+   * E3 corte 1: si una decisión humana de la bandeja manda sobre la copiada del legado. Apagado por
+   * omisión — sin esto, `vincularMl`/`reconciliarClave` se comportan bit a bit como antes de E3. Worker y
+   * API leen el mismo valor (`E3_BANDEJA`): si difirieran, el proyector podría vincular con la humana y la
+   * API de eventos del legado seguir pisándola, o viceversa.
+   */
+  bandeja: boolean;
 }
 export interface Config {
   servicio: Servicio; instancia: string; version: string; pgUrl: string; apiPuerto: number;
@@ -121,6 +128,10 @@ const Esquema = z.object({
   // Apagado por omisión: se despliega capturando y se enciende ('1') después de medir. Capturar no depende de esto.
   CATALOGO_COMPARAR_ATRIBUTOS: z.enum(['0', '1']).default('0'),
   CATALOGO_UMBRAL_ERROR: z.coerce.number().int().min(1).max(100).default(10),
+  // E3 corte 1: apagado por omisión hasta el canario. Lo lee tanto el worker (proyector) como la API
+  // (eventos/copias del legado) — ambos toman ConfigCatalogo.bandeja del mismo parseo, así que nunca pueden
+  // quedar en valores distintos por un typo en un solo servicio.
+  E3_BANDEJA: z.enum(['0', '1']).default('0'),
 });
 
 /** Todo o nada: media configuración de barridos haría arrancar un worker que no barre nada. */
@@ -153,6 +164,7 @@ function leerCatalogo(v: z.infer<typeof Esquema>): ConfigCatalogo | undefined {
     bootstrapRpm: v.CATALOGO_BOOTSTRAP_RPM, bootstrapCedeSenales: v.CATALOGO_BOOTSTRAP_CEDE_SENALES,
     umbralErrorPorciento: v.CATALOGO_UMBRAL_ERROR,
     compararAtributos: v.CATALOGO_COMPARAR_ATRIBUTOS === '1',
+    bandeja: v.E3_BANDEJA === '1',
   };
 }
 

@@ -23,18 +23,19 @@ const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
 describe('E2-CPY-02 API interna del catálogo', () => {
   let base: BaseDePrueba; let pool: ReturnType<typeof crearPool>; let admin: ReturnType<typeof crearPool>;
   let cuentas: Map<Canal, string>;
-  const api = (c: ReadonlyMap<Canal, string> = cuentas) => crearApi({
+  const api = (c: ReadonlyMap<Canal, string> = cuentas, bandejaCatalogo = false) => crearApi({
     pool, logger: crearLogger('test'), estadoPgDir: '/nada',
-    senales: { keyring, origenes: crearOrigenes('127.0.0.1/32'), cuentas: c },
+    senales: { keyring, origenes: crearOrigenes('127.0.0.1/32'), cuentas: c }, bandejaCatalogo,
   });
   const firmado = (path: string, cuerpo: string, nonce = randomBytes(16).toString('base64url'), k = clave) => {
     const ts = String(Math.floor(Date.now() / 1000));
     return { 'content-type': 'application/json', 'x-fusion-key-id': 'k1', 'x-fusion-timestamp': ts, 'x-fusion-nonce': nonce,
       'x-fusion-signature': firmar(k, ts, nonce, 'POST', path, Buffer.from(cuerpo)) };
   };
-  const post = async (path: string, cuerpo: unknown, o: { nonce?: string; clave?: typeof clave; c?: ReadonlyMap<Canal, string> } = {}) => {
+  const post = async (path: string, cuerpo: unknown,
+    o: { nonce?: string; clave?: typeof clave; c?: ReadonlyMap<Canal, string>; bandeja?: boolean } = {}) => {
     const texto = JSON.stringify(cuerpo);
-    const r = await api(o.c).inject({ method: 'POST', url: path, payload: texto, headers: firmado(path, texto, o.nonce, o.clave), remoteAddress: '127.0.0.1' });
+    const r = await api(o.c, o.bandeja).inject({ method: 'POST', url: path, payload: texto, headers: firmado(path, texto, o.nonce, o.clave), remoteAddress: '127.0.0.1' });
     return { status: r.statusCode, body: r.json() as Record<string, unknown> };
   };
   const fila = (recurso: string, sku: string): FilaDecision => ({
@@ -151,6 +152,31 @@ describe('E2-CPY-02 API interna del catálogo', () => {
     const r = await api().inject({ method: 'POST', url: `${PREFIJO_CATALOGO}/eventos`, payload: texto,
       headers: firmado(`${PREFIJO_CATALOGO}/copias`, texto), remoteAddress: '127.0.0.1' });
     expect(r.statusCode).toBe(401);
+  });
+
+  it('E3 corte 1, hallazgo ALTO (commit b3e72186): la API interna con la bandeja encendida no pisa una decisión humana vigente al aplicar un evento del legado', async () => {
+    const empresa = (await admin.query<{ company_id: string }>('SELECT company_id FROM core.channel_accounts WHERE id = $1', [cuentas.get('mercadolibre')])).rows[0]!.company_id;
+    const cuenta = cuentas.get('mercadolibre')!;
+    const modelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'ml_simple', 'MLA80', 'MLA80') RETURNING id`, [empresa, cuenta])).rows[0]!.id;
+    const variante = (await admin.query<{ id: string }>(
+      "INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, 'FB-81') RETURNING id",
+      [empresa, modelo])).rows[0]!.id;
+    await admin.query(
+      `INSERT INTO catalog.identity_decisions (company_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
+       VALUES ($1, $2, 'MLA80', '', 'vincular', $3, 'humano', 'jose', 'aplicar')`, [empresa, cuenta, variante]);
+    await admin.query(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id)
+       VALUES ($1, $2, 'mercadolibre', 'vendible', 'MLA80', '', $3)`, [empresa, cuenta, variante]);
+
+    const e = { evento_id: randomUUID(), recurso: 'MLA80', variacion: '', accion: 'confirmar', sku: 'FB-80', actor: 'sistema',
+      motivo: null, confirmado_por: null, ocurrido_en: new Date().toISOString() };
+    expect(await post(`${PREFIJO_CATALOGO}/eventos`, e, { bandeja: true })).toMatchObject({ status: 200, body: { resultado: 'aplicado' } });
+    // El vínculo sigue en la variante que puso la humana: la API no lo movió a FB-80.
+    expect((await admin.query('SELECT variant_id FROM catalog.external_representations WHERE recurso = $1', ['MLA80'])).rows)
+      .toEqual([{ variant_id: variante }]);
+    expect((await admin.query("SELECT count(*)::int n FROM catalog.identity_cases WHERE tipo = 'decision_en_conflicto'")).rows).toEqual([{ n: 1 }]);
   });
 
   it('sin cuenta de ML configurada, 409', async () => {

@@ -193,7 +193,7 @@ async function vincularWoo(
         await tx.query('UPDATE catalog.sellable_variants SET sku = $2, version = version + 1 WHERE id = $1', [variante, valor]);
         await cerrar(variante, CASOS_SKU_WOO, 'SKU canónico asignado');
         // Publicaciones de ML que esperaban este SKU (caso sku_inexistente_en_woo) se fusionan ahora.
-        await reconciliarSku(tx, empresa, valor, `apareció ${valor} en Woo`);
+        await reconciliarSku(tx, empresa, valor, `apareció ${valor} en Woo`, { bandeja: ctx.bandeja ?? false });
       }
     }
     // Si la variante ya tiene otro SKU, el canónico de un id de Woo no cambia nunca: no hay nada que hacer.

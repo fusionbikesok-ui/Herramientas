@@ -45,7 +45,7 @@ const CASOS_DE_PENDIENTE = ['sku_pendiente', 'sku_inexistente_en_woo'];
 
 export async function reconciliarClave(
   tx: Consultable, cuenta: string, recurso: string, variacion: string, motivo: string,
-  o: { bandeja: boolean } = { bandeja: false },
+  o: { bandeja: boolean },
 ): Promise<Reconciliacion> {
   const rep = (await tx.query<{ id: string; company_id: string; variant_id: string | null; omitida_por_decision: boolean }>(
     `SELECT id, company_id, variant_id, omitida_por_decision FROM catalog.external_representations
@@ -135,8 +135,14 @@ export async function reconciliarClave(
 /**
  * Apareció en Woo un SKU: toda publicación de ML cuya decisión vigente apuntaba a él y que hoy está en una
  * variante pendiente se fusiona con la variante de ese SKU.
+ *
+ * `o.bandeja` es OBLIGATORIO (hallazgo ALTO de revisión, commit b3e72186): sin él por defecto en `false`,
+ * cuando aparecía en Woo el SKU de una decisión vieja del legado, esto revinculaba a esa decisión sin
+ * consultar si había una decisión HUMANA vigente que debía seguir mandando — pisándola en silencio.
  */
-export async function reconciliarSku(tx: Consultable, empresa: string, sku: string, motivo: string): Promise<number> {
+export async function reconciliarSku(
+  tx: Consultable, empresa: string, sku: string, motivo: string, o: { bandeja: boolean },
+): Promise<number> {
   const claves = (await tx.query<{ channel_account_id: string; recurso: string; variacion_normalizada: string }>(
     `SELECT channel_account_id, recurso, variacion_normalizada FROM catalog.matcher_decisions
       WHERE company_id = $1 AND sku = $2 AND vigente_hasta IS NULL AND accion IN ('confirmar', 'asignar')
@@ -144,7 +150,7 @@ export async function reconciliarSku(tx: Consultable, empresa: string, sku: stri
   let cambiadas = 0;
   for (const cuenta of [...new Set(claves.map((c) => c.channel_account_id))].sort()) await bloquearDecisiones(tx, cuenta);
   for (const c of claves) {
-    if ((await reconciliarClave(tx, c.channel_account_id, c.recurso, c.variacion_normalizada, motivo)) === 'vinculada') cambiadas++;
+    if ((await reconciliarClave(tx, c.channel_account_id, c.recurso, c.variacion_normalizada, motivo, o)) === 'vinculada') cambiadas++;
   }
   return cambiadas;
 }

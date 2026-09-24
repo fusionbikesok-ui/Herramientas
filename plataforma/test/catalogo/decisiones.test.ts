@@ -31,7 +31,7 @@ describe('E2-DEC-01 decisiones y fusión', () => {
   const publicacion = (id: string) => ver(ml, 'ml.items', id, { id, title: id, status: 'active' });
   const evento = (recurso: string, accion: EventoDecision['accion'], sku: string | null, ocurrido = new Date()): EventoDecision => ({
     evento_id: randomUUID(), recurso, variacion: '', accion, sku, actor: 'persona', motivo: null, confirmado_por: 'jose', ocurrido_en: ocurrido.toISOString() });
-  const aplicar = (e: EventoDecision) => enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, e));
+  const aplicar = (e: EventoDecision) => enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, e, { bandeja: false }));
   /** A qué SKU cuelga hoy la publicación: el SKU, 'pendiente', u 'omitida'. */
   const vinculo = async (recurso: string) => (await q<{ v: string }>(
     `SELECT CASE WHEN r.omitida_por_decision THEN 'omitida' ELSE COALESCE(v.sku, 'pendiente') END AS v
@@ -131,7 +131,7 @@ describe('E2-DEC-01 decisiones y fusión', () => {
     ];
     const copia = await abrirCopia(app, { empresa, tipo: 'matcher', totalEsperado: 2, hashEsperado: hashFilas(filas), corte: new Date().toISOString() });
     await recibirLote(app, copia, 1, filas);
-    await enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml));
+    await enTransaccion(app, (tx) => confirmarCopia(tx, copia, ml, { bandeja: false }));
     expect([await vinculo('MLA7'), await vinculo('MLA8')]).toEqual(['FB-70', 'FB-71']);
   });
 

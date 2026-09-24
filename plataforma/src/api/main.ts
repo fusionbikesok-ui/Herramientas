@@ -31,6 +31,9 @@ if (senales) {
     logger.warn('sin SENALES_REGISTRO_FILE: no se puede comprobar que SENALES_CUENTAS coincida con el registro del worker');
   }
 }
-const app = crearApi({ pool, logger, estadoPgDir: config.estadoPgDir, heartbeatMaxS: config.heartbeatMaxS, ...(senales ? { senales } : {}) });
+const app = crearApi({
+  pool, logger, estadoPgDir: config.estadoPgDir, heartbeatMaxS: config.heartbeatMaxS,
+  bandejaCatalogo: config.catalogo?.bandeja ?? false, ...(senales ? { senales } : {}),
+});
 alApagar(logger, async () => { detenerLatidos(); await app.close(); await pool.end(); });
 await app.listen({ host: '0.0.0.0', port: config.apiPuerto });
