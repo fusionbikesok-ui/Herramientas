@@ -39,19 +39,28 @@ interface RepresentacionCaso {
 interface Contadores { sinTituloMl: number; contenedorDifiereVariante: number; porFuente: Record<string, number> }
 
 /** Arma el índice del catálogo Woo (candidato universo) de una empresa, una sola vez por corrida. */
+/**
+ * `atributos_crudos.attributes` de la representación Woo VIVA vinculada a la variante — NUNCA de una
+ * representación ML, aunque esté vinculada a la misma variante (sería fuga de la verdad: el candidato
+ * acertaría por construcción contra el dato que ya lo señala). El shape ({name, option}[]) es el mismo
+ * que arma el legado y el que espera extraerAtributosDeAttrsWC del lado Woo real, así que se pasa tal cual.
+ * Si no hay representación Woo o no trae `attributes`, la fila sigue sin atributos_json (fallback por
+ * título de construirWC, como antes de este cambio).
+ */
 async function indiceWoo(tx: Consultable, empresa: string): Promise<IndiceWoo> {
   const filas = (await tx.query<{ sku: string; nombre: string; tipo: string; atributos_json: string | null; img: string | null }>(
     `SELECT sv.sku AS sku, pm.titulo AS nombre,
             CASE WHEN pm.origen = 'woo_padre' THEN 'variation' ELSE 'simple' END AS tipo,
-            NULL::text AS atributos_json, NULL::text AS img
+            (SELECT (r.atributos_crudos->'attributes')::text FROM catalog.external_representations r
+              WHERE r.canal = 'woocommerce' AND r.variant_id = sv.id AND r.archivado_en IS NULL
+                AND jsonb_typeof(r.atributos_crudos->'attributes') = 'array'
+              ORDER BY r.creado_en DESC LIMIT 1) AS atributos_json,
+            NULL::text AS img
        FROM catalog.sellable_variants sv
        JOIN catalog.product_models pm ON pm.id = sv.model_id
       WHERE sv.company_id = $1 AND sv.sku IS NOT NULL AND sv.archivado_en IS NULL
         AND pm.origen IN ('woo_padre', 'woo_simple') AND pm.archivado_en IS NULL`,
     [empresa])).rows;
-  // El atributo_json estructurado no existe del lado plataforma (E2 lo partió en model_attributes,
-  // no lo conserva crudo) — construirWC cae sola al fallback por título cuando atributos_json es
-  // null, que es exactamente lo que corresponde acá (mismo camino que un WC sin atributos_json real).
   return construirWCIndex(filas);
 }
 

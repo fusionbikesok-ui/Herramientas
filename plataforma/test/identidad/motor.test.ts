@@ -38,6 +38,25 @@ describe('E3-MOTOR-01 correrMotor', () => {
       [empresa, modelo, sku])).rows[0]!.id;
   }
 
+  /** Variante Woo con color/talle capturados de verdad (representación canal woocommerce, atributos_crudos
+   *  con el shape real {name,option}[]) — para probar que indiceWoo() los usa en vez de NULL::text fijo. */
+  async function varianteConSkuYAtributosWoo(sku: string, titulo: string, attrs: { name: string; option: string }[]) {
+    const variante = await varianteConSku2(sku, titulo);
+    await admin.query(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, atributos_crudos)
+       VALUES ($1, $2, 'woocommerce', 'vendible', $3, '', $4, $5)`,
+      [empresa, ml, `woo-${sku}`, variante, JSON.stringify({ attributes: attrs })]);
+    return variante;
+  }
+  async function varianteConSku2(sku: string, titulo: string) {
+    const modelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'woo_padre', $3, $4) RETURNING id`, [empresa, ml, sku, titulo])).rows[0]!.id;
+    return (await admin.query<{ id: string }>(
+      'INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, $3) RETURNING id',
+      [empresa, modelo, sku])).rows[0]!.id;
+  }
+
   /** Variante pendiente + representación ML + caso sku_pendiente, con sku_observado. */
   async function casoConSkuObservado(recurso: string, skuObservado: string | null, titulo = recurso) {
     const modelo = (await admin.query<{ id: string }>(
@@ -382,6 +401,37 @@ describe('E3-MOTOR-01 correrMotor', () => {
       await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
       const d = (await q<{ detalle: Record<string, unknown> }>('SELECT detalle FROM catalog.identity_cases WHERE id = $1', [caso]))[0]!.detalle;
       expect(d).toMatchObject({ d5: true, motor: { engine: ENGINE_VERSION } });
+    });
+  });
+
+  describe('color/talle real de Woo en indiceWoo() (E3 corte 1, hallazgo de opt-ff sobre candidatos "basura")', () => {
+    it('[esc:atributos-woo-reales] el candidato con color/talle Woo COINCIDENTES gana por sobre uno cuyo título matchea texto pero es OTRO producto', async () => {
+      // Reproduce el caso real MLA2107861068/FB-7668 de producción: título ML "...Volta Razz...Negro/azul/rosa",
+      // candidato correcto FB-7668 con título Woo que NO menciona color en el texto (va en atributos_crudos),
+      // compitiendo contra FB-30597 "Llanta...Color Negro..." cuyo TÍTULO sí trae la palabra "negro".
+      const correcta = await varianteConSkuYAtributosWoo(
+        'FB-7668', 'Bicicleta MTB R29 Volta Razz - 24V, Shimano Altus, Frenos Hidraulicos',
+        [{ name: 'Color', option: 'Negro/Azul/Rosa' }, { name: 'Talle', option: 'S' }]);
+      await varianteConSkuYAtributosWoo('FB-30597', 'Llanta Aluminio R29 Awa Xcaholic Tubeless Ready Compatible Color Negro Peso 520Grs', []);
+      const { caso, modelo, rep } = await casoConSkuObservado('MLC70', null, 'Bicicleta Mountain Bike Volta Razz R29 Cuadro Aluminio Negro/azul/rosa S');
+      await admin.query(
+        `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+         VALUES ($1, $2, 'color', 'Negro/Azul/Rosa', now())`, [modelo, rep]);
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      const top1 = (await q<{ sku: string; puntaje: number }>(
+        `SELECT sv.sku, k.puntaje FROM catalog.identity_candidates k JOIN catalog.sellable_variants sv ON sv.id = k.variant_id
+          WHERE k.case_id = $1 ORDER BY k.rank LIMIT 1`, [caso]))[0]!;
+      expect(top1.sku).toBe('FB-7668');
+      expect(top1.puntaje).toBeGreaterThan(0.4);
+      void correcta;
+    });
+
+    it('sin representación Woo o sin atributos_crudos: sigue funcionando por el fallback de título (no rompe lo existente)', async () => {
+      await varianteConSku('FB-8100'); // sin representación woocommerce ni atributos_crudos
+      const { caso } = await casoConSkuObservado('MLC71', null, 'Bici FB-8100');
+      await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+      const n = (await q<{ n: number }>('SELECT count(*)::int n FROM catalog.identity_candidates WHERE case_id = $1', [caso]))[0]!.n;
+      expect(n).toBeGreaterThan(0);
     });
   });
 });
