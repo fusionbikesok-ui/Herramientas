@@ -42,9 +42,17 @@ const Decision = z.strictObject({
   motivo: z.string().max(2000).optional(),
   revierte: z.uuid().optional(),
   actor: z.strictObject({ usuario: z.string().min(1).max(200), es_admin: z.boolean() }),
+  // Marca el "confirmar" del punto A (spec E3, decisión de José vía opt-16 2026-09-24): un click sobre un
+  // caso cuyo variant_id ya apunta a una variante única y viva, sin pasar por el buscador de candidatos.
+  // No cambia la validación de decidirCaso (sigue siendo un 'vincular' normal); sólo antepone el prefijo al
+  // motivo para que quede diferenciado en la auditoría, sin necesitar una columna nueva.
+  confirmar: z.boolean().optional(),
 });
+/** Prefijo del motivo para una decisión de confirmación rápida (punto A). Exportado para que el test lo
+ *  pueda referenciar sin repetir el string a mano. */
+export const PREFIJO_MOTIVO_CONFIRMAR = 'confirmar: ';
 const ConsultaCola = z.strictObject({
-  tipo: z.string().max(64).optional(), estado: z.string().max(32).optional(), grupo: z.coerce.number().int().min(0).max(4).optional(),
+  tipo: z.string().max(64).optional(), estado: z.string().max(32).optional(), grupo: z.coerce.number().int().min(0).max(6).optional(),
   cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(LIMITE_MAXIMO).default(LIMITE_POR_DEFECTO),
 });
 const ConsultaVariantes = z.strictObject({ q: z.string().trim().min(1).max(200) });
@@ -147,12 +155,15 @@ export function registrarIdentidadInterna(
       if (!q.success) return error(req, reply, 422, 'invalid_query', 'La consulta no es válida.');
       const cur = q.data.cursor ? decodificar(q.data.cursor) : null;
       if (q.data.cursor && !cur) return error(req, reply, 422, 'invalid_cursor', 'El cursor no es válido.');
-      // Grupo de prioridad (menor = antes): conflicto → D5 → con auto_sku en sombra → activa con stock → resto.
+      // Grupo de prioridad (menor = antes): conflicto → D5 → con auto_sku en sombra → activa con stock → resto
+      // con título → confirmable (variant_id ya vinculado a una variante viva: un click, sin candidatos) →
+      // sin título (al fondo, hasta que el punto B les dé una fuente). Decisión de José vía opt-16
+      // 2026-09-24: los decidibles primero, "confirmar" después de esos, "sin título" al final de todos.
       const r = await pool.query<Fila & { g: number; abierto_iso: string }>(
         `WITH cola AS (
-           SELECT c.id, c.tipo, c.estado, c.prioridad, c.version, c.abierto_en, c.detalle,
+           SELECT c.id, c.tipo, c.estado, c.prioridad, c.version, c.abierto_en, c.detalle, c.variant_id,
                   r.recurso, r.variacion_normalizada, r.sku_observado, r.estado_remoto, r.stock_canal, r.precio, r.moneda,
-                  m.titulo,
+                  m.titulo, cv.sku AS confirmar_sku,
                   CASE WHEN c.estado = 'conflict' THEN 0
                        WHEN (c.detalle->>'d5')::boolean IS TRUE THEN 1
                        WHEN EXISTS (SELECT 1 FROM catalog.identity_decisions d
@@ -160,10 +171,13 @@ export function registrarIdentidadInterna(
                                        AND d.variacion_normalizada = r.variacion_normalizada
                                        AND d.origen = 'auto_sku' AND d.efecto = 'sombra' AND d.superada_en IS NULL) THEN 2
                        WHEN r.estado_remoto = 'active' AND COALESCE(r.stock_canal, 0) > 0 THEN 3
+                       WHEN m.titulo IS NULL THEN 6
+                       WHEN cv.sku IS NOT NULL THEN 5
                        ELSE 4 END AS g
              FROM catalog.identity_cases c
              ${PUBLICACION}
              LEFT JOIN catalog.product_models m ON m.id = ${modeloMlSql('r')}
+             LEFT JOIN catalog.sellable_variants cv ON cv.id = c.variant_id AND cv.archivado_en IS NULL
             WHERE c.company_id = $1 AND c.cerrado_en IS NULL AND r.id IS NOT NULL
               AND ($2::text IS NULL OR c.tipo = $2) AND ($3::text IS NULL OR c.estado = $3))
          SELECT *, to_char(abierto_en AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS abierto_iso FROM cola
@@ -183,11 +197,15 @@ export function registrarIdentidadInterna(
                                      AND d.variacion_normalizada = r.variacion_normalizada
                                      AND d.origen = 'auto_sku' AND d.efecto = 'sombra' AND d.superada_en IS NULL) THEN 2
                      WHEN r.estado_remoto = 'active' AND COALESCE(r.stock_canal, 0) > 0 THEN 3
+                     WHEN m.titulo IS NULL THEN 6
+                     WHEN cv.sku IS NOT NULL THEN 5
                      ELSE 4 END AS g, count(*)::int AS n
            FROM catalog.identity_cases c ${PUBLICACION}
+           LEFT JOIN catalog.product_models m ON m.id = ${modeloMlSql('r')}
+           LEFT JOIN catalog.sellable_variants cv ON cv.id = c.variant_id AND cv.archivado_en IS NULL
           WHERE c.company_id = $1 AND c.cerrado_en IS NULL GROUP BY 1`, [auth.empresa])).rows;
       const en = (g: number | null) => cnt.find((f) => f.g === g)?.n ?? 0;
-      const contadores = { conflictos: en(0), d5: en(1), sku_exacto: en(2), activas_con_stock: en(3), resto: en(4), no_decidibles: en(null) };
+      const contadores = { conflictos: en(0), d5: en(1), sku_exacto: en(2), activas_con_stock: en(3), resto: en(4), confirmable: en(5), sin_titulo: en(6), no_decidibles: en(null) };
       const hay = r.rows.length > q.data.limit;
       const filas = r.rows.slice(0, q.data.limit);
       const ultimo = filas.at(-1);
@@ -197,6 +215,9 @@ export function registrarIdentidadInterna(
           d5: f.detalle && (f.detalle as { d5?: boolean }).d5 === true,
           publicacion: { recurso: f.recurso, variacion: f.variacion_normalizada, titulo: f.titulo ?? null, sku_observado: f.sku_observado ?? null,
             estado: f.estado_remoto ?? null, stock: f.stock_canal ?? null, precio: f.precio ?? null, moneda: f.moneda ?? null, link_ml: linkMl(String(f.recurso)) },
+          // Grupo 5 (punto A): la pantalla puede ofrecer "Confirmar" sin llamar a /casos/:id — ya tiene el
+          // variant_id y el SKU acá mismo, sin candidatos que buscar.
+          confirmar: f.g === 5 ? { variant_id: f.variant_id, sku: f.confirmar_sku ?? null } : null,
         })),
         // Precargable: el legado pide el "siguiente" con este cursor mientras el operador decide el actual.
         contadores,
@@ -285,10 +306,13 @@ export function registrarIdentidadInterna(
       if (typeof clave !== 'string' || clave.length < 8 || clave.length > 200) {
         return error(req, reply, 422, 'idempotency_key_requerida', 'Falta la cabecera Idempotency-Key.');
       }
+      const motivo = d.data.confirmar
+        ? PREFIJO_MOTIVO_CONFIRMAR + (d.data.motivo ?? 'sku ya vinculado')
+        : d.data.motivo;
       const r = await decidirCaso(pool, {
         caseId: req.params.id, expectedVersion: d.data.expected_version, eleccion: d.data.eleccion,
         ...(d.data.variant_id ? { variantId: d.data.variant_id } : {}), actor: d.data.actor.usuario, esAdmin: d.data.actor.es_admin,
-        ...(d.data.motivo ? { motivo: d.data.motivo } : {}), idempotencyKey: clave, ...(d.data.revierte ? { revierte: d.data.revierte } : {}),
+        ...(motivo ? { motivo } : {}), idempotencyKey: clave, ...(d.data.revierte ? { revierte: d.data.revierte } : {}),
       }, { bandeja });
       if (r.ok) return reply.code(200).send({ decision_id: r.decisionId, version: r.version, vinculo: r.vinculo });
       return error(req, reply, STATUS_DECISION[r.code], r.code, `No se pudo decidir: ${r.code}.`, r.details ? { details: r.details } : {});

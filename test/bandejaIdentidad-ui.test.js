@@ -53,11 +53,20 @@ describe('bandeja: logica pura', () => {
     expect(L.puedeDeshacer(null, 1500)).toBe(false);
   });
 
-  it('total del filtro: suma de grupos (sin no_decidibles) o el del grupo elegido', () => {
-    const c = { conflictos: 1, d5: 2, sku_exacto: 3, activas_con_stock: 4, resto: 5, no_decidibles: 99 };
-    expect(L.totalFiltro(c, null)).toBe(15);
+  it('total del filtro: suma de grupos (sin no_decidibles) o el del grupo elegido, incluye confirmable y sin_titulo', () => {
+    const c = { conflictos: 1, d5: 2, sku_exacto: 3, activas_con_stock: 4, resto: 5, confirmable: 6, sin_titulo: 7, no_decidibles: 99 };
+    expect(L.totalFiltro(c, null)).toBe(28);
     expect(L.totalFiltro(c, 1)).toBe(2);
+    expect(L.totalFiltro(c, 5)).toBe(6);
+    expect(L.totalFiltro(c, 6)).toBe(7);
     expect(L.totalFiltro({}, 4)).toBe(0);
+  });
+
+  it('grupos: confirmable (5) y sin_titulo (6) están en el mapa y el nombrero, en ese orden', () => {
+    expect(L.GRUPOS.confirmable).toBe(5);
+    expect(L.GRUPOS.sin_titulo).toBe(6);
+    expect(L.GRUPO_NOMBRE[5]).toMatch(/confirm/i);
+    expect(L.GRUPO_NOMBRE[6]).toMatch(/sin.*t[ií]tulo/i);
   });
 
   it('precio y stock sin dato no dicen «null»', () => {

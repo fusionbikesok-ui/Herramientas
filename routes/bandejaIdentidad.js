@@ -77,6 +77,9 @@ export function bandejaIdentidadRouter({ url, keyring, fetch: hacerFetch = globa
       ...(c.variant_id != null ? { variant_id: c.variant_id } : {}),
       ...(c.motivo != null ? { motivo: c.motivo } : {}),
       ...(c.revierte != null ? { revierte: c.revierte } : {}),
+      // Punto A: marca del botón/tecla "Confirmar" (SKU ya vinculado, sin candidatos). Sólo un booleano —
+      // no habilita nada que `eleccion:'vincular'` no habilitara ya; la plataforma antepone el prefijo al motivo.
+      ...(c.confirmar === true ? { confirmar: true } : {}),
       actor: { usuario: req.user.username, es_admin: req.user.is_admin === true },
     };
     return reenviar(res, 'POST', `${PREFIJO}/casos/${req.params.id}/decisiones`, cuerpo, { 'idempotency-key': clave });

@@ -111,7 +111,7 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(todo.body.casos.map((c: any) => c.grupo)).toEqual([0, 1, 2, 3, 4]);
     expect(todo.body.casos[0].publicacion).toMatchObject({ recurso: 'MLA1', link_ml: 'https://articulo.mercadolibre.com.ar/MLA-1' });
     expect(todo.body.siguiente).toBeNull();
-    expect(todo.body.contadores).toEqual({ conflictos: 1, d5: 1, sku_exacto: 1, activas_con_stock: 1, resto: 1, no_decidibles: 0 });
+    expect(todo.body.contadores).toEqual({ conflictos: 1, d5: 1, sku_exacto: 1, activas_con_stock: 1, resto: 1, confirmable: 0, sin_titulo: 0, no_decidibles: 0 });
 
     const juntas: string[] = [];
     let cursor: string | null = null;
@@ -128,6 +128,74 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(soloD5.body.casos.map((c: any) => c.id)).toEqual([d5.id]);
     expect(soloD5.body.contadores.resto).toBe(1);
     expect((await get(`${PREFIJO_IDENTIDAD}/casos?grupo=9`)).status).toBe(422);
+  });
+
+  it('confirmable: un caso con variant_id ya vinculado a una variante viva va al fondo, después de resto con título, y trae la variante para confirmar sin candidatos', async () => {
+    // "resto" (con título) tiene que seguir adelante del confirmable: José pidió los decidibles primero.
+    const resto = await caso('MLA20', { abierto: '2026-01-01T00:00:00Z' });
+    const confirmable = await caso('MLA21', { abierto: '2026-01-02T00:00:00Z' });
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-2845', confirmable.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos.map((c: any) => c.id)).toEqual([resto.id, confirmable.id]);
+    expect(r.body.casos.map((c: any) => c.grupo)).toEqual([4, 5]);
+    expect(r.body.contadores).toMatchObject({ resto: 1, confirmable: 1 });
+    const filaConfirmable = r.body.casos[1];
+    expect(filaConfirmable.confirmar).toMatchObject({ variant_id: confirmable.variante, sku: 'FB-2845' });
+
+    // Filtro por el nuevo grupo (chip propio).
+    const soloConfirmable = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=5`);
+    expect(soloConfirmable.body.casos.map((c: any) => c.id)).toEqual([confirmable.id]);
+  });
+
+  it('confirmable no le gana a conflicto ni D5: esos siguen en su propio grupo aunque tengan variant_id vinculado', async () => {
+    const conflicto = await caso('MLA22', { estado: 'conflict', abierto: '2026-01-01T00:00:00Z' });
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-1', conflicto.variante]);
+    const d5 = await caso('MLA23', { detalle: { d5: true }, abierto: '2026-01-02T00:00:00Z' });
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-2', d5.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos.map((c: any) => c.grupo)).toEqual([0, 1]);
+    expect(r.body.contadores).toMatchObject({ conflictos: 1, d5: 1, confirmable: 0 });
+  });
+
+  it('sin_titulo: un caso sin fuente de título ML va al fondo de todos, en su propio grupo y chip', async () => {
+    const conTitulo = await caso('MLA24', { abierto: '2026-01-01T00:00:00Z' });
+    // Publicación sin título ML observable: mismo patrón que el test de "título ML" (variante con modelo woo_*,
+    // sin representación de contenedor/variante con título propio).
+    const sinTitulo = await caso('MLA25', { abierto: '2026-01-02T00:00:00Z' });
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W25', 'Título Woo') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, sinTitulo.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos.map((c: any) => c.id)).toEqual([conTitulo.id, sinTitulo.id]);
+    expect(r.body.casos.map((c: any) => c.grupo)).toEqual([4, 6]);
+    expect(r.body.contadores).toMatchObject({ resto: 1, sin_titulo: 1 });
+    expect(r.body.casos[1].publicacion.titulo).toBeNull();
+
+    const soloSinTitulo = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=6`);
+    expect(soloSinTitulo.body.casos.map((c: any) => c.id)).toEqual([sinTitulo.id]);
+  });
+
+  it('confirmar: un POST con eleccion vincular al variant_id ya asociado no busca candidatos y marca el motivo', async () => {
+    const c = await caso('MLA26');
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-2845', c.variante]);
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 1, eleccion: 'vincular', variant_id: c.variante, actor, confirmar: true });
+    expect(r.status).toBe(200);
+    const decision = (await admin.query<{ motivo: string }>('SELECT motivo FROM catalog.identity_decisions WHERE id = $1', [r.body.decision_id])).rows[0];
+    expect(decision!.motivo).toMatch(/^confirmar:/);
+  });
+
+  it('confirmar con motivo propio: se antepone el prefijo, no se reemplaza', async () => {
+    const c = await caso('MLA27');
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-9000', c.variante]);
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 1, eleccion: 'vincular', variant_id: c.variante, actor, confirmar: true, motivo: 'chequeado con José' });
+    expect(r.status).toBe(200);
+    const decision = (await admin.query<{ motivo: string }>('SELECT motivo FROM catalog.identity_decisions WHERE id = $1', [r.body.decision_id])).rows[0];
+    expect(decision!.motivo).toBe('confirmar: chequeado con José');
   });
 
   it('un caso abierto sin publicación única no sale en la cola pero se cuenta en no_decidibles', async () => {

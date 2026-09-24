@@ -77,6 +77,20 @@ describe('E3 T6 proxy de la bandeja de identidad', () => {
     expect(p.recibidos[0].firmaValida).toBe(true);
   });
 
+  it('confirmar (punto A) viaja al cuerpo cuando el cliente lo manda', async () => {
+    const p = plataformaFalsa();
+    await request(app({ user: operador, fetch: p.fetch })).post(`/api/bandeja-identidad/casos/${ID}/decisiones`)
+      .set('Idempotency-Key', 'clave-1234').send({ expected_version: 1, eleccion: 'vincular', variant_id: ID, confirmar: true });
+    expect(JSON.parse(p.recibidos[0].cuerpo).confirmar).toBe(true);
+  });
+
+  it('sin confirmar en el cuerpo del cliente, no se agrega solo', async () => {
+    const p = plataformaFalsa();
+    await request(app({ user: operador, fetch: p.fetch })).post(`/api/bandeja-identidad/casos/${ID}/decisiones`)
+      .set('Idempotency-Key', 'clave-1234').send({ expected_version: 1, eleccion: 'omitir' });
+    expect(JSON.parse(p.recibidos[0].cuerpo).confirmar).toBeUndefined();
+  });
+
   it('GET con query: la ruta firmada es la enviada (ida y vuelta con caracteres especiales)', async () => {
     const p = plataformaFalsa();
     const a = app({ user: operador, fetch: p.fetch });

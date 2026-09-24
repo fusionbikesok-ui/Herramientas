@@ -25,9 +25,11 @@
     plataforma_no_responde: 'La plataforma no responde. Reintentamos solos.'
   };
 
-  // Chip → grupo de prioridad de la API (0 conflicto … 4 resto).
-  var GRUPOS = { conflictos: 0, d5: 1, sku_exacto: 2, activas_con_stock: 3, resto: 4 };
-  var GRUPO_NOMBRE = ['Conflicto', 'D5', 'SKU exacto en sombra', 'Activa con stock', 'Resto'];
+  // Chip → grupo de prioridad de la API (0 conflicto … 6 sin título). Punto A (decisión de José vía
+  // opt-16 2026-09-24): confirmable (5, SKU ya vinculado — un click, sin candidatos) va después de los
+  // decidibles; sin_titulo (6) al fondo de todos, hasta que el punto B les dé una fuente.
+  var GRUPOS = { conflictos: 0, d5: 1, sku_exacto: 2, activas_con_stock: 3, resto: 4, confirmable: 5, sin_titulo: 6 };
+  var GRUPO_NOMBRE = ['Conflicto', 'D5', 'SKU exacto en sombra', 'Activa con stock', 'Resto', 'Confirmar', 'Sin título'];
 
   function marca(m) { return MARCAS[m] || { clase: 'mk--miss', simbolo: '?', texto: String(m) }; }
 
@@ -67,11 +69,13 @@
     return !!ultima && !ultima.consumida && ahora - ultima.ts <= VENTANA_DESHACER_MS;
   }
 
-  // Total del filtro para «Caso N de M»: la suma de los contadores de la cola (sin no_decidibles).
+  // Total del filtro para «Caso N de M»: la suma de los contadores de la cola (sin no_decidibles). Confirmable
+  // y sin_titulo SÍ suman al total general: a diferencia de no_decidibles, esos casos aparecen en `casos`.
   function totalFiltro(contadores, grupo) {
     var c = contadores || {};
     if (grupo === null || grupo === undefined) {
-      return (c.conflictos || 0) + (c.d5 || 0) + (c.sku_exacto || 0) + (c.activas_con_stock || 0) + (c.resto || 0);
+      return (c.conflictos || 0) + (c.d5 || 0) + (c.sku_exacto || 0) + (c.activas_con_stock || 0) + (c.resto || 0)
+        + (c.confirmable || 0) + (c.sin_titulo || 0);
     }
     var clave = Object.keys(GRUPOS).filter(function (k) { return GRUPOS[k] === grupo; })[0];
     return c[clave] || 0;

@@ -245,7 +245,7 @@
       function (n) { entry.reintentos = n; banda(); });
   }
 
-  function decidir(eleccion, variantId, motivo) {
+  function decidir(eleccion, variantId, motivo, confirmar) {
     var d = S.detalle;
     if (!d) return;
     if (eleccion === 'vincular' && !variantId) {
@@ -254,12 +254,17 @@
     }
     quitarAviso('elegir'); quitarAviso('rechazo');
     var opcion = variantId ? L.opcionesDe(d.candidatos, S.busqueda).filter(function (o) { return o.variant_id === variantId; })[0] : null;
+    // Confirmar (punto A): la variante no está en candidatos/búsqueda — el SKU viene de cs.confirmar, guardado
+    // al armar el botón (ver disparaConfirmar). Sin esto, el chip de "vinculado a" en el aviso de deshacer
+    // quedaría con SKU null aunque la decisión en sí es correcta.
+    var skuConfirmado = confirmar && !opcion ? (S.cola[S.idx] && S.cola[S.idx].confirmar && S.cola[S.idx].confirmar.sku) : null;
     var cuerpo = { expected_version: d.version, eleccion: eleccion };
     if (eleccion === 'vincular') cuerpo.variant_id = variantId;
     if (motivo) cuerpo.motivo = motivo;
+    if (confirmar) cuerpo.confirmar = true;
     var entry = {
       key: crypto.randomUUID(), casoId: d.id, cuerpo: cuerpo, eleccion: eleccion, variantId: variantId || null,
-      marcas: opcion ? marcasDe(opcion) : '', sku: opcion ? opcion.sku : null, estado: 'pendiente', reintentos: 0
+      marcas: opcion ? marcasDe(opcion) : '', sku: opcion ? opcion.sku : skuConfirmado, estado: 'pendiente', reintentos: 0
     };
     // Sin `actor`: el usuario y es_admin los pone el proxy desde la sesión, nunca el cliente.
     S.pendientes.set(entry.key, entry);
@@ -269,6 +274,14 @@
     mostrarDeshacer(textoDecision(entry));
     banda();
     avanzar();
+  }
+
+  // Punto A: confirmar el SKU que el caso ya trae vinculado (grupo 5), sin pasar por el buscador de
+  // candidatos. cs.confirmar viene de la fila de cola (GET /casos), no del detalle.
+  function confirmarCasoActual() {
+    var cs = S.cola[S.idx];
+    if (!cs || !cs.confirmar) return;
+    decidir('vincular', cs.confirmar.variant_id, undefined, true);
   }
 
   function textoDecision(e) {
@@ -527,6 +540,14 @@
     }
 
     var ac = el('div', 'acciones');
+    // Punto A: caso confirmable (grupo 5, cs.confirmar trae variant_id/sku de la fila de cola) — un solo
+    // botón, sin buscar candidatos. Si por algo raro también hubiera candidatos, "Vincular" sigue disponible;
+    // Enter dispara "Confirmar" primero (ver disparaAtajo), porque es la acción principal de ese caso.
+    if (cs && cs.confirmar) {
+      var btnConf = el('button', 'btn btn--primary', 'Confirmar ' + (cs.confirmar.sku || 'SKU vinculado') + ' (Enter)',
+        { type: 'button', id: 'btn-confirmar' });
+      ac.appendChild(btnConf);
+    }
     if (opciones.length) ac.appendChild(el('button', 'btn btn--primary', 'Vincular al seleccionado (Enter)', { type: 'button', id: 'btn-vincular' }));
     var omisionVigente = d.detalle && d.detalle.d5 === true;
     if (omisionVigente) ac.appendChild(el('button', 'btn', 'Mantener la omisión', { type: 'button', id: 'btn-mantener' }));
@@ -611,7 +632,8 @@
     var root = $('root');
     root.addEventListener('click', function (ev) {
       var t = ev.target.closest('button, input[type="radio"]'); if (!t) return;
-      if (t.id === 'btn-vincular') decidir('vincular', S.sel);
+      if (t.id === 'btn-confirmar') confirmarCasoActual();
+      else if (t.id === 'btn-vincular') decidir('vincular', S.sel);
       else if (t.id === 'btn-omitir') decidir('omitir');
       else if (t.id === 'btn-mantener') decidir('mantener_omision');
       else if (t.id === 'btn-no-existe') decidir('sin_candidato');
@@ -637,7 +659,7 @@
       if (k === 'j' || k === 'ArrowDown') { ev.preventDefault(); ir(1); }
       else if (k === 'k' || k === 'ArrowUp') { ev.preventDefault(); ir(-1); }
       else if (/^[1-9]$/.test(k)) { ev.preventDefault(); seleccionarPorNumero(Number(k)); }
-      else if (k === 'Enter') { ev.preventDefault(); decidir('vincular', S.sel); }
+      else if (k === 'Enter') { ev.preventDefault(); if (S.cola[S.idx] && S.cola[S.idx].confirmar) confirmarCasoActual(); else decidir('vincular', S.sel); }
       else if (k === 's') { ev.preventDefault(); if (S.detalle) decidir('omitir'); }
       else if (k === 'n') { ev.preventDefault(); if (S.detalle) decidir('sin_candidato'); }
       else if (k === '/') { ev.preventDefault(); if (S.detalle) abrirBusqueda(); }
