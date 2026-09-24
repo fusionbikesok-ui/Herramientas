@@ -35,8 +35,14 @@ describe('bandeja: logica pura', () => {
   it('reintento: sólo red caída, 429 y 5xx; un 4xx es definitivo', () => {
     for (const s of [0, 429, 500, 502, 503]) expect(L.esReintentable(s)).toBe(true);
     for (const s of [200, 400, 403, 404, 409, 422]) expect(L.esReintentable(s)).toBe(false);
-    expect(L.demora(0)).toBe(1000);
-    expect(L.demora(99)).toBe(15000);
+    // backoff exponencial con jitter ±25 %, tope de 15 s, y 5 intentos en total
+    expect(L.demora(0, () => 0.5)).toBe(1000);
+    expect(L.demora(1, () => 0.5)).toBe(2000);
+    expect(L.demora(3, () => 0.5)).toBe(8000);
+    expect(L.demora(99, () => 0.5)).toBe(15000);
+    expect(L.demora(2, () => 0)).toBe(3000);
+    expect(L.demora(2, () => 1)).toBe(5000);
+    expect(L.MAX_INTENTOS).toBe(5);
   });
 
   it('deshacer: vale 10 s, una sola vez, y sólo si hay una decisión', () => {

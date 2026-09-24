@@ -227,16 +227,22 @@
     return (e.atributos || []).concat(e.otros_atributos || []).map(function (a) { return a.nombre + ':' + a.marca; }).sort().join('|');
   }
 
-  function enviar(entry) {
-    var cuerpo = entry.cuerpo;
+  // Reintenta red/5xx/429 con backoff y jitter hasta L.MAX_INTENTOS; devuelve la última respuesta (definitiva o agotada).
+  function conReintentos(hacer, alReintentar) {
     function intento(n) {
-      return http('POST', '/casos/' + encodeURIComponent(entry.casoId) + '/decisiones', cuerpo, entry.key).then(function (r) {
-        if (!L.esReintentable(r.status)) return r;
-        entry.reintentos = n + 1; banda();
+      return hacer().then(function (r) {
+        if (!L.esReintentable(r.status) || n + 1 >= L.MAX_INTENTOS) return r;
+        if (alReintentar) alReintentar(n + 1);
         return esperar(L.demora(n)).then(esperarRed).then(function () { return intento(n + 1); });
       });
     }
     return intento(0);
+  }
+
+  function enviar(entry) {
+    var ruta = '/casos/' + encodeURIComponent(entry.casoId) + '/decisiones';
+    return conReintentos(function () { return http('POST', ruta, entry.cuerpo, entry.key); },
+      function (n) { entry.reintentos = n; banda(); });
   }
 
   function decidir(eleccion, variantId, motivo) {
@@ -273,11 +279,12 @@
   }
 
   function alTerminar(entry, r) {
-    S.pendientes.delete(entry.key);
+    if (r.status === 200 || !L.esReintentable(r.status)) S.pendientes.delete(entry.key);
     if (r.status === 200) {
       entry.estado = 'ok'; entry.decisionId = r.data.decision_id; entry.versionNueva = r.data.version;
       anunciar('Guardado'); banda(); return;
     }
+    if (L.esReintentable(r.status)) return fallido(entry);
     entry.estado = 'error';
     S.hechos = Math.max(0, S.hechos - 1);
     banda();
@@ -292,6 +299,19 @@
     }
     aviso('rechazo', L.copyError(code) + (i >= 0 ? ' Volvemos a ese caso.' : ''));
     if (i >= 0) abrirCaso(i, { foco: true, sel: entry.variantId });
+  }
+
+  // Estado terminal tras agotar los reintentos: la decisión sigue pendiente (con su misma clave) y el operador decide.
+  function fallido(entry) {
+    entry.estado = 'fallido'; entry.reintentos = 0; banda();
+    var b = aviso('fallo-' + entry.key, 'No se pudo guardar la decisión (' + textoDecision(entry).replace(/\.$/, '') + '). Tu elección se conserva.', [{
+      texto: 'Reintentar', alClick: function () {
+        quitarAviso('fallo-' + entry.key); entry.estado = 'pendiente';
+        entry.promise = enviar(entry).then(function (r) { alTerminar(entry, r); return entry; });
+        banda();
+      }
+    }]);
+    var btn = b.querySelector('.btn'); if (btn) btn.focus();
   }
 
   function aplicarSobreNueva() {
@@ -331,10 +351,12 @@
     anunciar('Deshaciendo…');
     // P3: el revierte necesita el decision_id, que llega con el 200; si el guardado sigue en vuelo, se espera.
     u.entry.promise.then(function (e) {
+      if (e.estado === 'fallido') { u.consumida = false; aviso('rechazo', 'No se pudo deshacer: la decisión todavía no se guardó.'); return; }
       if (e.estado !== 'ok') return; // ya se avisó el rechazo y se volvió a ese caso
       if (Date.now() - u.ts > L.VENTANA_DESHACER_MS) { aviso('rechazo', 'No se pudo deshacer: el guardado tardó más que el tiempo para deshacer.'); return; }
-      return http('POST', '/casos/' + encodeURIComponent(e.casoId) + '/decisiones',
-        { expected_version: e.versionNueva, eleccion: 'sin_candidato', revierte: e.decisionId }, crypto.randomUUID())
+      u.claveDeshacer = u.claveDeshacer || crypto.randomUUID(); // una sola clave por intento de deshacer: el reintento devuelve lo mismo
+      var cuerpo = { expected_version: e.versionNueva, eleccion: 'sin_candidato', revierte: e.decisionId };
+      return conReintentos(function () { return http('POST', '/casos/' + encodeURIComponent(e.casoId) + '/decisiones', cuerpo, u.claveDeshacer); })
         .then(function (r) {
           var i = S.cola.findIndex(function (c) { return c.id === e.casoId; });
           if (r.status === 200) {
@@ -343,6 +365,7 @@
             if (i >= 0) return abrirCaso(i, { foco: true, sel: e.variantId });
             return;
           }
+          if (L.esReintentable(r.status)) { u.consumida = false; aviso('rechazo', 'No se pudo deshacer: sin respuesta de la plataforma. Probá de nuevo con z.'); return; }
           aviso('rechazo', L.copyError((r.data && r.data.code) || 'plataforma_no_responde'));
         });
     });

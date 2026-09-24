@@ -53,8 +53,14 @@
   // Sólo se reintenta lo que puede arreglarse solo: red caída (status 0), 5xx y 429. Un 4xx es una respuesta definitiva.
   function esReintentable(status) { return status === 0 || status === 429 || status >= 500; }
 
-  var DEMORAS = [1000, 2000, 4000, 8000, 15000];
-  function demora(intento) { return DEMORAS[Math.min(intento, DEMORAS.length - 1)]; }
+  // Backoff exponencial con jitter (±25 %), tope de 15 s por espera y de 5 intentos en total: con la plataforma
+  // caída el operador ve el error en ~30 s en vez de esperar para siempre.
+  var MAX_INTENTOS = 5;
+  function demora(intento, azar) {
+    var rnd = typeof azar === 'function' ? azar() : Math.random();
+    var base = Math.min(1000 * Math.pow(2, intento), 15000);
+    return Math.round(base * (0.75 + rnd * 0.5));
+  }
 
   var VENTANA_DESHACER_MS = 10000;
   function puedeDeshacer(ultima, ahora) {
@@ -123,7 +129,7 @@
 
   var api = {
     marca: marca, copyError: copyError, puedeDispararAtajo: puedeDispararAtajo, esReintentable: esReintentable,
-    demora: demora, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
+    demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
     formatoStock: formatoStock, opcionesDe: opcionesDe, nombresAtributos: nombresAtributos, atributoDe: atributoDe,
     filaVisible: filaVisible, GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };
