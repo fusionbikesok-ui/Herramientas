@@ -41,13 +41,13 @@ describe('llamarGemini', () => {
     expect(axios.post).toHaveBeenCalledTimes(2);
   });
 
-  it('reintenta hasta 3 intentos y después de agotarlos lanza el error del último', async () => {
+  it('reintenta hasta 5 intentos y después de agotarlos lanza un error que dice qué hacer', async () => {
     axios.post.mockResolvedValue({ status: 503, data: {} });
     const p = llamarGemini('KEY123', { contents: [] });
-    const assertion = expect(p).rejects.toThrow('Gemini API error 503');
+    const assertion = expect(p).rejects.toThrow(/Gemini API error 503: .*saturado.*Probá de nuevo en un minuto/);
     await vi.runAllTimersAsync();
     await assertion;
-    expect(axios.post).toHaveBeenCalledTimes(3);
+    expect(axios.post).toHaveBeenCalledTimes(5);
   });
 
   it('reintenta ante un error de red (sin response)', async () => {

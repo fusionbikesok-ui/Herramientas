@@ -1,6 +1,7 @@
 import axios from 'axios';
 import express from 'express';
 import multer from 'multer';
+import path from 'path';
 import { guardarArchivo } from '../utils/storage.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -11,7 +12,10 @@ const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemi
 // reintento. Solo se reintentan errores transitorios (5xx/429 y errores de red sin response, p.
 // ej. ECONNRESET) — nunca un 4xx de payload (400/401/403), que es un error real del request.
 const ESTADOS_REINTENTABLES = new Set([429, 500, 502, 503, 504]);
-const REINTENTOS_GEMINI = [1000, 3000]; // delays entre intentos: 3 intentos en total
+// 2026-09-24: con 3 intentos en ~4s, un 503 de Google ("modelo saturado") seguía llegando al operador
+// en la carga de stock. Ahora son 5 intentos en ~20s de espera total: alcanza para los picos cortos de
+// saturación sin pasar el timeout del proxy (las esperas + las llamadas quedan bien debajo de 60s).
+const REINTENTOS_GEMINI = [1000, 3000, 6000, 10000]; // delays entre intentos: 5 intentos en total
 
 function esperar(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -32,6 +36,11 @@ export async function llamarGemini(key, payload) {
           ultimoError = new Error(`Gemini API error ${resp.status}`);
           await esperar(REINTENTOS_GEMINI[intento]);
           continue;
+        }
+        // Al agotar los reintentos de un error transitorio, el mensaje le dice al operador qué hacer. Conserva el
+        // prefijo "Gemini API error <status>" porque el catch de abajo lo usa para no reintentar de nuevo.
+        if (ESTADOS_REINTENTABLES.has(resp.status)) {
+          throw new Error(`Gemini API error ${resp.status}: el servicio de Google está saturado. Probá de nuevo en un minuto; no se grabó nada.`);
         }
         throw new Error(`Gemini API error ${resp.status}`);
       }
@@ -63,6 +72,7 @@ export function parseJsonArrayText(text) {
 
 // Retorna el objeto completo incluyendo campos extra (proveedor, numero_pedido, etc.)
 const TIPOS_DOC_VALIDOS = new Set(['factura', 'remito', 'orden_compra', 'otro']);
+const EXTENSIONES_TEXTO = new Set(['.csv', '.xml', '.txt']);
 
 function parseJsonFull(text) {
   const cleaned = text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
@@ -96,12 +106,17 @@ export function geminiRouter(geminiKey) {
     try {
       const { prompt, importador, numero_pedido: numPed } = req.body;
       const mimeType = req.file.mimetype;
-      const base64 = req.file.buffer.toString('base64');
-      const text = await llamarGemini(geminiKey, {
-        contents: [{ parts: [
+      const extension = path.extname(req.file.originalname).toLowerCase();
+      const esTexto = EXTENSIONES_TEXTO.has(extension);
+      const contenido = esTexto ? req.file.buffer.toString('utf8') : null;
+      const parts = contenido !== null
+        ? [{ text: `${prompt}\n\nContenido del archivo:\n${contenido}` }]
+        : [
           { text: prompt },
-          { inline_data: { mime_type: mimeType, data: base64 } }
-        ] }]
+          { inline_data: { mime_type: mimeType, data: req.file.buffer.toString('base64') } }
+        ];
+      const text = await llamarGemini(geminiKey, {
+        contents: [{ parts }]
       });
       const { items, proveedor, numero_pedido, tipo_documento } = parseJsonFull(text);
 
