@@ -84,14 +84,17 @@ async function representacionDe(tx: Consultable, caso: CasoAbierto): Promise<Rep
   return reps.length === 1 ? reps[0]! : null;
 }
 
-/** ¿Ya hay una auto_sku vigente con esta MISMA variante para esta clave? Idempotencia del paso 2 del motor. */
-async function autoSkuYaVigente(tx: Consultable, cuenta: string, recurso: string, variacion: string, variantId: string): Promise<boolean> {
-  const fila = (await tx.query<{ variant_id: string | null }>(
-    `SELECT variant_id FROM catalog.identity_decisions
+/**
+ * La auto_sku en sombra vigente de esta clave, si hay. Idempotencia del paso 2: si apunta a la MISMA variante no se
+ * anota otra vez; si apunta a otra (el SKU pasó a resolver distinto) la nueva la supera — el UNIQUE parcial de
+ * (clave, efecto) no admite dos vigentes y un 23505 abortaría la corrida entera.
+ */
+async function autoSkuVigente(tx: Consultable, cuenta: string, recurso: string, variacion: string): Promise<{ id: string; variant_id: string | null } | undefined> {
+  return (await tx.query<{ id: string; variant_id: string | null }>(
+    `SELECT id, variant_id FROM catalog.identity_decisions
       WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3
         AND origen = 'auto_sku' AND efecto = 'sombra' AND superada_en IS NULL`,
     [cuenta, recurso, variacion])).rows[0];
-  return !!fila && fila.variant_id === variantId;
 }
 
 async function correrCaso(tx: Consultable, caso: CasoAbierto, empresa: string, indice: IndiceWoo, runId: string, log: Logger): Promise<{ autoSku: boolean }> {
@@ -141,14 +144,15 @@ async function correrCaso(tx: Consultable, caso: CasoAbierto, empresa: string, i
   if (resuelto === 'ninguna' || resuelto === 'varias') return { autoSku: false };
   if (vigente && (vigente.fuente === 'humano' || (vigente.fuente === 'legado' && vigente.accion === 'omitir'))) return { autoSku: false };
 
-  if (await autoSkuYaVigente(tx, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, resuelto.variantId)) return { autoSku: false };
+  const previa = await autoSkuVigente(tx, rep.channel_account_id, rep.recurso, rep.variacion_normalizada);
+  if (previa && previa.variant_id === resuelto.variantId) return { autoSku: false };
 
   await tx.query(
     `INSERT INTO catalog.identity_decisions
        (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id,
-        origen, actor, efecto, engine_version)
-     VALUES ($1, $2, $3, $4, $5, 'vincular', $6, 'auto_sku', 'identidad.motor', 'sombra', $7)`,
-    [empresa, caso.id, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, resuelto.variantId, ENGINE_VERSION]);
+        origen, actor, efecto, engine_version, supersede_a)
+     VALUES ($1, $2, $3, $4, $5, 'vincular', $6, 'auto_sku', 'identidad.motor', 'sombra', $7, $8)`,
+    [empresa, caso.id, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, resuelto.variantId, ENGINE_VERSION, previa?.id ?? null]);
   return { autoSku: true };
 }
 

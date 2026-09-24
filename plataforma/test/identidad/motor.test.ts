@@ -119,6 +119,20 @@ describe('E3-MOTOR-01 correrMotor', () => {
     expect(n).toBe(1);
   });
 
+  it('auto_sku vigente apuntando a otra variante (el SKU ahora resuelve a otra): la corrida no falla, supera la anterior y anota la nueva', async () => {
+    const a = await varianteConSku('FB-4010');
+    await casoConSkuObservado('MLB6', 'FB-4010');
+    expect((await correrMotor(app, { empresa, limite: 500, log: logSilencioso })).autoSku).toBe(1);
+    // El vendedor corrige el SKU de la publicación en ML: ahora el sku_observado resuelve a otra variante viva.
+    const b = await varianteConSku('FB-4011');
+    await admin.query("UPDATE catalog.external_representations SET sku_observado = 'FB-4011' WHERE recurso = 'MLB6'");
+    const r = await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+    expect(r.autoSku).toBe(1);
+    const filas = await q<{ variant_id: string; vigente: boolean }>(
+      "SELECT variant_id, superada_en IS NULL AS vigente FROM catalog.identity_decisions WHERE channel_account_id = $1 AND recurso = 'MLB6' AND origen = 'auto_sku' ORDER BY creado_en", [ml]);
+    expect(filas).toEqual([{ variant_id: a, vigente: false }, { variant_id: b, vigente: true }]);
+  });
+
   it('[esc:gtin] GTIN igual y SKU distinto (o sea sku_observado no resuelve): no hay auto_sku', async () => {
     // El motor sólo mira sku_observado (no GTIN: eso es evidencia, no identidad — ver 0014). Con
     // sku_observado null (representación sin ese dato, GTIN es lo único que trajo el canal), skuUnico
