@@ -2,6 +2,7 @@ import { planDeKeyrings } from '../catalogo/arranque.ts';
 import { crearBootstrap, prepararBootstrap, type CuentaBootstrap } from '../catalogo/bootstrap.ts';
 import { crearProyector } from '../catalogo/proyector.ts';
 import { iniciarCicloBootstrap, iniciarCicloCatalogo } from './catalogo.ts';
+import { iniciarCicloIdentidad } from './identidad.ts';
 import { cargarConfig } from '../comun/config.ts';
 import { crearLogger } from '../comun/logger.ts';
 import { crearPool } from '../db/pool.ts';
@@ -106,6 +107,12 @@ if (cicloCatalogo) {
     'proyector del catálogo encendido');
 }
 
+// El motor en sombra (E3 T4) tiene su propio ciclo, igual de independiente que el del proyector: no
+// llama al canal, sólo lee lo que el proyector de E2 ya escribió (product_models, model_attributes).
+// cargarConfig ya exigió CATALOGO_PROYECTOR=1 si motor está encendido, así que acá alcanza con mirar el flag.
+const cicloIdentidad = config.motor ? iniciarCicloIdentidad(pool, config.motorPausaMs, logger) : null;
+if (cicloIdentidad) logger.info({ pausaMs: config.motorPausaMs }, 'motor de identidad en sombra encendido');
+
 const barridos = crearWorkerBarridos({ db: pool, workerId: config.instancia, procesadores });
 const senales = keyringSobres ? crearWorkerSenales({ db: pool, workerId: config.instancia, keyring: keyringSobres, relectores }) : null;
 let enVuelta = false;
@@ -149,6 +156,7 @@ alApagar(logger, async () => {
   senales?.detener();
   await cicloCatalogo?.detener();
   await cicloBootstrap?.detener();
+  await cicloIdentidad?.detener();
   await barridos.detener();
   await pool.end();
 });

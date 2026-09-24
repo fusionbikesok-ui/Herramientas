@@ -314,3 +314,49 @@ describe('E3-CFG-02 compose declara E3_BANDEJA en worker y en api', () => {
   it('está declarada en el worker', () => { expect(declarada('worker')).toBe(true); });
   it('está declarada en la api', () => { expect(declarada('api')).toBe(true); });
 });
+
+/**
+ * E3 T4: motor en sombra. `motor` es TOP-LEVEL en Config, mismo motivo que `bandeja` arriba, pero a
+ * diferencia de bandeja sólo lo lee el worker (el motor no corre en la API) — cargarConfig lo rechaza
+ * en cualquier otro SERVICIO.
+ */
+describe('E3-MOTOR-CFG-01 E3_MOTOR', () => {
+  it('por defecto está apagado; sólo "1" lo enciende', () => {
+    expect(cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json' }).motor).toBe(false);
+    const con = (v: string) => cargarConfig({
+      ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_MOTOR: v }).motor;
+    expect(con('0')).toBe(false);
+    expect(con('1')).toBe(true);
+  });
+  it('cualquier valor fuera de "0"/"1" rechaza el arranque', () => {
+    expect(() => cargarConfig({ ...base, CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_MOTOR: 'true' })).toThrow();
+  });
+  it('en el worker, motor encendido sin CATALOGO_PROYECTOR rechaza el arranque', () => {
+    expect(() => cargarConfig({ ...base, SERVICIO: 'worker', E3_MOTOR: '1' })).toThrow(/CATALOGO_PROYECTOR/);
+  });
+  it('en el worker, motor encendido CON CATALOGO_PROYECTOR arranca normalmente, con la pausa por defecto de 30 minutos', () => {
+    const c = cargarConfig({ ...base, SERVICIO: 'worker', CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_MOTOR: '1' });
+    expect(c.motor).toBe(true);
+    expect(c.motorPausaMs).toBe(1_800_000);
+  });
+  it('E3_MOTOR_PAUSA_MS es configurable', () => {
+    const c = cargarConfig({
+      ...base, SERVICIO: 'worker', CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json',
+      E3_MOTOR: '1', E3_MOTOR_PAUSA_MS: '60000' });
+    expect(c.motorPausaMs).toBe(60_000);
+  });
+  it('en cualquier otro servicio, motor encendido rechaza el arranque (el motor no corre en la API)', () => {
+    expect(() => cargarConfig({ ...base, SERVICIO: 'api', CATALOGO_PROYECTOR: '1', CATALOGO_KEYRING_FILE: '/run/k.json', E3_MOTOR: '1' }))
+      .toThrow(/sólo tiene sentido en el worker/);
+  });
+});
+
+/**
+ * E3-MOTOR-CFG-02 — mismo defecto de clase que E2-CFG-03/E3-CFG-02, para `E3_MOTOR`/`E3_MOTOR_PAUSA_MS`.
+ * Sólo en el worker: la API rechaza E3_MOTOR=1 (test de arriba), así que no hace falta declararla ahí.
+ */
+describe('E3-MOTOR-CFG-02 compose declara E3_MOTOR y E3_MOTOR_PAUSA_MS en el worker', () => {
+  const declarada = (v: string) => new RegExp(`^ +${v}: \\$\\{${v}[:}]`, 'm').test(bloqueServicio('worker'));
+  it('E3_MOTOR está declarada en el worker', () => { expect(declarada('E3_MOTOR')).toBe(true); });
+  it('E3_MOTOR_PAUSA_MS está declarada en el worker', () => { expect(declarada('E3_MOTOR_PAUSA_MS')).toBe(true); });
+});

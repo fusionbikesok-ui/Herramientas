@@ -78,6 +78,17 @@ export interface Config {
    * despliegue, no un estado válido en silencio.
    */
   bandeja: boolean;
+  /**
+   * E3 corte 1 tarea 4: si el ciclo del motor en sombra corre en este worker (src/worker/identidad.ts).
+   * Apagado por omisión, mismo criterio que `bandeja` arriba: TOP-LEVEL, no dentro de `catalogo`, para
+   * que valga igual esté o no el catálogo configurado en este servicio en particular. Sólo lo lee el
+   * worker (el motor no tiene sentido en la API); `cargarConfig` exige CATALOGO_PROYECTOR=1 igual que
+   * `bandeja`, porque el motor lee product_models.titulo y catalog.model_attributes, que sólo existen
+   * si el proyector de E2 los está escribiendo.
+   */
+  motor: boolean;
+  /** Pausa entre vueltas del ciclo del motor (src/worker/identidad.ts). Sólo tiene efecto con `motor: true`. */
+  motorPausaMs: number;
 }
 export class ErrorConfig extends Error { override name = 'ErrorConfig'; }
 
@@ -139,6 +150,8 @@ const Esquema = z.object({
   // (eventos/copias del legado) — ambos toman ConfigCatalogo.bandeja del mismo parseo, así que nunca pueden
   // quedar en valores distintos por un typo en un solo servicio.
   E3_BANDEJA: z.enum(['0', '1']).default('0'),
+  E3_MOTOR: z.enum(['0', '1']).default('0'),
+  E3_MOTOR_PAUSA_MS: z.coerce.number().int().min(1000).default(1_800_000), // 30 minutos, el default del plan.
 });
 
 /** Todo o nada: media configuración de barridos haría arrancar un worker que no barre nada. */
@@ -263,11 +276,18 @@ export function cargarConfig(envCrudo: NodeJS.ProcessEnv, leerArchivo: (ruta: st
   if (bandeja && e.SERVICIO === 'worker' && !catalogo?.proyector) {
     throw new ErrorConfig('E3_BANDEJA=1 en el worker requiere CATALOGO_PROYECTOR=1: sin el proyector corriendo, la bandeja no se aplica al vincular publicaciones nuevas');
   }
+  const motor = e.E3_MOTOR === '1';
+  if (motor && e.SERVICIO !== 'worker') {
+    throw new ErrorConfig('E3_MOTOR=1 sólo tiene sentido en el worker (el motor no corre en la API)');
+  }
+  if (motor && !catalogo?.proyector) {
+    throw new ErrorConfig('E3_MOTOR=1 requiere CATALOGO_PROYECTOR=1: el motor lee product_models.titulo y catalog.model_attributes, que sólo existen con el proyector de E2 corriendo');
+  }
   return {
     servicio: e.SERVICIO, instancia: e.INSTANCIA, version: e.VERSION,
     pgUrl: `postgres://${encodeURIComponent(e.PG_USER)}:${encodeURIComponent(clave)}@${e.PG_HOST}:${e.PG_PORT}/${e.PG_DATABASE}`,
     apiPuerto: e.API_PUERTO, estadoPgDir: e.ESTADO_PG_DIR, heartbeatMaxS: e.HEARTBEAT_MAX_S, heartbeatIntervalMs: e.HEARTBEAT_INTERVAL_MS,
-    bandeja,
+    bandeja, motor, motorPausaMs: e.E3_MOTOR_PAUSA_MS,
     ...(barridos ? { barridos } : {}),
     ...(senales ? { senales } : {}),
     ...(informes ? { informes } : {}),

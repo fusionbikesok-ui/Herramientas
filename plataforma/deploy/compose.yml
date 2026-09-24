@@ -81,6 +81,12 @@ services:
       # E3 corte 1: la bandeja de decisiones humanas. En el worker requiere CATALOGO_PROYECTOR=1 (config.ts
       # lo valida al arrancar); ver la nota igual en el bloque de la API.
       E3_BANDEJA: ${E3_BANDEJA:-0}
+      # E3 T4: el ciclo del motor en sombra. Sólo el worker (config.ts lo rechaza en la API); requiere
+      # CATALOGO_PROYECTOR=1 igual que E3_BANDEJA, mismo motivo por el que esa línea existe (hallazgo de
+      # Codex sobre 447126b6): sin esta declaración, .env podía decir E3_MOTOR=1 y el contenedor nunca
+      # lo veía.
+      E3_MOTOR: ${E3_MOTOR:-0}
+      E3_MOTOR_PAUSA_MS: ${E3_MOTOR_PAUSA_MS:-1800000}
     volumes:
       - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
       - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
