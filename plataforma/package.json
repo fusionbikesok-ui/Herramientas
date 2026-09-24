@@ -8,6 +8,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:e3": "vitest run test/identidad",
     "migrar": "node src/db/cli-migrar.ts"
   },
   "dependencies": {
