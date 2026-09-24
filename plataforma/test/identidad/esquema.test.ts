@@ -155,6 +155,38 @@ describe('E3-SCH-01 esquema de identity_decisions/candidates/evidence', () => {
     expect(r.rows[0]!.delete).toBe(false);
   });
 
+  /*
+   * E3 T3, hallazgo de la segunda opinión de Codex sobre 1a7ec9da: `identity_decision_results` guarda el
+   * resultado que decidirCaso le devuelve a un reintento idempotente. Tiene que ser tan append-only como
+   * identity_decisions — si alguna migración futura le da UPDATE a la app (por el default privilege de
+   * `catalog` que ya mordió una vez, ver el comentario de arriba), la app podría reescribir el resultado de
+   * un reintento después de haberlo respondido, que es exactamente el agujero que esta tabla vino a cerrar.
+   */
+  it('UPDATE o DELETE sobre identity_decision_results con el rol de la app: permiso denegado', async () => {
+    const admin_ = await admin(); const e = await sembrar(admin_);
+    const m = await modelo(admin_, e); const v = await variante(admin_, e.empresa, m);
+    const c = await caso(admin_, e, v);
+    const decisionId = await decisionHumana(admin_, e, c, v);
+    await admin_.query(
+      'INSERT INTO catalog.identity_decision_results (decision_id, vinculo, version) VALUES ($1, $2, $3)',
+      [decisionId, 'vinculada', 2]);
+
+    const appDb = await app();
+    await expect(appDb.query(`UPDATE catalog.identity_decision_results SET vinculo = 'omitida' WHERE decision_id = $1`, [decisionId]))
+      .rejects.toThrow(/permission denied/i);
+    await expect(appDb.query(`DELETE FROM catalog.identity_decision_results WHERE decision_id = $1`, [decisionId]))
+      .rejects.toThrow(/permission denied/i);
+  });
+
+  it('has_table_privilege confirma que plataforma_app no tiene UPDATE ni DELETE sobre identity_decision_results', async () => {
+    const db = await admin();
+    const r = await db.query<{ update: boolean; delete: boolean }>(
+      `SELECT has_table_privilege('plataforma_app', 'catalog.identity_decision_results', 'UPDATE') AS update,
+              has_table_privilege('plataforma_app', 'catalog.identity_decision_results', 'DELETE') AS delete`);
+    expect(r.rows[0]!.update).toBe(false);
+    expect(r.rows[0]!.delete).toBe(false);
+  });
+
   it('(e) identity_cases.version vale 1 y estado vale actionable por omisión', async () => {
     const db = await admin(); const e = await sembrar(db);
     const m = await modelo(db, e); const v = await variante(db, e.empresa, m);

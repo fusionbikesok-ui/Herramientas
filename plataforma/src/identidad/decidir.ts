@@ -45,14 +45,20 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
 
   /** Busca una decisión previa con esta clave de idempotencia y arma el resultado de reintento. */
   const buscarPrevia = async (tx: Consultable): Promise<ResultadoDecision | null> => {
-    const previa = (await tx.query<{ id: string; hash_peticion: string; resultado_vinculo: Reconciliacion; resultado_version: number }>(
-      'SELECT id, hash_peticion, resultado_vinculo, resultado_version FROM catalog.identity_decisions WHERE idempotency_key = $1', [p.idempotencyKey])).rows[0];
+    const previa = (await tx.query<{ id: string; hash_peticion: string }>(
+      'SELECT id, hash_peticion FROM catalog.identity_decisions WHERE idempotency_key = $1', [p.idempotencyKey])).rows[0];
     if (!previa) return null;
     if (previa.hash_peticion !== hash) return { ok: false, code: 'idempotency_mismatch' };
     // Un reintento devuelve EXACTAMENTE lo que la primera vez devolvió (hallazgo de la segunda opinión de
-    // Codex): no recalcula nada, ni relee el caso — `resultado_version` es la versión que ESA decisión dejó,
-    // no la versión actual del caso, que puede haber seguido subiendo con decisiones posteriores.
-    return { ok: true, decisionId: previa.id, version: previa.resultado_version, vinculo: previa.resultado_vinculo };
+    // Codex sobre 447126b6/1a7ec9da): no recalcula nada, ni relee el caso — `identity_decision_results` es
+    // la única fuente, escrita una sola vez al final de la misma transacción que la insertó (nunca con un
+    // UPDATE posterior: append-only real, no una columna reescribible). Si faltara la fila acá, algo rompió
+    // la invariante de que decidirCaso siempre la escribe en la MISMA transacción que la decisión — un error
+    // explícito es mejor que inventar un resultado.
+    const resultado = (await tx.query<{ vinculo: Reconciliacion; version: number }>(
+      'SELECT vinculo, version FROM catalog.identity_decision_results WHERE decision_id = $1', [previa.id])).rows[0];
+    if (!resultado) throw new Error(`decidirCaso: falta identity_decision_results para la decisión ${previa.id} (idempotency_key ${p.idempotencyKey})`);
+    return { ok: true, decisionId: previa.id, version: resultado.version, vinculo: resultado.vinculo };
   };
 
   return enTransaccion(pool, async (tx) => {
@@ -208,10 +214,12 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
       'UPDATE catalog.identity_cases SET estado = $2, cerrado_en = now(), motivo_cierre = $3 WHERE id = $1',
       [p.caseId, estadoFinal, motivoCierre]);
 
-    // El resultado queda grabado en la propia decisión: un reintento con la misma idempotency_key lo
-    // devuelve tal cual, sin recalcular nada (hallazgo de la segunda opinión de Codex).
+    // El resultado se INSERTA (nunca UPDATE) en su propia tabla append-only: un reintento con la misma
+    // idempotency_key lo lee de ahí, tal cual, sin recalcular nada (hallazgo de la segunda opinión de Codex
+    // sobre 1a7ec9da: un UPDATE, aunque fuera sólo de estas dos columnas, dejaba a la app reescribir el
+    // resultado de cualquier decisión cuando quisiera).
     await tx.query(
-      'UPDATE catalog.identity_decisions SET resultado_vinculo = $2, resultado_version = $3 WHERE id = $1',
+      'INSERT INTO catalog.identity_decision_results (decision_id, vinculo, version) VALUES ($1, $2, $3)',
       [decisionId, vinculo, version]);
 
     // Paso 11: auditoría con actor, antes/después y correlation_id.

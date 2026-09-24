@@ -37,11 +37,6 @@ CREATE TABLE catalog.identity_decisions (
   efecto text NOT NULL CHECK (efecto IN ('sombra','aplicar')),
   engine_version text, hash_payload_ml text, expected_version int,
   idempotency_key text UNIQUE, hash_peticion text,
-  -- El resultado que decidirCaso le devolvió al pedido original (E3 T3, hallazgo de la segunda opinión de
-  -- Codex): un reintento idempotente tiene que devolver EXACTAMENTE lo mismo que la primera vez, no
-  -- recalcularlo. `resultado_version` es la versión del caso tras esa decisión (case.version + 1 en ese
-  -- momento), no la versión actual del caso, que puede haber seguido subiendo con decisiones posteriores.
-  resultado_vinculo text, resultado_version int,
   supersede_a uuid REFERENCES catalog.identity_decisions(id),
   superada_en timestamptz,            -- la única columna que cambia, y sólo la escribe un trigger al superar
   creado_en timestamptz NOT NULL DEFAULT now(),
@@ -58,12 +53,22 @@ CREATE INDEX identity_decisions_caso ON catalog.identity_decisions (case_id, cre
 -- La 0013 ya dio GRANT SELECT, INSERT, UPDATE sobre TODAS las tablas de catalog a plataforma_app. Acá se
 -- revoca el UPDATE (y el DELETE, que ya no tenía) SOLO sobre esta tabla, sin tocar el resto del esquema.
 REVOKE UPDATE, DELETE ON catalog.identity_decisions FROM plataforma_app;
--- Excepción puntual: `resultado_vinculo`/`resultado_version` son el resultado que decidirCaso (E3 T3) le dio
--- al pedido original, y sólo se llenan DESPUÉS del INSERT porque dependen de reconciliarClave (que a su vez
--- necesita que la fila ya exista, para calcular la decisión vigente). No rompen el "append-only" real (todo
--- lo demás sigue inmutable): son la única letra pequeña de auditoría de un resultado que en el momento del
--- INSERT todavía no se conoce, no una revisión de la decisión en sí.
-GRANT UPDATE (resultado_vinculo, resultado_version) ON catalog.identity_decisions TO plataforma_app;
+
+-- ───────────────────────────── resultado de decidirCaso, en su propia tabla ─────────────────────────────
+-- E3 T3: un reintento idempotente (misma idempotency_key, mismo cuerpo) tiene que devolver EXACTAMENTE lo
+-- que devolvió la primera vez, no recalcularlo — el caso puede haber seguido cambiando después (otra
+-- decisión, un revert) y su estado ACTUAL ya no es el que esta decisión produjo. Guardar el resultado como
+-- columnas de `identity_decisions` exigía un UPDATE posterior al INSERT, y con GRANT UPDATE de columna la
+-- app podía reescribirlo cuantas veces quisiera — un agujero real en el append-only, porque la auditoría
+-- usa justo esas columnas para responder el reintento (hallazgo de la segunda opinión de Codex sobre
+-- 1a7ec9da). Una tabla aparte, con la misma disciplina INSERT-only que `identity_decisions`, no tiene ese
+-- problema: se escribe una vez, al final de la misma transacción de decidirCaso, y nunca se toca de nuevo.
+CREATE TABLE catalog.identity_decision_results (
+  decision_id uuid PRIMARY KEY REFERENCES catalog.identity_decisions(id) ON DELETE RESTRICT,
+  vinculo text NOT NULL, version int NOT NULL,
+  creado_en timestamptz NOT NULL DEFAULT now()
+);
+REVOKE UPDATE, DELETE ON catalog.identity_decision_results FROM plataforma_app;
 
 -- El trigger corre como el dueño de la tabla (no como plataforma_app), así que puede escribir
 -- `superada_en` aunque la app no tenga UPDATE. Es la única escritura posterior al INSERT que existe.
