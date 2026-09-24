@@ -31,7 +31,7 @@ import type { Deposito } from './deposito.ts';
 
 /** El commit donde se arregló manifiesto.ts: se declara en el JSON para que quede trazado desde cuándo el bug no puede volver a producir este mismo error. */
 export const COMMIT_FIX = '58a611d1';
-export const CAUSA = "ORDER BY resolvía contra el alias chain_seq::text: orden lexicográfico, 9999 > 10000+";
+export const CAUSA = "ORDER BY resolvía contra el alias chain_seq::text: orden lexicográfico en vez de numérico (p.ej. '99' > '364', '9999' > '10000'); afectó a todo día cuyo último chain_seq no era el mayor en orden de texto";
 
 export interface DiaCorregido {
   fecha: string;
