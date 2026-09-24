@@ -30,7 +30,9 @@ import { crearPool } from '../src/db/pool.ts';
 import { decidirCaso } from '../src/identidad/decidir.ts';
 
 const dryRun = !process.argv.includes('--ejecutar');
-const ACTOR = 'admin-reapertura';
+// El actor de la auditoría tiene que ser quien aprobó la lista, no un nombre genérico que oculte
+// quién autorizó esto (nota de opt-16, 2026-09-24).
+const ACTOR = 'Jose';
 const MOTIVO = 'reapertura: omitido sin opción visible';
 
 // (recurso, sku que sku_observado resuelve a una variante viva única) — lista de opt-16, 2026-09-24.
