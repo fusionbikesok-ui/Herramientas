@@ -26,6 +26,6 @@ try {
   console.log(JSON.stringify(m, null, 2));
   const fecha = ahora.toISOString().slice(0, 10);
   const out = path.join(aqui, `../../docs/superpowers/evidence/e3/${fecha}-calibracion.md`);
-  fs.writeFileSync(out, `# Calibración E3 — ${fecha}\n\nengine_version \`${m.engineVersion}\`, n=${m.n}\n\n\`\`\`json\n${JSON.stringify(m, null, 2)}\n\`\`\`\n\nTiempo mediano = tiempo de resolución (abierto_en → decisión humana).\n`);
+  fs.writeFileSync(out, `# Calibración E3 — ${fecha}\n\nengine_version \`${m.engineVersion}\`, muestra n=${m.muestra.n}, ventana n=${m.ventana.n}\n\n\`\`\`json\n${JSON.stringify(m, null, 2)}\n\`\`\`\n\nTiempo mediano = tiempo de resolución (abierto_en → decisión humana).\n`);
   console.error('escrito', out);
 } finally { await pool.end(); }
