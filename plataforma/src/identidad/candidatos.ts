@@ -3,7 +3,13 @@ export interface ItemWoo { sku: string; nombre: string; tipo: string; color: str
 export interface IndiceWoo { wcItems: ItemWoo[]; indice: Record<string, number[]>; }
 interface Atributos { colores: Set<string>; talles: Set<string>; }
 interface Resultado { score: number; color_ok: boolean | null; talle_ok: boolean | null; wc_sku: string; wc_nombre: string; wc_tipo: string; wc_color: string; wc_talle: string; wc_img: string; }
-export interface Candidato { variantId: string; rank: number; puntaje: number; explicacion: { coincide: string[]; difiere: string[] } }
+// Marca por atributo (enmienda de interfaz 2026-09-24, spec bandeja §2): la API de T5 la devuelve
+// TAL CUAL, sin traducir. 'equivalente' es una coincidencia después de normalizar (mismo criterio de
+// color_ok/talle_ok: intersecta() ya normaliza vía norm()/COLORES, así que dos valores que matchean acá
+// pueden no ser textualmente idénticos, p.ej. "negro" ML contra "negro mate" candidato comparten el
+// token "negro" — 'equivalente', no 'coincide' a secas, cuando el texto crudo difiere).
+export interface AtributoComparado { nombre: 'color' | 'talle'; marca: 'coincide' | 'difiere' | 'falta' | 'equivalente'; valorMl: string; valorCandidato: string }
+export interface Candidato { variantId: string; rank: number; puntaje: number; explicacion: { atributos: AtributoComparado[] } }
 
 const EQUIV: Record<string, string> = { gray: 'gris', grey: 'gris', black: 'negro', white: 'blanco', red: 'rojo', blue: 'azul', green: 'verde', yellow: 'amarillo', orange: 'naranja', purple: 'violeta', pink: 'rosa', brown: 'marron' };
 const COLORES = new Set('negro blanco rojo azul verde amarillo naranja violeta rosa gris marron celeste teal dorado plateado dark brush fluo turquesa bordo beige crema lima coral fucsia cobre grafito antracita oliva arena vino mostaza salmon menta lavanda lila marino navy plata acero bronce cromado titanio titanium ceniza perlado metalizado multicolor transparente indigo agua aqua petroleo caramelo cappuccino castano musgo rosado burgundy borravino terracota ocre mate matte'.split(' '));
@@ -30,4 +36,33 @@ export function ctDesdeApi(color:unknown,talle:unknown):Atributos{const c=new Se
 export function getCandidatos(tn:string,esVar:boolean,varStr:string|undefined,override:Atributos|undefined,wcItems:ItemWoo[],indice:Record<string,number[]>):Resultado[]{const ct=override||(esVar?extraerAtributos(varStr):{colores:new Set(),talles:new Set()}),cuenta:Record<string,number>={};for(const t of new Set(tn.split(' ').filter(Boolean))){const posiciones=indice[t];if(posiciones)for(const p of posiciones)cuenta[p]=(cuenta[p]||0)+1}const pos=Object.keys(cuenta).sort((a,b)=>cuenta[b]!-cuenta[a]!).slice(0,50).map(Number),sc=pos.map(p=>{const w=wcItems[p]!,sm=tsr(tn,w.baseNorm),c=ct.colores.size?intersecta(ct.colores,w.colorToks):null,t=ct.talles.size?intersecta(ct.talles,w.talleToks):null,bonus=(c===true?.5:0)+(t===true?.5:0);return{sf:esVar?sm*(1+bonus)/2:sm,cOk:c,tOk:t,w}});sc.sort((a,b)=>{const x=attrScore(a.cOk)+attrScore(a.tOk),y=attrScore(b.cOk)+attrScore(b.tOk);return y!==x?y-x:b.sf-a.sf});return sc.slice(0,8).map(s=>({score:+s.sf.toFixed(3),color_ok:s.cOk,talle_ok:s.tOk,wc_sku:s.w!.sku,wc_nombre:s.w!.nombre,wc_tipo:s.w!.tipo,wc_color:s.w!.color,wc_talle:s.w!.talle,wc_img:s.w!.img}))}
 export function candidatosDeItem(ml:ItemMl,wc:ItemWoo[],indice:Record<string,number[]>):Resultado[]{return getCandidatos(norm(ml.ml_title),ml.ml_es_variante,ml.ml_variations,ml._ct,wc,indice)}
 export function djb2(str:string):number{let h=5381;for(let i=0;i<str.length;i++)h=((h*33)^str.charCodeAt(i))>>>0;return h>>>0}
-export function candidatosDe(ml:ItemMl,woo:any[],indice:IndiceWoo,n=3):Candidato[]{return candidatosDeItem(ml,indice.wcItems,indice.indice).slice(0,n).map((x,i)=>({variantId:x.wc_sku,rank:i+1,puntaje:x.score,explicacion:{coincide:[...(x.color_ok===true?['color']:[]),...(x.talle_ok===true?['talle']:[])],difiere:[...(x.color_ok===false?['color']:[]),...(x.talle_ok===false?['talle']:[])]}}))}
+
+/**
+ * Marca de un atributo (color o talle), comparando los tokens normalizados de la publicación ML
+ * (`ct`) contra los del candidato Woo (`wc`): mismo criterio que color_ok/talle_ok de getCandidatos
+ * (intersecta(), no igualdad exacta), pero acá se queda con el detalle que color_ok/talle_ok
+ * descartan (los valores en sí, para mostrarlos) y distingue 'coincide' (mismo texto normalizado
+ * exacto) de 'equivalente' (intersectan pero no son el mismo conjunto — p.ej. "negro" contra
+ * "negro mate").
+ */
+function marcarAtributo(nombre: 'color' | 'talle', ml: Set<string>, wc: Set<string>): AtributoComparado {
+  // Mismo criterio que color_ok/talle_ok de getCandidatos: null (acá 'falta') sólo cuando el lado ML
+  // no declaró nada para este atributo — si ML declaró y el candidato no, intersecta() contra un
+  // conjunto vacío da false ('difiere'), no 'falta' (un candidato sin el dato no es lo mismo que un
+  // dato que coincide, y hay que verlo como diferencia para que salte a la vista).
+  const valorMl = [...ml].sort().join(' '), valorCandidato = [...wc].sort().join(' ');
+  if (!ml.size) return { nombre, marca: 'falta', valorMl, valorCandidato };
+  if (!intersecta(ml, wc)) return { nombre, marca: 'difiere', valorMl, valorCandidato };
+  return { nombre, marca: valorMl === valorCandidato ? 'coincide' : 'equivalente', valorMl, valorCandidato };
+}
+
+export function candidatosDe(ml:ItemMl,woo:any[],indice:IndiceWoo,n=3):Candidato[]{
+  const ct = ml._ct || (ml.ml_es_variante ? extraerAtributos(ml.ml_variations) : { colores: new Set<string>(), talles: new Set<string>() });
+  return candidatosDeItem(ml,indice.wcItems,indice.indice).slice(0,n).map((x,i)=>{
+    const w = indice.wcItems.find((it) => it.sku === x.wc_sku);
+    const atributos: AtributoComparado[] = w
+      ? [marcarAtributo('color', ct.colores, w.colorToks), marcarAtributo('talle', ct.talles, w.talleToks)]
+      : [];
+    return { variantId: x.wc_sku, rank: i + 1, puntaje: x.score, explicacion: { atributos } };
+  });
+}

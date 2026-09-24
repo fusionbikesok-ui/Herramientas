@@ -12,15 +12,31 @@ describe('paridad del matching ML → Woo (muestra-30.json, 30 pares reales)', (
     const caso = args[0];
     const ml: ItemMl = { ...caso.ml, _ct: ctDesdeApi(caso.ml.color, caso.ml.talle) };
     const actual = candidatosDe(ml, fixture.catalogo, indiceFixture);
-    const esperado = caso.legado_top3.map((x: any, i: number) => ({
-      variantId: x.wc_sku,
-      rank: i + 1,
-      puntaje: x.score,
-      explicacion: {
-        coincide: [...(x.color_ok === true ? ['color'] : []), ...(x.talle_ok === true ? ['talle'] : [])],
-        difiere: [...(x.color_ok === false ? ['color'] : []), ...(x.talle_ok === false ? ['talle'] : [])],
-      },
-    }));
+    // La marca (enmienda 2026-09-24) se deriva de color_ok/talle_ok igual que antes, pero acá además
+    // hay que reconstruir el valor normalizado de cada lado para armar 'coincide' vs 'equivalente':
+    // mismo criterio que marcarAtributo() en candidatos.ts (los conjuntos ordenados y unidos con
+    // espacio, comparados por igualdad textual exacta después de normalizar).
+    const marca = (ok: boolean | null, valorMl: string, valorCandidato: string): string => {
+      if (ok === null) return 'falta';
+      if (ok === false) return 'difiere';
+      return valorMl === valorCandidato ? 'coincide' : 'equivalente';
+    };
+    const esperado = caso.legado_top3.map((x: any, i: number) => {
+      const valorMlColor = [...ml._ct!.colores].sort().join(' '), valorMlTalle = [...ml._ct!.talles].sort().join(' ');
+      const wItem = indiceFixture.wcItems.find((w) => w.sku === x.wc_sku)!;
+      const valorCandColor = [...wItem.colorToks].sort().join(' '), valorCandTalle = [...wItem.talleToks].sort().join(' ');
+      return {
+        variantId: x.wc_sku,
+        rank: i + 1,
+        puntaje: x.score,
+        explicacion: {
+          atributos: [
+            { nombre: 'color', marca: marca(x.color_ok, valorMlColor, valorCandColor), valorMl: valorMlColor, valorCandidato: valorCandColor },
+            { nombre: 'talle', marca: marca(x.talle_ok, valorMlTalle, valorCandTalle), valorMl: valorMlTalle, valorCandidato: valorCandTalle },
+          ],
+        },
+      };
+    });
     expect(actual, `entrada ${caso.clave}`).toEqual(esperado);
   });
 });
