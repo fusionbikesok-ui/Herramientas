@@ -815,6 +815,10 @@ CREATE TABLE catalog.external_representations (
   CONSTRAINT external_representations_un_aparicion
     UNIQUE (channel_account_id, recurso, variacion_normalizada)
 );
+COMMENT ON COLUMN catalog.external_representations.titulo_observado IS
+  'Título que trae el payload del canal para ESTA representación, cuando no hay modelo propio que lo guarde '
+  '(ítem de ML sin variaciones ya vinculado a una variante de Woo). Sólo lectura para modeloMlSql como último '
+  'fallback; nunca se usa para decidir identidad ni entra en hashCatalogo.';
 CREATE INDEX external_representations_variante ON catalog.external_representations (variant_id);
 CREATE INDEX external_representations_modelo ON catalog.external_representations (model_id);
 CREATE INDEX external_representations_user_product
@@ -913,10 +917,17 @@ CREATE TABLE catalog.identity_cases (
   version         int NOT NULL DEFAULT 1,
   estado          text NOT NULL DEFAULT 'actionable' CHECK (estado IN
                     ('unclassified','actionable','decided','verified','parked','intervention','conflict','archived')),
+  -- «No estoy seguro» en la bandeja (0022): sale de la cola normal hasta que se decide o se desaparta.
+  -- No es una decisión (no escribe identity_decisions ni mueve el vínculo), así que la calibración no lo ve.
+  apartado_en     timestamptz,
+  apartado_por    text,
+  apartado_motivo text,
   CONSTRAINT identity_cases_cierre_check CHECK ((cerrado_en IS NULL) = (motivo_cierre IS NULL)),
   -- Todo caso apunta a algo concreto: sin objeto no hay nada que revisar.
   CONSTRAINT identity_cases_objeto_check CHECK (variant_id IS NOT NULL OR representation_id IS NOT NULL OR model_id IS NOT NULL)
 );
+COMMENT ON COLUMN catalog.identity_cases.apartado_en IS
+  'Marcado «No estoy seguro» en la bandeja: sale de la cola normal hasta que se decide o se desaparta.';
 -- Un caso abierto por objeto y tipo. Cerrado, puede volver a abrirse: el problema puede reaparecer.
 CREATE UNIQUE INDEX identity_cases_un_abierto_variante
   ON catalog.identity_cases (variant_id, tipo) WHERE cerrado_en IS NULL AND variant_id IS NOT NULL;
@@ -1023,6 +1034,20 @@ CREATE TABLE catalog.identity_candidates (
   creado_en timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX identity_candidates_caso ON catalog.identity_candidates (case_id, creado_en DESC);
+
+-- ───────────────────────────── marcas de «No estoy seguro» en la bandeja (0022) ─────────────────────────────
+-- «No estoy seguro» aparta un caso sin decidirlo: no escribe identity_decisions ni mueve el vínculo, así que
+-- la calibración no lo ve. La clave de idempotencia es por caso+acción, no global (hallazgo Alto de Codex
+-- sobre la revisión de 0022): la misma Idempotency-Key reusada en OTRO caso o para la OTRA acción no debe
+-- devolver un resultado ajeno.
+CREATE TABLE catalog.identity_case_marks (
+  idempotency_key text NOT NULL,
+  case_id uuid NOT NULL REFERENCES catalog.identity_cases(id),
+  accion text NOT NULL CHECK (accion IN ('apartar', 'desapartar')),
+  version int NOT NULL,
+  creado_en timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (idempotency_key, case_id, accion)
+);
 
 -- ───────────────────────────── evidencia releída antes de auto-vincular (D4, 0020) ─────────────────────────────
 CREATE TABLE catalog.identity_evidence (
