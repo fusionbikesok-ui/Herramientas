@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
 import fs from 'fs';
 import request from 'supertest';
@@ -203,6 +203,58 @@ describe('E1-GW-01 ruta HTTP interna del legado', () => {
     app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: {}, geminiKey: 'k' });
     const r = await request(app).post('/internal/v1/channel-read').set('content-type', 'application/json').send('{}');
     expect(r.status).toBe(404);
+  });
+
+  describe('E1-T5 §2.1 fail-closed de la sombra sin tumbar el arranque', () => {
+    const KEYRING = './test/tmp-gateway-keyring.json';
+    const ENV_SOMBRA = ['GATEWAY_ML_SHADOW_RPM', ...CORRIENTES_ML.map((c) => `GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`), 'GATEWAY_ML_SHADOW_RPM_E2E3'];
+    const previos = {};
+
+    const conKeyring = () => {
+      fs.writeFileSync(KEYRING, JSON.stringify({ keys: { k1: clave.toString('base64') } }));
+      fs.chmodSync(KEYRING, 0o600);
+      process.env.GATEWAY_KEYRING_FILE = KEYRING;
+      process.env.GATEWAY_ORIGENES = '127.0.0.1/32,::1/128';
+      process.env.MOBILE_JWT_SECRET = 'test-mobile-jwt-secret-123456789012345';
+    };
+
+    beforeEach(() => { for (const k of ENV_SOMBRA) previos[k] = process.env[k]; });
+    afterEach(() => {
+      for (const k of ENV_SOMBRA) { if (previos[k] === undefined) delete process.env[k]; else process.env[k] = previos[k]; }
+      delete process.env.GATEWAY_KEYRING_FILE;
+      delete process.env.GATEWAY_ORIGENES;
+      fs.rmSync(KEYRING, { force: true });
+    });
+
+    it('con el global habilitado y sin las variables por corriente, buildApp NO lanza y la sombra queda cerrada', async () => {
+      conKeyring();
+      process.env.GATEWAY_ML_SHADOW_RPM = '30';
+      for (const c of CORRIENTES_ML) delete process.env[`GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`];
+      delete process.env.GATEWAY_ML_SHADOW_RPM_E2E3;
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() => {
+        app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k' });
+      }).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('sombra cerrada'));
+      const cuerpo = JSON.stringify({ op: 'ml.question', params: { id: '5' } });
+      const r = await request(app).post('/internal/v1/channel-read').set(firmado(cuerpo)).send(cuerpo);
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ status: 429, headers: { 'retry-after': expect.any(String), 'x-fusion-cupo': 'sombra-agotado' }, body: null });
+      errorSpy.mockRestore();
+    });
+
+    it('con las 6 variables por corriente presentes, buildApp arranca sin loguear el error de configuración', () => {
+      conKeyring();
+      process.env.GATEWAY_ML_SHADOW_RPM = '30';
+      for (const c of CORRIENTES_ML) process.env[`GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`] = '5';
+      process.env.GATEWAY_ML_SHADOW_RPM_E2E3 = '0';
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() => {
+        app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k' });
+      }).not.toThrow();
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
   });
 
   it('operación válida firmada: 200 con la respuesta saneada', async () => {

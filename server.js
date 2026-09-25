@@ -251,8 +251,18 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       CORRIENTES_ML.map((c) => [c, Number(process.env[`GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`] || 0)]),
     );
     configuracionPorCorriente.e2e3 = Number(process.env.GATEWAY_ML_SHADOW_RPM_E2E3 || 0);
-    // Fail-closed: si la sombra está habilitada, arranca sólo con las 6 variables de corriente presentes.
-    validarConfiguracionCupoSombra(configuracionPorCorriente, rpmGlobal);
+    // Fail-closed SÓLO de la sombra (E1 T5): una variable por corriente faltante o inválida jamás debe
+    // tumbar el arranque de herramientas entero (pedidos/stock/preparación no dependen de esto). Si la
+    // validación falla, la sombra queda cerrada (todas las corrientes ML dan 429 sintético con
+    // x-fusion-cupo, vía buckets en 0) y el legado sigue arrancando normal.
+    let presupuestoMl;
+    try {
+      validarConfiguracionCupoSombra(configuracionPorCorriente, rpmGlobal);
+      presupuestoMl = crearPresupuestoShadow(configuracionPorCorriente, rpmGlobal);
+    } catch (error) {
+      console.error(`[gateway-sombra] configuración de cupo por corriente inválida, sombra cerrada: ${error.message}`);
+      presupuestoMl = crearPresupuestoShadow({}, 0);
+    }
     return {
       claves: cargarKeyringInterno(process.env.GATEWAY_KEYRING_FILE),
       origenes: crearOrigenesInternos(process.env.GATEWAY_ORIGENES),
@@ -260,7 +270,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
         mlUserId: mlCfg?.userId || process.env.ML_USER_ID,
         mlAppId: mlCfg?.clientId || process.env.ML_CLIENT_ID,
         mlSiteId: process.env.ML_SITE_ID || null,
-        presupuestoMl: crearPresupuestoShadow(configuracionPorCorriente, rpmGlobal),
+        presupuestoMl,
         ejecutarMl: (ruta, headers) => mlFetch(app._db, mlCfg, 'get', ruta, null, { headers }),
         ejecutarWoo: (ruta) => wooFetch(wooCfg, ruta),
       }),
