@@ -50,19 +50,24 @@ if (config.barridos) {
   // El HMAC del plano de control no comparte claves con el cifrado de sobres.
   const keyringGateway = usaGateway ? cargarKeyring(config.barridos.gatewayKeyringFile!) : null;
   for (const cuenta of cuentas) {
-    // Un transporte por cuenta: cada una tiene su URL y, en directo, su semáforo de concurrencia.
+    // Un transporte por (cuenta, consumidor) (E1 T5 §2.8, decisión de José opción b): E2/E3 no comparten
+    // cupo con E1, así que el bootstrap del catálogo (E2) usa una instancia propia marcada 'catalogo', y
+    // los barridos/relectores C6/missed_feeds de E1 usan la de siempre (consumidor 'e1', el default).
     const transporte = cuenta.transporte === 'gateway'
       ? crearTransporteGateway({ url: cuenta.base_url, keyring: keyringGateway!, ...(cuenta.channel === 'mercadolibre' ? { sellerId: cuenta.seller_id } : {}) })
       : crearClienteCanal({ baseUrl: cuenta.base_url });
+    const transporteBootstrap = cuenta.transporte === 'gateway'
+      ? crearTransporteGateway({ url: cuenta.base_url, keyring: keyringGateway!, consumidor: 'catalogo', ...(cuenta.channel === 'mercadolibre' ? { sellerId: cuenta.seller_id } : {}) })
+      : transporte;
     const adaptadores = cuenta.channel === 'mercadolibre'
       ? crearAdaptadoresMl({ transporte, db: pool, sellerId: cuenta.seller_id })
       : crearAdaptadoresWoo({ transporte });
-    // Relectura puntual por señal (C6) con el mismo transporte de la cuenta.
+    // Relectura puntual por señal (C6) con el mismo transporte de la cuenta: son E1, no E3.
     const propios = cuenta.channel === 'mercadolibre' ? crearRelectoresMl({ transporte }) : crearRelectoresWoo({ transporte });
     if (cuenta.channel === 'mercadolibre') cuentasMissedFeeds.push({ id: cuenta.id, sellerId: cuenta.seller_id, transporte });
     cuentasBootstrap.push(cuenta.channel === 'mercadolibre'
-      ? { id: cuenta.id, topic: 'ml.items', transporte, sellerId: cuenta.seller_id }
-      : { id: cuenta.id, topic: 'woo.products', transporte });
+      ? { id: cuenta.id, topic: 'ml.items', transporte: transporteBootstrap, sellerId: cuenta.seller_id }
+      : { id: cuenta.id, topic: 'woo.products', transporte: transporteBootstrap });
     for (const relector of Object.values(propios)) relectores[claveRelector(cuenta.id, relector.topic)] = relector;
     for (const adaptador of Object.values(adaptadores)) {
       const motor = crearProcesadorMotor({ db: pool, adaptador, keyring });

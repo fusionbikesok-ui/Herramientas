@@ -3,9 +3,9 @@ import { enTransaccion } from '../db/pool.ts';
 import { ErrorCanalTerminal, ErrorDestinoProhibido } from '../reconciliacion/cliente-http.ts';
 import { ErrorPaginaInvalida, persistirRecurso, validarRecurso } from '../reconciliacion/motor.ts';
 import type { Relector } from '../reconciliacion/relectura.ts';
-import { cerrarSenal, fallarSenal, reclamarSenales, type ObjetivoSenal, type SenalReclamada } from '../reconciliacion/senales-cola.ts';
+import { cerrarSenal, diferirSenalPorCupo, fallarSenal, reclamarSenales, type ObjetivoSenal, type SenalReclamada } from '../reconciliacion/senales-cola.ts';
 import type { KeyringSobre } from '../seguridad/sobre.ts';
-import { ErrorBarridoReintentable } from './barridos.ts';
+import { ErrorBarridoReintentable, ErrorCupoSombraAgotado } from './barridos.ts';
 
 class ErrorLeasePerdido extends Error { override name = 'ErrorLeasePerdido'; }
 
@@ -45,7 +45,10 @@ export function crearWorkerSenales(opciones: {
     try {
       resultado = await relector.releer(s.resourceId);
     } catch (error) {
-      if (error instanceof ErrorBarridoReintentable) {
+      if (error instanceof ErrorCupoSombraAgotado) {
+        // No consume intento (spec E1 T5 §2.4): distinto de un HTTP_429 real, se difiere aparte.
+        await diferirSenalPorCupo(opciones.db, s, error.retryAfter);
+      } else if (error instanceof ErrorBarridoReintentable) {
         await fallarSenal(opciones.db, s, `retryable:${error.message.split(' ')[0]}`, error.retryAfter !== undefined ? { retryAfterS: error.retryAfter } : {});
       } else if (error instanceof ErrorCanalTerminal || error instanceof ErrorDestinoProhibido) {
         // Terminal de verdad: el canal dijo que no (404, 403) o el destino está prohibido. Reintentar no

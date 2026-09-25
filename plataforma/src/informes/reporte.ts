@@ -115,6 +115,37 @@ export async function armarReporte(
     t.convergencia = conBarrido.has(b.topic) ? Math.min(t.convergencia ?? 1, convergencia) : convergencia;
     conBarrido.add(b.topic);
   }
+  // E1 T5 §2.5 (corrige el hallazgo crítico 1 de la 2ª revisión de Codex): un `succeeded` temprano en el día
+  // no alcanza si una corrida posterior de la misma corriente quedó `pending`/`retryable`/`failed` (por
+  // diferimiento de cupo sombra u otro motivo) y nunca llegó a un `succeeded` que la reemplace. Sin esto, la
+  // foto vieja del primer barrido exitoso dejaba el día verde aunque el barrido más reciente no se haya
+  // completado nunca.
+  const ultimoExito = new Map<string, number>();
+  for (const b of await pool.query<{ topic: string; finished_at: Date }>(
+    `SELECT topic, max(finished_at) AS finished_at FROM integrations.sweep_runs
+      WHERE started_at >= $1 AND started_at < $2 AND strategy = 'convergence'
+        AND status = 'succeeded' AND finished_at IS NOT NULL AND finished_at <= $3
+      GROUP BY topic`,
+    [desde, hasta, corte],
+  ).then((r) => r.rows)) ultimoExito.set(b.topic, b.finished_at.getTime());
+  // Igual que arriba: congelado al corte, no en vivo. Una corrida cuenta como incompleta-al-corte si NO
+  // llegó a `succeeded` con `finished_at <= corte`; eso incluye la que sigue abierta hoy y también la que
+  // en su momento quedó pending/retryable/failed y recién se resolvió después del corte (o después de hoy).
+  // `finished_at` no se reescribe una vez puesto (revisión del hallazgo crítico de esta misma tanda): usar
+  // el status en vivo hacía que reintentar una corrida días después cambiara el resultado de un día ya
+  // cerrado, justo la falla de idempotencia que este módulo documenta evitar.
+  const incompletos = await pool.query<{ topic: string; started_at: Date }>(
+    `SELECT topic, max(started_at) AS started_at FROM integrations.sweep_runs
+      WHERE started_at >= $1 AND started_at < $2 AND strategy = 'convergence'
+        AND NOT (status = 'succeeded' AND finished_at IS NOT NULL AND finished_at <= $3)
+      GROUP BY topic`,
+    [desde, hasta, corte],
+  );
+  for (const { topic, started_at: iniciada } of incompletos.rows) {
+    const ultimo = ultimoExito.get(topic);
+    // Sin un éxito posterior que la cubra, la corrida incompleta invalida la cobertura declarada del día.
+    if (ultimo === undefined || iniciada.getTime() > ultimo) conBarrido.delete(topic);
+  }
   // Un tópico de convergencia habilitado que no se barrió en el día no tiene convergencia declarada: sin
   // esto, siete días sin barridos pasaban por una campaña limpia.
   const esperados = await pool.query<{ topic: string }>(

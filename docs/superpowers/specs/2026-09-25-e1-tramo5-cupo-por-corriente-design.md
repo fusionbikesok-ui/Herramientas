@@ -256,8 +256,13 @@ campaña.** Coherente con PM-187 (E2/E3 no deben afectar a E1). Contrato:
 - En producción, 24 h con las 6 corrientes con al menos un barrido OK, backlog no creciente por corriente, y
   **cero** casos de `CUPO_SOMBRA_AGOTADO` que hayan agotado el tope de edad (§2.4) — diferimientos que sí se
   resuelven dentro de su ventana no cuentan como falla.
-- Rollback: quitar las variables por corriente y volver al build anterior del legado; el techo global sigue
-  funcionando igual que hoy (sin distinción de corriente, un solo bucket).
+- Rollback: **no alcanza con quitar las variables por corriente** — con `GATEWAY_ML_SHADOW_RPM` (el techo
+  global) en su valor de hoy (30) y sin las 6 variables por corriente, la validación de arranque falla y
+  (implementado como fail-closed sólo de la sombra, nunca del legado) deja la sombra cerrada — todas las
+  corrientes ML dan 429 sintético con `x-fusion-cupo`, no el bucket único de antes. El rollback real es
+  volver al build anterior del legado (antes de este tramo), o cargar las 6 variables por corriente antes de
+  reiniciar. Bajar `GATEWAY_ML_SHADOW_RPM` a 0 si desactiva la sombra por completo (sin exigir las 6
+  variables) es una alternativa válida si el objetivo es sólo apagarla, no volver al comportamiento previo.
 - **Secuencia de despliegue (corregida tras la segunda revisión):** T5 se despliega → corre la tarea 0 (§2.7,
   24–48 h, gate) → si cumple el criterio de capacidad, el día siguiente es el día 0 de la campaña de 7 días
   verdes (PM-186); el despliegue de T5 en sí **no** es automáticamente el día 0. Un día amarillo por

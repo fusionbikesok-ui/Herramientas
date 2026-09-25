@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import {
-  completarCorrida, fallarCorrida, reclamarCorridas, soltarCorridaPorApagado,
+  completarCorrida, diferirCorridaPorCupo, fallarCorrida, reclamarCorridas, soltarCorridaPorApagado,
   type Corriente, type CorridaReclamada,
 } from '../reconciliacion/corridas.ts';
 import { claveCorrienteCuenta } from '../reconciliacion/tipos.ts';
@@ -15,6 +15,16 @@ export class ErrorBarridoReintentable extends Error {
   override name = 'ErrorBarridoReintentable';
   readonly retryAfter: number | undefined;
   constructor(message: string, retryAfter?: number) { super(message); this.retryAfter = retryAfter; }
+}
+
+/**
+ * E1 T5 (spec §2.3): 429 sintético del gateway sombra (header `x-fusion-cupo: sombra-agotado`), distinto
+ * de un 429 real de ML/Woo. No consume intento (§2.4): se maneja aparte de `fallarCorrida`.
+ */
+export class ErrorCupoSombraAgotado extends Error {
+  override name = 'ErrorCupoSombraAgotado';
+  readonly retryAfter: number;
+  constructor(message: string, retryAfter: number) { super(message); this.retryAfter = retryAfter; }
 }
 
 export interface WorkerBarridos {
@@ -50,6 +60,11 @@ export function crearWorkerBarridos(opciones: {
           const resultado = await procesador(corrida);
           await completarCorrida(opciones.db, corrida, resultado.cursorAfter, resultado.antesDeCerrar);
         } catch (error) {
+          if (error instanceof ErrorCupoSombraAgotado) {
+            // No consume intento (spec E1 T5 §2.4): distinto de un HTTP_429 real, se difiere aparte.
+            await diferirCorridaPorCupo(opciones.db, corrida, error.retryAfter);
+            continue;
+          }
           const retryAfter = error instanceof ErrorBarridoReintentable ? error.retryAfter : undefined;
           // Nombre + mensaje (p. ej. "ErrorBarridoReintentable: HTTP_429 /items/bulk"): sólo el nombre no alcanzaba
           // para saber por qué falló la vuelta diaria de ml.items. El mensaje ya viene con la ruta saneada.

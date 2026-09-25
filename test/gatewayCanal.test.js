@@ -1,8 +1,11 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
 import fs from 'fs';
 import request from 'supertest';
-import { construirOperacion, crearGatewayCanal, crearPresupuestoShadow, ErrorOperacionInvalida, OPERACIONES } from '../lib/gatewayCanal.js';
+import {
+  construirOperacion, corrienteDe, crearGatewayCanal, crearPresupuestoShadow, CORRIENTES_ML,
+  ErrorOperacionInvalida, OPERACIONES, TOPIC_A_CORRIENTE, validarConfiguracionCupoSombra,
+} from '../lib/gatewayCanal.js';
 import { crearOrigenesInternos, firmarInterno } from '../lib/internoHmac.js';
 
 const { buildApp } = await import('../server.js');
@@ -76,11 +79,93 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
   it('presupuesto shadow en cero: ML responde 429 sintético sin llamar a ML', async () => {
     const ejecutarMl = vi.fn();
     const gw = crearGatewayCanal({ mlUserId: '1', ejecutarMl, ejecutarWoo: vi.fn() });
-    expect(await gw({ op: 'ml.shipment', params: { id: '9' } })).toEqual({ status: 429, headers: { 'retry-after': '60' }, body: null });
+    expect(await gw({ op: 'ml.shipment', params: { id: '9' } })).toEqual({ status: 429, headers: { 'retry-after': '60', 'x-fusion-cupo': 'sombra-agotado' }, body: null });
     expect(ejecutarMl).not.toHaveBeenCalled();
     let t = 0; const cupo = crearPresupuestoShadow(2, () => t);
     expect([cupo(), cupo(), cupo()]).toEqual([true, true, false]);
     t = 60_000; expect(cupo()).toBe(true);
+  });
+
+  it('E1-T5 corrienteDe: cada operación ML resuelve una corriente y missed_feeds la deriva del topic', () => {
+    expect(corrienteDe('ml.shipment', {})).toBe('shipments');
+    expect(corrienteDe('ml.items.multiget', {})).toBe('items');
+    for (const [topic, corriente] of Object.entries(TOPIC_A_CORRIENTE)) {
+      expect(corrienteDe('ml.missed_feeds', { topic })).toBe(corriente);
+    }
+    expect(() => corrienteDe('ml.missed_feeds', { topic: 'payments' })).toThrow();
+    expect(() => corrienteDe('op.inexistente', {})).toThrow();
+    // Ninguna operación del catálogo queda sin corriente asignable (salvo missed_feeds, resuelta por topic).
+    for (const op of Object.keys(OPERACIONES)) {
+      if (op === 'ml.missed_feeds' || op.startsWith('woo.')) continue;
+      expect(() => corrienteDe(op, {}), op).not.toThrow();
+    }
+  });
+
+  it('E1-T5 cupo por corriente: bucket independiente por corriente y techo global encima', () => {
+    let t = 0;
+    const cupo = crearPresupuestoShadow({ orders: 1, shipments: 1, items: 0, questions: 0, messages: 0, claims: 0 }, 5, () => t);
+    expect(cupo.reservar('ml.order', {}, 'e1')).toEqual({ ok: true });
+    // La corriente de orders ya se vació: no afecta a shipments.
+    expect(cupo.reservar('ml.order', {}, 'e1').ok).toBe(false);
+    expect(cupo.reservar('ml.shipment', {}, 'e1')).toEqual({ ok: true });
+    // items en cero (sin variable configurada): cerrada igual que hoy por defecto.
+    const cerrada = cupo.reservar('ml.items.scan', {}, 'e1');
+    expect(cerrada.ok).toBe(false);
+    expect(cerrada.corriente).toBe('items');
+    expect(cerrada.segundosParaRefill).toBeGreaterThan(0);
+  });
+
+  it('E1-T5 techo global: agota antes de que una corriente individual llegue a su propio máximo', () => {
+    let t = 0;
+    const cupo = crearPresupuestoShadow({ orders: 5, shipments: 5, items: 0, questions: 0, messages: 0, claims: 0 }, 1, () => t);
+    expect(cupo.reservar('ml.order', {}, 'e1')).toEqual({ ok: true });
+    const r = cupo.reservar('ml.shipment', {}, 'e1');
+    expect(r).toEqual({ ok: false, corriente: 'global', segundosParaRefill: 60 });
+    t = 60_000;
+    expect(cupo.reservar('ml.shipment', {}, 'e1')).toEqual({ ok: true });
+  });
+
+  it('E1-T5 consumidores: catálogo/identidad comparten un bucket separado que no toca el cupo de E1', () => {
+    let t = 0;
+    const cupo = crearPresupuestoShadow({ orders: 0, shipments: 0, items: 5, questions: 0, messages: 0, claims: 0, e2e3: 1 }, 10, () => t);
+    expect(cupo.reservar('ml.items.multiget', {}, 'catalogo')).toEqual({ ok: true });
+    // El bucket e2e3 ya se usó: identidad (mismo bucket) queda cerrada, pero items de E1 sigue con cupo.
+    expect(cupo.reservar('ml.items.multiget', {}, 'identidad').ok).toBe(false);
+    expect(cupo.reservar('ml.items.multiget', {}, 'e1')).toEqual({ ok: true });
+  });
+
+  it('E1-T5 construirOperacion valida el consumidor y ausente = e1 (compatibilidad)', () => {
+    expect(() => construirOperacion({ op: 'ml.question', params: { id: '1' } }, ctx)).not.toThrow();
+    expect(() => construirOperacion({ op: 'ml.question', params: { id: '1' }, consumidor: 'catalogo' }, ctx)).not.toThrow();
+    expect(() => construirOperacion({ op: 'ml.question', params: { id: '1' }, consumidor: 'otro' }, ctx)).toThrow(ErrorOperacionInvalida);
+  });
+
+  it('E1-T5 validación de arranque: sombra habilitada sin variable de corriente falla con la corriente nombrada', () => {
+    expect(() => validarConfiguracionCupoSombra({}, 0)).not.toThrow();
+    expect(() => validarConfiguracionCupoSombra({ orders: 10 }, 60)).toThrow(/SHIPMENTS/);
+    const completa = Object.fromEntries(CORRIENTES_ML.map((c) => [c, 5]));
+    expect(() => validarConfiguracionCupoSombra(completa, 60)).not.toThrow();
+  });
+
+  it('E1-T5 e2e3 es opcional (default cerrado) pero un valor presente inválido sí falla', () => {
+    const completa = Object.fromEntries(CORRIENTES_ML.map((c) => [c, 5]));
+    expect(() => validarConfiguracionCupoSombra(completa, 60)).not.toThrow();
+    expect(() => validarConfiguracionCupoSombra({ ...completa, e2e3: 'diez' }, 60)).toThrow(/E2E3/);
+    expect(() => validarConfiguracionCupoSombra({ ...completa, e2e3: -1 }, 60)).toThrow(/E2E3/);
+    expect(() => validarConfiguracionCupoSombra({ ...completa, e2e3: 0 }, 60)).not.toThrow();
+    expect(() => validarConfiguracionCupoSombra({ ...completa, e2e3: 10 }, 60)).not.toThrow();
+  });
+
+  it('E1-T5 gateway con presupuesto por corriente: 429 sintético lleva x-fusion-cupo y retry-after real', async () => {
+    let t = 0;
+    const presupuestoMl = crearPresupuestoShadow({ orders: 0, shipments: 0, items: 0, questions: 0, messages: 0, claims: 0 }, 0, () => t);
+    const ejecutarMl = vi.fn();
+    const gw = crearGatewayCanal({ mlUserId: '1', ejecutarMl, ejecutarWoo: vi.fn(), presupuestoMl });
+    const r = await gw({ op: 'ml.shipment', params: { id: '1' } });
+    expect(r.status).toBe(429);
+    expect(r.headers['x-fusion-cupo']).toBe('sombra-agotado');
+    expect(Number(r.headers['retry-after'])).toBeGreaterThan(0);
+    expect(ejecutarMl).not.toHaveBeenCalled();
   });
 
   it('sanea la respuesta: sólo encabezados de paginado/retry y sin cuerpos de error remotos', async () => {
@@ -127,6 +212,71 @@ describe('E1-GW-01 ruta HTTP interna del legado', () => {
     app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: {}, geminiKey: 'k' });
     const r = await request(app).post('/internal/v1/channel-read').set('content-type', 'application/json').send('{}');
     expect(r.status).toBe(404);
+  });
+
+  describe('E1-T5 §2.1 fail-closed de la sombra sin tumbar el arranque', () => {
+    const KEYRING = './test/tmp-gateway-keyring.json';
+    const ENV_SOMBRA = ['GATEWAY_ML_SHADOW_RPM', ...CORRIENTES_ML.map((c) => `GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`), 'GATEWAY_ML_SHADOW_RPM_E2E3'];
+    const previos = {};
+
+    const conKeyring = () => {
+      fs.writeFileSync(KEYRING, JSON.stringify({ keys: { k1: clave.toString('base64') } }));
+      fs.chmodSync(KEYRING, 0o600);
+      process.env.GATEWAY_KEYRING_FILE = KEYRING;
+      process.env.GATEWAY_ORIGENES = '127.0.0.1/32,::1/128';
+      process.env.MOBILE_JWT_SECRET = 'test-mobile-jwt-secret-123456789012345';
+    };
+
+    beforeEach(() => { for (const k of ENV_SOMBRA) previos[k] = process.env[k]; });
+    afterEach(() => {
+      for (const k of ENV_SOMBRA) { if (previos[k] === undefined) delete process.env[k]; else process.env[k] = previos[k]; }
+      delete process.env.GATEWAY_KEYRING_FILE;
+      delete process.env.GATEWAY_ORIGENES;
+      fs.rmSync(KEYRING, { force: true });
+    });
+
+    it('con el global habilitado y sin las variables por corriente, buildApp NO lanza y la sombra queda cerrada', async () => {
+      conKeyring();
+      process.env.GATEWAY_ML_SHADOW_RPM = '30';
+      for (const c of CORRIENTES_ML) delete process.env[`GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`];
+      delete process.env.GATEWAY_ML_SHADOW_RPM_E2E3;
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() => {
+        app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k' });
+      }).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('sombra cerrada'));
+      const cuerpo = JSON.stringify({ op: 'ml.question', params: { id: '5' } });
+      const r = await request(app).post('/internal/v1/channel-read').set(firmado(cuerpo)).send(cuerpo);
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ status: 429, headers: { 'retry-after': expect.any(String), 'x-fusion-cupo': 'sombra-agotado' }, body: null });
+      errorSpy.mockRestore();
+    });
+
+    it('con las 6 variables por corriente presentes, buildApp arranca sin loguear el error de configuración', () => {
+      conKeyring();
+      process.env.GATEWAY_ML_SHADOW_RPM = '30';
+      for (const c of CORRIENTES_ML) process.env[`GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`] = '5';
+      process.env.GATEWAY_ML_SHADOW_RPM_E2E3 = '0';
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() => {
+        app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k' });
+      }).not.toThrow();
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
+    it('con un typo en GATEWAY_ML_SHADOW_RPM_E2E3, también cierra la sombra en vez de colar silenciosamente en 0', async () => {
+      conKeyring();
+      process.env.GATEWAY_ML_SHADOW_RPM = '30';
+      for (const c of CORRIENTES_ML) process.env[`GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`] = '5';
+      process.env.GATEWAY_ML_SHADOW_RPM_E2E3 = 'diez';
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() => {
+        app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k' });
+      }).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('GATEWAY_ML_SHADOW_RPM_E2E3'));
+      errorSpy.mockRestore();
+    });
   });
 
   it('operación válida firmada: 200 con la respuesta saneada', async () => {

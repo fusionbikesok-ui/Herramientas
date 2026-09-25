@@ -1,6 +1,9 @@
 import type pg from 'pg';
 import { esRegistro, idTexto } from './adaptadores/comun.ts';
 import { ErrorCanalTerminal, type TransporteCanal } from './cliente-http.ts';
+// Fuente única del mapeo tópico→corriente (E1 T5 spec §2.1): evita que este listado diverja del gateway.
+// @ts-expect-error módulo JS del legado sin tipos
+import { TOPIC_A_CORRIENTE } from '../../../lib/gatewayCanal.js';
 
 /**
  * `missed_feeds` de Mercado Libre (E1 T3 §10, corte C7): avisos que ML no pudo entregar con 200, hasta
@@ -19,7 +22,7 @@ import { ErrorCanalTerminal, type TransporteCanal } from './cliente-http.ts';
  */
 
 /** Tópicos que se consultan, y la equivalencia de cada aviso con los ocho tópicos de E1 (§6). */
-export const TOPICOS_CONSULTADOS = ['orders_v2', 'shipments', 'questions', 'messages', 'claims', 'items'] as const;
+export const TOPICOS_CONSULTADOS = Object.keys(TOPIC_A_CORRIENTE as Record<string, string>);
 const EQUIVALENCIA: Readonly<Record<string, string>> = {
   orders: 'ml.orders', orders_v2: 'ml.orders', shipments: 'ml.shipments', questions: 'ml.questions',
   messages: 'ml.messages', claims: 'ml.claims', post_purchase: 'ml.claims', items: 'ml.items',
