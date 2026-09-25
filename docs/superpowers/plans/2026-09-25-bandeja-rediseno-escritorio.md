@@ -32,7 +32,7 @@
 - Textos de la UI en español rioplatense (vos), sin tecnicismos.
 - Toda tecla visible en su botón, por ejemplo `Vincular seleccionado (Enter)`.
 - WCAG 2.2 AA: foco visible y `aria-keyshortcuts` en cada botón con tecla.
-- Sin despliegue: José despliega después de la revisión de opt-2f y la segunda opinión de Codex.
+- Sin despliegue: José despliega después de la revisión de opt-55 y la segunda opinión de Codex.
 - Migración numerada: `plataforma/migrations/0022_casos_apartados.sql`, con `SET lock_timeout = '5s'`.
 
 ## Foco de revisión (entradas que ningún test cubre por defecto)
@@ -290,7 +290,7 @@ it('siguienteNoSalteado no da vueltas infinitas', () => {
 ### Tarea 5: Cierre de la entrega
 
 - [ ] Segunda opinión de Codex sobre el diff completo: `git diff <base>..HEAD > /tmp/claude-0/bandeja-diff.txt; codex exec --sandbox read-only "<prompt en inglés: buscar defectos reales con archivo:línea y un escenario de falla>" > /tmp/claude-0/codex-bandeja-review.txt`. Responder cada hallazgo.
-- [ ] Avisar a opt-2f con los hashes, los archivos de salida y la respuesta a Codex.
-- [ ] opt-2f revisa y corre la suite completa una vez.
+- [ ] Avisar a opt-55 con los hashes, los archivos de salida y la respuesta a Codex.
+- [ ] opt-55 revisa y corre la suite completa una vez.
 - [ ] José aplica la migración 0022, despliega api + herramientas (antes etiqueta la imagen de cada servicio para poder volver atrás) y prueba 10 casos reales.
 - [ ] Medición: tiempo mediano por caso, deshacer, casos que terminan en búsqueda manual y errores de color/talle, antes y después (métrica de la propuesta). Recién entonces arranca la ventana de calibración de 7 días de E3.
