@@ -181,9 +181,13 @@
   // bandeja.js con la `api` inyectada. Así el Paso 2 del plan (T3) se prueba sin DOM/jsdom: se llama
   // ejecutarAccion con un `api` de mocks (vi.fn()) y se assertea qué se llamó y con qué.
   //
-  // `estado` = { cola, idx, salteados, detalle (opcional), sel (candidato elegido, opcional) }
+  // `estado` = { cola, idx, sel (candidato elegido), detalle (con .version) } para apartar/vincular/no_existe/
+  //   omitir_por_ahora, o { cola, idx, ultimoTipo: 'apartado'|'salteado', ultimoApartadoId, ultimoApartadoVersion,
+  //   ultimoSalteadoId } para 'deshacer' (el tipo 'decision' del undo no pasa por acá: sigue viviendo en
+  //   bandeja.js tal cual, porque necesita decision_id/versionNueva de una decisión ya guardada).
   // `api` = { apartar(caseId, expectedVersion), desapartar(caseId, expectedVersion), decidir(cuerpo),
-  //           omitir(caseId), mostrar(mensaje) } — cada método puede devolver lo que quiera, no se usa acá.
+  //           omitir(caseId), reabrir(caseId), mostrar(mensaje) } — cada método puede devolver lo que
+  //           quiera, no se usa acá.
   function ejecutarAccion(accion, estado, api) {
     if (!accion) return;
     var caso = estado.cola[estado.idx];

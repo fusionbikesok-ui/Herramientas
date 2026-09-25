@@ -431,8 +431,7 @@
 
   function deshacer() {
     var u = S.ultima;
-    if (!u || typeof u.ts === 'undefined') { aviso('deshacer', 'No hay nada para deshacer.'); return; }
-    if (Date.now() - u.ts > L.VENTANA_DESHACER_MS) { aviso('deshacer', 'No hay nada para deshacer.'); return; }
+    if (!L.puedeDeshacer(u, Date.now())) { aviso('deshacer', 'No hay nada para deshacer.'); return; }
     quitarAviso('deshacer');
     u.consumida = true;
     $('aviso-deshacer').classList.add('aviso-deshacer--oculto');

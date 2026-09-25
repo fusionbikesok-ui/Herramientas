@@ -100,6 +100,32 @@ describe('bandeja: atajos sobre radios', () => {
   });
 });
 
+describe('bandeja: deshacer() no se dispara dos veces (regresión de T3)', () => {
+  // El bug real: al reescribir deshacer() para apartado/salteado se cambió el guard de entrada de
+  // L.puedeDeshacer(u, ahora) (que exige !consumida) a un chequeo inline que sólo miraba `ts`, así que
+  // una Z repetida dentro de los 10 s volvía a disparar el undo (POST/DELETE duplicado). Se corrigió
+  // volviendo a delegar el guard en L.puedeDeshacer; este test fija ese comportamiento por código fuente
+  // (no hay DOM real acá, ver la nota de la Tarea 3 sobre jsdom) y por la lógica pura ya cubierta arriba.
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+
+  it('el guard de entrada de deshacer() delega en L.puedeDeshacer (que exige !consumida)', () => {
+    const cuerpo = js.match(/function deshacer\(\) \{[\s\S]*?\n {2}\}/)[0];
+    expect(cuerpo).toMatch(/L\.puedeDeshacer\(u, Date\.now\(\)\)/);
+  });
+
+  it('las 3 formas de S.ultima (decisión, apartado, salteado) siempre incluyen ts y consumida', () => {
+    // apartar(): S.ultima = { tipo: 'apartado', ... }
+    const apartar = js.match(/function apartar\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
+    expect(apartar).toMatch(/S\.ultima = \{[^}]*ts: Date\.now\(\)[^}]*consumida: false[^}]*\}/);
+    // omitirPorAhora(): S.ultima = { tipo: 'salteado', ... }
+    const omitir = js.match(/function omitirPorAhora\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
+    expect(omitir).toMatch(/S\.ultima = \{[^}]*ts: Date\.now\(\)[^}]*consumida: false[^}]*\}/);
+    // decidir(): S.ultima = { entry, ts, consumida } (forma vieja, sin tocar)
+    const decidir = js.match(/function decidir\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
+    expect(decidir).toMatch(/S\.ultima = \{ entry: entry, ts: Date\.now\(\), consumida: false \}/);
+  });
+});
+
 describe('bandeja: ejecutarAccion — Paso 2 de T3, sin DOM (decisión pura de qué llamar)', () => {
   function apiFalsa() {
     return { apartar: vi.fn(), desapartar: vi.fn(), decidir: vi.fn(), omitir: vi.fn(), reabrir: vi.fn(), mostrar: vi.fn() };
