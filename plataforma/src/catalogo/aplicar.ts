@@ -124,7 +124,7 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
     // variante de Woo), el título del payload no se pierde: se guarda en la representación misma, nunca en
     // un product_models nuevo. modeloMlSql lo usa como último fallback; hashCatalogo no lo lee.
     // Vacío o sólo espacios no es un título observado: NULL, no ''.
-    const tituloObservado = ctx.canal === 'mercadolibre' && !vinculo.modelo && p.modelo.titulo.trim() ? p.modelo.titulo : null;
+    const tituloObservado = tituloObservadoDe(ctx.canal, vinculo.modelo, p.modelo.titulo);
     const repId = await upsertRepresentacion(tx, empresa, ctx, obs, vinculo, p.archivar, tituloObservado);
     resumen.representaciones++;
     await persistirExtras(tx, ctx, repId, obs, resumen, empresa);
@@ -347,6 +347,11 @@ async function upsertRepresentacion(
       numeroAcotado(obs.comercial?.stock, 2 ** 31) === null ? null : Math.trunc(obs.comercial!.stock!), obs.comercial?.gtin ?? null,
       tituloObservado])).rows[0]!.id;
 }
+
+/** El titulo_observado que corresponde guardar: sólo ML, sólo sin modelo propio, y vacío o sólo espacios es NULL, no ''.
+ *  Exportado para que el backfill (backfill-titulo-observado.ts) use exactamente la misma regla. */
+export const tituloObservadoDe = (canal: Canal, modelo: string | null, titulo: string): string | null =>
+  canal === 'mercadolibre' && !modelo && titulo.trim() ? titulo : null;
 
 /**
  * Un número finito dentro de ±tope, o null: un valor fuera de rango abortaría la transacción del mensaje entero.
