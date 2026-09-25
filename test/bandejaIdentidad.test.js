@@ -73,6 +73,27 @@ describe('E3 T3 — lógica pura de teclas y acciones', () => {
     expect(L.siguienteNoSalteado(cola, 0, new Set(['b']))).toBe(-1);
     expect(L.siguienteNoSalteado(cola, 0, new Set())).toBe(1);
   });
+
+  it('indiceNoSalteado: T5, hallazgo Media de Codex — J/K salta los salteados igual que avanzar()', () => {
+    const cola = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    // b está salteado: desde a, avanzar (delta +1) tiene que ir directo a c.
+    expect(L.indiceNoSalteado(cola, 0, 1, new Set(['b']))).toBe(2);
+    // desde c, retroceder (delta -1) también tiene que saltear b y llegar a a.
+    expect(L.indiceNoSalteado(cola, 2, -1, new Set(['b']))).toBe(0);
+  });
+
+  it('indiceNoSalteado: sin salteados de por medio, es un paso simple', () => {
+    const cola = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    expect(L.indiceNoSalteado(cola, 0, 1, new Set())).toBe(1);
+    expect(L.indiceNoSalteado(cola, 2, -1, new Set())).toBe(1);
+  });
+
+  it('indiceNoSalteado: en el límite de la cola, o con todos los restantes salteados, da -1', () => {
+    const cola = [{ id: 'a' }, { id: 'b' }];
+    expect(L.indiceNoSalteado(cola, 1, 1, new Set())).toBe(-1); // ya es el último
+    expect(L.indiceNoSalteado(cola, 0, -1, new Set())).toBe(-1); // ya es el primero
+    expect(L.indiceNoSalteado(cola, 0, 1, new Set(['b']))).toBe(-1); // el único siguiente está salteado
+  });
 });
 
 describe('E3 T4 — «Por qué» y atributos iguales colapsados', () => {

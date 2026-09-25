@@ -158,6 +158,32 @@ describe('bandeja: deshacer() no se dispara dos veces (regresión de T3)', () =>
   });
 });
 
+describe('bandeja: tecla X en confirmable — d5 (T5, hallazgo Alto de Codex)', () => {
+  // Bug real preexistente (de la pantalla original, commit 1ca92ee4, no de T2-T4): la rama 'rechazar' del
+  // switch de teclas leía `cs.detalle.d5`, pero `cs` es una fila de S.cola (GET /casos), donde d5 viene
+  // PLANO (api/identidad-interna.ts: `d5: f.detalle && f.detalle.d5 === true`), no anidado bajo `.detalle`
+  // como en el detalle de GET /casos/:id (que sí tiene `detalle: c.detalle` crudo). Como `cs.detalle` nunca
+  // existe, `omisionVigente` daba siempre false y X mandaba 'sin_candidato' en vez de 'mantener_omision'
+  // para un caso D5 vigente — cambiaba la decisión real que se le manda a la plataforma.
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+
+  it("la rama 'rechazar' lee cs.d5 (plano), no cs.detalle.d5 (anidado, no existe en la fila de cola)", () => {
+    const cuerpo = js.match(/case 'rechazar':[\s\S]*?break;/)[0];
+    // El código ejecutable (línea del if) usa cs.d5; el bug corregido se documenta en un comentario que
+    // sí menciona "cs.detalle" entre comillas — por eso se chequea la línea del if, no todo el bloque.
+    const lineaIf = cuerpo.split('\n').find((l) => l.includes('if (cs'));
+    expect(lineaIf).toMatch(/cs\.d5 === true/);
+    expect(lineaIf).not.toMatch(/cs\.detalle/);
+  });
+
+  it("el botón 'No es este' en modo confirmable sí puede seguir leyendo d.detalle.d5 (el detalle, no la fila de cola)", () => {
+    // d.detalle.d5 es correcto ACÁ porque `d` es el detalle de GET /casos/:id, que sí anida `detalle: c.detalle`.
+    // No es el mismo bug: no hay que "unificar" los dos accesos, son formas distintas a propósito.
+    const cuerpo = js.match(/var omisionVigente = [\s\S]*?No es este \(X\)[\s\S]*?\n {4}\}/)[0];
+    expect(cuerpo).toMatch(/d\.detalle && d\.detalle\.d5 === true/);
+  });
+});
+
 describe('bandeja: ejecutarAccion — Paso 2 de T3, sin DOM (decisión pura de qué llamar)', () => {
   function apiFalsa() {
     return { apartar: vi.fn(), desapartar: vi.fn(), decidir: vi.fn(), omitir: vi.fn(), reabrir: vi.fn(), mostrar: vi.fn() };

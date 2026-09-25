@@ -205,8 +205,10 @@
   }
 
   function ir(delta) {
-    var i = S.idx + delta;
-    if (i < 0 || i >= S.cola.length) return;
+    // T5 — hallazgo Media de Codex: antes navegaba con S.idx+delta sin filtrar salteados, así que J/K
+    // (o las flechas) podían reabrir un caso recién omitido con O antes de que avanzar() lo saltee.
+    var i = L.indiceNoSalteado(S.cola, S.idx, delta, S.salteados);
+    if (i < 0) return;
     abrirCaso(i, { foco: true });
   }
 
@@ -706,7 +708,10 @@
       ac.appendChild(el('button', 'btn btn--primary', 'Vincular seleccionado (Enter)', { type: 'button', id: 'btn-vincular', 'aria-keyshortcuts': 'Enter' }));
     }
     if (cs && cs.confirmar) {
-      // En modo confirmable: opciones de rechazar
+      // En modo confirmable: opciones de rechazar. Acá `d` es el detalle de GET /casos/:id, que SÍ anida
+      // `detalle: c.detalle` (jsonb crudo, api/identidad-interna.ts) — a diferencia de la fila de cola
+      // (`cs`, ver más abajo en 'rechazar'), donde d5 viene plano. No unificar los dos accesos: son formas
+      // distintas a propósito.
       var omisionVigente = d.detalle && d.detalle.d5 === true;
       if (omisionVigente) ac.appendChild(el('button', 'btn', 'No es este (X)', { type: 'button', id: 'btn-no-es-este', 'aria-keyshortcuts': 'x' }));
       else ac.appendChild(el('button', 'btn', 'No es este (X)', { type: 'button', id: 'btn-rechazar', 'aria-keyshortcuts': 'x' }));
@@ -861,8 +866,12 @@
           confirmarCasoActual();
           break;
         case 'rechazar':
+          // d5 viene plano en la fila de cola (GET /casos: `d5: f.detalle && f.detalle.d5 === true`,
+          // api/identidad-interna.ts), no anidado bajo `.detalle` como en GET /casos/:id — bug real
+          // preexistente (Alto, hallazgo de Codex): esto leía `cs.detalle.d5`, que nunca existe en `cs`
+          // (una fila de cola), así que siempre caía en 'sin_candidato' aunque D5 estuviera vigente.
           var cs = S.cola[S.idx];
-          if (cs && cs.detalle && cs.detalle.d5 === true) decidir('mantener_omision');
+          if (cs && cs.d5 === true) decidir('mantener_omision');
           else decidir('sin_candidato');
           break;
         case 'buscar':

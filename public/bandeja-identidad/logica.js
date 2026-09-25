@@ -179,6 +179,19 @@
     return -1;
   }
 
+  // T5 — hallazgo Media de Codex: J/K (ir(delta)) no filtraba salteados como sí lo hacía avanzar(), así
+  // que omitir un caso con O y navegar manualmente con J/K podía reabrirlo antes de tiempo. Generaliza
+  // siguienteNoSalteado a ambos sentidos (delta=+1/-1); no llega a haber otros deltas en el uso real.
+  // Devuelve -1 si no hay ningún índice válido en esa dirección (todos salteados o límite de la cola).
+  function indiceNoSalteado(cola, idx, delta, salteados) {
+    var i = idx + delta;
+    while (i >= 0 && i < (cola || []).length) {
+      if (!salteados.has(cola[i].id)) return i;
+      i += delta;
+    }
+    return -1;
+  }
+
   // Dispatcher puro (sin DOM, sin fetch): decide QUÉ llamada hacer para una `accion` de accionDeTecla()
   // (o 'omitir_por_ahora'/'no_existe', que no vienen de una tecla en el sentido llamado por bandeja.js)
   // dado el `estado` actual, sin ejecutarla — la ejecución (fetch real, reintentos, foco) la hace
@@ -284,6 +297,7 @@
     demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
     formatoStock: formatoStock, opcionesDe: opcionesDe, nombresAtributos: nombresAtributos, atributoDe: atributoDe,
     filaVisible: filaVisible, accionDeTecla: accionDeTecla, siguienteNoSalteado: siguienteNoSalteado,
+    indiceNoSalteado: indiceNoSalteado,
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
     porQue: porQue, atributosIguales: atributosIguales,
     GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
