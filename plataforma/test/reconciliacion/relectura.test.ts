@@ -4,7 +4,7 @@ import { crearPool } from '../../src/db/pool.ts';
 import type { RespuestaCanal, TransporteCanal } from '../../src/reconciliacion/cliente-http.ts';
 import { crearRelectoresMl, crearRelectoresWoo } from '../../src/reconciliacion/relectura.ts';
 import { descifrarSobre, type KeyringSobre } from '../../src/seguridad/sobre.ts';
-import { ErrorBarridoReintentable } from '../../src/worker/barridos.ts';
+import { ErrorBarridoReintentable, ErrorCupoSombraAgotado } from '../../src/worker/barridos.ts';
 import { claveRelector, crearWorkerSenales } from '../../src/worker/senales.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 
@@ -168,6 +168,15 @@ describe('E1-RER-01 relectura puntual por señal', () => {
     await admin.query("update integrations.reconciliation_signals set available_at=now(), attempts=max_attempts-1 where id=$1", [lenta]);
     await w.unaVuelta();
     expect((await estado(lenta)).status).toBe('dead_lettered');
+  });
+
+  it('E1-T5 §2.4: un ErrorCupoSombraAgotado difiere la señal sin consumir intento, distinto de un 429 real', async () => {
+    const s = await senal(ml, 'ml.orders', '77');
+    const { w } = worker({ '/orders/77': () => { throw new ErrorCupoSombraAgotado('CUPO_SOMBRA_AGOTADO /orders/77', 8); } });
+    await w.unaVuelta();
+    const fila = await estado(s);
+    expect(fila).toMatchObject({ status: 'retryable', attempts: 0 });
+    expect(fila.available_at.getTime()).toBeGreaterThan(Date.now() + 5_000);
   });
 
   it('un worker sólo toma señales de las cuentas y tópicos que sabe releer', async () => {

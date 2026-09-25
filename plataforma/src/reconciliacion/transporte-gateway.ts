@@ -1,10 +1,16 @@
 import { randomBytes } from 'node:crypto';
-import { ErrorBarridoReintentable } from '../worker/barridos.ts';
+import { ErrorBarridoReintentable, ErrorCupoSombraAgotado } from '../worker/barridos.ts';
 import { firmar } from '../seguridad/interna.ts';
 import type { KeyringSobre } from '../seguridad/sobre.ts';
 import {
   ErrorCanalTerminal, ErrorDestinoProhibido, parsearRetryAfter, type RespuestaCanal, type TransporteCanal,
 } from './cliente-http.ts';
+// Fuente única del mapeo tópico→corriente (E1 T5 spec §2.1): la validación de `missed_feeds` no mantiene
+// su propia lista de tópicos aceptados, se deriva de la misma tabla que usa el gateway del legado.
+// @ts-expect-error módulo JS del legado sin tipos
+import { TOPIC_A_CORRIENTE } from '../../../lib/gatewayCanal.js';
+
+const TOPICOS_MISSED_FEEDS = new Set(Object.keys(TOPIC_A_CORRIENTE as Record<string, string>));
 
 /**
  * Transporte de canal a través del gateway GET del legado (E1 T3 §8, corte C5).
@@ -23,6 +29,9 @@ const HOSTS_GATEWAY = new Set(['127.0.0.1', 'localhost', '[::1]', 'host.docker.i
 const WOO = '/wp-json/wc/v3';
 
 export interface Operacion { op: string; params: Record<string, unknown> }
+
+/** Consumidores del gateway (spec §2.8, decisión de José opción b): E2/E3 no comparten cupo con E1. */
+export type Consumidor = 'e1' | 'catalogo' | 'identidad';
 
 function prohibida(motivo: string): never {
   throw new ErrorDestinoProhibido(`ruta sin operación de gateway: ${motivo}`);
@@ -88,6 +97,7 @@ export function rutaAOperacion(ruta: string, headers: Readonly<Record<string, st
   if (p === '/missed_feeds') {
     // `app_id` y `site_id` los agrega el legado desde su configuración: la plataforma no los decide.
     const v = exacto(q, { limit: '50' }, ['topic', 'offset']);
+    if (!TOPICOS_MISSED_FEEDS.has(v.topic!)) prohibida('topic');
     return { op: 'ml.missed_feeds', params: { topic: v.topic, offset: entero(v.offset!) } };
   }
   if (p === '/messages/unread') { exacto(q, { role: 'seller', tag: 'post_sale' }, []); return { op: 'ml.messages.unread', params: {} }; }
@@ -128,6 +138,8 @@ export function crearTransporteGateway(opciones: {
   url: string;
   keyring: KeyringSobre;
   sellerId?: string;
+  /** Fija el consumidor por instancia de transporte (spec §2.8): quien llama nunca lo decide. Default 'e1'. */
+  consumidor?: Consumidor;
   timeoutMs?: number;
   fetch?: typeof fetch;
   reloj?: () => Date;
@@ -146,7 +158,8 @@ export function crearTransporteGateway(opciones: {
   return {
     async get(ruta, extra = {}) {
       const operacion = rutaAOperacion(ruta, extra.headers ?? {}, opciones.sellerId);
-      const cuerpo = Buffer.from(JSON.stringify(operacion));
+      const consumidor = opciones.consumidor ?? 'e1';
+      const cuerpo = Buffer.from(JSON.stringify(consumidor === 'e1' ? operacion : { ...operacion, consumidor }));
       const ts = String(Math.floor(reloj().getTime() / 1000));
       const nonce = randomBytes(18).toString('base64url');
       let respuesta: Response;
@@ -176,6 +189,11 @@ export function crearTransporteGateway(opciones: {
       const headers = new Headers();
       if (sobre.headers && typeof sobre.headers === 'object') {
         for (const [k, v] of Object.entries(sobre.headers as Record<string, unknown>)) if (typeof v === 'string') headers.set(k, v);
+      }
+      // Un 429 del gateway sombra por cupo agotado (spec §2.3) no es un 429 real de ML/Woo: se distingue por
+      // el header `x-fusion-cupo` y no consume intento de la corrida/señal (§2.4), a diferencia de HTTP_429.
+      if (status === 429 && headers.get('x-fusion-cupo') === 'sombra-agotado') {
+        throw new ErrorCupoSombraAgotado(`CUPO_SOMBRA_AGOTADO ${operacion.op}`, parsearRetryAfter(headers.get('retry-after'), reloj()) ?? 60);
       }
       // Mismo mapeo que el cliente T2 para que los adaptadores no distingan el transporte.
       if (status === 408 || status === 429 || status >= 500) {

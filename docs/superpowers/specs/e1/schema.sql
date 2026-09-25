@@ -434,6 +434,7 @@ CREATE TABLE integrations.reconciliation_signals (
   correlation_id     uuid NOT NULL DEFAULT uuidv7(),
   received_at        timestamptz NOT NULL DEFAULT now(),
   finished_at        timestamptz,
+  deferred_since     timestamptz,  -- E1 T5 §2.4: fijado en el primer diferimiento por cupo sombra, no se resetea
   CONSTRAINT reconciliation_signals_lease_check CHECK (
     (status = 'claimed') = (lease_token IS NOT NULL AND lease_until IS NOT NULL AND worker_id IS NOT NULL)),
   CONSTRAINT reconciliation_signals_un_aviso UNIQUE (channel_account_id, topic, fingerprint)
@@ -492,6 +493,7 @@ CREATE TABLE integrations.sweep_runs (
   cursor_after       jsonb CONSTRAINT sweep_runs_cursor_after_check
                        CHECK (cursor_after IS NULL OR jsonb_typeof(cursor_after) = 'object'),
   correlation_id     uuid NOT NULL DEFAULT uuidv7(),
+  deferred_since     timestamptz,  -- E1 T5 §2.4: fijado en el primer diferimiento por cupo sombra, no se resetea
   CONSTRAINT sweep_runs_cursor_fk FOREIGN KEY (channel_account_id, topic, cursor_kind)
     REFERENCES integrations.reconciliation_cursors(channel_account_id, topic, cursor_kind)
     ON DELETE RESTRICT,

@@ -2,7 +2,10 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import crypto from 'crypto';
 import fs from 'fs';
 import request from 'supertest';
-import { construirOperacion, crearGatewayCanal, crearPresupuestoShadow, ErrorOperacionInvalida, OPERACIONES } from '../lib/gatewayCanal.js';
+import {
+  construirOperacion, corrienteDe, crearGatewayCanal, crearPresupuestoShadow, CORRIENTES_ML,
+  ErrorOperacionInvalida, OPERACIONES, TOPIC_A_CORRIENTE, validarConfiguracionCupoSombra,
+} from '../lib/gatewayCanal.js';
 import { crearOrigenesInternos, firmarInterno } from '../lib/internoHmac.js';
 
 const { buildApp } = await import('../server.js');
@@ -76,11 +79,84 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
   it('presupuesto shadow en cero: ML responde 429 sintético sin llamar a ML', async () => {
     const ejecutarMl = vi.fn();
     const gw = crearGatewayCanal({ mlUserId: '1', ejecutarMl, ejecutarWoo: vi.fn() });
-    expect(await gw({ op: 'ml.shipment', params: { id: '9' } })).toEqual({ status: 429, headers: { 'retry-after': '60' }, body: null });
+    expect(await gw({ op: 'ml.shipment', params: { id: '9' } })).toEqual({ status: 429, headers: { 'retry-after': '60', 'x-fusion-cupo': 'sombra-agotado' }, body: null });
     expect(ejecutarMl).not.toHaveBeenCalled();
     let t = 0; const cupo = crearPresupuestoShadow(2, () => t);
     expect([cupo(), cupo(), cupo()]).toEqual([true, true, false]);
     t = 60_000; expect(cupo()).toBe(true);
+  });
+
+  it('E1-T5 corrienteDe: cada operación ML resuelve una corriente y missed_feeds la deriva del topic', () => {
+    expect(corrienteDe('ml.shipment', {})).toBe('shipments');
+    expect(corrienteDe('ml.items.multiget', {})).toBe('items');
+    for (const [topic, corriente] of Object.entries(TOPIC_A_CORRIENTE)) {
+      expect(corrienteDe('ml.missed_feeds', { topic })).toBe(corriente);
+    }
+    expect(() => corrienteDe('ml.missed_feeds', { topic: 'payments' })).toThrow();
+    expect(() => corrienteDe('op.inexistente', {})).toThrow();
+    // Ninguna operación del catálogo queda sin corriente asignable (salvo missed_feeds, resuelta por topic).
+    for (const op of Object.keys(OPERACIONES)) {
+      if (op === 'ml.missed_feeds' || op.startsWith('woo.')) continue;
+      expect(() => corrienteDe(op, {}), op).not.toThrow();
+    }
+  });
+
+  it('E1-T5 cupo por corriente: bucket independiente por corriente y techo global encima', () => {
+    let t = 0;
+    const cupo = crearPresupuestoShadow({ orders: 1, shipments: 1, items: 0, questions: 0, messages: 0, claims: 0 }, 5, () => t);
+    expect(cupo.reservar('ml.order', {}, 'e1')).toEqual({ ok: true });
+    // La corriente de orders ya se vació: no afecta a shipments.
+    expect(cupo.reservar('ml.order', {}, 'e1').ok).toBe(false);
+    expect(cupo.reservar('ml.shipment', {}, 'e1')).toEqual({ ok: true });
+    // items en cero (sin variable configurada): cerrada igual que hoy por defecto.
+    const cerrada = cupo.reservar('ml.items.scan', {}, 'e1');
+    expect(cerrada.ok).toBe(false);
+    expect(cerrada.corriente).toBe('items');
+    expect(cerrada.segundosParaRefill).toBeGreaterThan(0);
+  });
+
+  it('E1-T5 techo global: agota antes de que una corriente individual llegue a su propio máximo', () => {
+    let t = 0;
+    const cupo = crearPresupuestoShadow({ orders: 5, shipments: 5, items: 0, questions: 0, messages: 0, claims: 0 }, 1, () => t);
+    expect(cupo.reservar('ml.order', {}, 'e1')).toEqual({ ok: true });
+    const r = cupo.reservar('ml.shipment', {}, 'e1');
+    expect(r).toEqual({ ok: false, corriente: 'global', segundosParaRefill: 60 });
+    t = 60_000;
+    expect(cupo.reservar('ml.shipment', {}, 'e1')).toEqual({ ok: true });
+  });
+
+  it('E1-T5 consumidores: catálogo/identidad comparten un bucket separado que no toca el cupo de E1', () => {
+    let t = 0;
+    const cupo = crearPresupuestoShadow({ orders: 0, shipments: 0, items: 5, questions: 0, messages: 0, claims: 0, e2e3: 1 }, 10, () => t);
+    expect(cupo.reservar('ml.items.multiget', {}, 'catalogo')).toEqual({ ok: true });
+    // El bucket e2e3 ya se usó: identidad (mismo bucket) queda cerrada, pero items de E1 sigue con cupo.
+    expect(cupo.reservar('ml.items.multiget', {}, 'identidad').ok).toBe(false);
+    expect(cupo.reservar('ml.items.multiget', {}, 'e1')).toEqual({ ok: true });
+  });
+
+  it('E1-T5 construirOperacion valida el consumidor y ausente = e1 (compatibilidad)', () => {
+    expect(() => construirOperacion({ op: 'ml.question', params: { id: '1' } }, ctx)).not.toThrow();
+    expect(() => construirOperacion({ op: 'ml.question', params: { id: '1' }, consumidor: 'catalogo' }, ctx)).not.toThrow();
+    expect(() => construirOperacion({ op: 'ml.question', params: { id: '1' }, consumidor: 'otro' }, ctx)).toThrow(ErrorOperacionInvalida);
+  });
+
+  it('E1-T5 validación de arranque: sombra habilitada sin variable de corriente falla con la corriente nombrada', () => {
+    expect(() => validarConfiguracionCupoSombra({}, 0)).not.toThrow();
+    expect(() => validarConfiguracionCupoSombra({ orders: 10 }, 60)).toThrow(/SHIPMENTS/);
+    const completa = Object.fromEntries(CORRIENTES_ML.map((c) => [c, 5]));
+    expect(() => validarConfiguracionCupoSombra(completa, 60)).not.toThrow();
+  });
+
+  it('E1-T5 gateway con presupuesto por corriente: 429 sintético lleva x-fusion-cupo y retry-after real', async () => {
+    let t = 0;
+    const presupuestoMl = crearPresupuestoShadow({ orders: 0, shipments: 0, items: 0, questions: 0, messages: 0, claims: 0 }, 0, () => t);
+    const ejecutarMl = vi.fn();
+    const gw = crearGatewayCanal({ mlUserId: '1', ejecutarMl, ejecutarWoo: vi.fn(), presupuestoMl });
+    const r = await gw({ op: 'ml.shipment', params: { id: '1' } });
+    expect(r.status).toBe(429);
+    expect(r.headers['x-fusion-cupo']).toBe('sombra-agotado');
+    expect(Number(r.headers['retry-after'])).toBeGreaterThan(0);
+    expect(ejecutarMl).not.toHaveBeenCalled();
   });
 
   it('sanea la respuesta: sólo encabezados de paginado/retry y sin cuerpos de error remotos', async () => {

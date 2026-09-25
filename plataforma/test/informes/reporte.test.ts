@@ -185,4 +185,28 @@ describe('armarReporte', () => {
     expect(r.topicos['ml.shipments']).toBeUndefined();
     expect(r.alertas).toContainEqual(expect.objectContaining({ codigo: 'convergencia_no_declarada', topic: 'ml.shipments' }));
   });
+
+  it('E1-T5 §2.5: un succeeded con cobertura 100% seguido de un diferimiento sin resolver da amarillo, no verde', async () => {
+    await pool.query('SELECT integrations.sembrar_corrientes($1)', [s.cuentaMl]);
+    await barrido('2026-09-16T08:00:00Z', 10, 10, 10);
+    // Corrida posterior en el mismo día que quedó pending (p. ej. por CUPO_SOMBRA_AGOTADO) y nunca se resolvió.
+    await pool.query(`INSERT INTO integrations.sweep_runs
+      (channel_account_id, topic, cursor_kind, strategy, started_at, status)
+      VALUES ($1, 'ml.shipments', 'state_sweep', 'convergence', '2026-09-16T20:00:00Z', 'pending')`, [s.cuentaMl]);
+    const r = await armarReporte(pool, '2026-09-16');
+    expect(r.alertas).toContainEqual(expect.objectContaining({ codigo: 'convergencia_no_declarada', topic: 'ml.shipments' }));
+    expect(r.semaforo).toBe('amarillo');
+  });
+
+  it('E1-T5 §2.5: un diferimiento que sí se resuelve después con éxito no degrada el día', async () => {
+    await barrido('2026-09-16T08:00:00Z', 10, 10, 10);
+    // La corrida que quedó pending a las 12:00 luego se completó (succeeded) a las 14:00: cubierta.
+    await pool.query(`INSERT INTO integrations.sweep_runs
+      (channel_account_id, topic, cursor_kind, strategy, started_at, finished_at, status, known_resources, swept, converged)
+      VALUES ($1, 'ml.shipments', 'state_sweep', 'convergence', '2026-09-16T14:00:00Z', '2026-09-16T14:05:00Z', 'succeeded', 10, 10, 10)`,
+      [s.cuentaMl]);
+    const r = await armarReporte(pool, '2026-09-16');
+    expect(r.topicos['ml.shipments']).toMatchObject({ cobertura: 1, convergencia: 1 });
+    expect(r.semaforo).toBe('verde');
+  });
 });

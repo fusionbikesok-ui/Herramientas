@@ -57,7 +57,7 @@ export async function cerrarSenal(
 ): Promise<boolean> {
   const r = await db.query(
     `UPDATE integrations.reconciliation_signals SET status=$4,error_detail=$5,finished_at=now(),
-       lease_token=NULL,lease_until=NULL,worker_id=NULL
+       lease_token=NULL,lease_until=NULL,worker_id=NULL,deferred_since=NULL
      WHERE ${LEASE_VIGENTE}`,
     [s.id, s.token, s.workerId, estado, detalle],
   );
@@ -84,4 +84,41 @@ export async function fallarSenal(
   );
   if (r.rowCount !== 1) return 'lease_perdido';
   return muerta ? 'dead_lettered' : 'retryable';
+}
+
+/** Tope de edad y código, iguales a los de `corridas.ts` (spec §2.4): mismo criterio para corridas y señales. */
+export const CUPO_SOMBRA_DIFERIDO_MAX_MIN_DEFAULT = 30;
+export const CODIGO_CUPO_SOMBRA_AGOTADO = 'CUPO_SOMBRA_AGOTADO';
+
+/**
+ * Diferimiento por cupo sombra agotado para señales (spec §2.4): hermana de `diferirCorridaPorCupo` en
+ * `corridas.ts`. Vuelve a `retryable` (no `dead_lettered`), no consume intento, y usa el `retryAfter` real.
+ * `deferred_since` se fija sólo la primera vez y se limpia al agotar el tope de edad (cae a `fallarSenal`
+ * con el código `CUPO_SOMBRA_AGOTADO`, consumiendo intento) o al cerrarse con éxito (`cerrarSenal`).
+ */
+export async function diferirSenalPorCupo(
+  db: Consultable, s: SenalReclamada, retryAfterSegundos: number,
+  opciones: { maxDiferidoMin?: number } = {},
+): Promise<'retryable' | 'dead_lettered' | 'lease_perdido'> {
+  const maxMin = opciones.maxDiferidoMin ?? CUPO_SOMBRA_DIFERIDO_MAX_MIN_DEFAULT;
+  const estado = await db.query<{ deferred_since: Date | null }>(
+    `SELECT deferred_since FROM integrations.reconciliation_signals WHERE ${LEASE_VIGENTE}`,
+    [s.id, s.token, s.workerId],
+  );
+  if (estado.rowCount !== 1) return 'lease_perdido';
+  const desde = estado.rows[0]!.deferred_since;
+  const agotoElTope = desde !== null && Date.now() - desde.getTime() > maxMin * 60_000;
+  if (agotoElTope) {
+    await db.query(`UPDATE integrations.reconciliation_signals SET deferred_since=NULL WHERE id=$1`, [s.id]);
+    return fallarSenal(db, s, CODIGO_CUPO_SOMBRA_AGOTADO, { retryAfterS: retryAfterSegundos });
+  }
+  const r = await db.query(
+    `UPDATE integrations.reconciliation_signals SET status='retryable',
+       available_at=now()+make_interval(secs=>$4),
+       deferred_since=COALESCE(deferred_since,now()),
+       attempts=greatest(attempts-1,0),lease_token=NULL,lease_until=NULL,worker_id=NULL
+     WHERE ${LEASE_VIGENTE}`,
+    [s.id, s.token, s.workerId, retryAfterSegundos],
+  );
+  return r.rowCount === 1 ? 'retryable' : 'lease_perdido';
 }

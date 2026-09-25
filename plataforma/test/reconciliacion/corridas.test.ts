@@ -3,10 +3,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ErrorLeaseVencido } from '../../src/colas/errores.ts';
 import { crearPool } from '../../src/db/pool.ts';
 import {
-  completarCorrida, demoraReintentoSegundos, fallarCorrida, liberarCorridasVencidas,
+  completarCorrida, demoraReintentoSegundos, diferirCorridaPorCupo, fallarCorrida, liberarCorridasVencidas,
   materializarCorridas, reclamarCorridas, renovarLeaseCorrida, soltarCorridaPorApagado,
 } from '../../src/reconciliacion/corridas.ts';
-import { crearWorkerBarridos } from '../../src/worker/barridos.ts';
+import { crearWorkerBarridos, ErrorCupoSombraAgotado } from '../../src/worker/barridos.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 
 
@@ -122,5 +122,69 @@ describe('programación y leases de barridos E1 T2', () => {
     expect(demoraReintentoSegundos(1, () => 0.5)).toBe(30);
     expect(demoraReintentoSegundos(20, () => 0.5)).toBe(900);
     expect(demoraReintentoSegundos(1, () => 0, 999)).toBe(300);
+  });
+
+  it('E1-T5 §2.4: el worker de barridos difiere sin consumir intento ante ErrorCupoSombraAgotado', async () => {
+    await corriente();
+    const worker = crearWorkerBarridos({
+      db, workerId: 'w-cupo',
+      procesadores: { [`${cuenta}|ml.orders|state_sweep`]: async () => { throw new ErrorCupoSombraAgotado('CUPO_SOMBRA_AGOTADO ml.orders', 9); } },
+    });
+    expect(await worker.unaVuelta()).toBe(1);
+    const fila = await db.query<{ status: string; attempts: number; deferred_since: Date | null }>(
+      'select status,attempts,deferred_since from integrations.sweep_runs',
+    );
+    expect(fila.rows[0]).toMatchObject({ status: 'pending', attempts: 0 });
+    expect(fila.rows[0]?.deferred_since).not.toBeNull();
+  });
+
+  it('E1-T5 §2.4: diferirCorridaPorCupo devuelve el intento, no lo consume, y usa el retry-after real', async () => {
+    await corriente();
+    const corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
+    expect(corrida.attempts).toBe(1);
+    expect(await diferirCorridaPorCupo(db, corrida, 17)).toBe('pending');
+    const fila = await db.query<{ status: string; attempts: number; deferred_since: Date | null; available_at: Date }>(
+      'select status,attempts,deferred_since,available_at from integrations.sweep_runs where id=$1', [corrida.id],
+    );
+    expect(fila.rows[0]?.status).toBe('pending');
+    expect(fila.rows[0]?.attempts).toBe(0);
+    expect(fila.rows[0]?.deferred_since).not.toBeNull();
+    expect(fila.rows[0]!.available_at.getTime()).toBeGreaterThan(Date.now() + 15_000);
+  });
+
+  it('E1-T5 §2.4: una corrida reprogramada dos veces no reinicia el reloj de deferred_since', async () => {
+    await corriente();
+    let corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
+    await diferirCorridaPorCupo(db, corrida, 1);
+    const primero = (await db.query<{ deferred_since: Date }>('select deferred_since from integrations.sweep_runs where id=$1', [corrida.id])).rows[0]!.deferred_since;
+    await admin.query('update integrations.sweep_runs set available_at=now()');
+    corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
+    await diferirCorridaPorCupo(db, corrida, 1);
+    const segundo = (await db.query<{ deferred_since: Date }>('select deferred_since from integrations.sweep_runs where id=$1', [corrida.id])).rows[0]!.deferred_since;
+    expect(segundo.getTime()).toBe(primero.getTime());
+  });
+
+  it('E1-T5 §2.4: pasado el tope de edad, cae a fallarCorrida con CUPO_SOMBRA_AGOTADO y limpia deferred_since', async () => {
+    await corriente();
+    const corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
+    await admin.query("update integrations.sweep_runs set deferred_since=now()-interval '31 minutes' where id=$1", [corrida.id]);
+    const estado = await diferirCorridaPorCupo(db, corrida, 5, { maxDiferidoMin: 30 });
+    expect(estado).toBe('retryable');
+    const fila = await db.query<{ deferred_since: Date | null; error_detail: string | null }>(
+      'select deferred_since,error_detail from integrations.sweep_runs where id=$1', [corrida.id],
+    );
+    expect(fila.rows[0]?.deferred_since).toBeNull();
+    expect(fila.rows[0]?.error_detail).toBe('CUPO_SOMBRA_AGOTADO');
+  });
+
+  it('E1-T5 §2.4: a los 29 min sigue diferido, pasados los 30 cae a fallarCorrida (límite exacto)', async () => {
+    await corriente({ maxAttempts: 8 });
+    for (const [minutos, esperado] of [[29, 'pending'], [31, 'retryable']] as const) {
+      await admin.query('delete from integrations.sweep_runs; delete from integrations.reconciliation_cursors');
+      await corriente({ maxAttempts: 8 });
+      const corrida = (await reclamarCorridas(db, 'w1', [{ channelAccountId: cuenta, topic: 'ml.orders', cursorKind: 'state_sweep' }], 1))[0]!;
+      await admin.query('update integrations.sweep_runs set deferred_since=now()-make_interval(mins=>$2) where id=$1', [corrida.id, minutos]);
+      expect(await diferirCorridaPorCupo(db, corrida, 5, { maxDiferidoMin: 30 }), `${minutos} min`).toBe(esperado);
+    }
   });
 });

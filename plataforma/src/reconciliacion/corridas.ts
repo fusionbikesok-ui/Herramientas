@@ -127,7 +127,7 @@ export async function completarCorrida(
     if (estado === 'succeeded') await antesDeCerrar?.(tx);
     await tx.query(
       `UPDATE integrations.sweep_runs SET status=$2,finished_at=now(),cursor_after=$3,
-       lease_token=NULL,lease_until=NULL,worker_id=NULL WHERE id=$1`,
+       lease_token=NULL,lease_until=NULL,worker_id=NULL,deferred_since=NULL WHERE id=$1`,
       [corrida.id, estado, cursorAfter],
     );
     return estado;
@@ -165,6 +165,46 @@ export async function soltarCorridaPorApagado(pool: pg.Pool, corrida: CorridaRec
      WHERE id=$1 AND status='claimed' AND lease_token=$2 AND worker_id=$3`,
     [corrida.id, corrida.token, corrida.workerId],
   );
+}
+
+/** Minutos por defecto antes de que un diferimiento por cupo sombra caiga a `fallarCorrida` (spec §2.4). */
+export const CUPO_SOMBRA_DIFERIDO_MAX_MIN_DEFAULT = 30;
+export const CODIGO_CUPO_SOMBRA_AGOTADO = 'CUPO_SOMBRA_AGOTADO';
+
+/**
+ * Diferimiento por cupo sombra agotado (spec §2.4, corrige el hallazgo crítico 1): hermana de
+ * `soltarCorridaPorApagado`, pero para un `ErrorCupoSombraAgotado`. Devuelve el intento a la corrida (no lo
+ * consume), reprograma con el `retryAfter` real recibido, y marca `deferred_since` sólo la primera vez —
+ * diferimientos posteriores de la misma corrida no reinician el reloj. Si ya pasó el tope de edad desde el
+ * primer choque, cae a la ruta normal de `fallarCorrida` con el código `CUPO_SOMBRA_AGOTADO`, consumiendo
+ * intento como cualquier otro fallo, y limpia `deferred_since`.
+ */
+export async function diferirCorridaPorCupo(
+  pool: pg.Pool, corrida: CorridaReclamada, retryAfterSegundos: number,
+  opciones: { maxDiferidoMin?: number; azar?: () => number } = {},
+): Promise<'pending' | 'retryable' | 'failed'> {
+  const maxMin = opciones.maxDiferidoMin ?? CUPO_SOMBRA_DIFERIDO_MAX_MIN_DEFAULT;
+  const estado = await pool.query<{ deferred_since: Date | null }>(
+    `SELECT deferred_since FROM integrations.sweep_runs WHERE ${LEASE_VIGENTE}`,
+    [corrida.id, corrida.token, corrida.workerId],
+  );
+  if (estado.rowCount !== 1) throw new ErrorLeaseVencido(`lease vencido o ajeno para sweep#${corrida.id}`);
+  const desde = estado.rows[0]!.deferred_since;
+  const agotoElTope = desde !== null && Date.now() - desde.getTime() > maxMin * 60_000;
+  if (agotoElTope) {
+    await pool.query(`UPDATE integrations.sweep_runs SET deferred_since=NULL WHERE id=$1`, [corrida.id]);
+    return fallarCorrida(pool, corrida, CODIGO_CUPO_SOMBRA_AGOTADO, retryAfterSegundos, opciones.azar, true);
+  }
+  const r = await pool.query(
+    `UPDATE integrations.sweep_runs SET status='pending',
+       available_at=now()+make_interval(secs=>$4),
+       deferred_since=COALESCE(deferred_since,now()),
+       attempts=greatest(attempts-1,0),lease_token=NULL,lease_until=NULL,worker_id=NULL
+     WHERE ${LEASE_VIGENTE}`,
+    [corrida.id, corrida.token, corrida.workerId, retryAfterSegundos],
+  );
+  if (r.rowCount !== 1) throw new ErrorLeaseVencido(`lease vencido o ajeno para sweep#${corrida.id}`);
+  return 'pending';
 }
 
 export async function liberarCorridasVencidas(pool: pg.Pool): Promise<{ pendientes: number; fallidas: number }> {

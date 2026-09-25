@@ -8,11 +8,12 @@ import { ErrorCanalTerminal, ErrorDestinoProhibido } from '../../src/reconciliac
 import type { CorridaReclamada } from '../../src/reconciliacion/corridas.ts';
 import { crearTransporteGateway, RUTA_GATEWAY, rutaAOperacion } from '../../src/reconciliacion/transporte-gateway.ts';
 import { firmar } from '../../src/seguridad/interna.ts';
-import { ErrorBarridoReintentable } from '../../src/worker/barridos.ts';
+import { ErrorBarridoReintentable, ErrorCupoSombraAgotado } from '../../src/worker/barridos.ts';
 import { crearSimulador, type FixtureCanales } from '../../../scripts/qa/simulador-canales.mjs';
 // El otro lado del contrato: el legado. Si las dos mitades divergen, este archivo falla.
 // @ts-expect-error módulo JS del legado sin tipos
-import { construirOperacion, crearGatewayCanal } from '../../../lib/gatewayCanal.js';
+import { construirOperacion, CORRIENTES_ML, crearGatewayCanal, TOPIC_A_CORRIENTE } from '../../../lib/gatewayCanal.js';
+import { TOPICOS_CONSULTADOS } from '../../src/reconciliacion/missed-feeds.ts';
 // @ts-expect-error módulo JS del legado sin tipos
 import { firmarInterno } from '../../../lib/internoHmac.js';
 
@@ -162,5 +163,36 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
     await expect(con(502, { code: 'channel_unavailable' }).get('/questions/1')).rejects.toBeInstanceOf(ErrorBarridoReintentable);
     const ok = await con(200, { status: 200, headers: { 'x-wp-totalpages': '3' }, body: [{ id: 1 }] }).get('/wp-json/wc/v3/products/1/variations?per_page=100&page=1');
     expect(ok.headers.get('x-wp-totalpages')).toBe('3');
+  });
+
+  it('E1-T5 §2.3: un 429 con x-fusion-cupo es ErrorCupoSombraAgotado, distinto de un 429 real', async () => {
+    const con = (status: number, sobre: unknown) => crearTransporteGateway({
+      url: 'http://127.0.0.1:3001', keyring,
+      fetch: async () => new Response(JSON.stringify(sobre), { status }),
+    });
+    const sombra = con(200, { status: 429, headers: { 'retry-after': '17', 'x-fusion-cupo': 'sombra-agotado' }, body: null });
+    await expect(sombra.get('/questions/1')).rejects.toBeInstanceOf(ErrorCupoSombraAgotado);
+    try { await sombra.get('/questions/1'); } catch (e) { expect((e as ErrorCupoSombraAgotado).retryAfter).toBe(17); }
+    // Un 429 real (sin el header sintético) sigue siendo HTTP_429 reintentable normal, no cupo agotado.
+    const real = con(200, { status: 429, headers: { 'retry-after': '30' }, body: null });
+    await expect(real.get('/questions/1')).rejects.toBeInstanceOf(ErrorBarridoReintentable);
+  });
+
+  it('E1-T5 §2.1: fuente única de tópicos — gateway, plataforma y missed-feeds aceptan exactamente el mismo conjunto', () => {
+    const delGateway = new Set(Object.keys(TOPIC_A_CORRIENTE));
+    expect(new Set(TOPICOS_CONSULTADOS)).toEqual(delGateway);
+    expect(new Set(CORRIENTES_ML)).toEqual(new Set(Object.values(TOPIC_A_CORRIENTE)));
+  });
+
+  it('E1-T5 §2.8: el consumidor se fija por instancia de transporte y viaja en la petición', async () => {
+    const vistas: Array<{ op: string; consumidor?: string }> = [];
+    const fetchEspia: typeof fetch = async (_destino, init) => {
+      vistas.push(JSON.parse(Buffer.from(init!.body as Uint8Array).toString('utf8')));
+      return new Response(JSON.stringify({ status: 200, headers: {}, body: {} }), { status: 200 });
+    };
+    await crearTransporteGateway({ url: 'http://127.0.0.1:3001', keyring, fetch: fetchEspia }).get('/questions/1');
+    await crearTransporteGateway({ url: 'http://127.0.0.1:3001', keyring, fetch: fetchEspia, consumidor: 'catalogo' }).get('/questions/1');
+    expect(vistas[0]!.consumidor).toBeUndefined();
+    expect(vistas[1]!.consumidor).toBe('catalogo');
   });
 });
