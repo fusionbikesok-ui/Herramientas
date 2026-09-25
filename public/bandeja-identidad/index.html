@@ -197,6 +197,15 @@
       overflow-wrap: anywhere;
     }
 
+    /* T4: fila «Iguales» (atributos colapsados) y fila «Por qué» (resumen por candidato) */
+    .celda-iguales { grid-column: 2 / -1; background: transparent; border: none; padding: var(--sp-1) var(--sp-2); }
+    .btn-iguales {
+      background: none; border: none; padding: 0; color: var(--muted); font-size: var(--fs-sm);
+      cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em;
+    }
+    .btn-iguales:hover, .btn-iguales:focus-visible { color: var(--text); }
+    .celda-porque { font-size: var(--fs-sm); color: var(--muted); }
+
     /* En modo lista (<40rem) */
     @container caso (max-width: 40rem) {
       .matriz {

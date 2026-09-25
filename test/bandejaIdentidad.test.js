@@ -75,6 +75,48 @@ describe('E3 T3 — lógica pura de teclas y acciones', () => {
   });
 });
 
+describe('E3 T4 — «Por qué» y atributos iguales colapsados', () => {
+  it('porQue: todo coincide arma una sola frase de coincidencia', () => {
+    const o = { explicacion: { atributos: [{ nombre: 'modelo', marca: 'coincide' }, { nombre: 'color', marca: 'coincide' }, { nombre: 'talle', marca: 'coincide' }] } };
+    expect(L.porQue(o)).toBe('Modelo, color y talle coinciden.');
+  });
+
+  it('porQue: difiere y falta arman dos frases separadas por ";"', () => {
+    const o = { explicacion: { atributos: [{ nombre: 'color', marca: 'difiere' }, { nombre: 'talle', marca: 'falta' }] } };
+    expect(L.porQue(o)).toBe('El color difiere; el talle falta.');
+  });
+
+  it('porQue: equivalente cuenta como coincidencia', () => {
+    const o = { explicacion: { atributos: [{ nombre: 'rodado', marca: 'equivalente' }] } };
+    expect(L.porQue(o)).toBe('Rodado coincide.');
+  });
+
+  it('porQue: sin atributos para comparar lo dice explícito', () => {
+    expect(L.porQue({ explicacion: {} })).toBe('Sin atributos para comparar.');
+    expect(L.porQue(null)).toBe('Sin atributos para comparar.');
+  });
+
+  it('atributosIguales: sólo los que tienen la MISMA marca en TODOS los candidatos', () => {
+    const opciones = [
+      { explicacion: { atributos: [{ nombre: 'marca', marca: 'coincide' }, { nombre: 'color', marca: 'coincide' }] } },
+      { explicacion: { atributos: [{ nombre: 'marca', marca: 'coincide' }, { nombre: 'color', marca: 'difiere' }] } },
+    ];
+    expect(L.atributosIguales(opciones)).toEqual(['marca']);
+  });
+
+  it('atributosIguales: un atributo que falta en algún candidato no cuenta como igual', () => {
+    const opciones = [
+      { explicacion: { atributos: [{ nombre: 'marca', marca: 'coincide' }] } },
+      { explicacion: { atributos: [] } },
+    ];
+    expect(L.atributosIguales(opciones)).toEqual([]);
+  });
+
+  it('atributosIguales: sin candidatos, no hay iguales', () => {
+    expect(L.atributosIguales([])).toEqual([]);
+  });
+});
+
 describe('E3 T6 proxy de la bandeja de identidad', () => {
   it('el actor y es_admin salen de la sesión aunque el cliente mande otros (elevación)', async () => {
     const p = plataformaFalsa(200, { decision_id: 'd', version: 2, vinculo: 'x' });

@@ -14,7 +14,7 @@
     grupo: null,            // filtro activo: null o 0..7
     cola: [], siguiente: null, cargandoMas: false,
     contadores: {}, totalInicial: 0, hechos: 0,
-    idx: -1, detalle: null, sel: null, busqueda: [], buscando: false, soloDif: false,
+    idx: -1, detalle: null, sel: null, busqueda: [], buscando: false, soloDif: false, mostrarIguales: false,
     conflicto: null,        // { entry, details } tras un 409
     cache: new Map(),       // id de caso → Promise del detalle
     pendientes: new Map(),  // Idempotency-Key → entry (guardado en segundo plano)
@@ -351,14 +351,14 @@
     S.salteados.add(caseId);
     S.ultima = { tipo: 'salteado', casoId: caseId, ts: Date.now(), consumida: false };
     S.hechos++;
-    mostrarDeshacer('Publicación sin vincular. Z deshace');
+    mostrarDeshacer('Salteada por ahora. Z deshace');
     banda();
     avanzar();
   }
 
   function textoDecision(e) {
     if (e.tipo === 'apartado') return 'Apartado para revisar después.';
-    if (e.tipo === 'salteado') return 'Publicación sin vincular.';
+    if (e.tipo === 'salteado') return 'Salteada por ahora (no se guardó nada).';
     if (e.eleccion === 'vincular') return 'Vinculado a ' + (e.sku || 'la variante elegida') + '.';
     if (e.eleccion === 'omitir') return 'Publicación sin vincular.';
     if (e.eleccion === 'mantener_omision') return 'Se mantiene la omisión.';
@@ -574,7 +574,27 @@
       opciones.forEach(function (o) { fila.appendChild(celdaFija(o, f[0], false, caso)); });
       m.appendChild(fila);
     });
+    // Atributos iguales en TODOS los candidatos se colapsan por defecto en una sola fila «Iguales» (T4):
+    // con muchos atributos idénticos la matriz se hacía larga sin aportar nada para decidir. Sigue visible
+    // con «Sólo diferencias» (a diferencia de las filas individuales) porque es justamente el resumen de lo
+    // que NO difiere; sin ella, activar el filtro haría desaparecer esa información sin avisar.
+    var iguales = L.atributosIguales(opciones);
+    var igualesSet = {}; iguales.forEach(function (n) { igualesSet[n] = true; });
+    if (iguales.length) {
+      var filaIguales = el('div', 'fila fila-iguales', null, { role: 'row' });
+      filaIguales.appendChild(el('div', 'celda-etiqueta', 'Iguales', { role: 'rowheader' }));
+      var celdaIguales = el('div', 'celda celda-iguales', null, { role: 'cell' });
+      var resumen = iguales.slice(0, 3).join(', ') + (iguales.length > 3 ? '…' : '');
+      var btnIguales = el('button', 'btn-iguales', resumen + ' · ' + (S.mostrarIguales ? 'Ver menos' : 'Ver más'),
+        { type: 'button', 'aria-expanded': S.mostrarIguales ? 'true' : 'false' });
+      btnIguales.addEventListener('click', function () { S.mostrarIguales = !S.mostrarIguales; render(); });
+      celdaIguales.appendChild(btnIguales);
+      filaIguales.appendChild(celdaIguales);
+      m.appendChild(filaIguales);
+    }
+
     L.nombresAtributos(opciones).forEach(function (n) {
+      if (igualesSet[n] && !S.mostrarIguales) return; // colapsado dentro de la fila «Iguales» de arriba
       if (!L.filaVisible(opciones, n, S.soloDif)) return;
       var fila = el('div', 'fila', null, { role: 'row' });
       fila.appendChild(el('div', 'celda-etiqueta', n, { role: 'rowheader' }));
@@ -583,6 +603,16 @@
       opciones.forEach(function (o) { fila.appendChild(celdaAtributo(o, n)); });
       m.appendChild(fila);
     });
+
+    // «Por qué» (T4): última fila de la tabla, un resumen corto por candidato de qué coincide/difiere/falta.
+    if (opciones.length) {
+      var filaPorQue = el('div', 'fila fila-porque', null, { role: 'row' });
+      filaPorQue.appendChild(el('div', 'celda-etiqueta', 'Por qué', { role: 'rowheader' }));
+      filaPorQue.appendChild(el('div', 'celda', null, { role: 'cell' })); // columna «Publicación ML»: no aplica
+      opciones.forEach(function (o) { filaPorQue.appendChild(el('div', 'celda celda-porque', L.porQue(o), { role: 'cell' })); });
+      m.appendChild(filaPorQue);
+    }
+
     var titulos = Array.prototype.map.call(enc.children, function (c) { return c.textContent; });
     m.querySelectorAll('.fila:not(.fila-encabezado)').forEach(function (f) {
       Array.prototype.forEach.call(f.children, function (c, i) { if (i >= 1) c.setAttribute('data-col', titulos[i]); });

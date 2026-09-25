@@ -234,3 +234,38 @@ describe('bandeja: aria-keyshortcuts (chequeo estático sobre bandeja.js, patró
     expect(m[0]).not.toMatch(/aria-keyshortcuts/);
   });
 });
+
+describe('bandeja: renderMatriz — fila «Por qué» y fila «Iguales» colapsada (T4, chequeo estático)', () => {
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+  const cuerpo = js.match(/function renderMatriz\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
+
+  it('la fila «Por qué» se arma después de las filas de atributos (última fila de la tabla)', () => {
+    const idxIguales = cuerpo.indexOf('fila-iguales');
+    const idxAtributos = cuerpo.indexOf('nombresAtributos(opciones).forEach');
+    const idxPorQue = cuerpo.indexOf('fila-porque');
+    expect(idxIguales).toBeGreaterThan(-1);
+    expect(idxAtributos).toBeGreaterThan(-1);
+    expect(idxPorQue).toBeGreaterThan(-1);
+    // Orden en el código = orden en el que se appendean las filas a la matriz = orden visual.
+    expect(idxIguales).toBeLessThan(idxAtributos);
+    expect(idxAtributos).toBeLessThan(idxPorQue);
+  });
+
+  it('cada celda de «Por qué» usa L.porQue(o) por candidato', () => {
+    expect(cuerpo).toMatch(/L\.porQue\(o\)/);
+  });
+
+  it('la fila «Iguales» tiene un botón que expande/colapsa (aria-expanded) y no depende de S.soloDif', () => {
+    const filaIguales = cuerpo.slice(cuerpo.indexOf('fila-iguales'), cuerpo.indexOf('L.nombresAtributos(opciones).forEach'));
+    expect(filaIguales).toMatch(/aria-expanded/);
+    expect(filaIguales).toMatch(/S\.mostrarIguales = !S\.mostrarIguales/);
+    // A diferencia de las filas de atributos sueltas, el bloque de «Iguales» no consulta L.filaVisible/S.soloDif:
+    // sigue mostrándose con "Sólo diferencias" activo, tal como pide el plan.
+    expect(filaIguales).not.toMatch(/filaVisible|S\.soloDif/);
+  });
+
+  it('un atributo colapsado en «Iguales» no se repite como fila suelta salvo que S.mostrarIguales esté activo', () => {
+    const bucleAtributos = cuerpo.slice(cuerpo.indexOf('L.nombresAtributos(opciones).forEach'), cuerpo.indexOf('fila-porque'));
+    expect(bucleAtributos).toMatch(/igualesSet\[n\] && !S\.mostrarIguales/);
+  });
+});

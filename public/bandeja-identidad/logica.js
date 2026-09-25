@@ -235,12 +235,53 @@
   // Texto para la pantalla vacía cuando ya no quedan casos no salteados (Paso 2, T3).
   var TEXTO_SOLO_SALTEADOS = 'Sólo quedan casos que salteaste';
 
+  // «Por qué» (T4): resumen corto de qué coincide y qué difiere/falta para un candidato, usando los
+  // mismos nombres de atributos que ya arma nombresAtributos()/atributoDe(). 'equivalente' cuenta como
+  // coincidencia para este resumen (la marca visual ya distingue ≈ de ✓ en la celda). Formato del mockup:
+  // "modelo, color y talle coinciden" / "el color difiere; el talle falta" / mezcla de ambas con '; '.
+  function porQue(opcion) {
+    var e = (opcion && opcion.explicacion) || {};
+    var lista = (e.atributos || []).concat(e.otros_atributos || []);
+    if (!lista.length) return 'Sin atributos para comparar.';
+    var coinciden = [], difieren = [], faltan = [];
+    lista.forEach(function (a) {
+      if (a.marca === 'coincide' || a.marca === 'equivalente') coinciden.push(a.nombre);
+      else if (a.marca === 'falta') faltan.push(a.nombre);
+      else difieren.push(a.nombre); // 'difiere' o cualquier marca desconocida
+    });
+    function listar(nombres) {
+      if (nombres.length === 1) return nombres[0];
+      if (nombres.length === 2) return nombres[0] + ' y ' + nombres[1];
+      return nombres.slice(0, -1).join(', ') + ' y ' + nombres[nombres.length - 1];
+    }
+    var partes = [];
+    if (coinciden.length) partes.push(listar(coinciden) + (coinciden.length > 1 ? ' coinciden' : ' coincide'));
+    if (difieren.length) partes.push((difieren.length > 1 ? 'los atributos ' : 'el ') + listar(difieren) + (difieren.length > 1 ? ' difieren' : ' difiere'));
+    if (faltan.length) partes.push((faltan.length > 1 ? 'los atributos ' : 'el ') + listar(faltan) + (faltan.length > 1 ? ' faltan' : ' falta'));
+    // Cada parte ya es una oración corta salvo la primera (que arranca en minúscula, "modelo, color… coinciden");
+    // se capitaliza sólo la primera letra del resumen entero.
+    var texto = partes.join('; ') + '.';
+    return texto.charAt(0).toUpperCase() + texto.slice(1);
+  }
+
+  // Atributos con la MISMA marca en TODOS los candidatos (para colapsarlos en una sola fila «Iguales»).
+  // Un atributo que falta en algún candidato (no tiene entrada) no cuenta como igual: no hay nada que comparar.
+  function atributosIguales(opciones) {
+    var nombres = nombresAtributos(opciones);
+    return nombres.filter(function (n) {
+      var marcas = (opciones || []).map(function (o) { var a = atributoDe(o, n); return a ? a.marca : null; });
+      if (!marcas.length || marcas.some(function (m) { return m === null; })) return false;
+      return marcas.every(function (m) { return m === marcas[0]; });
+    });
+  }
+
   var api = {
     marca: marca, copyError: copyError, puedeDispararAtajo: puedeDispararAtajo, esReintentable: esReintentable,
     demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
     formatoStock: formatoStock, opcionesDe: opcionesDe, nombresAtributos: nombresAtributos, atributoDe: atributoDe,
     filaVisible: filaVisible, accionDeTecla: accionDeTecla, siguienteNoSalteado: siguienteNoSalteado,
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
+    porQue: porQue, atributosIguales: atributosIguales,
     GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
