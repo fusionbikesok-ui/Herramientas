@@ -468,7 +468,8 @@ describe('refrescarPublicacionesMl — test de CABLEADO (hallazgo del revisor, 2
         return {
           status: 200, headers: {},
           data: [{
-            code: 200,
+            id: 'MLA200',
+            status_code: 200,
             body: {
               id: 'MLA200', title: 'Recuperado por multiget', status: 'active', sub_status: [],
               attributes: [{ id: 'SELLER_SKU', value_name: 'FB-200' }], variations: [],
@@ -484,6 +485,8 @@ describe('refrescarPublicacionesMl — test de CABLEADO (hallazgo del revisor, 2
     expect(r.total).toBe(1);
     const fila = db.prepare('SELECT titulo FROM ml_publicaciones_cache WHERE clave = ?').get('MLA200|');
     expect(fila?.titulo).toBe('Recuperado por multiget'); // antes del fix, el 500 abortaba todo
+    const bulkCall = axios.request.mock.calls.map(c => c[0]).find(cfg => String(cfg?.url).includes('/items/bulk?ids='));
+    expect(bulkCall?.url).toMatch(/attributes=body\.id,body\.title,body\.status,body\.sub_status,/);
   }, 10000);
 });
 

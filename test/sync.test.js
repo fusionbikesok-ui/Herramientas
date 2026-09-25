@@ -979,6 +979,8 @@ describe('vista de detalle', () => {
     const row = res.body.data.find(r => r.clave === 'MLD1|v1');
     expect(row.diagnostico).toBe('reactivable');
     expect(row.accion).toBe('reactivar');
+    const bulkCall = axios.request.mock.calls.map(c => c[0]).find(cfg => String(cfg?.url).includes('/items/bulk?ids='));
+    expect(bulkCall?.url).toMatch(/attributes=body\.id,body\.title,body\.status,body\.sub_status,body\.variations,body\.secure_thumbnail,body\.thumbnail/);
   });
 
   it('atencion/errores: diagnostica estructura_cambiada (activa, la variación no existe)', async () => {
