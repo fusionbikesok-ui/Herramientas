@@ -98,7 +98,7 @@ describe('Rutas de publicaciones frenadas por precio', () => {
     it('el precio SIGUE mal: no reactiva, la frenada sigue en la tabla, y el resultado la marca bloqueada', async () => {
       sembrarFrenada({ precioWc: 900000 }); // precio web alto → neto por debajo, sigue bloqueada
       mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        if (metodo === 'get' && path.startsWith('/items/bulk?ids=')) {
           return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
         }
         if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
@@ -118,7 +118,7 @@ describe('Rutas de publicaciones frenadas por precio', () => {
     it('camino feliz: precio ya corregido → reactiva y borra la frenada', async () => {
       sembrarFrenada({ precioWc: 300000 }); // precio web bajo → neto pasa el chequeo
       mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        if (metodo === 'get' && path.startsWith('/items/bulk?ids=')) {
           return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
         }
         if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
@@ -139,7 +139,7 @@ describe('Rutas de publicaciones frenadas por precio', () => {
         sembrarFrenada({ clave: `MLA${i}|`, itemId: `MLA${i}`, sku: `FB-${i}`, precioWc: 300000 });
       }
       mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        if (metodo === 'get' && path.startsWith('/items/bulk?ids=')) {
           const ids = path.match(/ids=([^&]*)/)[1].split(',');
           return {
             status: 200,

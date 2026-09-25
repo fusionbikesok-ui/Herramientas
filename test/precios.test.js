@@ -47,9 +47,9 @@ function mockMl({ saleFee = 100, envio = 50, itemPrice = 1000, freeShipping = tr
     const url = cfg.url || '';
     if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: saleFee }, headers: {} };
     if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: envio } } }, headers: {} };
-    if (url.includes('/items?ids=')) {
+    if (url.includes('/items/bulk?ids=')) {
       const ids = decodeURIComponent(url.split('ids=')[1].split('&')[0]).split(',');
-      return { status: 200, data: ids.map(id => ({ code: 200, body: {
+      return { status: 200, data: ids.map(id => ({ id, status_code: 200, body: {
         id, price: itemPrice, category_id: 'MLA1', listing_type_id: 'gold_special',
         shipping: { free_shipping: freeShipping }, variations: [],
       } })), headers: {} };
@@ -125,6 +125,7 @@ describe('mlPrecios — netoMl + precioWebClave', () => {
     expect(r.envio).toBe(50);
     expect(r.neto).toBe(850);
   });
+
 
   it('precioWebClave lee el precio de LISTA del SKU mapeado y devuelve el de CONTADO (2/3)', () => {
     seedCatalogo(db, { idWoo: 10, sku: 'FB-1', precio: 1234 });
@@ -272,6 +273,9 @@ describe('auditarPrecios + router', () => {
 
     const res = await request(app).post('/api/precios/objetivo').send({ claves: ['MLB|v1'] });
     expect(res.status).toBe(200);
+    const bulkCall = axios.request.mock.calls.map(c => c[0]).find(cfg => (cfg.url || '').includes('/items/bulk?ids='));
+    expect(bulkCall).toBeDefined();
+    expect(bulkCall.url).toMatch(/attributes=status_code,id,body\.id,body\.price,body\.category_id,body\.listing_type_id,body\.shipping,body\.variations,body\.status/);
     const r = res.body.resultados[0];
     expect(r.contado).toBe(1000);
     // El desglose que muestra la pantalla tiene que sumar exactamente el precio propuesto

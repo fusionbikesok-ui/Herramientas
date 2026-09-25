@@ -58,7 +58,7 @@ describe('Cobertura accionable — POST /actualizar-ml (botón "Actualizar desde
       if (String(path).includes('/items/search')) {
         return { status: 200, data: { results: ['MLA1'], scroll_id: null } };
       }
-      if (String(path).includes('/items?ids=')) {
+      if (String(path).includes('/items/bulk?ids=')) {
         return {
           status: 200,
           data: [{ code: 200, body: {

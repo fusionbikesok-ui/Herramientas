@@ -2055,7 +2055,7 @@ export function preparacionRouter(db, cfg) {
         const shipmentId = orden.shipping?.id;
         let envio = null;
         if (shipmentId) {
-          const envioResp = await mlFetch(db, cfg.ml, 'get', `/shipments/${shipmentId}`, null, { manual: true });
+          const envioResp = await mlFetch(db, cfg.ml, 'get', `/shipments/${shipmentId}`, null, { manual: true, headers: { 'x-format-new': 'true' } });
           if (envioResp.status !== 200) throw new Error(`ML shipment ${envioResp.status}`);
           envio = envioResp.data;
         }
@@ -3293,7 +3293,7 @@ async function pendientesMl(db, mlCfg) {
       if (edadMs < VIGENCIA_SHIPMENT_TERMINAL_MS) continue;
     }
 
-    const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
+    const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`, null, { headers: { 'x-format-new': 'true' } });
     if (shipResp.status !== 200) {
       fallosHttp.push(`${shipmentId}→${shipResp.status}`);
       continue;
@@ -3641,7 +3641,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
   const shipmentId = orden.shipping?.id;
   let envio = null;
   if (shipmentId) {
-    const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`);
+    const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`, null, { headers: { 'x-format-new': 'true' } });
     if (shipResp.status !== 200) return;
     envio = shipResp.data;
   }
