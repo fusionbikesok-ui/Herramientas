@@ -1642,7 +1642,7 @@ describe('limpiarVariacionesMuertas', () => {
   // ML devuelve el item con sus variaciones actuales. MLA_UNREACH se omite (no lo devuelve).
   function mockMlItems() {
     mlFetch.mockImplementation(async (d, cfg, method, path) => {
-      if (typeof path === 'string' && path.startsWith('/items?ids=')) {
+      if (typeof path === 'string' && path.startsWith('/items/bulk?ids=')) {
         const ids = new URLSearchParams(path.split('?')[1]).get('ids').split(',');
         const data = ids
           .filter(id => id !== 'MLA_UNREACH')

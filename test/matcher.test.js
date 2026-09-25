@@ -462,7 +462,7 @@ describe('refrescarPublicacionesMl — test de CABLEADO (hallazgo del revisor, 2
       if (url.includes('/items/search')) {
         return { status: 200, headers: {}, data: { results: ['MLA200'], scroll_id: null } };
       }
-      if (url.includes('/items?ids=')) {
+      if (url.includes('/items/bulk?ids=')) {
         llamadaMultiget += 1;
         if (llamadaMultiget === 1) return { status: 500, headers: {}, data: null };
         return {

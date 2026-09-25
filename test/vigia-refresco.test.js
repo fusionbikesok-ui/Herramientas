@@ -15,7 +15,7 @@ const CFG = { clientId: 'cid', clientSecret: 'cs', userId: '99999' };
 // Responde el multiget de /items con un item simple y el catalog_product_id pedido.
 function mockItems(catalogProductId) {
   mlFetch.mockImplementation(async (_db, _cfg, metodo, url) => {
-    if (metodo === 'get' && url.includes('/items?ids=')) {
+    if (metodo === 'get' && url.includes('/items/bulk?ids=')) {
       return { status: 200, data: [{ code: 200, body: {
         id: 'MLA1', title: 'Cubierta', status: 'active', sub_status: [],
         // El SKU sale del ATRIBUTO SELLER_SKU, no de seller_custom_field: skuDesdeAtributosMl

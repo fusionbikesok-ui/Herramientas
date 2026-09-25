@@ -1,6 +1,6 @@
 /**
  * Tests para reconciliarStockMl: reconciliación incremental del stock recordado
- * (ml_stock_estado.cantidad_ml) contra el stock REAL de ML (multiget /items?ids=).
+ * (ml_stock_estado.cantidad_ml) contra el stock REAL de ML (multiget /items/bulk?ids=).
  *
  * Caso real que motivó esto:
  * MLA1117110786| (SKU FB-4501) quedó con cantidad_ml=0 desde el 2026-07-17 mientras ML tenía
@@ -558,7 +558,7 @@ describe('reconciliarStockMl', () => {
     ).run(500, 'Producto FB-4501', 'FB-4501', 'simple', null, 0, nowIso);
 
     mlFetch.mockImplementation(async (dbArg, cfgArg, method, path) => {
-      if (method === 'get' && path.includes('/items?ids=')) {
+      if (method === 'get' && path.includes('/items/bulk?ids=')) {
         return { status: 200, data: [{ code: 200, body: { id: 'MLA1117110786', status: 'active', available_quantity: 1 } }] };
       }
       return { status: 200, data: {} }; // PUT de syncWcToMl

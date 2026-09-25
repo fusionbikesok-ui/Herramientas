@@ -65,6 +65,14 @@ describe('mlClient — base de la API configurable para QA (ML_API_BASE)', () =>
     expect(axios.request.mock.calls[0][0].url).toBe('https://api.mercadolibre.com/items/MLA1');
   });
 
+  it('opts.headers se reenvía en la request (x-format-new obligatorio para /shipments desde 2025-10-12)', async () => {
+    delete process.env.ML_API_BASE;
+    const { mlFetch } = await import('../lib/mlClient.js');
+    axios.request.mockResolvedValueOnce({ status: 200, headers: {}, data: { id: 'MLA1' } });
+    await mlFetch(db, ML_CFG, 'get', '/shipments/123', null, { headers: { 'x-format-new': 'true' } });
+    expect(axios.request.mock.calls[0][0].headers).toMatchObject({ 'x-format-new': 'true' });
+  });
+
   it('con ML_API_BASE las llamadas y el refresh OAuth van al simulador (barra final tolerada)', async () => {
     process.env.ML_API_BASE = 'https://qa-simulador:8443/';
     db.prepare('DELETE FROM ml_oauth_token').run();
@@ -696,7 +704,7 @@ describe('mlClient — trazabilidad de errores', () => {
     const { mlFetch } = await import('../lib/mlClient.js');
 
     const ids = Array.from({ length: 20 }, (_, i) => `MLA${i}`).join(',');
-    const path = `/items?ids=${ids}&attributes=id,price`;
+    const path = `/items/bulk?ids=${ids}&attributes=id,price`;
 
     axios.request.mockResolvedValueOnce({ status: 500, headers: {}, data: null });
     await mlFetch(db, ML_CFG, 'get', path);

@@ -76,13 +76,13 @@ export async function auditarPrecios(db, mlCfg) {
       const chunk = itemIds.slice(i, i + MULTIGET_CHUNK);
       const resp = await mlFetch(
         db, mlCfg, 'get',
-        `/items?ids=${chunk.join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations,status`
+        `/items/bulk?ids=${chunk.join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations,status`
       );
       await sleep(ML_CALL_DELAY_MS);
 
       const items = new Map();
       if (resp.status === 200 && Array.isArray(resp.data)) {
-        for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+        for (const e of resp.data) if ((e.status_code ?? e.code) === 200 && e.body) items.set(String(e.body.id), e.body);
       }
 
       for (const itemId of chunk) {
@@ -298,12 +298,12 @@ export function preciosRouter(db, cfg) {
 
         const resp = await mlFetch(
           db, mlCfg, 'get',
-          `/items?ids=${[...porItem.keys()].join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations,status`
+          `/items/bulk?ids=${[...porItem.keys()].join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations,status`
         );
         await sleep(ML_CALL_DELAY_MS);
         const items = new Map();
         if (resp.status === 200 && Array.isArray(resp.data)) {
-          for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+          for (const e of resp.data) if ((e.status_code ?? e.code) === 200 && e.body) items.set(String(e.body.id), e.body);
         }
 
         for (const [itemId, filas] of porItem) {

@@ -47,7 +47,7 @@ function mockMl({ saleFee = 100, envio = 50, itemPrice = 1000, freeShipping = tr
     const url = cfg.url || '';
     if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: saleFee }, headers: {} };
     if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: envio } } }, headers: {} };
-    if (url.includes('/items?ids=')) {
+    if (url.includes('/items/bulk?ids=')) {
       const ids = decodeURIComponent(url.split('ids=')[1].split('&')[0]).split(',');
       return { status: 200, data: ids.map(id => ({ code: 200, body: {
         id, price: itemPrice, category_id: 'MLA1', listing_type_id: 'gold_special',
