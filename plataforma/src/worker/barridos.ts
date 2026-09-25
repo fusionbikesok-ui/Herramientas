@@ -51,7 +51,9 @@ export function crearWorkerBarridos(opciones: {
           await completarCorrida(opciones.db, corrida, resultado.cursorAfter, resultado.antesDeCerrar);
         } catch (error) {
           const retryAfter = error instanceof ErrorBarridoReintentable ? error.retryAfter : undefined;
-          const codigo = error instanceof Error ? error.name : 'ErrorDesconocido';
+          // Nombre + mensaje (p. ej. "ErrorBarridoReintentable: HTTP_429 /items/bulk"): sólo el nombre no alcanzaba
+          // para saber por qué falló la vuelta diaria de ml.items. El mensaje ya viene con la ruta saneada.
+          const codigo = error instanceof Error ? `${error.name}: ${error.message}` : 'ErrorDesconocido';
           await fallarCorrida(opciones.db, corrida, codigo, retryAfter, Math.random,
             error instanceof ErrorBarridoReintentable);
         } finally {

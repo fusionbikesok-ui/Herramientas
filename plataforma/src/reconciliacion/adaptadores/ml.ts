@@ -8,7 +8,11 @@ import {
   idTexto, inicioVentana, numeroPosicion, textoPosicion, valorOnull, type Registro,
 } from './comun.ts';
 
-export interface DependenciasMl { transporte: TransporteCanal; db: Consultable; sellerId: string }
+export interface DependenciasMl {
+  transporte: TransporteCanal; db: Consultable; sellerId: string;
+  /** Inyectables para test: la espera entre reintentos/páginas y el azar del jitter. */
+  esperar?: (ms: number) => Promise<void>; azar?: () => number;
+}
 
 const LOTE_INDIVIDUAL = 20;
 /** Relecturas de un segmento de órdenes antes de declararlo inestable y dejar el cursor quieto. */
@@ -334,6 +338,32 @@ export function itemMl(crudo: unknown): RecursoRemoto {
   };
 }
 
+// Guía de ML (Rate limit / Error 429): backoff exponencial con jitter, sin ráfagas, y consumir el scroll
+// (vence a los 5 min) de forma continua. Un 429/5xx aislado se reintenta en el mismo pedido; si la espera
+// acumulada supera el presupuesto, se deja caer la vuelta para que la corrida reintente más tarde.
+const PAUSA_ENTRE_PAGINAS_MS = 300;
+const PRESUPUESTO_REINTENTO_MS = 90_000;
+const MAX_REINTENTOS_PEDIDO = 6;
+
+async function conReintento<T>(dep: DependenciasMl, pedido: () => Promise<T>): Promise<T> {
+  const esperar = dep.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const azar = dep.azar ?? Math.random;
+  let gastado = 0;
+  for (let intento = 0; ; intento++) {
+    try {
+      return await pedido();
+    } catch (error) {
+      if (!(error instanceof ErrorBarridoReintentable) || intento >= MAX_REINTENTOS_PEDIDO) throw error;
+      const ms = error.retryAfter !== undefined
+        ? error.retryAfter * 1000
+        : Math.round(Math.min(30_000, 1000 * 2 ** intento) * (0.8 + 0.4 * azar()));
+      if (gastado + ms > PRESUPUESTO_REINTENTO_MS) throw error;
+      gastado += ms;
+      await esperar(ms);
+    }
+  }
+}
+
 export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
     // Items no tiene filtro por modificación: su única corriente es la vuelta completa diaria.
@@ -341,15 +371,22 @@ export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
     async listar(ctx, posicion): Promise<PaginaRemota> {
       const q = new URLSearchParams({ search_type: 'scan', limit: '100' });
       const scroll = textoPosicion(posicion, 'scroll_id');
-      if (scroll) q.set('scroll_id', scroll);
+      if (scroll) {
+        q.set('scroll_id', scroll);
+        await (dep.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(PAUSA_ENTRE_PAGINAS_MS);
+      }
       const ruta = `/users/${encodeURIComponent(dep.sellerId)}/items/search?${q}`;
-      const body = exigirRegistro(exigirOk(await dep.transporte.get(ruta), 'items/search'), 'items/search');
+      const body = exigirRegistro(exigirOk(await conReintento(dep, () => dep.transporte.get(ruta)), 'items/search'), 'items/search');
       const ids = exigirLista(body.results, 'items/search results').map(idTexto);
       if (ids.some((id) => !id)) throw new ErrorCanalTerminal('ID_INVALIDO items/search');
       const lotes: string[][] = [];
       for (let i = 0; i < ids.length; i += LOTE_MULTIGET) lotes.push(ids.slice(i, i + LOTE_MULTIGET));
       // `/items/bulk?ids=` (sonda autenticada 2026-09-16): cada elemento trae su `status_code`.
-      const respuestas = await Promise.all(lotes.map((lote) => dep.transporte.get(`/items/bulk?ids=${lote.map(encodeURIComponent).join(',')}`)));
+      // De a uno, no en paralelo: cinco bulk simultáneos por página eran la ráfaga que la guía de ML desaconseja.
+      const respuestas: RespuestaCanal[] = [];
+      for (const lote of lotes) {
+        respuestas.push(await conReintento(dep, () => dep.transporte.get(`/items/bulk?ids=${lote.map(encodeURIComponent).join(',')}`)));
+      }
       const resources: RecursoRemoto[] = [];
       const presentes: string[] = [];
       for (const r of respuestas) {

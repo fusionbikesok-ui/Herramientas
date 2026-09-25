@@ -92,7 +92,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
 
   const cliente = (o: Partial<Parameters<typeof crearClienteCanal>[0]> = {}) => crearClienteCanal({ baseUrl: url, ...o });
   const adaptadores = (): Record<string, AdaptadorBarrido> => ({
-    ...crearAdaptadoresMl({ transporte: cliente(), db, sellerId: SELLER }),
+    ...crearAdaptadoresMl({ transporte: cliente(), db, sellerId: SELLER, esperar: async () => {} }),
     ...crearAdaptadoresWoo({ transporte: cliente() }),
   });
   const llamadas = async (): Promise<LlamadaSimulador[]> => (await fetch(`${url}/__qa/llamadas`)).json() as Promise<LlamadaSimulador[]>;
@@ -282,7 +282,8 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     expect(bulk.length).toBe(7);
     expect(bulk.every((l) => l.ruta.split('=')[1]!.split(',').length <= 20)).toBe(true);
     datos!.items.delete('MLA100005');
-    await qa({ ruta: 'scroll_id=100', status: 503 });
+    // 7 = el pedido original + los 6 reintentos del adaptador: sólo un 503 persistente tira la vuelta.
+    await qa({ ruta: 'scroll_id=100', status: 503, veces: 7 });
     await expect(barrer('ml.items', 'full_scan', { reloj: despues(1) })).rejects.toBeInstanceOf(ErrorBarridoReintentable);
     expect(await contar("select count(*) n from integrations.resource_observations where lifecycle='deleted'")).toBe(0);
     await admin.query("update integrations.sweep_runs set available_at=now() where status='retryable'");
