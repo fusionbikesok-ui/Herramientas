@@ -105,6 +105,23 @@ describe('bandeja: logica pura', () => {
     const ops = [{ explicacion: { atributos: [{ nombre: 'rodado', marca: 'equivalente' }] } }];
     expect(L.filaVisible(ops, 'rodado', true)).toBe(false);
   });
+
+  it('sólo diferencias: atributo ausente en TODOS los candidatos (no sólo en uno) se muestra', () => {
+    // Sugerencia Baja de Codex tras el fix: pinnear el caso donde ningún candidato tiene el atributo,
+    // no sólo el caso mixto (uno con dato, otro sin) que ya cubre el test anterior.
+    const ops = [
+      { explicacion: { atributos: [] } },
+      { explicacion: { atributos: [] } },
+    ];
+    expect(L.filaVisible(ops, 'color', true)).toBe(true);
+  });
+
+  it('sólo diferencias: sin candidatos (arreglo vacío) no hay nada que difiera → oculta', () => {
+    // Sugerencia Baja de Codex: comportamiento no especificado antes, ahora pinneado. Es inalcanzable desde
+    // la UI real (los nombres de fila salen de los propios candidatos), pero queda fijado por si se llama
+    // a filaVisible directamente desde otro lado.
+    expect(L.filaVisible([], 'color', true)).toBe(false);
+  });
 });
 
 describe('bandeja: atajos sobre radios', () => {
