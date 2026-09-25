@@ -1,6 +1,6 @@
 # E1 tramo 5 — Cupo sombra de ML por corriente
 
-**Estado:** diseño (PM-188, decisión de José 2026-09-25). **Entrega:** E1. **Reglas:** todo lo que toque ML sigue `specs/ml-api-guia.md`. **Revisión Codex:** primera pasada con 2 críticos/5 altos/2 medios/1 bajo (`/root/.claude/jobs/6c6b3b28/tmp/codex-rev-t5-informe.md`); esta versión los corrige uno por uno (ver §6).
+**Estado:** diseño (PM-188, decisión de José 2026-09-25). **Entrega:** E1. **Reglas:** todo lo que toque ML sigue `specs/ml-api-guia.md`. **Revisión Codex:** primera pasada con 2 críticos/5 altos/2 medios/1 bajo (`/root/.claude/jobs/6c6b3b28/tmp/codex-rev-t5-informe.md`); segunda pasada, sobre la corrección, con 1 crítico/3 altos/2 medios/1 bajo (`/root/.claude/jobs/e656f951/tmp/codex-rev-t5-informe-v2.md`). Esta versión corrige ambas rondas (ver §6).
 
 ## 1. Problema
 
@@ -29,9 +29,15 @@ en la tabla.
 | `claims` | `ml.claims.search`, `ml.claim` | `claims` |
 
 Regla de asignación: `presupuestoMl.reservar(op, params, ahora)` recibe la operación **y** sus parámetros;
-para `ml.missed_feeds` resuelve la corriente con `params.topic` (mismo mapeo que `TOPICOS_MISSED` en
-`gatewayCanal.js`), para el resto con una tabla estática operación→corriente. Una operación ML sin corriente
-asignable (ni por tabla ni por `topic`) es un error de programación: falla el test que recorre `OPERACIONES`.
+para `ml.missed_feeds` resuelve la corriente con `params.topic`, para el resto con una tabla estática
+operación→corriente. **Fuente única del mapeo de tópicos (corrige hallazgo medio 5 de la segunda revisión):**
+hoy `TOPICOS_MISSED` vive en `gatewayCanal.js` y la validación de tópicos aceptados se repite en
+`transporte-gateway.ts`; el mapeo tópico→corriente de esta spec (tabla de arriba) es una tercera lista. Para
+no divergir, la tabla tópico→corriente se define como la única fuente y las otras dos listas (`TOPICOS_MISSED`,
+la validación del transporte) se generan a partir de sus claves (`Object.keys(...)`) en vez de mantenerse por
+separado; un test de igualdad entre las tres verifica que ningún tópico quede aceptado en un lado y no en
+otro. Una operación ML sin corriente asignable (ni por tabla ni por `topic`) es un error de programación:
+falla el test que recorre `OPERACIONES`.
 
 Cada corriente tiene su bucket por minuto (`GATEWAY_ML_SHADOW_RPM_<CORRIENTE>`), y `GATEWAY_ML_SHADOW_RPM`
 sigue como **techo global** encima de todas: una llamada sale sólo si hay lugar en su corriente **y** en el
@@ -86,41 +92,67 @@ recibido. Un 429 sin ese header sigue siendo `HTTP_429` (429 real de ML o de un 
 - **Señales (`reconciliation_signals`):** mismo patrón sobre la función que hoy manda a `dead_lettered` en
   `senales-cola.ts:73`: con `ErrorCupoSombraAgotado` el estado vuelve a `'retryable'` (no `dead_lettered`),
   intento devuelto, `available_at` = el mismo cálculo.
-- **Tope por edad, para no ciclar indefinidamente:** si la corrida/señal lleva diferida más de
-  `CUPO_SOMBRA_DIFERIDO_MAX_MIN` (config, default 30 min) sin lograr ejecutar, la siguiente vez que choque
-  con `ErrorCupoSombraAgotado` cae a la ruta normal de `fallarCorrida`/`dead_lettered` **con el código
-  `CUPO_SOMBRA_AGOTADO`** (para diferenciarlo en observabilidad de un `HTTP_429` real), consumiendo intento
-  como cualquier otro fallo. Esto evita inanición: una corrida que nunca consigue cupo termina fallando
-  visiblemente en vez de reintentar para siempre.
+- **Tope por edad, para no ciclar indefinidamente (base temporal precisada tras la segunda revisión — alto 4):**
+  ambas tablas necesitan una columna nueva `deferred_since timestamptz` (nulable; se fija la **primera** vez
+  que la corrida/señal choca con `ErrorCupoSombraAgotado` y no se vuelve a tocar en diferimientos
+  posteriores de la misma corrida/señal — así una corrida reprogramada varias veces no "reinicia" su
+  reloj). Si `now() - deferred_since > CUPO_SOMBRA_DIFERIDO_MAX_MIN` (config, default 30 min) en un nuevo
+  choque con `ErrorCupoSombraAgotado`, cae a la ruta normal de `fallarCorrida`/`dead_lettered` **con el
+  código `CUPO_SOMBRA_AGOTADO`** (para diferenciarlo en observabilidad de un `HTTP_429` real), consumiendo
+  intento como cualquier otro fallo, y `deferred_since` se limpia. Si la corrida sale del diferimiento por
+  éxito antes del tope, `deferred_since` también se limpia. Esto evita inanición: una corrida que nunca
+  consigue cupo termina fallando visiblemente en vez de reintentar para siempre. Tests exigidos en §4:
+  29/30/31 minutos alrededor del tope, y una corrida reprogramada dos veces que no reinicia el reloj.
 - Métrica nueva en observabilidad (`sombra.ts:50-77`, que hoy cuenta `r429` con `LIKE '%HTTP_429%'`):
   contar `CUPO_SOMBRA_AGOTADO` por separado de `HTTP_429`, tanto en diferimientos (esperado, no alarma) como
   en los que agotaron el tope de edad (si esto ocurre con frecuencia, el reparto de §2.5 está mal calibrado
   y hay que revisarlo, no subir el tope).
 
-### 2.5 Efecto sobre PM-186 (corrige el hallazgo crítico 2)
+### 2.5 Efecto sobre PM-186 (corrige el hallazgo crítico 2; corrección adicional tras la segunda revisión — crítico 1 de esa pasada)
 
-No se introduce una categoría nueva de día en el reporte. `plataforma/src/informes/reporte.ts:97-134` ya
-resuelve esto con las reglas existentes: un tópico sin barrido OK en el día queda con convergencia `null` →
-el día es amarillo; cobertura `<1` → amarillo. Una corriente que se diferió toda la ventana del día y no
-llegó a completar su barrido cae en uno de esos dos casos por construcción — no hace falta lógica nueva de
-reporte, sólo declararlo: **un diferimiento que impide completar la cobertura o convergencia de una corriente
-en el día hace ese día amarillo y no cuenta para los 7 días verdes de PM-186**, igual que cualquier otro
-motivo de cobertura incompleta hoy. Un diferimiento que sí llega a completarse dentro de la ventana del día
-(la corrida se reprogramó y terminó a tiempo) no distingue el día de uno sin diferimientos.
+**El razonamiento original de esta sección era incompleto y quedó corregido tras verificar `reporte.ts` en
+detalle.** `plataforma/src/informes/reporte.ts:102-108` consulta `sweep_runs` filtrando **sólo**
+`status = 'succeeded'` para calcular cobertura/convergencia de un tópico, y si hay varios `succeeded` en el
+día toma el peor (`Math.min`). El problema: una corrida que quedó `pending`/`retryable` por diferimiento (o
+que agotó el tope de edad y terminó `failed`) **no aparece en esa consulta en absoluto** — no sólo no cuenta
+como éxito, directamente no se mira. Si esa misma corriente tuvo un `succeeded` anterior en el día con
+cobertura/convergencia 100 %, el reporte queda con esa foto vieja y puede marcar el día verde aunque la
+corrida más reciente nunca haya llegado a ejecutarse. Esto sí requiere un cambio de código, no sólo una
+declaración:
 
-### 2.6 Relación con el presupuesto legado (corrige el hallazgo alto 7 — el "alto 7" original de Codex es incorrecto, según verificación de código)
+- `reporte.ts` debe considerar, por tópico y por día, si hubo alguna corrida `pending`/`retryable`/`failed`
+  (por cualquier motivo, incluido `CUPO_SOMBRA_AGOTADO`) cuya `scheduled_for`/ventana esperada haya vencido
+  sin una `succeeded` posterior que la cubra — no basta con mirar la última `succeeded`. Concretamente:
+  agregar a la consulta de cobertura/convergencia una comprobación de que el número de `succeeded` en la
+  ventana coincide con el número de corridas **esperadas** según `interval_seconds` de esa corriente
+  (`reconciliation_cursors`), y si faltan, tratar el tópico como sin convergencia declarada (mismo camino que
+  hoy usa "tópico sin barrido en el día", `reporte.ts:117-120`), igual que si nunca se hubiera barrido.
+- Con ese cambio: **un diferimiento que impide completar la cantidad de barridos esperada de una corriente en
+  el día hace ese día amarillo y no cuenta para los 7 días verdes de PM-186**, aunque haya habido un
+  `succeeded` anterior en el mismo día. Un diferimiento que sí se resuelve a tiempo (la corrida reprogramada
+  ejecuta y cuenta como una más de las esperadas) no distingue el día de uno sin diferimientos.
+- Test nuevo exigido en §4: un tópico con un `succeeded` de cobertura 100 % seguido de un diferimiento que no
+  llega a resolverse en el día debe dar día amarillo, no verde.
+
+### 2.6 Relación con el presupuesto legado (corrige el hallazgo alto 7; matizado tras la segunda revisión — ver alto 3 de esa pasada)
 
 `ejecutarMl` del gateway (inyectado en `server.js:256`) usa `mlFetch` del legado, que pasa por
 `reservarCupo` de `lib/mlRateLimiter.js` (`lib/mlClient.js:13`) igual que cualquier llamada legado. Es decir:
 **la sombra ya consume del mismo presupuesto por cuenta que el legado** (lectura 500 rpm y global 1500 rpm,
 ambos ×0.85 de margen, `lib/mlLimites.js:49-79`) — no son buckets independientes sin relación, como decía la
 primera revisión. Los RPM de la sombra (60 global, repartidos por corriente en §2.7) son un **subtecho**
-dentro de ese presupuesto compartido, no una asignación adicional. La spec documenta esto explícitamente en
-vez de proponer coordinación nueva: no hace falta reservar capacidad aparte para el legado porque ambos ya
-comparten el mismo limitador de fondo; el riesgo real es que el legado, en un pico propio, consuma tanto que
-dentro del presupuesto compartido no quede margen para los 60 rpm de la sombra — en ese caso el legado gana
-(su código ya está en producción) y la sombra ve más `HTTP_429` reales de `mlRateLimiter`, correctamente
-distinguidos de `CUPO_SOMBRA_AGOTADO` por no traer `x-fusion-cupo`.
+dentro de ese presupuesto compartido, no una asignación adicional.
+
+**Matiz importante (segunda revisión):** que compartan el mismo limitador de fondo no significa que la
+convivencia esté garantizada — sigue sin haber una reserva explícita para la sombra ni una consulta de
+capacidad libre antes de cada llamada. El límite es un **subtecho conservador, no una garantía**: si el
+legado tiene un pico propio de tráfico, puede consumir la mayor parte del presupuesto compartido y dejar
+poco o nada para los 60 rpm de la sombra, generando `HTTP_429` reales frecuentes durante ese pico (no
+`CUPO_SOMBRA_AGOTADO`, que sólo ocurre por el bucket propio de la sombra). Esto no se previene con este
+diseño, sólo se detecta después vía la medición de §2.7 y la observabilidad de §2.4. Implementar coordinación
+activa (consulta de capacidad libre en tiempo real) queda fuera de alcance de este tramo (§3) — la aceptación
+de §4 agrega una métrica de impacto sobre el legado (429 reales, latencia) para poder ver si el subtecho
+resultó insuficiente en la práctica, sin bloquear el tramo a resolver la coordinación activa primero.
 
 ### 2.7 Reparto inicial y evidencia de capacidad (corrige el hallazgo alto 6)
 
@@ -129,12 +161,15 @@ No hay en este momento una medición de volúmenes reales de producción disponi
 (clasificador lo denegó en la sesión que preparó esta corrección); esa consulta la corre José con `!` cuando
 quiera calibrar el reparto. Por eso el tramo se divide en dos pasos, no uno solo:
 
-- **Tarea 0 — medición** (antes de fijar el reparto final): con el cupo por corriente ya desplegado pero con
-  valores conservadores (ver reparto provisional abajo), correr 24–48 h y registrar en `evidence/e1/` por
-  corriente: llamadas permitidas/min, llamadas diferidas/min, tamaño de la corrida más grande atendida y
-  cuánto tardó en completarse dentro de su `interval_seconds`. El criterio de aceptación de la tarea 0 no es
-  un número fijo: es que **cada corriente complete su barrido dentro de su propio `interval_seconds`** sin
-  backlog creciente (la cola de esa corriente no queda más larga al final del período que al principio).
+- **Tarea 0 — medición, gate obligatorio antes del día 0 de PM-186 (endurecido tras la segunda revisión —
+  medio 6):** con el cupo por corriente ya desplegado pero con valores conservadores (ver reparto provisional
+  abajo), correr 24–48 h y registrar en `evidence/e1/` por corriente: llamadas permitidas/min, llamadas
+  diferidas/min, tamaño de la corrida más grande atendida y cuánto tardó en completarse dentro de su
+  `interval_seconds`. **La campaña de 7 días verdes de PM-186 no arranca (no cuenta día 0) hasta que la
+  tarea 0 tenga evidencia registrada y el criterio se cumpla** — no es una medición informativa en paralelo,
+  es un gate previo. El criterio de aceptación de la tarea 0 no es un número fijo: es que **cada corriente
+  complete su barrido dentro de su propio `interval_seconds`** sin backlog creciente (la cola de esa corriente
+  no queda más larga al final del período que al principio).
 - **Reparto inicial provisional** (arranca conservador, no es el reparto final): sobre el techo global actual
   de 60 rpm (el documentado el 2026-09-17): orders 10, shipments 15, items 15, questions 5, messages 10,
   claims 5. Se ajusta con la medición de la tarea 0 y el OK de José — no antes.
@@ -142,18 +177,27 @@ quiera calibrar el reparto. Por eso el tramo se divide en dos pasos, no uno solo
   medición muestra que 60 rpm de sombra generan `HTTP_429` reales frecuentes (no `CUPO_SOMBRA_AGOTADO`), el
   techo baja, no el reparto entre corrientes.
 
-### 2.8 Otros consumidores del mismo transporte (corrige el hallazgo medio 9)
+### 2.8 Otros consumidores del mismo transporte (corrige el hallazgo medio 9 — corregido tras la segunda revisión: la primera versión de esta sección afirmaba que bootstrap comparte el gateway, y el código no lo confirma)
 
-`bootstrap.ts:77-84` (`/items/search`, `/items/bulk`) y `identidad/relectura-auto-sku.ts` (E3) usan el mismo
-`ejecutarMl`/gateway que los barridos de E1, y por lo tanto el mismo cupo por corriente de `items`. Durante
-la campaña de 7 días verdes (PM-186), **bootstrap y la relectura de E3 comparten el bucket `items` sin
-prioridad especial** — no quedan prohibidos ni tienen bucket propio en este tramo: son tráfico adicional
-dentro del mismo cupo, y si consumen lo suficiente para que `ml.items.scan`/`multiget` no complete su
-barrido en la ventana, eso es exactamente el caso que la tarea 0 (§2.7) tiene que detectar (backlog
-creciente en `items`). Las métricas de §2.2 incluyen qué operación generó cada consumo, así que un consumo
-alto de bootstrap/E3 es visible y distinguible del propio barrido de E1 sin trabajo adicional. Si la tarea 0
-muestra que esto bloquea la campaña, la decisión de excluir o priorizar bootstrap/E3 queda para José, no
-implícita en esta spec.
+**Corrección de hecho (segunda revisión de Codex, verificada en código):** `bootstrap.ts` (comentario propio,
+línea ~5: "Lector propio: no toca los adaptadores de las corrientes diarias") y
+`identidad/relectura-auto-sku.ts` (E3, vía `crearRelectoresMl` de `relectura.ts:32`) **no** llaman a
+`crearGatewayCanal` directamente: ambos reciben un `TransporteCanal` inyectado por quien los instancia
+(`OpcionesBootstrap.transporte` / `dep.transporte`). Hoy, `plataforma/src/worker/main.ts` **todavía no
+registra** ningún adaptador de bootstrap ni de relectura (pendiente del corte 5, requiere configuración de
+cuentas/keyring) — así que en el estado actual del código no hay una instancia real corriendo para verificar
+si ese `TransporteCanal` inyectado termina siendo el gateway sombra o un cliente aparte. La spec anterior
+asumía que sí, sin evidencia.
+
+**Decisión que este tramo deja pendiente, explícita en vez de implícita:** cuando se implemente el corte 5 de
+T3 (registro de adaptadores de bootstrap y relectura en `worker/main.ts`), quien lo haga debe decidir y
+documentar si `bootstrap.ts` e `identidad/relectura-auto-sku.ts` reciben el mismo `TransporteCanal` que
+alimenta `crearGatewayCanal` (y por lo tanto comparten el cupo por corriente de `items` de este tramo) o un
+transporte separado con su propio límite. Mientras esa decisión no se tome, **este tramo T5 no puede
+garantizar** que su reparto por corriente sea el único consumo de `items` sobre el presupuesto legado — sólo
+que los barridos de E1 mismos sí lo respetan. La tarea 0 (§2.7) mide el consumo del cupo por corriente
+propio de T5 (operación → corriente por las métricas de §2.2); si en el futuro bootstrap/relectura se cablean
+al mismo gateway, hay que repetir esa medición incluyéndolos.
 
 ## 3. Fuera de alcance (backlog, guía §7)
 
@@ -170,14 +214,20 @@ implícita en esta spec.
   `reconciliation_signals`), tope de edad que sí consume intento y usa el código `CUPO_SOMBRA_AGOTADO`,
   validación de arranque con variable de corriente faltante y gateway habilitado, cobertura de la tabla de
   corrientes incluyendo el caso `missed_feeds`.
-- Tarea 0 (§2.7) completada con evidencia en `evidence/e1/` antes de fijar el reparto final.
+- Tarea 0 (§2.7) completada con evidencia en `evidence/e1/` antes de fijar el reparto final — **gate
+  obligatorio**, no informativo (§2.7).
+- `reporte.ts` corregido y con el test de §2.5 verde (día amarillo cuando faltan barridos esperados aunque
+  haya un `succeeded` previo).
 - En producción, 24 h con las 6 corrientes con al menos un barrido OK, backlog no creciente por corriente, y
-  **cero** casos de `CUPO_SOMBRA_AGOTADO` que hayan agotado el tope de edad (2.4) — diferimientos que sí se
+  **cero** casos de `CUPO_SOMBRA_AGOTADO` que hayan agotado el tope de edad (§2.4) — diferimientos que sí se
   resuelven dentro de su ventana no cuentan como falla.
 - Rollback: quitar las variables por corriente y volver al build anterior del legado; el techo global sigue
   funcionando igual que hoy (sin distinción de corriente, un solo bucket).
-- Despliegue de T5 = día 0 de la campaña de 7 días verdes (PM-186); un día amarillo por diferimiento
-  incompleto (§2.5) reinicia el contador de 7 días, igual que cualquier otro motivo de día amarillo.
+- **Secuencia de despliegue (corregida tras la segunda revisión):** T5 se despliega → corre la tarea 0 (§2.7,
+  24–48 h, gate) → si cumple el criterio de capacidad, el día siguiente es el día 0 de la campaña de 7 días
+  verdes (PM-186); el despliegue de T5 en sí **no** es automáticamente el día 0. Un día amarillo por
+  diferimiento incompleto (§2.5) reinicia el contador de 7 días, igual que cualquier otro motivo de día
+  amarillo.
 
 ## 5. Documentación e integración con el programa (corrige el hallazgo bajo 10)
 
@@ -194,6 +244,8 @@ implícita en esta spec.
 
 ## 6. Trazabilidad de la revisión de Codex
 
+### Primera pasada (commit 2c3b8c8f → e915d1bd)
+
 | # | Hallazgo (informe original) | Sección de esta corrección |
 |---|---|---|
 | Crítico 1 | Reintento sin consumir intentos no implementado | §2.4 |
@@ -202,7 +254,19 @@ implícita en esta spec.
 | Alto 4 | Firma del gateway no soporta reparto por corriente | §2.2 |
 | Alto 5 | 429 sintético y real siguen confluyendo | §2.3 |
 | Alto 6 | Reparto sin volúmenes ni garantía de terminación | §2.7 |
-| Alto 7 | Techo global no coordinado con el legado | §2.6 (verificado: ya comparten presupuesto de fondo; no hacía falta coordinación nueva, sólo documentarlo) |
+| Alto 7 | Techo global no coordinado con el legado | §2.6 (verificado: ya comparten presupuesto de fondo; matizado en la segunda pasada — ver abajo) |
 | Medio 8 | "Sin variable = cerrada" sin validación de arranque | §2.1 (párrafo de validación) |
-| Medio 9 | Consumidores fuera del barrido (bootstrap, E3) sin modelar | §2.8 |
+| Medio 9 | Consumidores fuera del barrido (bootstrap, E3) sin modelar | §2.8 (corregido de hecho en la segunda pasada — ver abajo) |
 | Bajo 10 | Integración documental incompleta (ficha, programa, crosswalk) | §5 |
+
+### Segunda pasada (sobre e915d1bd, informe en `codex-rev-t5-informe-v2.md`)
+
+| # | Hallazgo | Sección de esta corrección |
+|---|---|---|
+| Crítico 1 (v2) | `reporte.ts` sólo mira `succeeded`; un diferimiento posterior a un `succeeded` del mismo día puede quedar invisible y el día salir verde igual | §2.5 (reescrita) |
+| Alto 2 (v2) | §2.8 afirmaba que `bootstrap.ts` usa el mismo gateway que los barridos; el código lo contradice (`TransporteCanal` inyectado propio, sin wiring todavía) | §2.8 (reescrita como decisión pendiente, no como hecho) |
+| Alto 3 (v2) | Compatibilidad con el limiter legado no garantizada, sólo compartida de hecho | §2.6 (matizada: subtecho conservador, no garantía) |
+| Alto 4 (v2) | Tope de edad sin base temporal definida (desde cuándo se cuenta) | §2.4 (agrega `deferred_since` persistente) |
+| Medio 5 (v2) | Mapeo tópico→corriente duplicado en 3 lugares, riesgo de divergencia | §2.1 (fuente única) |
+| Medio 6 (v2) | Tarea 0 debía ser gate previo a la campaña, no medición en paralelo | §2.7 y §4 (gate obligatorio, secuencia de despliegue corregida) |
+| Bajo 7 (v2) | §6 marcaba el medio 9 original como "corregido" sin serlo realmente | Esta tabla, fila Medio 9 arriba |
