@@ -1,10 +1,12 @@
 /**
  * E3 corte 1 T6 — proxy firmado de la bandeja de identidad hacia la API interna de la plataforma.
  *
- *   GET  /api/bandeja-identidad/casos?tipo&estado&cursor&limit   → GET  /internal/v1/identidad/casos
- *   GET  /api/bandeja-identidad/casos/:id                        → GET  /internal/v1/identidad/casos/:id
- *   POST /api/bandeja-identidad/casos/:id/decisiones             → POST /internal/v1/identidad/casos/:id/decisiones
- *   GET  /api/bandeja-identidad/variantes?q=                     → GET  /internal/v1/identidad/variantes
+ *   GET    /api/bandeja-identidad/casos?tipo&estado&cursor&limit   → GET    /internal/v1/identidad/casos
+ *   GET    /api/bandeja-identidad/casos/:id                        → GET    /internal/v1/identidad/casos/:id
+ *   POST   /api/bandeja-identidad/casos/:id/decisiones             → POST   /internal/v1/identidad/casos/:id/decisiones
+ *   GET    /api/bandeja-identidad/variantes?q=                     → GET    /internal/v1/identidad/variantes
+ *   POST   /api/bandeja-identidad/casos/:id/apartar                → POST   /internal/v1/identidad/casos/:id/apartar
+ *   DELETE /api/bandeja-identidad/casos/:id/apartar                → DELETE /internal/v1/identidad/casos/:id/apartar
  *
  * Frontera de confianza (enmienda de Codex al plan): la plataforma le cree al legado el actor y `es_admin` que
  * viajan en el cuerpo firmado, así que la garantía de que son verdaderos vive ACÁ. El actor y `es_admin` salen
@@ -84,6 +86,22 @@ export function bandejaIdentidadRouter({ url, keyring, fetch: hacerFetch = globa
     };
     return reenviar(res, 'POST', `${PREFIJO}/casos/${req.params.id}/decisiones`, cuerpo, { 'idempotency-key': clave });
   });
+
+  const manejarMarca = (metodo) => (req, res) => {
+    if (!UUID.test(req.params.id)) return res.status(404).json({ ok: false, code: 'caso_inexistente' });
+    const clave = req.get('idempotency-key');
+    if (!clave) return res.status(422).json({ ok: false, code: 'idempotency_key_requerida', message: 'Falta la cabecera Idempotency-Key.' });
+    const c = req.body ?? {};
+    // Mismo criterio que /decisiones: el cuerpo se arma campo por campo, actor sale SÓLO de la sesión.
+    const cuerpo = {
+      expected_version: c.expected_version,
+      ...(c.motivo != null ? { motivo: c.motivo } : {}),
+      actor: { usuario: req.user.username, es_admin: req.user.is_admin === true },
+    };
+    return reenviar(res, metodo, `${PREFIJO}/casos/${req.params.id}/apartar`, cuerpo, { 'idempotency-key': clave });
+  };
+  router.post('/casos/:id/apartar', manejarMarca('POST'));
+  router.delete('/casos/:id/apartar', manejarMarca('DELETE'));
 
   return router;
 }

@@ -39,6 +39,7 @@ function app({ user, fetch, url = 'http://plataforma.interna:3100', kr = keyring
   return a;
 }
 const operador = { id: 2, username: 'maria', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'write' }] };
+const auditor = { id: 3, username: 'auditor', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'read' }] };
 
 describe('E3 T6 proxy de la bandeja de identidad', () => {
   it('el actor y es_admin salen de la sesión aunque el cliente mande otros (elevación)', async () => {
@@ -158,5 +159,87 @@ describe('E3 T6 proxy de la bandeja de identidad', () => {
     expect(permiteAcceso(lectura, resolvePermiso('POST', `/bandeja-identidad/casos/${ID}/decisiones`))).toBe(false);
     expect(permiteAcceso([{ herramienta: 'matcher', nivel: 'write' }], resolvePermiso('POST', `/bandeja-identidad/casos/${ID}/decisiones`))).toBe(true);
     expect(permiteAcceso([{ herramienta: 'stock', nivel: 'write' }], resolvePermiso('GET', '/bandeja-identidad/casos'))).toBe(false);
+  });
+
+  it('apartar: POST reenvía expected_version, motivo y la Idempotency-Key, e inyecta actor desde la sesión', async () => {
+    const p = plataformaFalsa(200, { version: 2 });
+    const r = await request(app({ user: operador, fetch: p.fetch })).post(`/api/bandeja-identidad/casos/${ID}/apartar`)
+      .set('Idempotency-Key', 'clave-apartar-1')
+      .send({ expected_version: 1, motivo: 'no estoy seguro', actor: { usuario: 'jose', es_admin: true }, usuario: 'otro', es_admin: true });
+    expect(r.status).toBe(200);
+    expect(p.recibidos[0]).toMatchObject({ metodo: 'POST', ruta: `/internal/v1/identidad/casos/${ID}/apartar`, firmaValida: true });
+    expect(p.recibidos[0].headers['idempotency-key']).toBe('clave-apartar-1');
+    const enviado = JSON.parse(p.recibidos[0].cuerpo);
+    expect(enviado).toMatchObject({ expected_version: 1, motivo: 'no estoy seguro', actor: { usuario: 'maria', es_admin: false } });
+    expect(enviado).not.toHaveProperty('es_admin');
+    expect(enviado).not.toHaveProperty('usuario');
+  });
+
+  it('apartar: sin Idempotency-Key responde 422 sin llamar a la plataforma', async () => {
+    const p = plataformaFalsa();
+    const r = await request(app({ user: operador, fetch: p.fetch })).post(`/api/bandeja-identidad/casos/${ID}/apartar`)
+      .send({ expected_version: 1 });
+    expect(r.status).toBe(422);
+    expect(p.recibidos).toHaveLength(0);
+  });
+
+  it('apartar: valida el :id como UUID (404 si no lo es)', async () => {
+    const p = plataformaFalsa();
+    const r = await request(app({ user: operador, fetch: p.fetch })).post('/api/bandeja-identidad/casos/no-es-uuid/apartar')
+      .set('Idempotency-Key', 'clave-1').send({ expected_version: 1 });
+    expect(r.status).toBe(404);
+    expect(p.recibidos).toHaveLength(0);
+  });
+
+  it('apartar: pasa tal cual el estado y el cuerpo de la plataforma (409 version_conflict)', async () => {
+    const p = plataformaFalsa(409, { code: 'version_conflict' });
+    const r = await request(app({ user: operador, fetch: p.fetch })).post(`/api/bandeja-identidad/casos/${ID}/apartar`)
+      .set('Idempotency-Key', 'clave-1').send({ expected_version: 1 });
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ code: 'version_conflict' });
+  });
+
+  it('desapartar: DELETE reenvía expected_version, motivo y la Idempotency-Key, e inyecta actor desde la sesión', async () => {
+    const p = plataformaFalsa(200, { version: 3 });
+    const r = await request(app({ user: operador, fetch: p.fetch })).delete(`/api/bandeja-identidad/casos/${ID}/apartar`)
+      .set('Idempotency-Key', 'clave-desapartar-1')
+      .send({ expected_version: 2, motivo: 'ya lo decidí', actor: { usuario: 'jose', es_admin: true } });
+    expect(r.status).toBe(200);
+    expect(p.recibidos[0]).toMatchObject({ metodo: 'DELETE', ruta: `/internal/v1/identidad/casos/${ID}/apartar`, firmaValida: true });
+    expect(p.recibidos[0].headers['idempotency-key']).toBe('clave-desapartar-1');
+    const enviado = JSON.parse(p.recibidos[0].cuerpo);
+    expect(enviado).toMatchObject({ expected_version: 2, motivo: 'ya lo decidí', actor: { usuario: 'maria', es_admin: false } });
+  });
+
+  it('desapartar: sin Idempotency-Key responde 422 sin llamar a la plataforma', async () => {
+    const p = plataformaFalsa();
+    const r = await request(app({ user: operador, fetch: p.fetch })).delete(`/api/bandeja-identidad/casos/${ID}/apartar`)
+      .send({ expected_version: 1 });
+    expect(r.status).toBe(422);
+    expect(p.recibidos).toHaveLength(0);
+  });
+
+  it('desapartar: valida el :id como UUID (404 si no lo es)', async () => {
+    const p = plataformaFalsa();
+    const r = await request(app({ user: operador, fetch: p.fetch })).delete('/api/bandeja-identidad/casos/no-es-uuid/apartar')
+      .set('Idempotency-Key', 'clave-1').send({ expected_version: 1 });
+    expect(r.status).toBe(404);
+    expect(p.recibidos).toHaveLength(0);
+  });
+
+  it('desapartar: pasa tal cual el estado y el cuerpo de la plataforma (409 no_apartado)', async () => {
+    const p = plataformaFalsa(409, { code: 'no_apartado' });
+    const r = await request(app({ user: operador, fetch: p.fetch })).delete(`/api/bandeja-identidad/casos/${ID}/apartar`)
+      .set('Idempotency-Key', 'clave-1').send({ expected_version: 1 });
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ code: 'no_apartado' });
+  });
+
+  it('permisos: apartar y desapartar requieren matcher:write; el auditor (sólo lectura) recibe 403 en los dos', () => {
+    const soloLectura = auditor.permisos;
+    expect(permiteAcceso(soloLectura, resolvePermiso('POST', `/bandeja-identidad/casos/${ID}/apartar`))).toBe(false);
+    expect(permiteAcceso(soloLectura, resolvePermiso('DELETE', `/bandeja-identidad/casos/${ID}/apartar`))).toBe(false);
+    expect(permiteAcceso([{ herramienta: 'matcher', nivel: 'write' }], resolvePermiso('POST', `/bandeja-identidad/casos/${ID}/apartar`))).toBe(true);
+    expect(permiteAcceso([{ herramienta: 'matcher', nivel: 'write' }], resolvePermiso('DELETE', `/bandeja-identidad/casos/${ID}/apartar`))).toBe(true);
   });
 });
