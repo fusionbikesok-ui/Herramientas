@@ -181,8 +181,11 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
     // MISMA publicación, no volver a derivarla de `variant_id` una vez que éste ya no le pertenece.
     const version = bloqueado.version + 1;
     // Revertir reabre un caso cerrado: la decisión anterior deja de ser la última palabra.
+    // Decidir cualquier caso (apartado o no) limpia una marca «No estoy seguro» que haya quedado: la
+    // decisión es la última palabra y el caso ya no tiene sentido en la cola de apartados (rediseño bandeja).
     await tx.query(
-      `UPDATE catalog.identity_cases SET version = $2, estado = 'decided', representation_id = COALESCE(representation_id, $3)
+      `UPDATE catalog.identity_cases SET version = $2, estado = 'decided', representation_id = COALESCE(representation_id, $3),
+        apartado_en = NULL, apartado_por = NULL, apartado_motivo = NULL
         ${p.revierte ? ', cerrado_en = NULL, motivo_cierre = NULL' : ''} WHERE id = $1`,
       [p.caseId, version, repId]);
 

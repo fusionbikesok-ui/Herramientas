@@ -111,7 +111,7 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(todo.body.casos.map((c: any) => c.grupo)).toEqual([0, 1, 2, 3, 4]);
     expect(todo.body.casos[0].publicacion).toMatchObject({ recurso: 'MLA1', link_ml: 'https://articulo.mercadolibre.com.ar/MLA-1' });
     expect(todo.body.siguiente).toBeNull();
-    expect(todo.body.contadores).toEqual({ conflictos: 1, d5: 1, sku_exacto: 1, activas_con_stock: 1, resto: 1, confirmable: 0, sin_titulo: 0, no_decidibles: 0 });
+    expect(todo.body.contadores).toEqual({ conflictos: 1, d5: 1, sku_exacto: 1, activas_con_stock: 1, resto: 1, confirmable: 0, sin_titulo: 0, apartados: 0, no_decidibles: 0 });
 
     const juntas: string[] = [];
     let cursor: string | null = null;
@@ -416,5 +416,23 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     // E: el SKU exacto se normaliza (upper/trim), como en el plan.
     expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=%20fb-100%20`)).body.variantes[0].sku).toBe('FB-100');
     expect((await get(`${PREFIJO_IDENTIDAD}/variantes`)).status).toBe(422);
+  });
+
+  it('apartados: van a su propio grupo 7, se cuentan en contadores.apartados y no aparecen filtrando por otro grupo', async () => {
+    const normal = await caso('MLA30', { abierto: '2026-01-01T00:00:00Z' });
+    const conflicto = await caso('MLA31', { estado: 'conflict', abierto: '2026-01-02T00:00:00Z' });
+    // Aparta el de conflicto: aunque su estado sea 'conflict', apartado_en manda y va al grupo 7, no al 0.
+    await admin.query('UPDATE catalog.identity_cases SET apartado_en = now(), apartado_por = $2 WHERE id = $1', [conflicto.id, 'jose']);
+
+    const todo = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(todo.body.casos.map((c: any) => c.id)).toEqual([normal.id, conflicto.id]);
+    expect(todo.body.casos.map((c: any) => c.grupo)).toEqual([4, 7]);
+    expect(todo.body.casos.map((c: any) => c.apartado)).toEqual([false, true]);
+    expect(todo.body.contadores.apartados).toBe(1);
+
+    const soloApartados = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=7`);
+    expect(soloApartados.body.casos.map((c: any) => c.id)).toEqual([conflicto.id]);
+    const sinApartados = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=4`);
+    expect(sinApartados.body.casos.map((c: any) => c.id)).toEqual([normal.id]);
   });
 });

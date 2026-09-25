@@ -26,6 +26,7 @@ import type { Logger } from 'pino';
 import { z } from 'zod';
 import { otrosAtributos, type Atributos } from '../identidad/comparar.ts';
 import { decidirCaso, type ResultadoDecision } from '../identidad/decidir.ts';
+import { apartarCaso, desapartarCaso } from '../identidad/apartar.ts';
 import { verificarInterna } from '../seguridad/interna.ts';
 import type { OpcionesSenales } from './senales.ts';
 
@@ -52,10 +53,16 @@ const Decision = z.strictObject({
  *  pueda referenciar sin repetir el string a mano. */
 export const PREFIJO_MOTIVO_CONFIRMAR = 'confirmar: ';
 const ConsultaCola = z.strictObject({
-  tipo: z.string().max(64).optional(), estado: z.string().max(32).optional(), grupo: z.coerce.number().int().min(0).max(6).optional(),
+  tipo: z.string().max(64).optional(), estado: z.string().max(32).optional(), grupo: z.coerce.number().int().min(0).max(7).optional(),
   cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(LIMITE_MAXIMO).default(LIMITE_POR_DEFECTO),
 });
 const ConsultaVariantes = z.strictObject({ q: z.string().trim().min(1).max(200) });
+/** Rediseño de la bandeja: apartar/desapartar («No estoy seguro»), con Idempotency-Key igual que decidir. */
+const Apartar = z.strictObject({
+  expected_version: z.number().int().min(1),
+  actor: z.strictObject({ usuario: z.string().min(1).max(200), es_admin: z.boolean() }),
+  motivo: z.string().max(2000).optional(),
+});
 
 const STATUS_DECISION: Record<Exclude<ResultadoDecision, { ok: true }>['code'], number> = {
   version_conflict: 409, caso_cerrado: 409, revierte_no_vigente: 409,
@@ -78,7 +85,8 @@ const linkMl = (recurso: string) => 'https://articulo.mercadolibre.com.ar/' + re
  *  no tiene modelo propio (E3 punto B, revisión de opt-16 sobre 5cb02ef5), pero sí puede tener
  *  `r.titulo_observado` — ese caso NO es "sin título", va por confirmable/activa/resto según corresponda.
  *  Requiere que la consulta traiga `cv.sku` (LEFT JOIN sellable_variants por `c.variant_id`, sólo vivas). */
-const GRUPO_CASE = `CASE WHEN c.estado = 'conflict' THEN 0
+const GRUPO_CASE = `CASE WHEN c.apartado_en IS NOT NULL THEN 7
+                       WHEN c.estado = 'conflict' THEN 0
                        WHEN (c.detalle->>'d5')::boolean IS TRUE THEN 1
                        WHEN EXISTS (SELECT 1 FROM catalog.identity_decisions d
                                      WHERE d.channel_account_id = r.channel_account_id AND d.recurso = r.recurso
@@ -139,7 +147,7 @@ export function registrarIdentidadInterna(
     });
 
     /** Verifica firma + origen y gasta el nonce. Devuelve la cuenta/empresa, o null si ya respondió el error. */
-    async function autenticar(req: FastifyRequest, reply: FastifyReply, metodo: 'GET' | 'POST'): Promise<{ cuenta: string; empresa: string } | null> {
+    async function autenticar(req: FastifyRequest, reply: FastifyReply, metodo: 'GET' | 'POST' | 'DELETE'): Promise<{ cuenta: string; empresa: string } | null> {
       const cuerpo = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       const path = metodo === 'GET' ? req.url : req.url.split('?')[0]!;
       const v = verificarInterna({
@@ -205,7 +213,7 @@ export function registrarIdentidadInterna(
            LEFT JOIN catalog.sellable_variants cv ON cv.id = c.variant_id AND cv.archivado_en IS NULL
           WHERE c.company_id = $1 AND c.cerrado_en IS NULL GROUP BY 1`, [auth.empresa])).rows;
       const en = (g: number | null) => cnt.find((f) => f.g === g)?.n ?? 0;
-      const contadores = { conflictos: en(0), d5: en(1), sku_exacto: en(2), activas_con_stock: en(3), resto: en(4), confirmable: en(5), sin_titulo: en(6), no_decidibles: en(null) };
+      const contadores = { conflictos: en(0), d5: en(1), sku_exacto: en(2), activas_con_stock: en(3), resto: en(4), confirmable: en(5), sin_titulo: en(6), apartados: en(7), no_decidibles: en(null) };
       const hay = r.rows.length > q.data.limit;
       const filas = r.rows.slice(0, q.data.limit);
       const ultimo = filas.at(-1);
@@ -218,6 +226,7 @@ export function registrarIdentidadInterna(
           // Grupo 5 (punto A): la pantalla puede ofrecer "Confirmar" sin llamar a /casos/:id — ya tiene el
           // variant_id y el SKU acá mismo, sin candidatos que buscar.
           confirmar: f.g === 5 ? { variant_id: f.variant_id, sku: f.confirmar_sku ?? null } : null,
+          apartado: f.g === 7,
         })),
         // Precargable: el legado pide el "siguiente" con este cursor mientras el operador decide el actual.
         contadores,
@@ -358,6 +367,41 @@ export function registrarIdentidadInterna(
       if (r.ok) return reply.code(200).send({ decision_id: r.decisionId, version: r.version, vinculo: r.vinculo });
       return error(req, reply, STATUS_DECISION[r.code], r.code, `No se pudo decidir: ${r.code}.`, r.details ? { details: r.details } : {});
     });
+
+    // ───────────────────────── apartar / desapartar («No estoy seguro») ─────────────────────────
+    // Mismo contrato que decidir: Idempotency-Key obligatoria, expected_version, y los mismos códigos de
+    // error que decidirCaso ya usa (version_conflict, caso_cerrado, caso_inexistente), más no_apartado para
+    // el DELETE cuando el caso ya no está apartado.
+    const STATUS_MARCA: Record<Exclude<Awaited<ReturnType<typeof apartarCaso>>, { ok: true }>['code'], number> = {
+      version_conflict: 409, caso_cerrado: 409, caso_inexistente: 404, bandeja_apagada: 503, no_apartado: 409,
+    };
+    async function manejarMarca(
+      req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply, metodo: 'POST' | 'DELETE',
+      accion: typeof apartarCaso | typeof desapartarCaso,
+    ) {
+      const auth = await autenticar(req, reply, metodo); if (!auth) return reply;
+      if (!z.uuid().safeParse(req.params.id).success) return error(req, reply, 404, 'caso_inexistente', 'No existe el caso.');
+      let datos: unknown;
+      try { datos = JSON.parse((Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)).toString('utf8')); }
+      catch { return error(req, reply, 400, 'invalid_body', 'El cuerpo no es JSON.'); }
+      const d = Apartar.safeParse(datos);
+      if (!d.success) return error(req, reply, 422, 'invalid_body', 'El pedido no es válido.');
+      const clave = req.headers['idempotency-key'];
+      if (typeof clave !== 'string' || clave.length < 8 || clave.length > 200) {
+        return error(req, reply, 422, 'idempotency_key_requerida', 'Falta la cabecera Idempotency-Key.');
+      }
+      // El caso tiene que ser de la empresa autenticada: mismo chequeo que hace decidirCaso puertas adentro.
+      const caso = (await pool.query<{ id: string }>('SELECT id FROM catalog.identity_cases WHERE id = $1 AND company_id = $2', [req.params.id, auth.empresa])).rows[0];
+      if (!caso) return error(req, reply, 404, 'caso_inexistente', 'No existe el caso.');
+      const r = await accion(pool, {
+        caseId: req.params.id, expectedVersion: d.data.expected_version, actor: d.data.actor.usuario,
+        ...(d.data.motivo ? { motivo: d.data.motivo } : {}), idempotencyKey: clave,
+      });
+      if (r.ok) return reply.code(200).send({ version: r.version });
+      return error(req, reply, STATUS_MARCA[r.code], r.code, `No se pudo ${metodo === 'POST' ? 'apartar' : 'desapartar'}: ${r.code}.`);
+    }
+    sub.post<{ Params: { id: string } }>(`${PREFIJO_IDENTIDAD}/casos/:id/apartar`, (req, reply) => manejarMarca(req, reply, 'POST', apartarCaso));
+    sub.delete<{ Params: { id: string } }>(`${PREFIJO_IDENTIDAD}/casos/:id/apartar`, (req, reply) => manejarMarca(req, reply, 'DELETE', desapartarCaso));
 
     // ───────────────────────── buscar otra variante ─────────────────────────
     sub.get(`${PREFIJO_IDENTIDAD}/variantes`, async (req, reply) => {

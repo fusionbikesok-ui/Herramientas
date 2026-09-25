@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { apartarCaso } from '../../src/identidad/apartar.ts';
 import { calibrar } from '../../src/identidad/calibracion.ts';
 import { ENGINE_VERSION } from '../../src/identidad/motor.ts';
 import { crearPool } from '../../src/db/pool.ts';
@@ -109,6 +110,16 @@ describe('E3-CALIB-01 calibrar', () => {
       expect(m.muestra.n).toBe(0);
       expect(m.ventana).toEqual({ n: 4, top1: 0.25, top3: 0.75, top1MalAlto: 0.25, recallN: 0.75 });
       expect(m.total).toEqual(m.ventana);
+    });
+
+    it('apartar un caso de la ventana no cambia ninguna métrica: «No estoy seguro» no es una decisión', async () => {
+      const [t1, t2] = [await destino(), await destino()];
+      const a = await caso(); await corrida(a.id, '2026-06-01T10:01:00Z', [[t1, 0.9]]); await decision(a, { origen: 'humano', variante: t1, en: '2026-06-01T11:00:00Z' });
+      const b = await caso(); await corrida(b.id, '2026-06-01T10:01:00Z', [[t2, 0.9]]); await decision(b, { origen: 'humano', variante: t2, en: '2026-06-01T11:00:00Z' });
+      const antes = await run();
+      await apartarCaso(admin, { caseId: b.id, expectedVersion: 1, actor: 'jose', idempotencyKey: 'apt-1' });
+      const despues = await run();
+      expect(despues).toEqual(antes);
     });
 
     it('una corrida posterior a la decisión no cuenta (sin fuga de la verdad)', async () => {
