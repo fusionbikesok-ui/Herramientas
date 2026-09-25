@@ -14,6 +14,7 @@
  */
 import type { Consultable } from '../db/pool.ts';
 import { decisionVigente } from '../identidad/autoridad.ts';
+import { estructuraItemMl, registrarFormato } from '../identidad/formato.ts';
 import { valoresRelacionados } from './atributos.ts';
 import { bloquearDecisiones, reconciliarSku } from './decisiones.ts';
 import type { OrigenModelo, Proyeccion, RepresentacionObservada, SkuObservado } from './intenciones.ts';
@@ -31,6 +32,13 @@ export interface ContextoAplicacion {
   /** E3_BANDEJA: si una decisión humana de la bandeja manda sobre la copiada del legado. Por defecto NO
    *  (comportamiento idéntico a antes de E3, bit a bit: decisionVigente ni consulta identity_decisions). */
   bandeja?: boolean;
+  /**
+   * E3 corte 3 tarea 1: el payload CRUDO de `ml.items` (antes de proyectarItemMl), sólo para
+   * `canal === 'mercadolibre'`. `formato.ts` necesita la estructura del payload tal como lo mandó ML, no
+   * ya reducida a `Proyeccion` (que descarta listing_type_id/catalog_listing/buying_mode). El proyector lo
+   * pasa cuando lo tiene; si falta (p.ej. un llamador que no viene de `ml.items`), no se registra formato.
+   */
+  payloadMl?: unknown;
 }
 
 export interface ResumenAplicacion {
@@ -108,6 +116,21 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
     if (existente?.version_remota && ctx.versionRemota && ctx.versionRemota < existente.version_remota) {
       resumen.viejas++;
       continue;
+    }
+
+    // E3 corte 3 tarea 1: registrar la observación de formato (D4) cuando se proyecta un ml.items — DESPUÉS
+    // del chequeo de versión de arriba (hallazgo Alto de la segunda opinión de Codex, 2026-09-25: hacerlo
+    // antes dejaba que un mensaje reordenado/atrasado se convirtiera en la "última" observación y generara
+    // falsos cambios de SKU/formato). Un ítem de ML tiene un solo `recurso` compartido por todas sus
+    // representaciones (el contenedor y cada variación, `ml.ts`), así que se registra UNA vez por proyección,
+    // en la representación del ítem/contenedor (`variacion === ''`, siempre presente: ver `proyectarItemMl`),
+    // no una vez por representación. Si `resultado === 'cambio'` no se hace nada más acá: la transición a
+    // `intervention` es la Tarea 6.
+    if (ctx.canal === 'mercadolibre' && ctx.payloadMl !== undefined && obs.variacion === '') {
+      await registrarFormato(tx, {
+        cuenta: ctx.cuenta, recurso: obs.recurso, estructura: estructuraItemMl(ctx.payloadMl),
+        versionRemota: ctx.versionRemota, origen: 'barrido',
+      });
     }
 
     if (obs.tipo === 'contenedor') {

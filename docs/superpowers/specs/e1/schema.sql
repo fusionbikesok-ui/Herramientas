@@ -824,6 +824,24 @@ CREATE INDEX external_representations_modelo ON catalog.external_representations
 CREATE INDEX external_representations_user_product
   ON catalog.external_representations (channel_account_id, user_product_id) WHERE user_product_id IS NOT NULL;
 
+-- ───────────────────────────── observación de formato de ML (0023, E3 corte 3) ─────────────────────────────
+CREATE TABLE catalog.format_observations (
+  id uuid PRIMARY KEY DEFAULT uuidv7(),
+  channel_account_id uuid NOT NULL REFERENCES core.channel_accounts(id) ON DELETE RESTRICT,
+  recurso text NOT NULL,
+  hash_estructura text NOT NULL,
+  estructura jsonb NOT NULL,
+  version_remota text,
+  variaciones jsonb,
+  cantidad_pack int,
+  listing_type text,
+  catalog_listing boolean,
+  seller_sku text,
+  origen text NOT NULL CHECK (origen IN ('barrido','relectura')),
+  observado_en timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX format_observations_ultima ON catalog.format_observations (channel_account_id, recurso, observado_en DESC, id DESC);
+
 -- ───────────────────────────── atributos e imágenes (E2 T2) ─────────────────────────────
 -- Una fila por (representación, nombre, valor): un atributo multivalor son varias filas. La procedencia es la
 -- representación y no el canal, porque un canal puede tener varias publicaciones del mismo modelo (el canal sale
