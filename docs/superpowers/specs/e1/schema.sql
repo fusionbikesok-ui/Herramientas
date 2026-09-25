@@ -833,7 +833,7 @@ CREATE TABLE catalog.format_observations (
   estructura jsonb NOT NULL,
   version_remota text,
   variaciones jsonb,
-  cantidad_pack int,
+  cantidad_pack text,
   listing_type text,
   catalog_listing boolean,
   seller_sku text,

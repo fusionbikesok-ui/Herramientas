@@ -90,6 +90,25 @@ describe('E3-FMT-02 registrarFormato', () => {
     });
   });
 
+  it('cantidad_pack guarda el VALOR crudo del primer atributo de pack presente, no un conteo — hallazgo Bajo de Codex, corregido en T2', async () => {
+    const conPack: EstructuraMl = { ...e1, pack: { UNITS_PER_PACK: '2 unidades' } };
+    await enTransaccion(app, async (tx) => {
+      await registrarFormato(tx, { cuenta, recurso: 'MLA5', estructura: conPack, versionRemota: 'v1', origen: 'barrido' });
+    });
+    const fila = (await app.query<{ cantidad_pack: string | null }>(
+      "select cantidad_pack from catalog.format_observations where recurso = 'MLA5'")).rows[0]!;
+    expect(fila.cantidad_pack).toBe('2 unidades');
+  });
+
+  it('sin atributos de pack, cantidad_pack es NULL', async () => {
+    await enTransaccion(app, async (tx) => {
+      await registrarFormato(tx, { cuenta, recurso: 'MLA6', estructura: e1, versionRemota: 'v1', origen: 'barrido' });
+    });
+    const fila = (await app.query<{ cantidad_pack: string | null }>(
+      "select cantidad_pack from catalog.format_observations where recurso = 'MLA6'")).rows[0]!;
+    expect(fila.cantidad_pack).toBeNull();
+  });
+
   it('cambio de SKU de una variación (ítem CON variaciones, sku_vendedor propio siempre null) se detecta como cambio/sku, no formato — hallazgo Alto de la segunda opinión de Codex, 2026-09-25', async () => {
     const conVariaciones: EstructuraMl = {
       ...e1, sku_vendedor: null,

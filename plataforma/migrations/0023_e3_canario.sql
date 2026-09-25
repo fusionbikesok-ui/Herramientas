@@ -9,7 +9,7 @@ CREATE TABLE catalog.format_observations (
   -- Columnas propias por spec §4 (no sólo el jsonb de estructura): permiten filtrar/leer sin parsear jsonb.
   version_remota text,
   variaciones jsonb,
-  cantidad_pack int,
+  cantidad_pack text,
   listing_type text,
   catalog_listing boolean,
   seller_sku text,

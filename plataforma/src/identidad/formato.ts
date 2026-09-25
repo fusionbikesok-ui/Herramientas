@@ -156,10 +156,13 @@ export async function registrarFormato(
       [
         o.cuenta, o.recurso, hash, JSON.stringify(o.estructura), o.versionRemota,
         JSON.stringify(o.estructura.variaciones),
-        // Nº de atributos de pack presentes en esta publicación (0 si no es un pack). No se intenta parsear
-        // el VALOR del atributo (p.ej. "2 unidades") a un entero: el plan no define esa conversión y un
-        // parseo adivinado sería un dato inventado. Columna informativa (spec §4), no de decisión.
-        Object.keys(o.estructura.pack).length,
+        // Valor CRUDO del primer atributo de pack presente (p.ej. '2', '2 unidades'), o NULL si no es un
+        // pack — columna informativa (spec §4), no de decisión: no participa del hash ni de ninguna
+        // comparación. Corrección sobre la primera versión de esta entrega (hallazgo Bajo de la segunda
+        // opinión de Codex, aceptado por opt-55, 2026-09-25): antes guardaba la CANTIDAD de atributos de
+        // pack (0/1/2...), que un nombre de columna "cantidad_pack" induce a leer como la cantidad por pack
+        // del propio atributo — engañoso. No se parsea a número: el plan no define esa conversión.
+        Object.values(o.estructura.pack)[0] ?? null,
         o.estructura.listing_type_id, o.estructura.catalog_listing, o.estructura.sku_vendedor, o.origen,
       ]);
   }
