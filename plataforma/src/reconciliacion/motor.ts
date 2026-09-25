@@ -11,6 +11,7 @@ export class ErrorPaginaInvalida extends Error { override name = 'ErrorPaginaInv
 
 const PREFIJO_BAJA = 'deleted:';
 const RENOVAR_LEASE_MS = 25_000;
+const LATIDO_LEASE_MS = 20_000;
 
 interface ObservacionActual { remote_version: string; remote_hash: Buffer; lifecycle: string }
 
@@ -192,6 +193,7 @@ export function crearProcesadorMotor(opciones: {
   keyring: KeyringSobre;
   reloj?: () => Date;
   relojMonotonoMs?: () => number;
+  latidoMs?: number;
   maxPaginas?: number;
 }): (corrida: CorridaReclamada) => Promise<ResultadoBarrido> {
   const { adaptador, db, keyring } = opciones;
@@ -229,7 +231,21 @@ export function crearProcesadorMotor(opciones: {
     let cursorAfter: Record<string, unknown> | null = null;
     let paginas = 0; let enumerados = 0; let encolados = 0; let duplicados = 0;
     let ultimaRenovacion = monotono();
+    // Latido: una página (scan + bulks con reintentos) puede tardar más que el lease de 60 s, así que se renueva
+    // también en segundo plano. Si una renovación falla, la corrida aborta en el próximo chequeo.
+    let errorLatido: unknown = null;
+    let renovando = false;
+    const latido = setInterval(() => {
+      if (renovando || errorLatido) return;
+      renovando = true;
+      renovarLeaseCorrida(db, corrida)
+        .then(() => { ultimaRenovacion = monotono(); })
+        .catch((error: unknown) => { errorLatido = error; })
+        .finally(() => { renovando = false; });
+    }, opciones.latidoMs ?? LATIDO_LEASE_MS);
+    try {
     do {
+      if (errorLatido) throw errorLatido;
       paginas++;
       if (paginas > (opciones.maxPaginas ?? 100_000)) throw new Error('límite de páginas excedido');
       if (monotono() - ultimaRenovacion >= RENOVAR_LEASE_MS) {
@@ -274,6 +290,10 @@ export function crearProcesadorMotor(opciones: {
       posicion = pagina.nextPosition;
       cursorAfter = pagina.cursorAfter;
     } while (posicion !== null);
+    if (errorLatido) throw errorLatido;
+    } finally {
+      clearInterval(latido);
+    }
     if (!cursorAfter || cursorAfter.v !== 1) throw new ErrorPaginaInvalida('adaptador no devolvió cursor v1');
     if (adaptador.fullScan) {
       const alcance = adaptador.alcanceBajas ?? 'todos';

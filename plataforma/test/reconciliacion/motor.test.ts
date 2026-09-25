@@ -183,6 +183,23 @@ describe('motor transaccional de reconciliación E1 T2', () => {
     expect(despues.getTime()).toBeGreaterThan(antes.getTime());
   });
 
+  it('renueva el lease mientras una misma página tarda (latido), no sólo entre páginas', async () => {
+    const corrida = await nuevaCorrida();
+    const leer = async () => (await db.query<{ lease_until: Date }>('select lease_until from integrations.sweep_runs')).rows[0]!.lease_until.getTime();
+    const antes = await leer();
+    let durante = 0;
+    const lento: AdaptadorBarrido = {
+      ...adaptador([]),
+      async listar() {
+        await new Promise((r) => setTimeout(r, 1200));
+        durante = await leer();
+        return { resources: [], nextPosition: null, cursorAfter: { v: 1 } };
+      },
+    };
+    await crearProcesadorMotor({ db, adaptador: lento, keyring, reloj, latidoMs: 100 })(corrida);
+    expect(durante).toBeGreaterThan(antes);
+  });
+
   it('una vuelta completa declara bajas sólo si puede confirmar el cursor', async () => {
     const inicial = await nuevaCorrida();
     const a = recurso('o-a', '2026-09-15T09:00:00Z'); const b = recurso('o-b', '2026-09-15T09:00:00Z');
