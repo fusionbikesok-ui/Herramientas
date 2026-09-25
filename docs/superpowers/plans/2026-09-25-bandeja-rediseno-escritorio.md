@@ -30,7 +30,7 @@
 - Por tarea: sólo tests afectados + `npx tsc --noEmit -p plataforma`. La suite completa la corre el orquestador al final de la entrega.
 - Salida cruda de tests a `/tmp/claude-0/`.
 - Textos de la UI en español rioplatense (vos), sin tecnicismos.
-- Toda tecla visible en su botón, por ejemplo `Vincular 1`.
+- Toda tecla visible en su botón, por ejemplo `Vincular seleccionado (Enter)`.
 - WCAG 2.2 AA: foco visible y `aria-keyshortcuts` en cada botón con tecla.
 - Sin despliegue: José despliega después de la revisión de opt-2f y la segunda opinión de Codex.
 - Migración numerada: `plataforma/migrations/0022_casos_apartados.sql`, con `SET lock_timeout = '5s'`.
