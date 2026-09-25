@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { apartarCaso } from '../../src/identidad/apartar.ts';
 import { decidirCaso, type PedidoDecision } from '../../src/identidad/decidir.ts';
 import { canonizar } from '../../src/informes/jcs.ts';
 import { crearPool } from '../../src/db/pool.ts';
@@ -478,6 +479,42 @@ describe('E3-DEC-01 decidirCaso', () => {
       expect(hermanoDespues.estado).toBe('actionable');
       expect(hermanoDespues.motivo_cierre).toBeNull();
       expect(hermanoDespues.version).toBe(hermanoAntes.version + 1);
+    });
+
+    /* Hallazgo de opt-55 sobre la revisión de la Tarea 1 del rediseño de bandeja: el hermano B es un caso
+     * abierto propio, así que puede apartarse («No estoy seguro») ANTES de que A se decida. El cierre de
+     * hermanos (arriba, l.275-279) tiene que limpiar apartado_en/por/motivo igual que el cierre del caso
+     * propio — si no, un revert lo reabre todavía marcado como apartado. */
+    it('(d) apartar el hermano y luego decidir A lo cierra SIN marca; revertir lo reabre también SIN marca', async () => {
+      const { variante: destino } = await variantePendienteConSku('FB-607');
+      const { caso: casoSku } = await casoPendiente('MLA607');
+      const repId = (await q<{ id: string }>(
+        `SELECT id FROM catalog.external_representations WHERE channel_account_id = $1 AND recurso = $2`,
+        [ml, 'MLA607']))[0]!.id;
+      const casoHermano = (await admin.query<{ id: string; version: number }>(
+        `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id, detalle)
+         VALUES ($1, 'user_product_divergente', $2, '{}'::jsonb) RETURNING id, version`, [empresa, repId])).rows[0]!;
+
+      const ap = await apartarCaso(app, { caseId: casoHermano.id, expectedVersion: casoHermano.version, actor: 'jose', idempotencyKey: randomUUID() });
+      expect(ap.ok).toBe(true);
+
+      const r1 = await decidir(pedido({ caseId: casoSku, expectedVersion: 1, eleccion: 'vincular', variantId: destino }));
+      expect(r1.ok).toBe(true);
+      if (!r1.ok) return;
+
+      const hermanoCerrado = (await q<{ cerrado_en: Date | null; apartado_en: Date | null }>(
+        'SELECT cerrado_en, apartado_en FROM catalog.identity_cases WHERE id = $1', [casoHermano.id]))[0]!;
+      expect(hermanoCerrado.cerrado_en).not.toBeNull();
+      expect(hermanoCerrado.apartado_en).toBeNull();
+
+      const r2 = await decidir(pedido({
+        caseId: casoSku, expectedVersion: 2, eleccion: 'sin_candidato', esAdmin: true, revierte: r1.decisionId }));
+      expect(r2.ok).toBe(true);
+
+      const hermanoReabierto = (await q<{ cerrado_en: Date | null; apartado_en: Date | null }>(
+        'SELECT cerrado_en, apartado_en FROM catalog.identity_cases WHERE id = $1', [casoHermano.id]))[0]!;
+      expect(hermanoReabierto.cerrado_en).toBeNull();
+      expect(hermanoReabierto.apartado_en).toBeNull();
     });
 
     it('omitir un caso deja cerrado el caso hermano de la misma representación, no sólo el propio', async () => {

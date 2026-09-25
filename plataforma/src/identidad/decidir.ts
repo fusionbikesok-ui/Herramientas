@@ -250,8 +250,11 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
     // variante pendiente nueva: se cierra acá mismo con el mismo motivo, para no reabrir la cola con un caso
     // que el propio decidirCaso ya resolvió como "sin candidato".
     if (p.eleccion === 'sin_candidato' && repFinal.variant_id) {
+      // Limpia apartado_en/por/motivo igual que el UPDATE principal del caso (arriba): este hermano puede
+      // haber estado apartado por su cuenta antes de que ESTE caso se decidiera, y si un revert lo reabre
+      // más adelante no tiene que volver marcado (hallazgo de opt-55 sobre la revisión de la Tarea 1).
       await tx.query(
-        `UPDATE catalog.identity_cases SET cerrado_en = now(), motivo_cierre = $2
+        `UPDATE catalog.identity_cases SET cerrado_en = now(), motivo_cierre = $2, apartado_en = NULL, apartado_por = NULL, apartado_motivo = NULL
           WHERE variant_id = $1 AND tipo = 'sku_pendiente' AND cerrado_en IS NULL AND id <> $3`,
         [repFinal.variant_id, motivoCierre, p.caseId]);
     }
@@ -272,8 +275,11 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
     // revisión por diseño.
     // Si esta misma decisión es un revierte que acaba de reabrir hermanos (arriba), no los vuelve a cerrar
     // acá: el punto de revertir es justamente devolverlos a la cola.
+    // Mismo motivo que arriba: un hermano cerrado acá puede haber estado apartado por su cuenta; limpiar la
+    // marca evita que un revert lo reabra todavía marcado «No estoy seguro» (hallazgo de opt-55).
     await tx.query(
-      `UPDATE catalog.identity_cases SET estado = $2, cerrado_en = now(), motivo_cierre = $3, version = version + 1
+      `UPDATE catalog.identity_cases SET estado = $2, cerrado_en = now(), motivo_cierre = $3, version = version + 1,
+        apartado_en = NULL, apartado_por = NULL, apartado_motivo = NULL
         WHERE representation_id = $1 AND cerrado_en IS NULL AND id <> $4 AND NOT (id = ANY($5))
           AND estado <> 'conflict' AND COALESCE((detalle->>'d5')::boolean, false) IS NOT TRUE`,
       [repId, estadoFinal, `decidido en bandeja (hermano de ${decisionId})`, p.caseId, reabiertos]);
