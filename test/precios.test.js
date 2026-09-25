@@ -275,7 +275,7 @@ describe('auditarPrecios + router', () => {
     expect(res.status).toBe(200);
     const bulkCall = axios.request.mock.calls.map(c => c[0]).find(cfg => (cfg.url || '').includes('/items/bulk?ids='));
     expect(bulkCall).toBeDefined();
-    expect(bulkCall.url).toMatch(/attributes=body\.id,body\.price,body\.category_id,body\.listing_type_id,body\.shipping,body\.variations,body\.status/);
+    expect(bulkCall.url).toMatch(/attributes=status_code,id,body\.id,body\.price,body\.category_id,body\.listing_type_id,body\.shipping,body\.variations,body\.status/);
     const r = res.body.resultados[0];
     expect(r.contado).toBe(1000);
     // El desglose que muestra la pantalla tiene que sumar exactamente el precio propuesto

@@ -76,7 +76,7 @@ export async function auditarPrecios(db, mlCfg) {
       const chunk = itemIds.slice(i, i + MULTIGET_CHUNK);
       const resp = await mlFetch(
         db, mlCfg, 'get',
-        `/items/bulk?ids=${chunk.join(',')}&attributes=body.id,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations,body.status`
+        `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations,body.status`
       );
       await sleep(ML_CALL_DELAY_MS);
 
@@ -298,7 +298,7 @@ export function preciosRouter(db, cfg) {
 
         const resp = await mlFetch(
           db, mlCfg, 'get',
-          `/items/bulk?ids=${[...porItem.keys()].join(',')}&attributes=body.id,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations,body.status`
+          `/items/bulk?ids=${[...porItem.keys()].join(',')}&attributes=status_code,id,body.id,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations,body.status`
         );
         await sleep(ML_CALL_DELAY_MS);
         const items = new Map();

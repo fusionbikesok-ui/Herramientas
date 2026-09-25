@@ -964,7 +964,14 @@ describe('vista de detalle', () => {
   function mockItem(body) {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (url.includes('/items/bulk?ids=')) return { status: 200, data: [{ id: body.id, status_code: 200, body }], headers: {} };
+      if (url.includes('/items/bulk?ids=')) {
+        // El elemento SOLO trae id/status_code en la raíz si la URL los pidió explícitamente
+        // en attributes= (comportamiento real de ML, verificado 2026-09-25 con lectura directa:
+        // atributos filtran el elemento entero, no solo el body).
+        const pideRaiz = /attributes=[^&]*\bstatus_code\b/.test(url) || /attributes=[^&]*(^|,)id(,|$)/.test(url);
+        const entry = pideRaiz ? { id: body.id, status_code: 200, body } : { body };
+        return { status: 200, data: [entry], headers: {} };
+      }
       return { status: 200, data: {}, headers: {} };
     });
   }
@@ -980,7 +987,7 @@ describe('vista de detalle', () => {
     expect(row.diagnostico).toBe('reactivable');
     expect(row.accion).toBe('reactivar');
     const bulkCall = axios.request.mock.calls.map(c => c[0]).find(cfg => String(cfg?.url).includes('/items/bulk?ids='));
-    expect(bulkCall?.url).toMatch(/attributes=body\.id,body\.title,body\.status,body\.sub_status,body\.variations,body\.secure_thumbnail,body\.thumbnail/);
+    expect(bulkCall?.url).toMatch(/attributes=status_code,id,body\.id,body\.title,body\.status,body\.sub_status,body\.variations,body\.secure_thumbnail,body\.thumbnail/);
   });
 
   it('atencion/errores: diagnostica estructura_cambiada (activa, la variación no existe)', async () => {

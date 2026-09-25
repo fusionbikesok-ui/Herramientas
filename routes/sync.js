@@ -1544,7 +1544,7 @@ async function _reconciliarStockMl(db, cfg) {
   let esperasCooldown = 0;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    const path = `/items/bulk?ids=${chunk.join(',')}&attributes=body.id,body.status,body.sub_status,body.available_quantity,body.variations`;
+    const path = `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.status,body.sub_status,body.available_quantity,body.variations`;
     let resp;
     try {
       resp = await mlFetch(db, mlCfg, 'get', path);
@@ -1978,7 +1978,7 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
     try {
       const resp = await mlFetch(
         db, mlCfg, 'get',
-        `/items/bulk?ids=${chunk.join(',')}&attributes=body.id,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations`
+        `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations`
       );
       if (resp.status === 200 && Array.isArray(resp.data)) {
         for (const e of resp.data) if ((e.status_code ?? e.code) === 200 && e.body) items.set(String(e.body.id), e.body);
@@ -2231,7 +2231,7 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
     try {
       const resp = await mlFetch(
         db, mlCfg, 'get',
-        `/items/bulk?ids=${chunk.join(',')}&attributes=body.id,body.status,body.sub_status,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations`,
+        `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.status,body.sub_status,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations`,
         null, opts
       );
       if (resp.status === 200 && Array.isArray(resp.data)) {
@@ -2626,7 +2626,7 @@ async function variacionesVivasDeMl(db, mlCfg, itemIds) {
   const ids = [...new Set((itemIds || []).filter(Boolean))];
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
-    const resp = await mlFetch(db, mlCfg, 'get', `/items/bulk?ids=${chunk.join(',')}&attributes=body.id,body.status,body.variations`);
+    const resp = await mlFetch(db, mlCfg, 'get', `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.status,body.variations`);
     await sleep(espera(ML_CALL_DELAY_MS));
     if (resp.status !== 200 || !Array.isArray(resp.data)) continue; // chunk fallido → fail-closed
     for (const entry of resp.data) {
@@ -2725,7 +2725,7 @@ async function enriquecerConMl(db, mlCfg, rows) {
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(db, mlCfg, 'get',
-      `/items/bulk?ids=${chunk.join(',')}&attributes=body.id,body.title,body.secure_thumbnail,body.thumbnail`);
+      `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.title,body.secure_thumbnail,body.thumbnail`);
     if (resp.status !== 200 || !Array.isArray(resp.data)) continue;
     for (const entry of resp.data) {
       if ((entry.status_code ?? entry.code) !== 200 || !entry.body) continue;
@@ -2783,7 +2783,7 @@ async function diagnosticarErrores(db, mlCfg, rows) {
   for (let i = 0; i < itemIds.length; i += MULTIGET_CHUNK) {
     const chunk = itemIds.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(db, mlCfg, 'get',
-      `/items/bulk?ids=${chunk.join(',')}&attributes=body.id,body.title,body.status,body.sub_status,body.variations,body.secure_thumbnail,body.thumbnail`);
+      `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.title,body.status,body.sub_status,body.variations,body.secure_thumbnail,body.thumbnail`);
     if (resp.status !== 200 || !Array.isArray(resp.data)) continue;
     for (const entry of resp.data) {
       if ((entry.status_code ?? entry.code) === 200 && entry.body) info.set(String(entry.body.id), entry.body);

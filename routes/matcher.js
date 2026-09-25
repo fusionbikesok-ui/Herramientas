@@ -325,7 +325,7 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items/bulk?ids=${chunk.join(',')}&include_attributes=all&attributes=body.id,body.title,body.status,body.sub_status,body.seller_custom_field,body.attributes,body.variations,body.secure_thumbnail,body.thumbnail,body.permalink,body.catalog_listing,body.catalog_product_id,body.price,body.available_quantity,body.user_product_id,body.channels,body.category_id,body.listing_type_id,body.shipping,body.date_created`,
+      `/items/bulk?ids=${chunk.join(',')}&include_attributes=all&attributes=status_code,id,body.id,body.title,body.status,body.sub_status,body.seller_custom_field,body.attributes,body.variations,body.secure_thumbnail,body.thumbnail,body.permalink,body.catalog_listing,body.catalog_product_id,body.price,body.available_quantity,body.user_product_id,body.channels,body.category_id,body.listing_type_id,body.shipping,body.date_created`,
       null, { manual: true }
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
@@ -548,7 +548,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items/bulk?ids=${chunk.join(',')}&include_attributes=all&attributes=body.id,body.title,body.status,body.sub_status,body.seller_custom_field,body.attributes,body.variations,body.secure_thumbnail,body.thumbnail,body.permalink,body.catalog_listing,body.catalog_product_id,body.price,body.available_quantity,body.user_product_id,body.channels,body.category_id,body.listing_type_id,body.shipping,body.date_created`
+      `/items/bulk?ids=${chunk.join(',')}&include_attributes=all&attributes=status_code,id,body.id,body.title,body.status,body.sub_status,body.seller_custom_field,body.attributes,body.variations,body.secure_thumbnail,body.thumbnail,body.permalink,body.catalog_listing,body.catalog_product_id,body.price,body.available_quantity,body.user_product_id,body.channels,body.category_id,body.listing_type_id,body.shipping,body.date_created`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
       // Mismo criterio que BLOQUEANTE 1 en el camino total: .status explícito para que

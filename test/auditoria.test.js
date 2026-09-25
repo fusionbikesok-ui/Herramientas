@@ -104,7 +104,7 @@ describe('barridoAuditoria', () => {
     const r = await barridoAuditoria(db, {});
     expect(r.auditados).toBe(1);
     const [, , , path] = mlFetch.mock.calls[0];
-    expect(path).toBe('/items/bulk?ids=MLA111&attributes=body.id,body.health,body.pictures,body.video_id');
+    expect(path).toBe('/items/bulk?ids=MLA111&attributes=status_code,id,body.id,body.health,body.pictures,body.video_id');
     const row = db.prepare("SELECT * FROM auditoria_publicacion WHERE clave='MLA111|0'").get();
     expect(row).toBeDefined();
     expect(row.health).toBeCloseTo(0.42);
