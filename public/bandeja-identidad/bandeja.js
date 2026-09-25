@@ -177,7 +177,7 @@
     return detalleDe(caso.id).then(function (d) {
       if (token !== S.navToken) return;
       if (d.cerrado_en) { anunciar('Ese caso ya se resolvió. Pasamos al siguiente.'); S.cola.splice(i, 1); return S.cola.length ? abrirCaso(Math.min(i, S.cola.length - 1), opts) : vacio(); }
-      S.detalle = d; S.busqueda = []; S.buscando = false;
+      S.detalle = d; S.busqueda = []; S.buscando = false; S.mostrarIguales = false; // T4: por caso, no una preferencia de sesión como soloDif
       if (opts.sel !== undefined) S.sel = opts.sel; else S.sel = null;
       if (!opts.conservarConflicto) S.conflicto = null;
       render();
@@ -593,16 +593,23 @@
       m.appendChild(filaIguales);
     }
 
-    L.nombresAtributos(opciones).forEach(function (n) {
-      if (igualesSet[n] && !S.mostrarIguales) return; // colapsado dentro de la fila «Iguales» de arriba
+    // aria-controls del botón «Iguales» apunta a los ids de las filas que expande/colapsa (display:contents
+    // en .fila impide envolverlas en un único contenedor sin romper el grid; aria-controls acepta una lista).
+    var idsFilasIguales = [];
+    L.nombresAtributos(opciones).forEach(function (n, i) {
+      var esIgual = !!igualesSet[n];
+      if (esIgual && !S.mostrarIguales) return; // colapsado dentro de la fila «Iguales» de arriba
       if (!L.filaVisible(opciones, n, S.soloDif)) return;
-      var fila = el('div', 'fila', null, { role: 'row' });
+      var idFila = esIgual ? 'fila-igual-' + i : null;
+      var fila = el('div', 'fila', null, idFila ? { role: 'row', id: idFila } : { role: 'row' });
+      if (idFila) idsFilasIguales.push(idFila);
       fila.appendChild(el('div', 'celda-etiqueta', n, { role: 'rowheader' }));
       var pub = caso.publicacion.atributos && caso.publicacion.atributos[n];
       fila.appendChild(el('div', 'celda', pub ? String(pub) : '—'));
       opciones.forEach(function (o) { fila.appendChild(celdaAtributo(o, n)); });
       m.appendChild(fila);
     });
+    if (btnIguales && idsFilasIguales.length) btnIguales.setAttribute('aria-controls', idsFilasIguales.join(' '));
 
     // «Por qué» (T4): última fila de la tabla, un resumen corto por candidato de qué coincide/difiere/falta.
     if (opciones.length) {

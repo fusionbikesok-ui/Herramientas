@@ -266,6 +266,16 @@ describe('bandeja: renderMatriz — fila «Por qué» y fila «Iguales» colapsa
 
   it('un atributo colapsado en «Iguales» no se repite como fila suelta salvo que S.mostrarIguales esté activo', () => {
     const bucleAtributos = cuerpo.slice(cuerpo.indexOf('L.nombresAtributos(opciones).forEach'), cuerpo.indexOf('fila-porque'));
-    expect(bucleAtributos).toMatch(/igualesSet\[n\] && !S\.mostrarIguales/);
+    expect(bucleAtributos).toMatch(/esIgual = !!igualesSet\[n\]/);
+    expect(bucleAtributos).toMatch(/esIgual && !S\.mostrarIguales/);
+  });
+
+  it('el botón «Iguales» declara aria-controls apuntando a las filas que expande (hallazgo de Codex en T4)', () => {
+    expect(cuerpo).toMatch(/btnIguales\.setAttribute\('aria-controls'/);
+  });
+
+  it('S.mostrarIguales se resetea al abrir cada caso (no es una preferencia de sesión como soloDif)', () => {
+    const abrirCaso = js.match(/function abrirCaso\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
+    expect(abrirCaso).toMatch(/S\.mostrarIguales = false/);
   });
 });

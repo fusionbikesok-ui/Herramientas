@@ -115,6 +115,41 @@ describe('E3 T4 — «Por qué» y atributos iguales colapsados', () => {
   it('atributosIguales: sin candidatos, no hay iguales', () => {
     expect(L.atributosIguales([])).toEqual([]);
   });
+
+  it('atributosIguales: coincide y equivalente NO se agrupan entre sí (marca exacta, no "misma conclusión")', () => {
+    // Decisión explícita (hallazgo Media de Codex en T4): "Iguales" resume la MISMA evidencia visual (la
+    // marca que ve el operador en la celda, ✓ vs ≈ son símbolos distintos), no la misma conclusión para
+    // decidir. Si mañana se quiere agrupar por conclusión, este test es el que hay que cambiar a propósito.
+    const opciones = [
+      { explicacion: { atributos: [{ nombre: 'rodado', marca: 'coincide' }] } },
+      { explicacion: { atributos: [{ nombre: 'rodado', marca: 'equivalente' }] } },
+    ];
+    expect(L.atributosIguales(opciones)).toEqual([]);
+  });
+
+  it('atributosIguales: se sostiene con 3+ candidatos (todos coincide menos uno)', () => {
+    const opciones = [
+      { explicacion: { atributos: [{ nombre: 'color', marca: 'coincide' }] } },
+      { explicacion: { atributos: [{ nombre: 'color', marca: 'coincide' }] } },
+      { explicacion: { atributos: [{ nombre: 'color', marca: 'difiere' }] } },
+    ];
+    expect(L.atributosIguales(opciones)).toEqual([]);
+  });
+
+  it('porQue: sólo diferencias (sin coincidencias ni faltantes)', () => {
+    const o = { explicacion: { atributos: [{ nombre: 'color', marca: 'difiere' }, { nombre: 'talle', marca: 'difiere' }] } };
+    expect(L.porQue(o)).toBe('Los atributos color y talle difieren.');
+  });
+
+  it('porQue: sólo faltantes', () => {
+    const o = { explicacion: { atributos: [{ nombre: 'talle', marca: 'falta' }] } };
+    expect(L.porQue(o)).toBe('El talle falta.');
+  });
+
+  it('porQue: toma otros_atributos además de atributos', () => {
+    const o = { explicacion: { atributos: [{ nombre: 'color', marca: 'coincide' }], otros_atributos: [{ nombre: 'marca', marca: 'difiere' }] } };
+    expect(L.porQue(o)).toBe('Color coincide; el marca difiere.');
+  });
 });
 
 describe('E3 T6 proxy de la bandeja de identidad', () => {
