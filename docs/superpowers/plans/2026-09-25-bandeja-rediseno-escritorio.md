@@ -2,7 +2,7 @@
 
 > **Para agentes:** SUB-SKILL REQUERIDA: superpowers:subagent-driven-development o superpowers:executing-plans. Pasos con checkbox (`- [ ]`).
 
-**Objetivo:** que José decida más casos correctos por minuto en la bandeja E3. Cambios: una tecla decide y avanza; se agrega «No estoy seguro» (apartar sin decidir); «Omitir por ahora» deja de escribir una omisión permanente; el caso muestra el «por qué» de cada candidato. Se hace primero en escritorio.
+**Objetivo:** que José decida más casos correctos por minuto en la bandeja E3. Cambios: teclas visibles en cada botón; se agrega «No estoy seguro» (apartar sin decidir); «Omitir por ahora» deja de escribir una omisión permanente; el caso muestra el «por qué» de cada candidato. Se hace primero en escritorio.
 
 **Arquitectura:** hay tres capas y se cambian las tres.
 - **Plataforma (Fastify):** marca de «apartado» en `catalog.identity_cases`. No es una decisión: no toca `identity_decisions` ni el vínculo, y por eso no entra en la calibración.
@@ -16,11 +16,11 @@
 2. Las teclas quedan como en la propuesta.
 3. Se usa sobre todo en la computadora.
 
-## Supuestos que José confirma al revisar este plan
+## Decisiones de José sobre los supuestos (2026-09-25)
 
 - **S1 — «Omitir por ahora» (O) NO escribe nada.** Pasa el caso al final de la cola de la sesión. Hoy `s` escribe `eleccion='omitir'`, que deja la publicación omitida *para siempre* (`catalogo/decisiones.ts:67`). Esa omisión permanente sigue disponible como botón «No vincular esta publicación», sin tecla, para que no se dispare por accidente.
 - **S2 — La ayuda pasa de `?` a `a`**, porque `?` ahora es «No estoy seguro».
-- **S3 — `1`/`2`/`3` vinculan directamente y avanzan**, en vez de sólo seleccionar. Hacer clic en un candidato sigue seleccionándolo, y `Enter` vincula el seleccionado.
+- **S3 — `1`/`2`/`3` SELECCIONAN (como hoy) y `Enter` vincula el seleccionado.** Decisión de José: dos teclas por caso, más seguro. Los botones siguen mostrando `1`/`2`/`3` en cada candidato.
 - **S4 — En «Confirmar SKU»:** `Enter` confirma y `X` rechaza. Rechazar es `mantener_omision` si el caso es `omitida_revisar`, y `sin_candidato` en los demás casos.
 - **S5 — Los apartados salen de la cola normal.** Van a un chip propio, «Apartados (N)», al final.
 
@@ -39,7 +39,7 @@
 
 1. **Apartar un caso que cambió de versión mientras se miraba:** tiene que dar `version_conflict` como `decidirCaso`, no apartar a ciegas. → test en la Tarea 1.
 2. **Decidir (vincular) un caso apartado:** la decisión se aplica y el caso deja de figurar como apartado. → test en la Tarea 1.
-3. **Tecla `1` con menos de 1 candidato**, o `3` con sólo 2: no hace nada y lo anuncia; nunca vincula a `undefined`. → test en la Tarea 3.
+3. **Tecla `3` con sólo 2 candidatos:** no selecciona nada y lo anuncia; `Enter` sin selección no vincula a `undefined` y avisa «Elegí un candidato». → test en la Tarea 3.
 4. **`Z` después de «No estoy seguro»:** desaparta con DELETE y vuelve al caso. No manda un `revierte` de decisión. → test en la Tarea 3.
 5. **`O` sobre el último caso de la cola:** no entra en un bucle infinito: si sólo quedan casos omitidos-por-ahora, muestra «Sólo quedan casos que salteaste». → test en la Tarea 3.
 
@@ -188,7 +188,7 @@ En `calibracion.test.ts`: apartar un caso de la ventana no cambia ninguna métri
 **Interfaces:**
 - Consume: `POST` y `DELETE` `/api/bandeja-identidad/casos/:id/apartar` (Tarea 2), y `apartado`/`contadores.apartados` de la cola (Tarea 1).
 - Produce en `logica.js`:
-  - `accionDeTecla(key, ctx) → { tipo: 'vincular', n } | { tipo: 'confirmar' } | { tipo: 'rechazar' } | { tipo: 'omitir_por_ahora' } | { tipo: 'apartar' } | { tipo: 'no_existe' } | { tipo: 'buscar' } | { tipo: 'deshacer' } | { tipo: 'ayuda' } | null`. `ctx = { confirmable: boolean, nCandidatos: number, tipoCaso: string }`.
+  - `accionDeTecla(key, ctx) → { tipo: 'seleccionar', n } | { tipo: 'vincular' } | { tipo: 'confirmar' } | { tipo: 'rechazar' } | { tipo: 'omitir_por_ahora' } | { tipo: 'apartar' } | { tipo: 'no_existe' } | { tipo: 'buscar' } | { tipo: 'deshacer' } | { tipo: 'ayuda' } | null`. `ctx = { confirmable: boolean, nCandidatos: number, tipoCaso: string }`.
   - `siguienteNoSalteado(cola, idx, salteados) → number | -1`
   - `GRUPOS.apartados = 7`
 
@@ -196,7 +196,7 @@ En `calibracion.test.ts`: apartar un caso de la ventana no cambia ninguna métri
 
 | Tecla | Caso normal | Caso «Confirmar SKU» |
 |---|---|---|
-| `1` `2` `3` | vincula el candidato N y avanza (si no existe: anuncia «No hay candidato N») | — |
+| `1` `2` `3` | selecciona el candidato N (si no existe: anuncia «No hay candidato N») | — |
 | `Enter` | vincula el seleccionado | confirma |
 | `X` | — | rechaza (`mantener_omision` si `omitida_revisar`; si no, `sin_candidato`) |
 | `/` | buscar otra variante | buscar |
@@ -212,8 +212,9 @@ El botón «No vincular esta publicación» (escribe `eleccion='omitir'`) queda 
 - [ ] **Paso 1: Tests que fallan de lógica** (`test/bandejaIdentidad.test.js`):
 
 ```js
-it('1/2/3 vinculan si existe el candidato', () => {
-  expect(L.accionDeTecla('2', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular', n: 2 });
+it('1/2/3 seleccionan si existe el candidato y Enter vincula', () => {
+  expect(L.accionDeTecla('2', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'seleccionar', n: 2 });
+  expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular' });
   expect(L.accionDeTecla('3', { confirmable: false, nCandidatos: 2, tipoCaso: 'sku_pendiente' })).toBeNull();
 });
 it('? aparta, a es ayuda, O omite por ahora, N no existe', () => {
@@ -239,7 +240,7 @@ it('siguienteNoSalteado no da vueltas infinitas', () => {
 - [ ] **Paso 2: Tests UI que fallan** (`test/bandejaIdentidad-ui.test.js`, con el setup jsdom + fetch simulado que ya usa ese archivo):
   - `?` hace `POST …/apartar` con `expected_version`, avanza y muestra «Apartado. Z deshace».
   - `Z` después de apartar hace `DELETE …/apartar` y reabre el mismo caso, sin mandar ningún `POST …/decisiones`.
-  - `2` hace `POST …/decisiones` con `eleccion:'vincular'` y el `variant_id` del segundo candidato.
+  - `2` y después `Enter` hacen `POST …/decisiones` con `eleccion:'vincular'` y el `variant_id` del segundo candidato; `2` solo no hace ningún POST.
   - `O` no hace ningún POST y el caso siguiente queda abierto.
   - Si todos los casos restantes están salteados, aparece el texto «Sólo quedan casos que salteaste».
   - Todos los botones con tecla tienen `aria-keyshortcuts` y muestran la tecla en el texto.
@@ -252,7 +253,7 @@ it('siguienteNoSalteado no da vueltas infinitas', () => {
   1. El listener de teclado llama a `L.accionDeTecla` y hace `switch` sobre `tipo`.
   2. `apartar()` es un camino propio, no una decisión. La maquinaria de deshacer de hoy asume `entry.promise`, `decisionId` y el resultado de una decisión (l.358-372), así que no sirve tal cual. `apartar()` hace `conReintentos` con una `Idempotency-Key` fija por intento y guarda `S.ultima = { tipo:'apartado', casoId, promesa, versionNueva }`. `deshacer()` se parte en tres por `S.ultima.tipo`: `'decision'` (el código actual, sin cambios), `'apartado'` (espera la promesa y hace DELETE con `expected_version: versionNueva` y su propia clave; si da 409, avisa «Ya cambió; no se deshizo») y `'salteado'`.
   3. `omitirPorAhora()` agrega a `S.salteados` (un Set) y usa `siguienteNoSalteado`; `deshacer()` de un salteado lo saca del Set y vuelve.
-  4. Los botones quedan en este orden: `Vincular 1..3` (uno por candidato, primario el 1), `Buscar /`, `No estoy seguro ?`, `Omitir por ahora O`, `No existe N`, y separado a la derecha `No vincular esta publicación`. En confirmables: `Confirmar Enter` y `No es este X`.
+  4. Los botones quedan en este orden: `Vincular seleccionado Enter` (primario; cada candidato muestra su tecla 1/2/3), `Buscar /`, `No estoy seguro ?`, `Omitir por ahora O`, `No existe N`, y separado a la derecha `No vincular esta publicación`. En confirmables: `Confirmar Enter` y `No es este X`.
   5. `textoDecision`: `apartado` → «Apartado para revisar después.», `omitir` → «Publicación sin vincular.»
 
 - [ ] **Paso 6: `index.html`.** Actualizar la tabla de ayuda según el mapa y agregar el chip `data-filtro="apartados"` con el contador, último en la fila de chips.
