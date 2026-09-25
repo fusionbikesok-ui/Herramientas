@@ -1,6 +1,6 @@
 # E3 — Identidad y matcher único en sombra
 
-**Estado:** borrador
+**Estado:** desarrollo (corte 1 con primeras corridas en producción el 2026-09-24 según evidencia, corte 3 en construcción; ver `plan-maestro.md`)
 
 **Dependencias:** E2
 

@@ -62,7 +62,7 @@
       "id": "E2",
       "slug": "catalogo-modelo-importacion",
       "title": "Modelo e importación del catálogo canónico",
-      "state": "borrador",
+      "state": "observada",
       "depends": [
         "E1"
       ],
@@ -89,7 +89,7 @@
       "id": "E3",
       "slug": "identidad-matcher-sombra",
       "title": "Identidad y matcher único en sombra",
-      "state": "borrador",
+      "state": "desarrollo",
       "depends": [
         "E2"
       ],

@@ -27,7 +27,8 @@
     "test:e0": "bash scripts/postgres/test-e0.sh",
     "test:e1": "bash scripts/test-e1.sh",
     "verificar-informe": "node scripts/verificar-informe.mjs",
-    "test:e2": "bash scripts/test-e2.sh"
+    "test:e2": "bash scripts/test-e2.sh",
+    "test:e3": "npm --prefix plataforma run test:e3"
   },
   "keywords": [],
   "author": "",
