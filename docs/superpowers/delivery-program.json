@@ -54,9 +54,9 @@
       "migration": "Usuarios sin contraseñas; importación idempotente de metadatos, sin datos de negocio.",
       "risks": "La sombra jamás condiciona el ACK legacy. Estados sin historial enumerables se validan por convergencia; envíos usan cursor shipment.last_updated propio.",
       "tests": "npm run test:e1 con los escenarios de docs/superpowers/specs/e1/test-e1.md (esquema, auditoría, colas, duplicados, barridos por tópico, convergencia de envíos, borrados Woo, presupuesto de latencia, PostgreSQL caído, reporte firmado, WebAuthn virtual, capacidades, contrato y servicios separados).",
-      "rollout": "T3 conecta la sombra mediante recibos mínimos, señales separadas y gateway GET tipado; canario 1/10/50/100% y soak de 24 h. T4 ejecuta los 7 días contractuales con reportes firmados. Aborto ante impacto en códigos HTTP, errores o latencia.",
-      "acceptance": "0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José.",
-      "next": "Revisar y aprobar el diseño y plan de T3 (`specs/2026-09-16-e1-tramo3-sombra-viva-design.md` y `plans/2026-09-16-e1-tramo3-sombra-viva.md`). T1 y T2 están implementados y verificados sólo en infraestructura efímera; T3 está documentado pero no implementado, desplegado ni autorizado para usar credenciales o tráfico real."
+      "rollout": "T3 conecta la sombra mediante recibos mínimos, señales separadas y gateway GET tipado; canario 1/10/50/100% y soak de 24 h. T4 ejecuta los 7 días contractuales con reportes firmados. Aborto ante impacto en códigos HTTP, errores o latencia. T5 reparte el cupo del gateway sombra por corriente ML (orders/shipments/items/questions/messages/claims) con techo global sobre el presupuesto legado compartido; su despliegue es el día 0 de la campaña de 7 días verdes de PM-186.",
+      "acceptance": "0 faltantes inexplicados por tópico, cobertura declarada, reportes firmados verificados y revisión de José. T5 exige además: 24 h con las 6 corrientes con al menos un barrido OK, backlog no creciente por corriente, y cero casos de CUPO_SOMBRA_AGOTADO que hayan agotado el tope de edad.",
+      "next": "Implementar T5 (PM-188, `specs/2026-09-25-e1-tramo5-cupo-por-corriente-design.md`): cupo del gateway sombra por corriente en vez de un bucket único, que hoy deja ml.shipments y ml.messages en 0 barridos OK y ml.items en dead letter, bloqueando la campaña de 7 días verdes de PM-186. T1-T4 están implementados y desplegados en producción; T5 es lo único pendiente de E1."
     },
     {
       "id": "E2",
