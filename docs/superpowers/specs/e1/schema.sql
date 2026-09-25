@@ -989,7 +989,10 @@ CREATE TABLE catalog.identity_decisions (
   creado_en timestamptz NOT NULL DEFAULT now(),
   CHECK ((eleccion = 'vincular') = (variant_id IS NOT NULL)),
   CHECK (origen <> 'humano' OR efecto = 'aplicar'),
-  CHECK (origen <> 'auto_sku' OR efecto = 'sombra')   -- el corte 3 lo reemplaza
+  -- 0025 (corte 3, tarea 3): reemplaza el CHECK original (origen<>auto_sku OR efecto=sombra), que prohibía
+  -- auto_sku+aplicar. Ahora lo permite, pero exige hash_payload_ml como evidencia de qué se releyó.
+  CONSTRAINT auto_sku_aplicar_con_hash
+    CHECK (origen <> 'auto_sku' OR efecto = 'sombra' OR (efecto = 'aplicar' AND hash_payload_ml IS NOT NULL))
 );
 -- Una decisión vigente por clave (canal, recurso, variación) y efecto: humana (aplicar) y auto_sku
 -- (sombra) sobre la misma publicación conviven sin chocar, son dos anotaciones distintas.
