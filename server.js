@@ -250,7 +250,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     const configuracionPorCorriente = Object.fromEntries(
       CORRIENTES_ML.map((c) => [c, Number(process.env[`GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`] || 0)]),
     );
-    configuracionPorCorriente.e2e3 = Number(process.env.GATEWAY_ML_SHADOW_RPM_E2E3 || 0);
+    // Sin coercionar acá: si viene con un typo (no numérico), que lo detecte validarConfiguracionCupoSombra
+    // en vez de que `Number('typo') || 0` lo aplane a "cerrado" en silencio antes de validar.
+    configuracionPorCorriente.e2e3 = process.env.GATEWAY_ML_SHADOW_RPM_E2E3;
     // Fail-closed SÓLO de la sombra (E1 T5): una variable por corriente faltante o inválida jamás debe
     // tumbar el arranque de herramientas entero (pedidos/stock/preparación no dependen de esto). Si la
     // validación falla, la sombra queda cerrada (todas las corrientes ML dan 429 sintético con

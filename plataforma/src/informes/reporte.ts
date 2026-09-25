@@ -128,11 +128,18 @@ export async function armarReporte(
       GROUP BY topic`,
     [desde, hasta, corte],
   ).then((r) => r.rows)) ultimoExito.set(b.topic, b.finished_at.getTime());
+  // Igual que arriba: congelado al corte, no en vivo. Una corrida cuenta como incompleta-al-corte si NO
+  // llegó a `succeeded` con `finished_at <= corte`; eso incluye la que sigue abierta hoy y también la que
+  // en su momento quedó pending/retryable/failed y recién se resolvió después del corte (o después de hoy).
+  // `finished_at` no se reescribe una vez puesto (revisión del hallazgo crítico de esta misma tanda): usar
+  // el status en vivo hacía que reintentar una corrida días después cambiara el resultado de un día ya
+  // cerrado, justo la falla de idempotencia que este módulo documenta evitar.
   const incompletos = await pool.query<{ topic: string; started_at: Date }>(
     `SELECT topic, max(started_at) AS started_at FROM integrations.sweep_runs
-      WHERE started_at >= $1 AND started_at < $2 AND strategy = 'convergence' AND status != 'succeeded'
+      WHERE started_at >= $1 AND started_at < $2 AND strategy = 'convergence'
+        AND NOT (status = 'succeeded' AND finished_at IS NOT NULL AND finished_at <= $3)
       GROUP BY topic`,
-    [desde, hasta],
+    [desde, hasta, corte],
   );
   for (const { topic, started_at: iniciada } of incompletos.rows) {
     const ultimo = ultimoExito.get(topic);

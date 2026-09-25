@@ -209,4 +209,22 @@ describe('armarReporte', () => {
     expect(r.topicos['ml.shipments']).toMatchObject({ cobertura: 1, convergencia: 1 });
     expect(r.semaforo).toBe('verde');
   });
+
+  it('E1-T5 §2.5: rearmar el mismo día no cambia si una corrida pending se resuelve después del corte (idempotencia)', async () => {
+    await pool.query('SELECT integrations.sembrar_corrientes($1)', [s.cuentaMl]);
+    await barrido('2026-09-16T08:00:00Z', 10, 10, 10);
+    const { id } = (await pool.query<{ id: number }>(`INSERT INTO integrations.sweep_runs
+      (channel_account_id, topic, cursor_kind, strategy, started_at, status)
+      VALUES ($1, 'ml.shipments', 'state_sweep', 'convergence', '2026-09-16T20:00:00Z', 'pending') RETURNING id`, [s.cuentaMl])).rows[0]!;
+    const antes = await armarReporte(pool, '2026-09-16');
+    expect(antes.semaforo).toBe('amarillo');
+    // Días después, un reintento resuelve esa misma corrida (misma fila) con éxito, mucho más allá del corte
+    // (06:00 ART del día siguiente = 2026-09-17T09:00:00Z). El día 2026-09-16 ya se informó: rearmarlo ahora
+    // no puede cambiar de resultado sólo porque el estado en vivo de la fila cambió.
+    await pool.query(`UPDATE integrations.sweep_runs SET status='succeeded', finished_at='2026-09-20T00:00:00Z',
+      known_resources=10, swept=10, converged=10 WHERE id=$1`, [id]);
+    const despues = await armarReporte(pool, '2026-09-16');
+    expect(despues.semaforo).toBe('amarillo');
+    expect(despues.alertas).toContainEqual(expect.objectContaining({ codigo: 'convergencia_no_declarada', topic: 'ml.shipments' }));
+  });
 });

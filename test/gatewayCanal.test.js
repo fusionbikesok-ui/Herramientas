@@ -147,6 +147,15 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
     expect(() => validarConfiguracionCupoSombra(completa, 60)).not.toThrow();
   });
 
+  it('E1-T5 e2e3 es opcional (default cerrado) pero un valor presente inválido sí falla', () => {
+    const completa = Object.fromEntries(CORRIENTES_ML.map((c) => [c, 5]));
+    expect(() => validarConfiguracionCupoSombra(completa, 60)).not.toThrow();
+    expect(() => validarConfiguracionCupoSombra({ ...completa, e2e3: 'diez' }, 60)).toThrow(/E2E3/);
+    expect(() => validarConfiguracionCupoSombra({ ...completa, e2e3: -1 }, 60)).toThrow(/E2E3/);
+    expect(() => validarConfiguracionCupoSombra({ ...completa, e2e3: 0 }, 60)).not.toThrow();
+    expect(() => validarConfiguracionCupoSombra({ ...completa, e2e3: 10 }, 60)).not.toThrow();
+  });
+
   it('E1-T5 gateway con presupuesto por corriente: 429 sintético lleva x-fusion-cupo y retry-after real', async () => {
     let t = 0;
     const presupuestoMl = crearPresupuestoShadow({ orders: 0, shipments: 0, items: 0, questions: 0, messages: 0, claims: 0 }, 0, () => t);
@@ -253,6 +262,19 @@ describe('E1-GW-01 ruta HTTP interna del legado', () => {
         app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k' });
       }).not.toThrow();
       expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
+    it('con un typo en GATEWAY_ML_SHADOW_RPM_E2E3, también cierra la sombra en vez de colar silenciosamente en 0', async () => {
+      conKeyring();
+      process.env.GATEWAY_ML_SHADOW_RPM = '30';
+      for (const c of CORRIENTES_ML) process.env[`GATEWAY_ML_SHADOW_RPM_${c.toUpperCase()}`] = '5';
+      process.env.GATEWAY_ML_SHADOW_RPM_E2E3 = 'diez';
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() => {
+        app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k' });
+      }).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('GATEWAY_ML_SHADOW_RPM_E2E3'));
       errorSpy.mockRestore();
     });
   });
