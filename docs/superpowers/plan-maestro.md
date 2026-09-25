@@ -97,9 +97,13 @@ T3 está implementado (C1–C10, commits hasta `3a17af0`): C9 verde el 2026-09-1
 - **Campaña de 7 días verdes de E1** (PM-186, canario de ML reencendido el 2026-09-18 03:48 UTC): no hay reporte de campaña ni revisión de José registrados; E1 sigue sin aceptar.
 - **Excepción «E2 y E3 avanzan sin E1 aceptada»** (dependencia E1→E2→E3 del DAG): no hay decisión PM que la habilite; queda como divergencia abierta para que José la registre o la corrija.
 - **Estado en producción** (versión desplegada, migraciones aplicadas, flags): no fue verificado por esta actualización; las cifras salen de la evidencia y las fichas citadas.
+- **Migración a `/items/bulk?ids=`**: `/items?ids=` de Mercado Libre entra en deprecación y deja de estar disponible el **2026-10-25** (`specs/ml-api-guia.md` §1); verificar antes de esa fecha que ningún llamador siga usando el endpoint viejo.
+- **Diagnóstico de alertas de E1 (2026-09-25)**: los 429 sintéticos del gateway sombra (`GATEWAY_ML_SHADOW_RPM` como bucket único compartido por las 6 corrientes ML) dejaron `ml.shipments` y `ml.messages` con 0 barridos OK en 24 h y señales de `ml.items` en dead letter; esto bloquea la campaña de 7 días verdes de E1. Ver `specs/ml-api-guia.md` §4 y su backlog §7 para la corrección definitiva (cupo por corriente, etc.), pendiente de convertir en entrega/tramo con decisión de José.
 
 ## Arquitectura e invariantes acumulativos
 
+- Toda entrega, tramo o cambio que llame a Mercado Libre o procese sus webhooks debe cumplir
+  `specs/ml-api-guia.md` y citarla en su diseño (regla del 2026-09-25).
 - PostgreSQL 18 es el destino canónico. SQLite se conserva como archivo histórico verificable.
 - Cambios de negocio son transaccionales, auditados, atribuibles y corregidos mediante nuevos eventos.
 - Catálogo separa modelo de variante vendible; SKU `FB-{ID_WOO}` es obligatorio, inmutable y no
