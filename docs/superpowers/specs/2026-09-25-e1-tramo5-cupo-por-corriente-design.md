@@ -209,9 +209,30 @@ adicional real sobre el bucket `items`, sin prioridad especial y sin bucket prop
 (§2.7) tiene que medir el consumo de `items` **con bootstrap y relectura corriendo**, no sólo con los
 barridos de E1, porque ambos consumen del mismo cupo hoy. Las métricas de §2.2 (operación → corriente por
 llamada) ya distinguen qué operación generó cada consumo, así que un consumo alto de bootstrap/E3 es visible
-sin trabajo adicional. Si la tarea 0 muestra que esto bloquea la campaña, excluir bootstrap/E3 del gateway
-sombra durante la campaña (cambiando su `cuenta.transporte` a un cliente directo) o darles prioridad propia
-queda para José, no implícito en esta spec.
+sin trabajo adicional. ~~Si la tarea 0 muestra que esto bloquea la campaña, excluir bootstrap/E3 [...] queda para José.~~
+
+**Decisión de José (2026-09-25, opción b): E2/E3 no comparten cupo con E1; se separan en este tramo, antes de la
+campaña.** Coherente con PM-187 (E2/E3 no deben afectar a E1). Contrato:
+
+- **Consumidor explícito en la petición al gateway.** La petición pasa de `{op, params}` a
+  `{op, params, consumidor?}` con `consumidor ∈ {'e1', 'catalogo', 'identidad'}`; ausente = `'e1'`
+  (compatibilidad). `construirOperacion` lo valida con la misma lista cerrada; cualquier otro valor es
+  `ErrorOperacionInvalida`.
+- **Quién es quién** (el wiring de `main.ts` fija el consumidor por instancia de transporte, no el llamador):
+  barridos de E1, relectores por señal C6 (`crearRelectoresMl/Woo`, `main.ts:60`; son E1, no E3) y
+  `missed_feeds` → `'e1'`; bootstrap del catálogo (`cuentasBootstrap`, E2) → `'catalogo'`; relectura del
+  auto-SKU de E3 (`identidad/relectura-auto-sku.ts`, cuando se wiree) → `'identidad'`. En `main.ts` se crea
+  un transporte por (cuenta, consumidor) con el mismo cliente HTTP subyacente.
+- **Buckets:** `'e1'` usa los cupos por corriente de §2.1; `'catalogo'` e `'identidad'` comparten un bucket
+  único propio `GATEWAY_ML_SHADOW_RPM_E2E3` (default 0 = cerrado; misma validación de arranque de §2.3).
+  Todos siguen bajo el techo global `GATEWAY_ML_SHADOW_RPM`, que **reserva** la suma de los cupos de E1: el
+  bucket E2/E3 sólo toma lo que sobra del global, nunca el cupo de una corriente de E1.
+- **Métricas y reporte:** cada llamada se registra con (consumidor, corriente); el reporte de la campaña
+  cuenta sólo `'e1'`, y un 429 sintético de `'catalogo'`/`'identidad'` no afecta cobertura ni convergencia
+  de E1.
+- **Tarea 0 (§2.7):** mide los tres consumidores por separado, con bootstrap y relectura activos.
+- **Tests:** agotar `'catalogo'` no reduce el cupo de ninguna corriente de E1; consumidor inválido rechazado;
+  petición sin consumidor se trata como `'e1'`.
 
 ## 3. Fuera de alcance (backlog, guía §7)
 
@@ -292,3 +313,4 @@ queda para José, no implícito en esta spec.
 | Crítico (v3) | §2.5 sólo documenta el fix de `reporte.ts`; el código no cambió | No es un hallazgo nuevo de diseño: `reporte.ts` se corrige como parte de la implementación de T5, no en esta spec. Aclarado en la nota de alcance al inicio del §2. |
 | Alto (v3) | §2.8 (versión de la 2ª pasada) quedó desactualizada: `worker/main.ts` SÍ wirea un único `transporte` por cuenta compartido entre barridos, relectores y `cuentasBootstrap` | §2.8 reescrita con el hecho verificado: si `cuenta.transporte==='gateway'`, bootstrap y relectura de E3 comparten el cupo `items` hoy, sin decisión pendiente. |
 | Medio (v3) | §2.1 declara "fuente única" pero no existe ese módulo en el código | Mismo caso que el crítico: la fuente única es un requisito de implementación de T5 (tarea concreta con test de igualdad), no un módulo ya escrito. Aclarado en la nota de alcance. |
+| Decisión José (b) | Bootstrap/relectura E3 compartían cupo `items` con E1 | §2.8: consumidor explícito en la petición, bucket `GATEWAY_ML_SHADOW_RPM_E2E3` separado bajo el techo global |
