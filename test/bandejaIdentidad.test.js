@@ -199,6 +199,18 @@ describe('E3 T6 proxy de la bandeja de identidad', () => {
     expect(r.body).toMatchObject({ code: 'version_conflict' });
   });
 
+  it('desapartar: el actor y es_admin del body del DELETE se ignoran (elevación)', async () => {
+    const p = plataformaFalsa(200, { version: 3 });
+    const r = await request(app({ user: operador, fetch: p.fetch })).delete(`/api/bandeja-identidad/casos/${ID}/apartar`)
+      .set('Idempotency-Key', 'clave-elevacion-1')
+      .send({ expected_version: 2, es_admin: true, usuario: 'otro', actor: { usuario: 'jose', es_admin: true } });
+    expect(r.status).toBe(200);
+    const enviado = JSON.parse(p.recibidos[0].cuerpo);
+    expect(enviado.actor).toEqual({ usuario: 'maria', es_admin: false });
+    expect(enviado).not.toHaveProperty('es_admin');
+    expect(enviado).not.toHaveProperty('usuario');
+  });
+
   it('desapartar: DELETE reenvía expected_version, motivo y la Idempotency-Key, e inyecta actor desde la sesión', async () => {
     const p = plataformaFalsa(200, { version: 3 });
     const r = await request(app({ user: operador, fetch: p.fetch })).delete(`/api/bandeja-identidad/casos/${ID}/apartar`)
