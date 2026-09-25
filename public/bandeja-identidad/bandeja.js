@@ -11,14 +11,15 @@
 
   // ───────────────────────── estado ─────────────────────────
   var S = {
-    grupo: null,            // filtro activo: null o 0..4
+    grupo: null,            // filtro activo: null o 0..7
     cola: [], siguiente: null, cargandoMas: false,
     contadores: {}, totalInicial: 0, hechos: 0,
     idx: -1, detalle: null, sel: null, busqueda: [], buscando: false, soloDif: false,
     conflicto: null,        // { entry, details } tras un 409
     cache: new Map(),       // id de caso → Promise del detalle
     pendientes: new Map(),  // Idempotency-Key → entry (guardado en segundo plano)
-    ultima: null,           // { entry, ts, consumida } para deshacer
+    ultima: null,           // { tipo: 'decision'|'apartado'|'salteado', ... } para deshacer
+    salteados: new Set(),   // Set de IDs de casos omitidos por ahora (sólo en la sesión)
     atajos: leerAtajos(), navToken: 0, timerDeshacer: null, timerBusqueda: null
   };
 
@@ -210,13 +211,42 @@
   }
 
   function avanzar() {
-    if (S.idx + 1 < S.cola.length) return abrirCaso(S.idx + 1, { foco: true });
+    // Buscar el próximo caso no salteado
+    var siguiente = L.siguienteNoSalteado(S.cola, S.idx, S.salteados);
+    if (siguiente >= 0) return abrirCaso(siguiente, { foco: true });
+
+    // Si no hay más casos no salteados en la cola actual, cargar más
     if (S.siguiente) {
       return http('GET', rutaCola(S.siguiente)).then(function (r) {
         if (r.status !== 200) return falloCarga(r);
         S.cola = S.cola.concat(r.data.casos || []); S.siguiente = r.data.siguiente || null;
-        return S.idx + 1 < S.cola.length ? abrirCaso(S.idx + 1, { foco: true }) : vacio();
+        var siguienteCargado = L.siguienteNoSalteado(S.cola, S.idx, S.salteados);
+        if (siguienteCargado >= 0) return abrirCaso(siguienteCargado, { foco: true });
+        // Si todos están salteados, mostrar aviso
+        if (S.salteados.size > 0) {
+          S.idx = -1; S.detalle = null;
+          var root = $('root'); vaciar(root);
+          var d = el('div', 'api-estado api-estado--vacio', null, { role: 'status', tabindex: '-1', id: 'caso-focus' });
+          d.appendChild(el('p', null, 'Sólo quedan casos que salteaste'));
+          root.appendChild(d);
+          d.focus();
+          banda();
+          return;
+        }
+        return vacio();
       });
+    }
+
+    // Si todos están salteados, mostrar aviso
+    if (S.salteados.size > 0) {
+      S.idx = -1; S.detalle = null;
+      var root = $('root'); vaciar(root);
+      var d = el('div', 'api-estado api-estado--vacio', null, { role: 'status', tabindex: '-1', id: 'caso-focus' });
+      d.appendChild(el('p', null, 'Sólo quedan casos que salteaste'));
+      root.appendChild(d);
+      d.focus();
+      banda();
+      return;
     }
     return vacio();
   }
@@ -284,9 +314,53 @@
     decidir('vincular', cs.confirmar.variant_id, undefined, true);
   }
 
+  // Apartar un caso sin decidir (tecla ?). No escribe una decisión, sólo marca en catalog.identity_cases.
+  // Utiliza la misma maquinaria de reintentos que decidir(). La decisión de SI apartar (caso abierto,
+  // no ya apartado) vive en logica.js/ejecutarAccion; acá sólo se ejecuta el efecto.
+  function apartar(caseId, v) {
+    var clave = 'apartar-' + caseId + '-v' + v; // clave idempotente fija para cada intento sobre esa versión
+    var promesa = conReintentos(function () {
+      return http('POST', '/casos/' + encodeURIComponent(caseId) + '/apartar', { expected_version: v }, clave);
+    });
+    S.ultima = { tipo: 'apartado', casoId: caseId, promesa: promesa, versionActual: v, versionNueva: null, ts: Date.now(), consumida: false };
+    S.hechos++;
+    mostrarDeshacer('Apartado para revisar después. Z deshace');
+    banda();
+    // Esperar que la promesa se resuelva para saber la versión nueva, luego avanzar
+    promesa.then(function (r) {
+      if (r.status === 200) {
+        S.ultima.versionNueva = r.data.version;
+        anunciar('Apartado');
+      } else {
+        S.hechos = Math.max(0, S.hechos - 1);
+        var code = (r.data && r.data.code) || 'plataforma_no_responde';
+        if (code === 'version_conflict') {
+          aviso('rechazo', L.copyError(code));
+        } else {
+          aviso('rechazo', L.copyError(code));
+        }
+        banda();
+        return;
+      }
+      avanzar();
+    });
+  }
+
+  // Omitir por ahora (tecla O): el caso se pone al final de la cola de la sesión, sin escribir en la BD.
+  function omitirPorAhora(caseId) {
+    S.salteados.add(caseId);
+    S.ultima = { tipo: 'salteado', casoId: caseId, ts: Date.now(), consumida: false };
+    S.hechos++;
+    mostrarDeshacer('Publicación sin vincular. Z deshace');
+    banda();
+    avanzar();
+  }
+
   function textoDecision(e) {
+    if (e.tipo === 'apartado') return 'Apartado para revisar después.';
+    if (e.tipo === 'salteado') return 'Publicación sin vincular.';
     if (e.eleccion === 'vincular') return 'Vinculado a ' + (e.sku || 'la variante elegida') + '.';
-    if (e.eleccion === 'omitir') return 'Caso omitido.';
+    if (e.eleccion === 'omitir') return 'Publicación sin vincular.';
     if (e.eleccion === 'mantener_omision') return 'Se mantiene la omisión.';
     return 'Marcado como «no existe en el catálogo».';
   }
@@ -357,12 +431,54 @@
 
   function deshacer() {
     var u = S.ultima;
-    if (!L.puedeDeshacer(u, Date.now())) { aviso('deshacer', 'No hay nada para deshacer.'); return; }
+    if (!u || typeof u.ts === 'undefined') { aviso('deshacer', 'No hay nada para deshacer.'); return; }
+    if (Date.now() - u.ts > L.VENTANA_DESHACER_MS) { aviso('deshacer', 'No hay nada para deshacer.'); return; }
     quitarAviso('deshacer');
     u.consumida = true;
     $('aviso-deshacer').classList.add('aviso-deshacer--oculto');
     anunciar('Deshaciendo…');
-    // P3: el revierte necesita el decision_id, que llega con el 200; si el guardado sigue en vuelo, se espera.
+
+    // Qué rama tomar (desapartar vs. reabrir un salteado) es la parte que decide logica.js/ejecutarAccion;
+    // acá sólo se ejecuta el efecto real (fetch, reintentos, foco) para el tipo que corresponda.
+    var estadoDeshacer = { cola: S.cola, idx: S.idx, ultimoTipo: u.tipo, ultimoApartadoId: u.tipo === 'apartado' ? u.casoId : undefined,
+      ultimoApartadoVersion: u.versionNueva, ultimoSalteadoId: u.tipo === 'salteado' ? u.casoId : undefined };
+    L.ejecutarAccion({ tipo: 'deshacer' }, estadoDeshacer, {
+      apartar: function () {}, decidir: function () {}, mostrar: function () {}, omitir: function () {},
+      reabrir: function (casoId) {
+        S.salteados.delete(casoId);
+        S.hechos = Math.max(0, S.hechos - 1);
+        var i = S.cola.findIndex(function (c) { return c.id === casoId; });
+        if (i >= 0) { anunciar('Deshecho'); abrirCaso(i, { foco: true }); }
+      },
+      desapartar: function () {
+        // Deshacer un apartado: hacer DELETE /apartar con expected_version=versionNueva
+        u.promesa.then(function () {
+          if (!u.versionNueva) { aviso('rechazo', 'El apartado aún se está guardando; probá de nuevo.'); u.consumida = false; return; }
+          u.claveDeshacer = u.claveDeshacer || crypto.randomUUID();
+          return conReintentos(function () {
+            return http('DELETE', '/casos/' + encodeURIComponent(u.casoId) + '/apartar', { expected_version: u.versionNueva }, u.claveDeshacer);
+          }).then(function (r) {
+            var i = S.cola.findIndex(function (c) { return c.id === u.casoId; });
+            if (r.status === 200) {
+              S.hechos = Math.max(0, S.hechos - 1);
+              S.cache.delete(u.casoId);
+              anunciar('Apartado deshecho');
+              if (i >= 0) return abrirCaso(i, { foco: true });
+              return;
+            }
+            if (r.status === 409) {
+              aviso('rechazo', 'Ya cambió; no se deshizo.');
+              return;
+            }
+            if (L.esReintentable(r.status)) { u.consumida = false; aviso('rechazo', 'Sin respuesta; probá de nuevo con Z.'); return; }
+            aviso('rechazo', L.copyError((r.data && r.data.code) || 'plataforma_no_responde'));
+          });
+        });
+      }
+    });
+    if (u.tipo === 'salteado' || u.tipo === 'apartado') return;
+
+    // Tipo 'decision' (por defecto, hacia atrás compatible con la forma antigua)
     u.entry.promise.then(function (e) {
       if (e.estado === 'fallido') { u.consumida = false; aviso('rechazo', 'No se pudo deshacer: la decisión todavía no se guardó.'); return; }
       if (e.estado !== 'ok') return; // ya se avisó el rechazo y se volvió a ese caso
@@ -546,16 +662,29 @@
     // Enter dispara "Confirmar" primero (ver disparaAtajo), porque es la acción principal de ese caso.
     if (cs && cs.confirmar) {
       var btnConf = el('button', 'btn btn--primary', 'Confirmar ' + (cs.confirmar.sku || 'SKU vinculado') + ' (Enter)',
-        { type: 'button', id: 'btn-confirmar' });
+        { type: 'button', id: 'btn-confirmar', 'aria-keyshortcuts': 'Enter' });
       ac.appendChild(btnConf);
     }
-    if (opciones.length) ac.appendChild(el('button', 'btn btn--primary', 'Vincular al seleccionado (Enter)', { type: 'button', id: 'btn-vincular' }));
-    var omisionVigente = d.detalle && d.detalle.d5 === true;
-    if (omisionVigente) ac.appendChild(el('button', 'btn', 'Mantener la omisión', { type: 'button', id: 'btn-mantener' }));
-    ac.appendChild(el('button', 'btn', 'Omitir (s)', { type: 'button', id: 'btn-omitir' }));
-    ac.appendChild(el('button', 'btn', 'No existe en el catálogo (n)', { type: 'button', id: 'btn-no-existe' }));
-    ac.appendChild(el('button', 'btn', 'Buscar otra variante (/)', { type: 'button', id: 'btn-buscar' }));
-    ac.appendChild(el('button', 'btn', S.soloDif ? 'Mostrar todas las filas (d)' : 'Sólo diferencias (d)', { type: 'button', id: 'btn-dif', 'aria-pressed': S.soloDif ? 'true' : 'false' }));
+    // En modo confirmable, Add los botones de confirmar/rechazar; en modo normal, mostrar opción de vincular
+    if (opciones.length && !cs?.confirmar) {
+      ac.appendChild(el('button', 'btn btn--primary', 'Vincular seleccionado (Enter)', { type: 'button', id: 'btn-vincular', 'aria-keyshortcuts': 'Enter' }));
+    }
+    if (cs && cs.confirmar) {
+      // En modo confirmable: opciones de rechazar
+      var omisionVigente = d.detalle && d.detalle.d5 === true;
+      if (omisionVigente) ac.appendChild(el('button', 'btn', 'No es este (X)', { type: 'button', id: 'btn-no-es-este', 'aria-keyshortcuts': 'x' }));
+      else ac.appendChild(el('button', 'btn', 'No es este (X)', { type: 'button', id: 'btn-rechazar', 'aria-keyshortcuts': 'x' }));
+    }
+    // Botones comunes
+    ac.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' }));
+    ac.appendChild(el('button', 'btn', 'No estoy seguro (?)', { type: 'button', id: 'btn-apartar', 'aria-keyshortcuts': '?' }));
+    ac.appendChild(el('button', 'btn', 'Omitir por ahora (O)', { type: 'button', id: 'btn-omitir-ahora', 'aria-keyshortcuts': 'o' }));
+    if (!cs?.confirmar) {
+      ac.appendChild(el('button', 'btn', 'No existe (N)', { type: 'button', id: 'btn-no-existe', 'aria-keyshortcuts': 'n' }));
+    }
+    // Botón sin tecla a la derecha
+    ac.appendChild(el('button', 'btn', 'No vincular esta publicación', { type: 'button', id: 'btn-no-vincular' }));
+    ac.appendChild(el('button', 'btn', S.soloDif ? 'Mostrar todas las filas (d)' : 'Sólo diferencias (d)', { type: 'button', id: 'btn-dif', 'aria-pressed': S.soloDif ? 'true' : 'false', 'aria-keyshortcuts': 'd' }));
     root.appendChild(ac);
 
     var hist = d.historial || [];
@@ -634,11 +763,18 @@
     root.addEventListener('click', function (ev) {
       var t = ev.target.closest('button, input[type="radio"]'); if (!t) return;
       if (t.id === 'btn-confirmar') confirmarCasoActual();
-      else if (t.id === 'btn-vincular') decidir('vincular', S.sel);
-      else if (t.id === 'btn-omitir') decidir('omitir');
-      else if (t.id === 'btn-mantener') decidir('mantener_omision');
+      else if (t.id === 'btn-vincular') { if (S.sel) decidir('vincular', S.sel); else { anunciar('Elegí un candidato'); aviso('elegir', 'Elegí un candidato antes de vincular.'); } }
+      else if (t.id === 'btn-no-vincular') decidir('omitir');
+      else if (t.id === 'btn-no-es-este') decidir('mantener_omision');
+      else if (t.id === 'btn-rechazar') decidir('sin_candidato');
       else if (t.id === 'btn-no-existe') decidir('sin_candidato');
       else if (t.id === 'btn-buscar') abrirBusqueda();
+      else if (t.id === 'btn-apartar' || t.id === 'btn-omitir-ahora') {
+        L.ejecutarAccion({ tipo: t.id === 'btn-apartar' ? 'apartar' : 'omitir_por_ahora' }, { cola: S.cola, idx: S.idx }, {
+          apartar: apartar, omitir: omitirPorAhora,
+          desapartar: function () {}, reabrir: function () {}, decidir: function () {}, mostrar: function () {}
+        });
+      }
       else if (t.id === 'btn-dif') { S.soloDif = !S.soloDif; render(); $('btn-dif').focus(); }
       else if (t.id === 'btn-aplicar') aplicarSobreNueva();
       else if (t.classList.contains('foto-btn')) abrirVisor(t);
@@ -657,18 +793,62 @@
       if (ev.target.closest && ev.target.closest('button, a, summary') && (k === 'Enter' || k === ' ')) return; // el botón enfocado manda
       var enRadio = ev.target.type === 'radio';
       if ((k === 'ArrowDown' || k === 'ArrowUp') && enRadio) return; // en un radio, las flechas cambian la opción
-      if (k === 'j' || k === 'ArrowDown') { ev.preventDefault(); ir(1); }
-      else if (k === 'k' || k === 'ArrowUp') { ev.preventDefault(); ir(-1); }
-      else if (/^[1-9]$/.test(k)) { ev.preventDefault(); seleccionarPorNumero(Number(k)); }
-      else if (k === 'Enter') { ev.preventDefault(); if (S.cola[S.idx] && S.cola[S.idx].confirmar) confirmarCasoActual(); else decidir('vincular', S.sel); }
-      else if (k === 's') { ev.preventDefault(); if (S.detalle) decidir('omitir'); }
-      else if (k === 'n') { ev.preventDefault(); if (S.detalle) decidir('sin_candidato'); }
-      else if (k === '/') { ev.preventDefault(); if (S.detalle) abrirBusqueda(); }
-      else if (k === 'd') { ev.preventDefault(); S.soloDif = !S.soloDif; render(); }
-      else if (k === 'f') { ev.preventDefault(); var fb = document.querySelector('.foto-btn'); if (fb) abrirVisor(fb); }
-      else if (k === 'z') { ev.preventDefault(); deshacer(); }
-      else if (k === 'h') { ev.preventDefault(); var hh = $('historial'); if (hh) hh.open = !hh.open; }
-      else if (k === '?') { ev.preventDefault(); $('ayuda-dialog').showModal(); }
+
+      // Teclas de navegación (siempre disponibles)
+      if (k === 'j' || k === 'ArrowDown') { ev.preventDefault(); ir(1); return; }
+      if (k === 'k' || k === 'ArrowUp') { ev.preventDefault(); ir(-1); return; }
+
+      // Teclas que siempre aplican
+      if (k === 'd') { ev.preventDefault(); S.soloDif = !S.soloDif; render(); return; }
+      if (k === 'f') { ev.preventDefault(); var fb = document.querySelector('.foto-btn'); if (fb) abrirVisor(fb); return; }
+      if (k === 'h') { ev.preventDefault(); var hh = $('historial'); if (hh) hh.open = !hh.open; return; }
+
+      // Otras teclas dependen del detalle
+      if (!S.detalle) return;
+
+      var confirmable = S.cola[S.idx] && S.cola[S.idx].confirmar;
+      var nCandidatos = L.opcionesDe(S.detalle.candidatos, S.busqueda).length;
+      var accion = L.accionDeTecla(k, { confirmable: confirmable, nCandidatos: nCandidatos, tipoCaso: S.detalle.tipo_caso });
+
+      if (!accion) return;
+      ev.preventDefault();
+
+      switch (accion.tipo) {
+        case 'seleccionar':
+          seleccionarPorNumero(accion.n);
+          break;
+        case 'vincular':
+          if (S.sel === null || S.sel === undefined) { anunciar('Elegí un candidato'); aviso('elegir', 'Elegí un candidato antes de vincular.'); }
+          else decidir('vincular', S.sel);
+          break;
+        case 'confirmar':
+          confirmarCasoActual();
+          break;
+        case 'rechazar':
+          var cs = S.cola[S.idx];
+          if (cs && cs.detalle && cs.detalle.d5 === true) decidir('mantener_omision');
+          else decidir('sin_candidato');
+          break;
+        case 'buscar':
+          abrirBusqueda();
+          break;
+        case 'omitir_por_ahora':
+        case 'apartar':
+          L.ejecutarAccion(accion, { cola: S.cola, idx: S.idx }, {
+            apartar: apartar, omitir: omitirPorAhora,
+            desapartar: function () {}, reabrir: function () {}, decidir: function () {}, mostrar: function () {}
+          });
+          break;
+        case 'no_existe':
+          decidir('sin_candidato');
+          break;
+        case 'deshacer':
+          deshacer();
+          break;
+        case 'ayuda':
+          $('ayuda-dialog').showModal();
+          break;
+      }
     });
 
     document.querySelectorAll('.chip-pri[data-filtro]').forEach(function (chip) {

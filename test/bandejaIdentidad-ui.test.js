@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 // Prueba el código real de public/bandeja-identidad/logica.js (no una copia).
 // logica.js es un script clásico (UMD): en vitest se exporta como CommonJS-interop o cuelga de globalThis, como en el navegador.
@@ -96,5 +97,114 @@ describe('bandeja: atajos sobre radios', () => {
     expect(L.puedeDispararAtajo({ key: 'n', target: { tagName: 'INPUT', type: 'radio', closest: () => null } }, true)).toBe(true);
     expect(L.puedeDispararAtajo({ key: 'n', target: { tagName: 'INPUT', type: 'search', closest: () => null } }, true)).toBe(false);
     expect(L.puedeDispararAtajo({ key: 'n', target: { tagName: 'INPUT', type: 'text', closest: () => null } }, true)).toBe(false);
+  });
+});
+
+describe('bandeja: ejecutarAccion — Paso 2 de T3, sin DOM (decisión pura de qué llamar)', () => {
+  function apiFalsa() {
+    return { apartar: vi.fn(), desapartar: vi.fn(), decidir: vi.fn(), omitir: vi.fn(), reabrir: vi.fn(), mostrar: vi.fn() };
+  }
+
+  it('? aparta el caso actual con su versión, una sola vez', () => {
+    const api = apiFalsa();
+    const estado = { cola: [{ id: 'c1', version: 3, apartado: false }], idx: 0 };
+    L.ejecutarAccion({ tipo: 'apartar' }, estado, api);
+    expect(api.apartar).toHaveBeenCalledTimes(1);
+    expect(api.apartar).toHaveBeenCalledWith('c1', 3);
+  });
+
+  it('? sobre un caso ya apartado no llama a apartar de nuevo', () => {
+    const api = apiFalsa();
+    const estado = { cola: [{ id: 'c1', version: 3, apartado: true }], idx: 0 };
+    L.ejecutarAccion({ tipo: 'apartar' }, estado, api);
+    expect(api.apartar).not.toHaveBeenCalled();
+  });
+
+  it('Z después de apartar llama a desapartar con la versión nueva, y NUNCA a decidir', () => {
+    const api = apiFalsa();
+    const estado = { cola: [{ id: 'c1', version: 3 }], idx: -1, ultimoTipo: 'apartado', ultimoApartadoId: 'c1', ultimoApartadoVersion: 4 };
+    L.ejecutarAccion({ tipo: 'deshacer' }, estado, api);
+    expect(api.desapartar).toHaveBeenCalledTimes(1);
+    expect(api.desapartar).toHaveBeenCalledWith('c1', 4);
+    expect(api.decidir).not.toHaveBeenCalled();
+  });
+
+  it('Z después de omitir por ahora reabre el caso salteado (sin apartar ni decidir)', () => {
+    const api = apiFalsa();
+    const estado = { cola: [{ id: 'c2' }], idx: -1, ultimoTipo: 'salteado', ultimoSalteadoId: 'c2' };
+    L.ejecutarAccion({ tipo: 'deshacer' }, estado, api);
+    expect(api.reabrir).toHaveBeenCalledWith('c2');
+    expect(api.apartar).not.toHaveBeenCalled();
+    expect(api.decidir).not.toHaveBeenCalled();
+  });
+
+  it('2 solo (seleccionar) no llama a ninguna acción de la api: sólo Enter decide', () => {
+    const api = apiFalsa();
+    const estado = { cola: [{ id: 'c1' }], idx: 0, sel: null, detalle: { version: 1 } };
+    // 'seleccionar' no es un caso manejado por ejecutarAccion (lo maneja bandeja.js con S.sel directamente,
+    // no hace ninguna llamada a la api): confirma que no dispara nada.
+    L.ejecutarAccion({ tipo: 'seleccionar', n: 2 }, estado, api);
+    expect(api.decidir).not.toHaveBeenCalled();
+    expect(api.apartar).not.toHaveBeenCalled();
+  });
+
+  it('2 y después Enter: decidir se llama con eleccion vincular y el variant_id seleccionado', () => {
+    const api = apiFalsa();
+    const estado = { cola: [{ id: 'c1' }], idx: 0, sel: 'variante-2', detalle: { version: 5 } };
+    L.ejecutarAccion({ tipo: 'vincular' }, estado, api);
+    expect(api.decidir).toHaveBeenCalledWith({ expected_version: 5, eleccion: 'vincular', variant_id: 'variante-2' });
+  });
+
+  it('Enter sin selección no decide y avisa "Elegí un candidato" en vez de vincular a undefined', () => {
+    const api = apiFalsa();
+    const estado = { cola: [{ id: 'c1' }], idx: 0, sel: null, detalle: { version: 5 } };
+    L.ejecutarAccion({ tipo: 'vincular' }, estado, api);
+    expect(api.decidir).not.toHaveBeenCalled();
+    expect(api.mostrar).toHaveBeenCalledWith('Elegí un candidato');
+  });
+
+  it('O (omitir_por_ahora) llama a omitir con el id del caso actual y no hace ningún decidir/apartar', () => {
+    const api = apiFalsa();
+    const estado = { cola: [{ id: 'c3' }], idx: 0 };
+    L.ejecutarAccion({ tipo: 'omitir_por_ahora' }, estado, api);
+    expect(api.omitir).toHaveBeenCalledWith('c3');
+    expect(api.decidir).not.toHaveBeenCalled();
+    expect(api.apartar).not.toHaveBeenCalled();
+  });
+
+  it('siguienteNoSalteado sobre el último caso, con sólo salteados restantes, no da vueltas infinitas (-1)', () => {
+    const cola = [{ id: 'a' }, { id: 'b' }];
+    expect(L.siguienteNoSalteado(cola, 0, new Set(['b']))).toBe(-1);
+  });
+
+  it('texto de cola agotada por salteados coincide con lo que muestra bandeja.js', () => {
+    expect(L.TEXTO_SOLO_SALTEADOS).toBe('Sólo quedan casos que salteaste');
+  });
+
+  it('grupos: apartados (7) está en GRUPOS y GRUPO_NOMBRE', () => {
+    expect(L.GRUPOS.apartados).toBe(7);
+    expect(L.GRUPO_NOMBRE[7]).toMatch(/apartado/i);
+  });
+});
+
+describe('bandeja: aria-keyshortcuts (chequeo estático sobre bandeja.js, patrón del repo sin DOM)', () => {
+  // Los botones de acciones se arman dinámicamente en bandeja.js (el('button', ..., { id, 'aria-keyshortcuts' })),
+  // no son markup estático de index.html. Se busca la llamada a el(...) de cada botón con tecla.
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+
+  const botonesConTecla = ['btn-vincular', 'btn-buscar', 'btn-apartar', 'btn-omitir-ahora', 'btn-no-existe', 'btn-confirmar', 'btn-rechazar'];
+
+  it.each(botonesConTecla)('el botón %s se arma con aria-keyshortcuts y muestra la tecla en el texto', (id) => {
+    const m = js.match(new RegExp("el\\('button'[^;]*?id: '" + id + "'[^}]*\\}\\)"));
+    expect(m, `no se encontró el armado del botón ${id} en bandeja.js`).not.toBeNull();
+    expect(m[0]).toMatch(/aria-keyshortcuts/);
+    // El texto del botón (antes de los attrs) debe traer la tecla entre paréntesis, ej. "(Enter)"/"(?)"/"(O)".
+    expect(m[0]).toMatch(/\([^)]+\)/);
+  });
+
+  it('el botón "No vincular esta publicación" no tiene tecla asignada (S1): sin aria-keyshortcuts', () => {
+    const m = js.match(/el\('button'[^;]*?id: 'btn-no-vincular'[^}]*\}\)/);
+    expect(m).not.toBeNull();
+    expect(m[0]).not.toMatch(/aria-keyshortcuts/);
   });
 });

@@ -442,7 +442,7 @@
   <div class="topbar">
     <a href="../home/" class="topbar-back">← Inicio</a>
     <div class="topbar-title">Bandeja de identidad</div>
-    <button type="button" class="topbar-btn" id="btn-ayuda" aria-label="Atajos (?)">?</button>
+    <button type="button" class="topbar-btn" id="btn-ayuda" aria-label="Atajos (A)" aria-keyshortcuts="a">A</button>
   </div>
 
   <!-- Chips de prioridad -->
@@ -467,6 +467,9 @@
     </button>
     <button type="button" class="chip-pri" id="chip-sin-titulo" data-filtro="sin_titulo" aria-pressed="false">
       Sin título <span class="contador">0</span>
+    </button>
+    <button type="button" class="chip-pri" id="chip-apartados" data-filtro="apartados" aria-pressed="false">
+      Apartado <span class="contador">0</span>
     </button>
     <span class="chip-pri" id="chip-no-decidibles">
       Sin publicación única: <span class="contador">0</span>
@@ -526,38 +529,46 @@
         </tr>
         <tr>
           <td><kbd>Enter</kbd></td>
-          <td>Vincular al seleccionado</td>
+          <td>Vincular / Confirmar</td>
         </tr>
         <tr>
-          <td><kbd>s</kbd></td>
-          <td>Omitir</td>
-        </tr>
-        <tr>
-          <td><kbd>n</kbd></td>
-          <td>No existe en el catálogo</td>
+          <td><kbd>X</kbd></td>
+          <td>Rechazar (sólo en confirmable)</td>
         </tr>
         <tr>
           <td><kbd>/</kbd></td>
           <td>Buscar otra variante</td>
         </tr>
         <tr>
-          <td><kbd>d</kbd></td>
-          <td>Solo diferencias</td>
+          <td><kbd>?</kbd></td>
+          <td>No estoy seguro (apartar)</td>
         </tr>
         <tr>
-          <td><kbd>f</kbd></td>
+          <td><kbd>O</kbd></td>
+          <td>Omitir por ahora</td>
+        </tr>
+        <tr>
+          <td><kbd>N</kbd></td>
+          <td>No existe en el catálogo</td>
+        </tr>
+        <tr>
+          <td><kbd>D</kbd></td>
+          <td>Sólo diferencias</td>
+        </tr>
+        <tr>
+          <td><kbd>F</kbd></td>
           <td>Ampliar foto</td>
         </tr>
         <tr>
-          <td><kbd>z</kbd></td>
+          <td><kbd>Z</kbd></td>
           <td>Deshacer</td>
         </tr>
         <tr>
-          <td><kbd>h</kbd></td>
+          <td><kbd>H</kbd></td>
           <td>Historial</td>
         </tr>
         <tr>
-          <td><kbd>?</kbd></td>
+          <td><kbd>A</kbd></td>
           <td>Ayuda</td>
         </tr>
         <tr>

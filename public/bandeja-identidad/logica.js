@@ -25,11 +25,11 @@
     plataforma_no_responde: 'La plataforma no responde. Reintentamos solos.'
   };
 
-  // Chip → grupo de prioridad de la API (0 conflicto … 6 sin título). Punto A (decisión de José vía
+  // Chip → grupo de prioridad de la API (0 conflicto … 7 apartados). Punto A (decisión de José vía
   // opt-16 2026-09-24): confirmable (5, SKU ya vinculado — un click, sin candidatos) va después de los
-  // decidibles; sin_titulo (6) al fondo de todos, hasta que el punto B les dé una fuente.
-  var GRUPOS = { conflictos: 0, d5: 1, sku_exacto: 2, activas_con_stock: 3, resto: 4, confirmable: 5, sin_titulo: 6 };
-  var GRUPO_NOMBRE = ['Conflicto', 'D5', 'SKU exacto en sombra', 'Activa con stock', 'Resto', 'Confirmar', 'Sin título'];
+  // decidibles; sin_titulo (6) al fondo de todos, hasta que el punto B les dé una fuente; apartados (7) al final.
+  var GRUPOS = { conflictos: 0, d5: 1, sku_exacto: 2, activas_con_stock: 3, resto: 4, confirmable: 5, sin_titulo: 6, apartados: 7 };
+  var GRUPO_NOMBRE = ['Conflicto', 'D5', 'SKU exacto en sombra', 'Activa con stock', 'Resto', 'Confirmar', 'Sin título', 'Apartado'];
 
   function marca(m) { return MARCAS[m] || { clase: 'mk--miss', simbolo: '?', texto: String(m) }; }
 
@@ -131,11 +131,113 @@
     });
   }
 
+  // Mapeo de tecla a acción según el contexto (caso normal o confirmable).
+  // Devuelve { tipo, n? } o null si la tecla no aplica o el número de candidato no existe.
+  function accionDeTecla(key, ctx) {
+    var k = key.toLowerCase();
+    var confirmable = ctx.confirmable;
+    var nCandidatos = ctx.nCandidatos || 0;
+
+    // Teclas comunes
+    if (k === '/') return { tipo: 'buscar' };
+    if (k === 'z') return { tipo: 'deshacer' };
+    if (k === 'a') return { tipo: 'ayuda' };
+
+    // En caso normal
+    if (!confirmable) {
+      if (/^[1-9]$/.test(k)) {
+        var n = Number(k);
+        if (n > nCandidatos) return null; // candidato no existe
+        return { tipo: 'seleccionar', n: n };
+      }
+      if (k === 'enter') return { tipo: 'vincular' };
+      if (k === '?') return { tipo: 'apartar' };
+      if (k === 'o') return { tipo: 'omitir_por_ahora' };
+      if (k === 'n') return { tipo: 'no_existe' };
+      if (k === 's') return null; // omisión permanente ya no tiene tecla
+      return null;
+    }
+
+    // En caso confirmable
+    if (k === 'enter') return { tipo: 'confirmar' };
+    if (k === 'x') return { tipo: 'rechazar' };
+    if (k === '?') return { tipo: 'apartar' };
+    if (k === 'o') return { tipo: 'omitir_por_ahora' };
+    return null;
+  }
+
+  // Busca el siguiente índice en la cola que NO esté en salteados, empezando desde idx+1.
+  // Devuelve -1 si todos los restantes están salteados.
+  function siguienteNoSalteado(cola, idx, salteados) {
+    for (var i = idx + 1; i < cola.length; i++) {
+      if (!salteados.has(cola[i].id)) return i;
+    }
+    return -1;
+  }
+
+  // Dispatcher puro (sin DOM, sin fetch): decide QUÉ llamada hacer para una `accion` de accionDeTecla()
+  // (o 'omitir_por_ahora'/'no_existe', que no vienen de una tecla en el sentido llamado por bandeja.js)
+  // dado el `estado` actual, sin ejecutarla — la ejecución (fetch real, reintentos, foco) la hace
+  // bandeja.js con la `api` inyectada. Así el Paso 2 del plan (T3) se prueba sin DOM/jsdom: se llama
+  // ejecutarAccion con un `api` de mocks (vi.fn()) y se assertea qué se llamó y con qué.
+  //
+  // `estado` = { cola, idx, salteados, detalle (opcional), sel (candidato elegido, opcional) }
+  // `api` = { apartar(caseId, expectedVersion), desapartar(caseId, expectedVersion), decidir(cuerpo),
+  //           omitir(caseId), mostrar(mensaje) } — cada método puede devolver lo que quiera, no se usa acá.
+  function ejecutarAccion(accion, estado, api) {
+    if (!accion) return;
+    var caso = estado.cola[estado.idx];
+
+    switch (accion.tipo) {
+      case 'apartar':
+        if (!caso || caso.apartado) return;
+        api.apartar(caso.id, caso.version);
+        return;
+
+      case 'deshacer': {
+        // Se limita a los dos tipos que agrega esta tarea; 'decision' sigue viviendo en bandeja.js
+        // (necesita decision_id/versionNueva de una decisión ya guardada, que no pasa por acá).
+        var casoApartado = estado.cola.filter(function (c) { return c.id === estado.ultimoApartadoId; })[0];
+        if (estado.ultimoTipo === 'apartado' && casoApartado) {
+          api.desapartar(casoApartado.id, estado.ultimoApartadoVersion);
+          return;
+        }
+        if (estado.ultimoTipo === 'salteado' && estado.ultimoSalteadoId !== undefined) {
+          api.reabrir(estado.ultimoSalteadoId);
+          return;
+        }
+        return;
+      }
+
+      case 'omitir_por_ahora':
+        if (!caso) return;
+        api.omitir(caso.id);
+        return;
+
+      case 'vincular':
+        if (estado.sel === null || estado.sel === undefined) { api.mostrar('Elegí un candidato'); return; }
+        api.decidir({ expected_version: estado.detalle && estado.detalle.version, eleccion: 'vincular', variant_id: estado.sel });
+        return;
+
+      case 'no_existe':
+        api.decidir({ expected_version: estado.detalle && estado.detalle.version, eleccion: 'sin_candidato' });
+        return;
+
+      default:
+        return;
+    }
+  }
+
+  // Texto para la pantalla vacía cuando ya no quedan casos no salteados (Paso 2, T3).
+  var TEXTO_SOLO_SALTEADOS = 'Sólo quedan casos que salteaste';
+
   var api = {
     marca: marca, copyError: copyError, puedeDispararAtajo: puedeDispararAtajo, esReintentable: esReintentable,
     demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
     formatoStock: formatoStock, opcionesDe: opcionesDe, nombresAtributos: nombresAtributos, atributoDe: atributoDe,
-    filaVisible: filaVisible, GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
+    filaVisible: filaVisible, accionDeTecla: accionDeTecla, siguienteNoSalteado: siguienteNoSalteado,
+    ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
+    GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BandejaLogica = api;

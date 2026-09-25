@@ -1,6 +1,7 @@
 /**
- * E3 corte 1 T6 — el proxy firmado de la bandeja de identidad. La firma se verifica contra el `verificarInterna`
- * REAL de la plataforma (TS): si los dos lados divergen, este test falla.
+ * E3 corte 1 T3 y T6 — lógica pura de la bandeja (sin DOM, sin fetch) y el proxy firmado.
+ * La firma del proxy se verifica contra el `verificarInterna` REAL de la plataforma (TS):
+ * si los dos lados divergen, este test falla.
  */
 import crypto from 'crypto';
 import express from 'express';
@@ -10,6 +11,10 @@ import Fastify from '../plataforma/node_modules/fastify/fastify.js';
 import { bandejaIdentidadRouter } from '../routes/bandejaIdentidad.js';
 import { resolvePermiso, permiteAcceso } from '../lib/permisos.js';
 import { crearOrigenes, verificarInterna } from '../plataforma/src/seguridad/interna.ts';
+
+// Importar lógica pura
+const mod = await import('../public/bandeja-identidad/logica.js');
+const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.BandejaLogica ?? globalThis.window?.BandejaLogica);
 
 const clave = crypto.randomBytes(32);
 const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
@@ -40,6 +45,35 @@ function app({ user, fetch, url = 'http://plataforma.interna:3100', kr = keyring
 }
 const operador = { id: 2, username: 'maria', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'write' }] };
 const auditor = { id: 3, username: 'auditor', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'read' }] };
+
+describe('E3 T3 — lógica pura de teclas y acciones', () => {
+  it('1/2/3 seleccionan si existe el candidato y Enter vincula', () => {
+    expect(L.accionDeTecla('2', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'seleccionar', n: 2 });
+    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular' });
+    expect(L.accionDeTecla('3', { confirmable: false, nCandidatos: 2, tipoCaso: 'sku_pendiente' })).toBeNull();
+  });
+
+  it('? aparta, a es ayuda, O omite por ahora, N no existe', () => {
+    const c = { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' };
+    expect(L.accionDeTecla('?', c)).toEqual({ tipo: 'apartar' });
+    expect(L.accionDeTecla('a', c)).toEqual({ tipo: 'ayuda' });
+    expect(L.accionDeTecla('o', c)).toEqual({ tipo: 'omitir_por_ahora' });
+    expect(L.accionDeTecla('n', c)).toEqual({ tipo: 'no_existe' });
+    expect(L.accionDeTecla('s', c)).toBeNull(); // la omisión permanente ya no tiene tecla
+  });
+
+  it('en confirmable Enter confirma y X rechaza', () => {
+    const c = { confirmable: true, nCandidatos: 0, tipoCaso: 'omitida_revisar' };
+    expect(L.accionDeTecla('Enter', c)).toEqual({ tipo: 'confirmar' });
+    expect(L.accionDeTecla('x', c)).toEqual({ tipo: 'rechazar' });
+  });
+
+  it('siguienteNoSalteado no da vueltas infinitas', () => {
+    const cola = [{ id: 'a' }, { id: 'b' }];
+    expect(L.siguienteNoSalteado(cola, 0, new Set(['b']))).toBe(-1);
+    expect(L.siguienteNoSalteado(cola, 0, new Set())).toBe(1);
+  });
+});
 
 describe('E3 T6 proxy de la bandeja de identidad', () => {
   it('el actor y es_admin salen de la sesión aunque el cliente mande otros (elevación)', async () => {
