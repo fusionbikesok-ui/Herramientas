@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** esperar a que cierre la **campaña de 7 días verdes seguidos con ML en canario** y ajustar el tope de ML con la medición de 7 días (23/09), después pedir la revisión de José. Todo el código de E1 (T1–T4) está implementado y **desplegado en producción**: la tarea 16 se hizo el 2026-09-18 y el 2026-09-20 se confirmó que `audit.audit_daily_manifests` acumula los manifiestos del 17, 18 y 19 firmados con `e1-2026-09` en modo `compliance`, con el scheduler cerrando la vuelta diaria sin fallos. No queda nada por desplegar de E1.
+- **Próxima acción exacta:** implementar el **tramo 5** (PM-188, `specs/2026-09-25-e1-tramo5-cupo-por-corriente-design.md`) — cupo del gateway sombra por corriente en vez de un bucket único, que hoy deja `ml.shipments` y `ml.messages` en 0 barridos OK y `ml.items` en dead letter, bloqueando la campaña de 7 días verdes. Con T5 desplegado arranca el día 0 de la **campaña de 7 días verdes seguidos con ML en canario**; al cerrar, se ajusta el tope de ML con la medición y se pide la revisión de José. T1–T4 están implementados y **desplegados en producción**: la tarea 16 se hizo el 2026-09-18 y el 2026-09-20 se confirmó que `audit.audit_daily_manifests` acumula los manifiestos del 17, 18 y 19 firmados con `e1-2026-09` en modo `compliance`, con el scheduler cerrando la vuelta diaria sin fallos. T5 es lo único que queda por desplegar de E1.
 - **Tarea 16 (puesta en producción) hecha el 2026-09-18:** informes firmados encendidos a las 12:29 UTC. La primera
   vuelta (día 17) subió manifiesto y reporte a `bucket-produccion` en compliance, mandó el email y su firma se
   verificó con `npm run verificar-informe` sobre los objetos bajados de B2; el reporte salió amarillo, honesto

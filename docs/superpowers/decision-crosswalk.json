@@ -1736,8 +1736,8 @@
     {
       "id": "PM-188",
       "owner": "E1",
-      "consumers": [],
-      "basis": "contenido y dominio de la decisión"
+      "consumers": ["E2", "E3"],
+      "basis": "E2 y E3 dependen del cierre de la campaña de 7 días verdes de PM-186, que T5 desbloquea; E3 además comparte directamente el bucket de cupo `items` con la relectura automática de SKU (spec T5 §2.8)."
     }
   ]
 }
