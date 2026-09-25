@@ -11,14 +11,14 @@
 
 Nada se enciende en producción sin José.
 
-**Nota sobre normalización de SKU (pregunta abierta para José):** este plan NO cambia `normalizarSku`
-(`src/identidad/sku.ts`). Esa función sólo homogeneiza mayúsculas y espacios de borde; NO colapsa espacios
-internos (`"FB 12"` vs `"FB  12"` normalizan distinto), aunque la spec §5 sugiere que debería. Como el SKU
-canónico es `^FB-[0-9]+$` (CHECK de `sellable_variants`), un SKU bien formado nunca tiene espacios internos
-y esto no cambia ningún vínculo existente en la práctica — por eso no se toca acá. La Tarea 1 agrega un test
-que fija (pinnea) el comportamiento actual de `normalizarSku` con espacios internos, para que quede
-documentado y cualquier cambio futuro sea deliberado, no un efecto colateral. Si José quiere el colapso de
-espacios internos igual, es un cambio aparte fuera de este corte.
+**Nota sobre normalización de SKU:** este plan NO cambia `normalizarSku` (`src/identidad/sku.ts`).
+Corrección sobre una versión anterior de esta nota (hallazgo de la segunda opinión de Codex, 2026-09-25):
+la implementación real es `s.trim().toUpperCase().replace(/\s+/g, ' ')`, que SÍ colapsa espacios internos
+(`"FB  12"` y `"FB 12"` normalizan igual — `/\s+/g` matchea una o más corridas de espacio, no sólo el
+borde). Como el SKU canónico es `^FB-[0-9]+$` (CHECK de `sellable_variants`), un SKU bien formado nunca
+tiene espacios de ningún tipo y esto no cambia ningún vínculo existente en la práctica — por eso no se toca
+acá igual. La Tarea 1 agrega un test que fija (pinnea) el comportamiento REAL (colapsa), para que quede
+documentado y cualquier cambio futuro sea deliberado, no un efecto colateral.
 
 **Arquitectura:** todo vive en `plataforma/src/identidad/`.
 - `formato.ts` (puro): estructura de una publicación de ML y su hash.
@@ -67,7 +67,7 @@ espacios internos igual, es un cambio aparte fuera de este corte.
 - Test: `plataforma/test/identidad/formato.test.ts`
 
 **Interfaces:**
-- Consume: `normalizarSku` (`src/identidad/sku.ts`) — sólo en el test que fija su comportamiento actual con espacios internos (ver nota bajo el objetivo).
+- Consume: `normalizarSku` (`src/identidad/sku.ts`) — sólo en el test que fija su comportamiento actual (colapsa espacios internos; ver nota bajo el objetivo).
 - Produce:
   - `estructuraItemMl(payload: unknown): EstructuraMl`, con `EstructuraMl = { listing_type_id: string|null; catalog_listing: boolean; buying_mode: string|null; sku_vendedor: string|null; variaciones: Array<{ id: string; combinacion: string[]; sku_vendedor: string|null }>; pack: Record<string,string> }`. `sku_vendedor` por atributo/`seller_custom_field` del ítem, y por variación (spec §4: el formato observa también el SKU declarado, no sólo la estructura, para poder distinguir D4 de D6 en la relectura);
   - `hashEstructura(e: EstructuraMl): string`: sha256 de `canonizar(e)` (`src/informes/jcs.ts`);
@@ -94,8 +94,8 @@ it('cambiar el pack, el tipo de publicación o las variaciones cambia el hash', 
   expect(hashEstructura(estructuraItemMl({ ...base, variations: [] }))).not.toBe(h);
 });
 it('el orden de variaciones y de combinaciones no cambia el hash', () => { /* mismo item con arrays invertidos */ });
-it('[pin] normalizarSku NO colapsa espacios internos (comportamiento actual, no lo cambia este corte)', () => {
-  expect(normalizarSku('FB 12')).not.toBe(normalizarSku('FB  12')); // dos espacios vs uno: siguen distintos
+it('[pin] normalizarSku SÍ colapsa espacios internos (comportamiento actual, no lo cambia este corte)', () => {
+  expect(normalizarSku('FB  12')).toBe(normalizarSku('FB 12')); // \s+ colapsa cualquier corrida de espacio
 });
 it('registrarFormato: primera vez nueva, igual no inserta, distinta con SKU distinto es cambio/sku, distinta con estructura distinta es cambio/formato', async () => {
   expect(await registrarFormato(tx, { cuenta, recurso: 'MLA1', estructura: e1, versionRemota: 'v1', origen: 'barrido' })).toEqual({ resultado: 'nueva', que: null });
@@ -104,6 +104,11 @@ it('registrarFormato: primera vez nueva, igual no inserta, distinta con SKU dist
   expect(await registrarFormato(tx, { cuenta, recurso: 'MLA1', estructura: eSkuDistinto, versionRemota: 'v2', origen: 'relectura' })).toEqual({ resultado: 'cambio', que: 'sku' });
   expect(await registrarFormato(tx, { cuenta, recurso: 'MLA1', estructura: e2, versionRemota: 'v3', origen: 'relectura' })).toEqual({ resultado: 'cambio', que: 'formato' });
   expect((await tx.query('select count(*)::int n from catalog.format_observations')).rows[0].n).toBe(3);
+});
+it('si SKU y formato cambian a la vez, que es "sku" (precedencia): es la señal más fuerte', async () => {
+  const eAmbosDistintos = { ...e2, sku_vendedor: 'FB-OTRO' }; // e2 ya difiere de e1 en estructura
+  expect(await registrarFormato(tx, { cuenta, recurso: 'MLA3', estructura: e1, versionRemota: 'v1', origen: 'barrido' })).toEqual({ resultado: 'nueva', que: null });
+  expect(await registrarFormato(tx, { cuenta, recurso: 'MLA3', estructura: eAmbosDistintos, versionRemota: 'v2', origen: 'relectura' })).toEqual({ resultado: 'cambio', que: 'sku' });
 });
 it('dos registrarFormato concurrentes para la MISMA clave, con la misma estructura nueva: sólo uno inserta', async () => {
   // Dos transacciones (dos conexiones del pool), NO la misma tx: el advisory lock serializa la segunda
@@ -147,9 +152,14 @@ Sólo se inserta una fila cuando el hash difiere de la última. La tabla es la h
 `registrarFormato` recibe además `versionRemota: string | null` (la versión/revisión que trae el payload de
 ML, si la tiene) y la guarda en `version_remota`. Devuelve `{ resultado: 'nueva'|'igual'|'cambio'; que: 'sku'|'formato'|null }`:
 `que` distingue si lo que cambió respecto de la última observación fue el `seller_sku` (declarado, D6) o el
-resto de la estructura (D4) — `null` cuando `resultado` no es `'cambio'`. Los llamadores de la Tarea 6 (que
-necesitan diferenciar intervention por SKU vs. por formato) usan este campo en vez de volver a comparar
-estructuras.
+resto de la estructura (D4) — `null` cuando `resultado` no es `'cambio'`. **Precedencia si cambiaron los
+dos a la vez** (hallazgo de la segunda opinión de Codex, 2026-09-25: el plan original no lo definía): `que`
+es `'sku'` — un SKU declarado distinto es la señal más fuerte de que la publicación cambió de qué está
+vendiendo, y es la que la Tarea 6 necesita para decidir si reabre por `sku_cambiado` en vez de pausar. El
+mismo criterio aplica a `ResultadoRelecturaAutoSku` (Tarea 2, misma tabla de política): si el 200 trae SKU Y
+formato distintos a la vez, el resultado es `{ tipo: 'cambio'; que: 'sku' }`, no `'formato'`. Los llamadores
+de la Tarea 6 (que necesitan diferenciar intervention por SKU vs. por formato) usan este campo en vez de
+volver a comparar estructuras.
 
 - [ ] **Paso 4: Implementar `formato.ts`.** Ordenar las variaciones por id y cada combinación como `"<attr_id>=<value_id|value_name>"`, también ordenada. `pack` = los atributos cuyo id está en `ATRIBUTOS_PACK`.
 
@@ -188,7 +198,7 @@ estructuras.
 
 El SKU de la variación: si `variacion` no es `''`, se toma el `seller_custom_field` o el atributo `SELLER_SKU` de la variación con ese id; si no, el del ítem. **Es la misma regla que ya usa `sku_observado`**: ubicarla en `src/catalogo/ml.ts` y reusarla. No escribir otra.
 
-- [ ] **Paso 1: Tests que fallan:** uno por fila de la tabla, con un `Relector` falso que devuelve o lanza lo indicado. Para el reintento: `esperar` registra las esperas y se afirma que hubo 2 esperas antes del `parked`, y que la primera respeta `retryAfter` si viene.
+- [ ] **Paso 1: Tests que fallan:** uno por fila de la tabla, con un `Relector` falso que devuelve o lanza lo indicado. Para el reintento: `esperar` registra las esperas y se afirma que hubo 2 esperas antes del `parked`, y que la primera respeta `retryAfter` si viene. Un caso más: 200 con SKU Y hash de formato distintos a la vez → `{ tipo: 'cambio', que: 'sku' }` (misma precedencia que `registrarFormato`, Tarea 1).
 - [ ] **Paso 2: Ver que fallan** → `/tmp/claude-0/c3-t2-rojo.txt`
 - [ ] **Paso 3: Implementar.** `hashPayload` = sha256 de `canonizar(payload)` del ítem releído. Queda guardado en la decisión (Tarea 4).
 - [ ] **Paso 4: Verde** → `/tmp/claude-0/c3-t2-verde.txt`
@@ -220,16 +230,27 @@ por su definición vía `pg_constraint`/`pg_get_constraintdef`, no por nombre:
 -- acá se reemplaza el CHECK sin nombre de 0020:45 que hoy prohíbe auto_sku+aplicar, por uno que además
 -- exige hash_payload_ml cuando efecto='aplicar' con origen='auto_sku' (evidencia de qué se releyó).
 DO $$
-DECLARE v_conname text;
+DECLARE v_conname text; v_encontrados int;
 BEGIN
-  SELECT conname INTO v_conname
+  -- Hallazgo de la segunda opinión de Codex (2026-09-25): el filtro por ILIKE es amplio a propósito para no
+  -- depender de un formato exacto de pg_get_constraintdef entre versiones de Postgres, pero por eso mismo
+  -- podría matchear más de un CHECK. SELECT normal no lo detecta (toma cualquiera); se cuenta primero y se
+  -- aborta si no da EXACTAMENTE uno, en vez de arriesgar borrar (o dejar de borrar) el CHECK equivocado.
+  SELECT count(*) INTO v_encontrados
     FROM pg_constraint
    WHERE conrelid = 'catalog.identity_decisions'::regclass
      AND contype = 'c'
      AND pg_get_constraintdef(oid) ILIKE '%auto_sku%sombra%';
-  IF v_conname IS NULL THEN
+  IF v_encontrados = 0 THEN
     RAISE EXCEPTION '0023: no se encontró el CHECK de 0020:45 (origen<>auto_sku OR efecto=sombra) en catalog.identity_decisions; revisar antes de continuar';
+  ELSIF v_encontrados > 1 THEN
+    RAISE EXCEPTION '0023: % CHECK distintos matchean el patrón auto_sku/sombra en catalog.identity_decisions; ambiguo, revisar a mano antes de continuar', v_encontrados;
   END IF;
+  SELECT conname INTO STRICT v_conname
+    FROM pg_constraint
+   WHERE conrelid = 'catalog.identity_decisions'::regclass
+     AND contype = 'c'
+     AND pg_get_constraintdef(oid) ILIKE '%auto_sku%sombra%';
   EXECUTE format('ALTER TABLE catalog.identity_decisions DROP CONSTRAINT %I', v_conname);
 END $$;
 ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
@@ -237,9 +258,10 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
 ```
 
 - [ ] **Paso 1b: Tests de esquema** (antes o junto con el Paso 2): un INSERT `auto_sku`/`aplicar` SIN
-  `hash_payload_ml` es rechazado por el CHECK; el mismo INSERT CON `hash_payload_ml` pasa; un INSERT
-  `humano`/`sombra` (combinación inválida por el otro CHECK de 0020:44) sigue rechazado. Corren contra la
-  base de prueba ya migrada, no contra producción.
+  `hash_payload_ml` es rechazado por el CHECK; el mismo INSERT CON `hash_payload_ml` pasa (y ya NO es
+  rechazado por el CHECK viejo: confirma que 0020:45 quedó reemplazado y no sólo agregado uno nuevo al
+  lado); un INSERT `humano`/`sombra` (combinación inválida por el otro CHECK de 0020:44) sigue rechazado.
+  Corren contra la base de prueba ya migrada, no contra producción.
 
 - [ ] **Paso 2: Tests que fallan** en `autoridad.test.ts`:
   - `[esc:flag-apagado]` con `autoSku` omitido o `'apagado'`: una `auto_sku`/`aplicar` vigente es INVISIBLE (devuelve lo mismo que hoy);
@@ -388,6 +410,18 @@ CREATE TABLE catalog.e3_canario_casos (
 
 **Interfaces:**
 - Consume: `registrarFormato` (T1).
+- **Dónde se aplica el flag** (precisión pedida por opt-55): el único punto de enforcement es el mismo lugar
+  del archivo modificado — el bloque de `aplicar.ts` agregado por esta tarea, justo después de que
+  `registrarFormato`/la observación de `sku_observado` corren (esas SIEMPRE corren, con cualquier valor del
+  flag: son observación pura, no dependen de `E3_INTERVENTION`). Todo lo de abajo (abrir el caso
+  `intervention`, el `identity_commands`, el evento de auditoría) queda detrás de un solo
+  `if (flags.E3_INTERVENTION === '1') { ... }` que envuelve las tres acciones juntas — no se evalúa el flag
+  por separado en cada una, para no dejar abierta la posibilidad de un estado a medias (p.ej. el caso
+  `intervention` abierto pero sin su evento de auditoría porque el flag se leyó dos veces con valores
+  distintos en el medio de un despliegue). Con `E3_INTERVENTION=0` esto es un no-op total: no abre casos, no
+  escribe `identity_commands`, no audita — y esto es así también para vínculos HUMANOS (`vincular`), no sólo
+  `auto_sku`: el flag gatea la transición a `intervention` en sí, sin importar el origen de la decisión
+  vigente que la disparó.
 - Produce: al proyectar un `ml.items` cuya clave tiene una decisión VIGENTE `auto_sku`/`aplicar` (o humana `vincular`):
   - si el SKU normalizado observado ya no es el de la variante vinculada → caso `intervention` (se reabre o crea `tipo='sku_cambiado'` sobre la representación). El vínculo NO cambia;
   - si el formato dio `resultado: 'cambio'` (con `que: 'formato'`; `que: 'sku'` ya lo cubre la rama anterior) → caso `intervention` + un `identity_commands` `pausar_publicacion` `parked`. El vínculo NO cambia;
@@ -399,7 +433,9 @@ CREATE TABLE catalog.e3_canario_casos (
   - la misma observación repetida no duplica el caso ni el comando;
   - sin decisión vigente → nada;
   - `E3_INTERVENTION=0` (default): no abre ningún caso `intervention` aunque el resto de las condiciones se cumplan — es la corrección al ítem anterior de este plan, que decía "con los flags apagados esto sigue funcionando"; eso era incorrecto: sin `E3_INTERVENTION=1` esta tarea no abre nada;
-  - `E3_INTERVENTION=1` con `E3_CANARIO=0` y `E3_AUTO_SKU=0`: SÍ abre casos `intervention` igual (es sombra, no depende del canario ni del auto-SKU aplicado).
+  - `E3_INTERVENTION=1` con `E3_CANARIO=0` y `E3_AUTO_SKU=0`: SÍ abre casos `intervention` igual (es sombra, no depende del canario ni del auto-SKU aplicado);
+  - `E3_INTERVENTION=1` sobre una clave con decisión VIGENTE humana `vincular` (sin ninguna `auto_sku`): también abre `intervention` si cambia el SKU o el formato — el flag gatea la transición en sí, no sólo el camino del auto-SKU;
+  - con `E3_INTERVENTION=0`, `registrarFormato` y la observación de `sku_observado` SIGUEN corriendo (se ve la fila nueva en `format_observations`), sólo la apertura del caso `intervention` queda desactivada — confirma que el flag no desactiva la observación, sólo la reacción.
 - [ ] **Paso 2: Rojo** → `/tmp/claude-0/c3-t6-rojo.txt`
 - [ ] **Paso 3: Implementar.** Verificar en 0020 que `'intervention'` esté en el CHECK de `estado` (lo está) y si `tipo` tiene CHECK; si lo tiene, agregar `'sku_cambiado'` en la parte 4.
 - [ ] **Paso 4: Verde** → `/tmp/claude-0/c3-t6-verde.txt`
@@ -416,18 +452,28 @@ CREATE TABLE catalog.e3_canario_casos (
 - Consume: `calibrar` (`src/identidad/calibracion.ts`), para top-1/top-3 sobre la muestra y las humanas de la ventana.
 - Produce: `replay(pool, { empresa, desde, hasta }): Promise<{ calibracion: Metricas; autoSkuVsHumano: { coinciden: number; difieren: Array<{ recurso: string; autoSku: string; humano: string }> }; veredicto: 'apto'|'no_apto' }>`. Es `apto` sólo si `difieren.length === 0`: es el error D6 tipo 2, medido sobre la ventana.
 
-**Denominador de `autoSkuVsHumano` (precisión sobre el ítem del plan original, que no lo definía):** sólo
-entran las claves con una `auto_sku` Y con una verdad humana conocida — una decisión humana vigente
-`vincular` (compara contra esa variante), o `sin_candidato`/`omitir` (verdad = "no es ninguna candidata",
-así que cualquier `auto_sku` vigente sobre esa clave cuenta como `difieren`). Una clave con `auto_sku` pero
-SIN ninguna decisión humana (ni vincular ni sin_candidato/omitir) NO entra en el denominador: no hay verdad
-contra la cual comparar, así que ni suma a `coinciden` ni a `difieren`. Igual que `calibracion.ts`, un
-apartado («No estoy seguro») no es una decisión y por lo tanto tampoco entra.
+**Denominador de `autoSkuVsHumano` (precisión sobre el ítem del plan original, que no lo definía) —
+deliberadamente DISTINTO del denominador de `calibrar()`, no el mismo:** `calibracion.ts` mide precisión
+del MOTOR (top-1/top-3 contra una verdad de SKU) y por eso descarta `omitir`/`sin_candidato` — no son una
+verdad de SKU contra la que comparar un candidato (`calibracion.ts:4-6`). `autoSkuVsHumano` mide otra cosa:
+si el auto-SKU vinculó algo que un humano, mirando la MISMA clave, decidió que no correspondía vincular a
+esa variante (el error D6 tipo 2 de la spec). Para ese propósito sí importa `sin_candidato`/`omitir`: entran
+las claves con una `auto_sku` Y con una verdad humana vigente de cualquiera de estos tipos:
+  - `vincular` → compara la variante humana contra la de la `auto_sku` (coinciden si son la misma);
+  - `sin_candidato` u `omitir` → la verdad es "no es ninguna candidata", así que CUALQUIER `auto_sku`
+    vigente sobre esa clave cuenta como `difieren` (el auto-SKU vinculó algo que el humano dijo que no
+    correspondía vincular);
+  - `mantener_omision` se trata igual que `omitir` (mismo significado de verdad: sigue sin corresponder).
+Una clave con `auto_sku` pero SIN ninguna decisión humana de estos tipos NO entra en el denominador: no hay
+verdad contra la cual comparar, así que ni suma a `coinciden` ni a `difieren`. Un apartado («No estoy
+seguro») no es una decisión (invariante ya establecida en `identity_cases.apartado_en`, rediseño de
+bandeja) y tampoco entra.
 
 - [ ] **Paso 1: Tests que fallan:**
   - una `auto_sku`/`sombra` igual a la humana `vincular` → coincide;
   - una distinta → `difieren` y `no_apto`;
   - una humana `sin_candidato` sobre una clave con `auto_sku` → cuenta en `difieren` (el humano dijo que no es esa);
+  - una humana `mantener_omision` sobre una clave con `auto_sku` → cuenta en `difieren`, igual que `omitir`;
   - una humana `apartado` (no es decisión) no cuenta;
   - una `auto_sku` sobre una clave SIN ninguna decisión humana (ni vincular ni sin_candidato/omitir) → no entra en el denominador: no suma ni a `coinciden` ni a `difieren`.
 - [ ] **Paso 2: Rojo** → `/tmp/claude-0/c3-t7-rojo.txt`
