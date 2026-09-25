@@ -90,6 +90,21 @@ describe('bandeja: logica pura', () => {
     expect(L.filaVisible(ops, 'marca', true)).toBe(true);
     expect(L.filaVisible(ops, 'color', false)).toBe(true);
   });
+
+  it('sólo diferencias: un candidato SIN dato para el atributo (ni siquiera "falta") no se oculta, aunque otro coincida', () => {
+    // Corrección de un hallazgo Alto de Codex en T4: ocultar esta fila haría parecer que el candidato sin
+    // dato coincide, empujando a un vínculo equivocado — justo lo que el rediseño busca evitar.
+    const ops = [
+      { explicacion: { atributos: [{ nombre: 'color', marca: 'coincide' }] } },
+      { explicacion: { atributos: [] } }, // sin entrada para 'color': ni coincide, ni difiere, ni falta
+    ];
+    expect(L.filaVisible(ops, 'color', true)).toBe(true);
+  });
+
+  it('sólo diferencias: equivalente cuenta como coincidencia (no fuerza la fila a visible)', () => {
+    const ops = [{ explicacion: { atributos: [{ nombre: 'rodado', marca: 'equivalente' }] } }];
+    expect(L.filaVisible(ops, 'rodado', true)).toBe(false);
+  });
 });
 
 describe('bandeja: atajos sobre radios', () => {

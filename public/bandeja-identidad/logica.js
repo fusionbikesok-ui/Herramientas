@@ -122,12 +122,16 @@
     return null;
   }
 
-  // «Sólo diferencias»: una fila se oculta si ninguna opción difiere ni le falta el dato.
+  // «Sólo diferencias»: una fila se oculta si ninguna opción difiere ni le falta el dato. Que a un candidato
+  // le falte el dato (sin entrada en absoluto, distinto de la marca 'falta') también cuenta como visible:
+  // ocultar esa fila lo haría ver como si coincidiera, empujando a un vínculo equivocado (hallazgo de Codex
+  // en T4, corregido por decisión explícita de opt-55). 'equivalente' sigue contando como coincidencia, igual
+  // que 'coincide' — son grupos separados a propósito (ver atributosIguales), pero acá ambos son "no difiere".
   function filaVisible(opciones, nombre, soloDiferencias) {
     if (!soloDiferencias) return true;
     return (opciones || []).some(function (o) {
       var a = atributoDe(o, nombre);
-      return !!a && a.marca !== 'coincide';
+      return !a || (a.marca !== 'coincide' && a.marca !== 'equivalente');
     });
   }
 
