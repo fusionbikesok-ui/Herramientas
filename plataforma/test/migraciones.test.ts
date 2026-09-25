@@ -24,7 +24,7 @@ async function valor<T>(url: string, sql: string): Promise<T> {
 describe('migraciones', () => {
   it('E1-SCH-02 migrar dos bases vacías da el mismo esquema', async () => {
     const a = await nueva(); const b = await nueva();
-    expect(await migrar(a.urlMigrador, DIR_MIGRACIONES)).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql', '0009_informes_entregas.sql', '0010_webauthn_desafios.sql', '0011_intentos_recuperacion.sql', '0012_entregas_oculto.sql', '0013_catalogo.sql', '0014_catalogo_atributos.sql', '0015_catalogo_taxonomia.sql', '0016_taxonomia_mapeo_muchos_a_uno.sql', '0017_categorias_sin_equivalencia.sql', '0018_model_facets.sql', '0019_casos_de_modelo.sql', '0020_identidad.sql']);
+    expect(await migrar(a.urlMigrador, DIR_MIGRACIONES)).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql', '0009_informes_entregas.sql', '0010_webauthn_desafios.sql', '0011_intentos_recuperacion.sql', '0012_entregas_oculto.sql', '0013_catalogo.sql', '0014_catalogo_atributos.sql', '0015_catalogo_taxonomia.sql', '0016_taxonomia_mapeo_muchos_a_uno.sql', '0017_categorias_sin_equivalencia.sql', '0018_model_facets.sql', '0019_casos_de_modelo.sql', '0020_identidad.sql', '0021_titulo_observado.sql', '0022_casos_apartados.sql']);
     await migrar(b.urlMigrador, DIR_MIGRACIONES);
     expect(esquemaDe(a.nombre)).toBe(esquemaDe(b.nombre));
   });
@@ -59,7 +59,7 @@ describe('migraciones', () => {
   it('E1-SCH-02 dos migradores concurrentes aplican una sola vez', async () => {
     const a = await nueva();
     const [r1, r2] = await Promise.all([migrar(a.urlMigrador, DIR_MIGRACIONES), migrar(a.urlMigrador, DIR_MIGRACIONES)]);
-    expect([...r1, ...r2].sort()).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql', '0009_informes_entregas.sql', '0010_webauthn_desafios.sql', '0011_intentos_recuperacion.sql', '0012_entregas_oculto.sql', '0013_catalogo.sql', '0014_catalogo_atributos.sql', '0015_catalogo_taxonomia.sql', '0016_taxonomia_mapeo_muchos_a_uno.sql', '0017_categorias_sin_equivalencia.sql', '0018_model_facets.sql', '0019_casos_de_modelo.sql', '0020_identidad.sql']);
+    expect([...r1, ...r2].sort()).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql', '0009_informes_entregas.sql', '0010_webauthn_desafios.sql', '0011_intentos_recuperacion.sql', '0012_entregas_oculto.sql', '0013_catalogo.sql', '0014_catalogo_atributos.sql', '0015_catalogo_taxonomia.sql', '0016_taxonomia_mapeo_muchos_a_uno.sql', '0017_categorias_sin_equivalencia.sql', '0018_model_facets.sql', '0019_casos_de_modelo.sql', '0020_identidad.sql', '0021_titulo_observado.sql', '0022_casos_apartados.sql']);
   });
 
   it('el esquema migrado coincide con la referencia schema.sql', async () => {
