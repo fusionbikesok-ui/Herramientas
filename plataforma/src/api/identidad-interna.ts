@@ -372,8 +372,11 @@ export function registrarIdentidadInterna(
     // Mismo contrato que decidir: Idempotency-Key obligatoria, expected_version, y los mismos códigos de
     // error que decidirCaso ya usa (version_conflict, caso_cerrado, caso_inexistente), más no_apartado para
     // el DELETE cuando el caso ya no está apartado.
+    // apartarCaso/desapartarCaso nunca devuelven 'bandeja_apagada' (ese código es sólo de decidirCaso, que
+    // corta antes de abrir transacción si `!o.bandeja`); no está en este mapeo para no dejar código muerto
+    // sin cobertura (hallazgo Bajo de Codex).
     const STATUS_MARCA: Record<Exclude<Awaited<ReturnType<typeof apartarCaso>>, { ok: true }>['code'], number> = {
-      version_conflict: 409, caso_cerrado: 409, caso_inexistente: 404, bandeja_apagada: 503, no_apartado: 409,
+      version_conflict: 409, caso_cerrado: 409, caso_inexistente: 404, no_apartado: 409,
     };
     async function manejarMarca(
       req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply, metodo: 'POST' | 'DELETE',

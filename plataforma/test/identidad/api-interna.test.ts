@@ -41,6 +41,13 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     const r = await api(o.bandeja ?? true).inject({ method: 'POST', url: path, payload: texto, headers: cabeceras('POST', path, texto, undefined, extra), remoteAddress: '127.0.0.1' });
     return { status: r.statusCode, body: r.json() as any };
   };
+  const del = async (path: string, cuerpo: unknown, o: { idem?: string | null; bandeja?: boolean } = {}) => {
+    const texto = JSON.stringify(cuerpo);
+    const extra: Record<string, string> = {};
+    if (o.idem !== null) extra['idempotency-key'] = o.idem ?? randomUUID();
+    const r = await api(o.bandeja ?? true).inject({ method: 'DELETE', url: path, payload: texto, headers: cabeceras('DELETE', path, texto, undefined, extra), remoteAddress: '127.0.0.1' });
+    return { status: r.statusCode, body: r.json() as any };
+  };
   const actor = { usuario: 'jose', es_admin: false };
 
   beforeAll(async () => {
@@ -434,5 +441,64 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(soloApartados.body.casos.map((c: any) => c.id)).toEqual([conflicto.id]);
     const sinApartados = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=4`);
     expect(sinApartados.body.casos.map((c: any) => c.id)).toEqual([normal.id]);
+  });
+
+  describe('POST/DELETE .../apartar', () => {
+    const ruta = (id: string) => `${PREFIJO_IDENTIDAD}/casos/${id}/apartar`;
+
+    it('apartar y desapartar por HTTP: 200, y el caso deja/vuelve a la cola normal', async () => {
+      const c = await caso('MLA40');
+      const r1 = await post(ruta(c.id), { expected_version: 1, actor });
+      expect(r1.status).toBe(200);
+      expect(r1.body.version).toBe(2);
+      expect((await get(`${PREFIJO_IDENTIDAD}/casos?grupo=7`)).body.casos.map((x: any) => x.id)).toEqual([c.id]);
+
+      const r2 = await del(ruta(c.id), { expected_version: 2, actor });
+      expect(r2.status).toBe(200);
+      expect(r2.body.version).toBe(3);
+      expect((await get(`${PREFIJO_IDENTIDAD}/casos?grupo=7`)).body.casos).toEqual([]);
+    });
+
+    it('sin firma: 401; sin Idempotency-Key: 422', async () => {
+      const c = await caso('MLA41');
+      const sinFirma = await (async () => {
+        const texto = JSON.stringify({ expected_version: 1, actor });
+        const r = await api().inject({ method: 'POST', url: ruta(c.id), payload: texto, headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() }, remoteAddress: '127.0.0.1' });
+        return r.statusCode;
+      })();
+      expect(sinFirma).toBe(401);
+      expect((await post(ruta(c.id), { expected_version: 1, actor }, { idem: null })).status).toBe(422);
+    });
+
+    it('version_conflict (409) con expected_version vieja', async () => {
+      const c = await caso('MLA42');
+      expect((await post(ruta(c.id), { expected_version: 99, actor })).status).toBe(409);
+    });
+
+    it('caso_inexistente (404) para un id ajeno o de otra empresa', async () => {
+      expect((await post(ruta(randomUUID()), { expected_version: 1, actor })).status).toBe(404);
+    });
+
+    it('no_apartado (409) al desapartar uno que no está apartado', async () => {
+      const c = await caso('MLA43');
+      expect((await del(ruta(c.id), { expected_version: 1, actor })).status).toBe(409);
+    });
+
+    it('reintento con la misma Idempotency-Key: mismo resultado, no sube versión dos veces', async () => {
+      const c = await caso('MLA44');
+      const clave = randomUUID();
+      const a = await post(ruta(c.id), { expected_version: 1, actor }, { idem: clave });
+      const b = await post(ruta(c.id), { expected_version: 1, actor }, { idem: clave });
+      expect(b.body).toEqual(a.body);
+    });
+
+    it('la misma clave usada para apartar OTRO caso no devuelve un resultado ajeno', async () => {
+      const c1 = await caso('MLA45'); const c2 = await caso('MLA46');
+      const clave = randomUUID();
+      const r1 = await post(ruta(c1.id), { expected_version: 1, actor }, { idem: clave });
+      const r2 = await post(ruta(c2.id), { expected_version: 1, actor }, { idem: clave });
+      expect(r1.status).toBe(200); expect(r2.status).toBe(200);
+      expect(r2.body.version).toBe(2); // no repitió el resultado de c1: subió su propia versión
+    });
   });
 });

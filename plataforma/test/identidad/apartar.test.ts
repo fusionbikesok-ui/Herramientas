@@ -115,4 +115,43 @@ describe('E3-APT-01 apartarCaso/desapartarCaso', () => {
     expect(d.ok).toBe(true);
     expect((await app.query('select apartado_en from catalog.identity_cases where id=$1', [caso.id])).rows[0].apartado_en).toBeNull();
   });
+
+  it('la misma clave usada para apartar OTRO caso no devuelve un resultado ajeno (clave por caso+acción)', async () => {
+    const c1 = await casoAbierto(); const c2 = await casoAbierto();
+    const clave = 'misma-clave';
+    const r1 = await apartarCaso(app, { caseId: c1.id, expectedVersion: c1.version, actor: 'jose', idempotencyKey: clave });
+    const r2 = await apartarCaso(app, { caseId: c2.id, expectedVersion: c2.version, actor: 'jose', idempotencyKey: clave });
+    expect(r1).toEqual({ ok: true, version: c1.version + 1 });
+    expect(r2).toEqual({ ok: true, version: c2.version + 1 }); // no repitió r1: c2 se apartó de verdad
+  });
+
+  it('la misma clave usada para apartar y luego desapartar no colisiona (clave por acción)', async () => {
+    const caso = await casoAbierto();
+    const clave = 'k-compartida';
+    const r1 = await apartarCaso(app, { caseId: caso.id, expectedVersion: caso.version, actor: 'jose', idempotencyKey: clave });
+    const r2 = await desapartarCaso(app, { caseId: caso.id, expectedVersion: caso.version + 1, actor: 'jose', idempotencyKey: clave });
+    expect(r1).toEqual({ ok: true, version: caso.version + 1 });
+    expect(r2).toEqual({ ok: true, version: caso.version + 2 });
+  });
+
+  it('dos apartar concurrentes con la misma clave: uno gana, el otro repite su resultado (no 500 por choque de PK)', async () => {
+    const caso = await casoAbierto();
+    const [a, b] = await Promise.all([
+      apartarCaso(app, { caseId: caso.id, expectedVersion: caso.version, actor: 'jose', idempotencyKey: 'concurrente' }),
+      apartarCaso(app, { caseId: caso.id, expectedVersion: caso.version, actor: 'jose', idempotencyKey: 'concurrente' }),
+    ]);
+    expect(a).toEqual({ ok: true, version: caso.version + 1 });
+    expect(b).toEqual(a);
+  });
+
+  it('audita exactamente un evento identidad.caso_apartado, y otro identidad.caso_desapartado al desapartar', async () => {
+    const caso = await casoAbierto();
+    await apartarCaso(app, { caseId: caso.id, expectedVersion: caso.version, actor: 'jose', idempotencyKey: 'k-aud-1' });
+    await apartarCaso(app, { caseId: caso.id, expectedVersion: caso.version, actor: 'jose', idempotencyKey: 'k-aud-1' }); // reintento: no debe auditar de nuevo
+    await desapartarCaso(app, { caseId: caso.id, expectedVersion: caso.version + 1, actor: 'jose', idempotencyKey: 'k-aud-2' });
+    const eventos = (await admin.query<{ action: string; company_id: string; aggregate_id: string }>(
+      `select action, company_id, aggregate_id from audit.audit_events where aggregate_id = $1 order by chain_seq`, [caso.id])).rows;
+    expect(eventos.map((e) => e.action)).toEqual(['identidad.caso_apartado', 'identidad.caso_desapartado']);
+    expect(eventos.every((e) => e.company_id === empresa)).toBe(true);
+  });
 });

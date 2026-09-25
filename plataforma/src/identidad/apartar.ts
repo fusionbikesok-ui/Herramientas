@@ -17,24 +17,31 @@ export interface PedidoMarca { caseId: string; expectedVersion: number; actor: s
 
 export type ResultadoMarca =
   | { ok: true; version: number }
-  | { ok: false; code: 'version_conflict' | 'caso_cerrado' | 'caso_inexistente' | 'bandeja_apagada' | 'no_apartado' };
+  | { ok: false; code: 'version_conflict' | 'caso_cerrado' | 'caso_inexistente' | 'no_apartado' };
 
-/** Busca una marca previa con esta clave de idempotencia para esta acción; si existe, es el resultado del
- *  reintento (no se vuelve a tocar la fila del caso ni a auditar). */
-async function buscarMarcaPrevia(tx: Consultable, idempotencyKey: string, accion: 'apartar' | 'desapartar'): Promise<ResultadoMarca | null> {
+/** Busca una marca previa con esta clave de idempotencia, para ESTE caso y ESTA acción (la clave sola no
+ *  alcanza: reusada para otro caso u otra acción no debe devolver un resultado ajeno). Si existe, es el
+ *  resultado del reintento (no se vuelve a tocar la fila del caso ni a auditar). */
+async function buscarMarcaPrevia(tx: Consultable, idempotencyKey: string, caseId: string, accion: 'apartar' | 'desapartar'): Promise<ResultadoMarca | null> {
   const previa = (await tx.query<{ version: number }>(
-    'SELECT version FROM catalog.identity_case_marks WHERE idempotency_key = $1 AND accion = $2', [idempotencyKey, accion])).rows[0];
+    'SELECT version FROM catalog.identity_case_marks WHERE idempotency_key = $1 AND case_id = $2 AND accion = $3',
+    [idempotencyKey, caseId, accion])).rows[0];
   return previa ? { ok: true, version: previa.version } : null;
 }
 
 export async function apartarCaso(pool: pg.Pool, p: PedidoMarca): Promise<ResultadoMarca> {
   return enTransaccion(pool, async (tx) => {
-    const previa = await buscarMarcaPrevia(tx, p.idempotencyKey, 'apartar');
-    if (previa) return previa;
+    // Primera pasada, sin candado: resuelve la mayoría de los reintentos rápido. Todavía puede haber una
+    // carrera con OTRO apartarCaso concurrente con la MISMA clave (los dos pasan esta lectura antes de que
+    // ninguno tome el FOR UPDATE) — por eso se repite el chequeo después del candado, igual que decidirCaso.
+    const previaSinCandado = await buscarMarcaPrevia(tx, p.idempotencyKey, p.caseId, 'apartar');
+    if (previaSinCandado) return previaSinCandado;
 
     const caso = (await tx.query<{ version: number; cerrado_en: Date | null; company_id: string }>(
       'SELECT version, cerrado_en, company_id FROM catalog.identity_cases WHERE id = $1 FOR UPDATE', [p.caseId])).rows[0];
     if (!caso) return { ok: false, code: 'caso_inexistente' };
+    const previa = await buscarMarcaPrevia(tx, p.idempotencyKey, p.caseId, 'apartar');
+    if (previa) return previa;
     if (caso.version !== p.expectedVersion) return { ok: false, code: 'version_conflict' };
     if (caso.cerrado_en) return { ok: false, code: 'caso_cerrado' };
 
@@ -57,12 +64,14 @@ export async function apartarCaso(pool: pg.Pool, p: PedidoMarca): Promise<Result
 
 export async function desapartarCaso(pool: pg.Pool, p: PedidoMarca): Promise<ResultadoMarca> {
   return enTransaccion(pool, async (tx) => {
-    const previa = await buscarMarcaPrevia(tx, p.idempotencyKey, 'desapartar');
-    if (previa) return previa;
+    const previaSinCandado = await buscarMarcaPrevia(tx, p.idempotencyKey, p.caseId, 'desapartar');
+    if (previaSinCandado) return previaSinCandado;
 
     const caso = (await tx.query<{ version: number; apartado_en: Date | null; company_id: string }>(
       'SELECT version, apartado_en, company_id FROM catalog.identity_cases WHERE id = $1 FOR UPDATE', [p.caseId])).rows[0];
     if (!caso) return { ok: false, code: 'caso_inexistente' };
+    const previa = await buscarMarcaPrevia(tx, p.idempotencyKey, p.caseId, 'desapartar');
+    if (previa) return previa;
     if (caso.version !== p.expectedVersion) return { ok: false, code: 'version_conflict' };
     if (!caso.apartado_en) return { ok: false, code: 'no_apartado' };
 
