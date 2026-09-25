@@ -1724,6 +1724,20 @@
       "owner": "E1",
       "consumers": [],
       "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-187",
+      "owner": "E3",
+      "consumers": [
+        "E2"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-188",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
     }
   ]
 }
