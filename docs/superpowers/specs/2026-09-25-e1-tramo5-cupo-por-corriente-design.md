@@ -1,6 +1,6 @@
 # E1 tramo 5 — Cupo sombra de ML por corriente
 
-**Estado:** diseño (PM-188, decisión de José 2026-09-25). **Entrega:** E1. **Reglas:** todo lo que toque ML sigue `specs/ml-api-guia.md`. **Revisión Codex:** primera pasada con 2 críticos/5 altos/2 medios/1 bajo (`/root/.claude/jobs/6c6b3b28/tmp/codex-rev-t5-informe.md`); segunda pasada, sobre la corrección, con 1 crítico/3 altos/2 medios/1 bajo (`/root/.claude/jobs/e656f951/tmp/codex-rev-t5-informe-v2.md`). Esta versión corrige ambas rondas (ver §6).
+**Estado:** diseño (PM-188, decisión de José 2026-09-25). **Entrega:** E1. **Reglas:** todo lo que toque ML sigue `specs/ml-api-guia.md`. **Revisión Codex:** 1ª pasada, 2 críticos/5 altos/2 medios/1 bajo (`/root/.claude/jobs/6c6b3b28/tmp/codex-rev-t5-informe.md`); 2ª pasada, 1 crítico/3 altos/2 medios/1 bajo (`.../e656f951/tmp/codex-rev-t5-informe-v2.md`); 3ª pasada, 1 crítico/1 alto/1 medio — resueltos con una aclaración de alcance (spec de diseño, no cambio de código) y un hecho de wiring corregido en `main.ts` (`.../e656f951/tmp/codex-rev-t5-informe-v3.md`). Ver §6.
 
 ## 1. Problema
 
@@ -9,6 +9,18 @@ compartido por las 6 corrientes ML de la sombra. `ml.shipments` (1 GET por enví
 (1 + 1 por pack) lo vacían solos: 0 barridos OK en 24 h y señales de `ml.items` en dead letter con
 `retryable: HTTP_429`. Además, el 429 sintético es indistinguible de un 429 real de ML (guía §4). Con esto
 la campaña de 7 días verdes (PM-186) no puede salir nunca.
+
+**Nota de alcance (aclarada tras la tercera revisión de Codex):** este documento es una **spec de diseño**,
+no un cambio de código. Describe el contrato que la implementación de T5 tiene que cumplir — incluidas las
+correcciones de `reporte.ts` (§2.5), el módulo único de mapeo tópico→corriente (§2.1) y la columna
+`deferred_since` (§2.4) — para que las tareas de implementación no repitan los hallazgos de las revisiones de
+Codex. Ninguno de esos cambios de código existe todavía en este commit; existen como requisito explícito de
+la tarea de implementación, con su criterio de aceptación en tests dirigidos (§4). Una revisión que contraste
+esta spec contra el código real y encuentre que el código *todavía* no tiene esos cambios no es un hallazgo
+nuevo: es el estado esperado de una spec antes de implementarse. Sí son hallazgos válidos: que la spec
+describa un contrato incorrecto, ambiguo, o que no coincida con el código que rodea el área a cambiar (como
+el wiring real de `worker/main.ts` en §2.8, que si se documenta mal hace que la implementación arranque de
+una base equivocada).
 
 ## 2. Alcance
 
@@ -177,27 +189,29 @@ quiera calibrar el reparto. Por eso el tramo se divide en dos pasos, no uno solo
   medición muestra que 60 rpm de sombra generan `HTTP_429` reales frecuentes (no `CUPO_SOMBRA_AGOTADO`), el
   techo baja, no el reparto entre corrientes.
 
-### 2.8 Otros consumidores del mismo transporte (corrige el hallazgo medio 9 — corregido tras la segunda revisión: la primera versión de esta sección afirmaba que bootstrap comparte el gateway, y el código no lo confirma)
+### 2.8 Otros consumidores del mismo transporte (corrige el hallazgo medio 9; hecho verificado y corregido de nuevo en la tercera revisión — la versión de la segunda revisión ya estaba desactualizada frente al wiring real)
 
-**Corrección de hecho (segunda revisión de Codex, verificada en código):** `bootstrap.ts` (comentario propio,
-línea ~5: "Lector propio: no toca los adaptadores de las corrientes diarias") y
-`identidad/relectura-auto-sku.ts` (E3, vía `crearRelectoresMl` de `relectura.ts:32`) **no** llaman a
-`crearGatewayCanal` directamente: ambos reciben un `TransporteCanal` inyectado por quien los instancia
-(`OpcionesBootstrap.transporte` / `dep.transporte`). Hoy, `plataforma/src/worker/main.ts` **todavía no
-registra** ningún adaptador de bootstrap ni de relectura (pendiente del corte 5, requiere configuración de
-cuentas/keyring) — así que en el estado actual del código no hay una instancia real corriendo para verificar
-si ese `TransporteCanal` inyectado termina siendo el gateway sombra o un cliente aparte. La spec anterior
-asumía que sí, sin evidencia.
+**Hecho verificado en código (tercera revisión, `worker/main.ts:52-66`):** por cada cuenta configurada en el
+registro de barridos, `main.ts` crea **un** `transporte` (`crearTransporteGateway` si `cuenta.transporte ===
+'gateway'`, o un cliente directo si no) y ese mismo objeto se pasa a los adaptadores de barrido
+(`crearAdaptadoresMl`/`Woo`), a los relectores por señal (`crearRelectoresMl`/`Woo`, `main.ts:60`) **y** a
+`cuentasBootstrap` (`main.ts:61-63`). No hay tres transportes por cuenta, hay uno solo. `crearTransporteGateway`
+es el cliente de plataforma para `lib/gatewayCanal.js` del legado (`transporte-gateway.ts:9-16`).
 
-**Decisión que este tramo deja pendiente, explícita en vez de implícita:** cuando se implemente el corte 5 de
-T3 (registro de adaptadores de bootstrap y relectura en `worker/main.ts`), quien lo haga debe decidir y
-documentar si `bootstrap.ts` e `identidad/relectura-auto-sku.ts` reciben el mismo `TransporteCanal` que
-alimenta `crearGatewayCanal` (y por lo tanto comparten el cupo por corriente de `items` de este tramo) o un
-transporte separado con su propio límite. Mientras esa decisión no se tome, **este tramo T5 no puede
-garantizar** que su reparto por corriente sea el único consumo de `items` sobre el presupuesto legado — sólo
-que los barridos de E1 mismos sí lo respetan. La tarea 0 (§2.7) mide el consumo del cupo por corriente
-propio de T5 (operación → corriente por las métricas de §2.2); si en el futuro bootstrap/relectura se cablean
-al mismo gateway, hay que repetir esa medición incluyéndolos.
+**Consecuencia directa, sin decisión pendiente:** para toda cuenta cuyo `transporte` esté configurado como
+`'gateway'`, **bootstrap y la relectura de E3 SÍ comparten el gateway sombra y por lo tanto el cupo por
+corriente de `items` de este tramo** con los barridos de E1 — no es una posibilidad a decidir en el futuro,
+es el comportamiento actual del wiring para esa cuenta. Para una cuenta con `transporte` distinto de
+`'gateway'` (cliente directo), ninguno de los tres pasa por el gateway sombra ni por su cupo.
+
+Durante la campaña de 7 días verdes (PM-186), esto significa que bootstrap y la relectura de E3 son tráfico
+adicional real sobre el bucket `items`, sin prioridad especial y sin bucket propio en este tramo — la tarea 0
+(§2.7) tiene que medir el consumo de `items` **con bootstrap y relectura corriendo**, no sólo con los
+barridos de E1, porque ambos consumen del mismo cupo hoy. Las métricas de §2.2 (operación → corriente por
+llamada) ya distinguen qué operación generó cada consumo, así que un consumo alto de bootstrap/E3 es visible
+sin trabajo adicional. Si la tarea 0 muestra que esto bloquea la campaña, excluir bootstrap/E3 del gateway
+sombra durante la campaña (cambiando su `cuenta.transporte` a un cliente directo) o darles prioridad propia
+queda para José, no implícito en esta spec.
 
 ## 3. Fuera de alcance (backlog, guía §7)
 
@@ -270,3 +284,11 @@ al mismo gateway, hay que repetir esa medición incluyéndolos.
 | Medio 5 (v2) | Mapeo tópico→corriente duplicado en 3 lugares, riesgo de divergencia | §2.1 (fuente única) |
 | Medio 6 (v2) | Tarea 0 debía ser gate previo a la campaña, no medición en paralelo | §2.7 y §4 (gate obligatorio, secuencia de despliegue corregida) |
 | Bajo 7 (v2) | §6 marcaba el medio 9 original como "corregido" sin serlo realmente | Esta tabla, fila Medio 9 arriba |
+
+### Tercera pasada (sobre ef40f5c9, informe en `codex-rev-t5-informe-v3.md`)
+
+| # | Hallazgo | Resolución |
+|---|---|---|
+| Crítico (v3) | §2.5 sólo documenta el fix de `reporte.ts`; el código no cambió | No es un hallazgo nuevo de diseño: `reporte.ts` se corrige como parte de la implementación de T5, no en esta spec. Aclarado en la nota de alcance al inicio del §2. |
+| Alto (v3) | §2.8 (versión de la 2ª pasada) quedó desactualizada: `worker/main.ts` SÍ wirea un único `transporte` por cuenta compartido entre barridos, relectores y `cuentasBootstrap` | §2.8 reescrita con el hecho verificado: si `cuenta.transporte==='gateway'`, bootstrap y relectura de E3 comparten el cupo `items` hoy, sin decisión pendiente. |
+| Medio (v3) | §2.1 declara "fuente única" pero no existe ese módulo en el código | Mismo caso que el crítico: la fuente única es un requisito de implementación de T5 (tarea concreta con test de igualdad), no un módulo ya escrito. Aclarado en la nota de alcance. |
