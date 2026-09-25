@@ -96,7 +96,9 @@ export async function reclamarCorridas(
   }));
 }
 
-const LEASE_VIGENTE = `id=$1 AND status='claimed' AND lease_token=$2 AND worker_id=$3 AND lease_until>now()`;
+/** Exportado para que motor.ts verifique el lease DENTRO de la misma transacción que persiste una página,
+ *  con el mismo criterio que acá (mismo lease_token y worker_id, y todavía vigente). */
+export const LEASE_VIGENTE = `id=$1 AND status='claimed' AND lease_token=$2 AND worker_id=$3 AND lease_until>now()`;
 
 export async function renovarLeaseCorrida(pool: pg.Pool, corrida: CorridaReclamada, leaseSegundos = 60): Promise<void> {
   const r = await pool.query(

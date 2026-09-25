@@ -4,7 +4,7 @@ import { enTransaccion, type Consultable } from '../db/pool.ts';
 import { cifrarSobre, type KeyringSobre } from '../seguridad/sobre.ts';
 import type { ResultadoBarrido } from '../worker/barridos.ts';
 import { hashCanonico, jsonCanonico } from './canonico.ts';
-import { renovarLeaseCorrida, type CorridaReclamada } from './corridas.ts';
+import { LEASE_VIGENTE, renovarLeaseCorrida, type CorridaReclamada } from './corridas.ts';
 import type { AdaptadorBarrido, AlcanceBajas, RecursoRemoto, TipoVersion } from './tipos.ts';
 
 export class ErrorPaginaInvalida extends Error { override name = 'ErrorPaginaInvalida'; }
@@ -271,6 +271,13 @@ export function crearProcesadorMotor(opciones: {
         }
       }
       await enTransaccion(db, async (tx) => {
+        // Un worker cuyo lease venció (heartbeat que falló) puede seguir en este loop y tratar de escribir
+        // una página después de que otro worker ya reclamó la corrida: verificar la propiedad DENTRO de esta
+        // misma transacción, con el mismo criterio que corridas.ts, para que un lease ajeno la haga rollback
+        // entera en vez de persistir una página huérfana (hallazgo de Codex sobre e7fa400d/8196eff9).
+        const propio = await tx.query(`SELECT 1 FROM integrations.sweep_runs WHERE ${LEASE_VIGENTE} FOR UPDATE`,
+          [corrida.id, corrida.token, corrida.workerId]);
+        if (propio.rowCount !== 1) throw new ErrorLeaseVencido(`lease vencido o ajeno para sweep#${corrida.id}`);
         if (presencia) {
           await marcarPresencia(tx, corrida, presentes);
           enumerados += presentes.length;

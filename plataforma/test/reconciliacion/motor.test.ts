@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { crearPool } from '../../src/db/pool.ts';
 import { completarCorrida, fallarCorrida, materializarCorridas, reclamarCorridas } from '../../src/reconciliacion/corridas.ts';
 import { hashCanonico, jsonCanonico } from '../../src/reconciliacion/canonico.ts';
+import { ErrorLeaseVencido } from '../../src/colas/errores.ts';
 import { crearProcesadorMotor, ErrorPaginaInvalida } from '../../src/reconciliacion/motor.ts';
 import type { AdaptadorBarrido, PaginaRemota, RecursoRemoto, TipoVersion } from '../../src/reconciliacion/tipos.ts';
 import { descifrarSobre, type KeyringSobre } from '../../src/seguridad/sobre.ts';
@@ -137,6 +138,34 @@ describe('motor transaccional de reconciliación E1 T2', () => {
     await expect(crearProcesadorMotor({ db, adaptador: adaptador([pagina]), keyring, reloj })(corrida)).rejects.toBeInstanceOf(ErrorPaginaInvalida);
     expect(await contar('select count(*) n from integrations.resource_observations')).toBe(0);
     expect(await contar('select count(*) n from integrations.inbox_messages')).toBe(0);
+  });
+
+  it('un lease robado por otro worker entre páginas hace fallar la transacción de la página con ErrorLeaseVencido y no escribe nada', async () => {
+    const corrida = await nuevaCorrida();
+    const r1 = recurso('o-lease-1', '2026-09-15T10:00:00Z');
+    const r2 = recurso('o-lease-2', '2026-09-15T10:00:00Z');
+    const conRobo: AdaptadorBarrido = {
+      ...adaptador([]),
+      async listar(_ctx, posicion) {
+        const page = typeof posicion?.page === 'number' ? posicion.page : 0;
+        if (page === 1) {
+          // Simula el heartbeat de este worker fallando: el lease vence, otro worker lo reclama con
+          // otro lease_token/worker_id ANTES de que la página 2 llegue a persistir.
+          await admin.query(
+            `update integrations.sweep_runs set lease_token=gen_random_uuid(), worker_id='otro-worker',
+               lease_until=now()+interval '1 minute' where id=$1`, [corrida.id]);
+        }
+        return {
+          resources: [page === 0 ? r1 : r2], nextPosition: page === 0 ? { page: 1 } : null,
+          cursorAfter: { v: 1, updated_at: '2026-09-15T10:00:00Z', tie_breaker: page === 0 ? r1.id : r2.id },
+        };
+      },
+    };
+    await expect(crearProcesadorMotor({ db, adaptador: conRobo, keyring, reloj })(corrida)).rejects.toBeInstanceOf(ErrorLeaseVencido);
+    // La página 1 (o-lease-1) sí alcanzó a persistir antes del robo; la 2 (o-lease-2) no: su transacción
+    // completa (persistirRecurso + el UPDATE de contadores) abortó entera al fallar la verificación de lease.
+    expect(await contar('select count(*) n from integrations.inbox_messages')).toBe(1);
+    expect((await db.query('select 1 from integrations.inbox_messages where resource_id=$1', ['o-lease-2'])).rowCount).toBe(0);
   });
 
   it('versión hash: igual no encola; distinta reemplaza aunque no sea ordenable', async () => {

@@ -345,10 +345,14 @@ const PAUSA_ENTRE_PAGINAS_MS = 300;
 const PRESUPUESTO_REINTENTO_MS = 90_000;
 const MAX_REINTENTOS_PEDIDO = 6;
 
-async function conReintento<T>(dep: DependenciasMl, pedido: () => Promise<T>): Promise<T> {
+/** El presupuesto de una página: el scan y cada /items/bulk secuencial de esa página lo COMPARTEN (no uno
+ *  cada uno), porque en conjunto no pueden superar los 5 minutos que dura vivo el scroll_id de ML. */
+interface PresupuestoReintento { gastadoMs: number }
+const nuevoPresupuesto = (): PresupuestoReintento => ({ gastadoMs: 0 });
+
+async function conReintento<T>(dep: DependenciasMl, presupuesto: PresupuestoReintento, pedido: () => Promise<T>): Promise<T> {
   const esperar = dep.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const azar = dep.azar ?? Math.random;
-  let gastado = 0;
   for (let intento = 0; ; intento++) {
     try {
       return await pedido();
@@ -357,8 +361,8 @@ async function conReintento<T>(dep: DependenciasMl, pedido: () => Promise<T>): P
       const ms = error.retryAfter !== undefined
         ? error.retryAfter * 1000
         : Math.round(Math.min(30_000, 1000 * 2 ** intento) * (0.8 + 0.4 * azar()));
-      if (gastado + ms > PRESUPUESTO_REINTENTO_MS) throw error;
-      gastado += ms;
+      if (presupuesto.gastadoMs + ms > PRESUPUESTO_REINTENTO_MS) throw error;
+      presupuesto.gastadoMs += ms;
       await esperar(ms);
     }
   }
@@ -369,6 +373,9 @@ export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
     // Items no tiene filtro por modificación: su única corriente es la vuelta completa diaria.
     topic: 'ml.items', cursorKind: 'full_scan', fullScan: true, versionKind: 'temporal',
     async listar(ctx, posicion): Promise<PaginaRemota> {
+      // Un solo presupuesto para TODA la página (scan + todos sus bulk secuenciales): son parte de la misma
+      // ventana de 5 minutos del scroll_id, no pedidos independientes con 90s cada uno (hallazgo de Codex).
+      const presupuesto = nuevoPresupuesto();
       const q = new URLSearchParams({ search_type: 'scan', limit: '100' });
       const scroll = textoPosicion(posicion, 'scroll_id');
       if (scroll) {
@@ -376,7 +383,7 @@ export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
         await (dep.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(PAUSA_ENTRE_PAGINAS_MS);
       }
       const ruta = `/users/${encodeURIComponent(dep.sellerId)}/items/search?${q}`;
-      const body = exigirRegistro(exigirOk(await conReintento(dep, () => dep.transporte.get(ruta)), 'items/search'), 'items/search');
+      const body = exigirRegistro(exigirOk(await conReintento(dep, presupuesto, () => dep.transporte.get(ruta)), 'items/search'), 'items/search');
       const ids = exigirLista(body.results, 'items/search results').map(idTexto);
       if (ids.some((id) => !id)) throw new ErrorCanalTerminal('ID_INVALIDO items/search');
       const lotes: string[][] = [];
@@ -385,7 +392,7 @@ export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
       // De a uno, no en paralelo: cinco bulk simultáneos por página eran la ráfaga que la guía de ML desaconseja.
       const respuestas: RespuestaCanal[] = [];
       for (const lote of lotes) {
-        respuestas.push(await conReintento(dep, () => dep.transporte.get(`/items/bulk?ids=${lote.map(encodeURIComponent).join(',')}`)));
+        respuestas.push(await conReintento(dep, presupuesto, () => dep.transporte.get(`/items/bulk?ids=${lote.map(encodeURIComponent).join(',')}`)));
       }
       const resources: RecursoRemoto[] = [];
       const presentes: string[] = [];
