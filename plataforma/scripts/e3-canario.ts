@@ -20,7 +20,9 @@ try {
     const registro = cargarRegistro(valor('--registro') || process.env.BARRIDOS_REGISTRO_FILE!);
     const cuenta = registro.find((c) => c.channel === 'mercadolibre'); if (!cuenta || cuenta.channel !== 'mercadolibre') throw new Error('no hay cuenta ML en el registro');
     const keyring = cargarKeyring(process.env.CATALOGO_KEYRING_FILE);
-    const transporte = cuenta.transporte === 'gateway' ? crearTransporteGateway({ url: cuenta.base_url, keyring, sellerId: cuenta.seller_id }) : crearClienteCanal({ baseUrl: cuenta.base_url });
+    // Relectura de E3 por el cupo sombra con consumidor 'identidad' (E1 T5 §2.8): en producción ese cupo está cerrado
+    // (GATEWAY_ML_SHADOW_RPM_E2E3=0) hasta que José lo abra, así que el canario no puede leer ML antes de tiempo.
+    const transporte = cuenta.transporte === 'gateway' ? crearTransporteGateway({ url: cuenta.base_url, keyring, consumidor: 'identidad', sellerId: cuenta.seller_id }) : crearClienteCanal({ baseUrl: cuenta.base_url });
     const r = await correrCanario(pool, crearRelectoresMl({ transporte })['ml.items']!, { corridaId: valor('--corrida'), bandeja: true }); console.log(JSON.stringify(r));
   } else if (comando === 'cerrar') console.log(JSON.stringify(await cerrarCanario(pool, { corridaId: valor('--corrida') })));
   else if (comando === 'estado') { const r = await pool.query(`SELECT estado, count(*)::int AS casos FROM catalog.e3_canario_casos WHERE corrida_id=$1 GROUP BY estado`, [valor('--corrida')]); console.log(JSON.stringify(r.rows)); }
