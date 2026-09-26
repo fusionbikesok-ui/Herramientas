@@ -158,6 +158,15 @@ describe('bandeja: deshacer() no se dispara dos veces (regresión de T3)', () =>
   });
 });
 
+describe('bandeja: consume el nombre real del tipo del detalle', () => {
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+
+  it('pasa detalle.tipo a la lógica de teclas, no el nombre inexistente tipo_caso', () => {
+    expect(js).toMatch(/tipoCaso:\s*S\.detalle\.tipo\b/);
+    expect(js).not.toMatch(/tipoCaso:\s*S\.detalle\.tipo_caso\b/);
+  });
+});
+
 describe('bandeja: tecla X en confirmable — d5 (T5, hallazgo Alto de Codex)', () => {
   // Bug real preexistente (de la pantalla original, commit 1ca92ee4, no de T2-T4): la rama 'rechazar' del
   // switch de teclas leía `cs.detalle.d5`, pero `cs` es una fila de S.cola (GET /casos), donde d5 viene

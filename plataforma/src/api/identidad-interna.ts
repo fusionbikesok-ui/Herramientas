@@ -243,6 +243,8 @@ export function registrarIdentidadInterna(
         `SELECT c.id, c.tipo, c.estado, c.prioridad, c.version, c.detalle, c.abierto_en, c.cerrado_en, c.motivo_cierre,
                 r.id AS rep_id, r.channel_account_id, r.recurso, r.variacion_normalizada, r.sku_observado, r.estado_remoto,
                 r.stock_canal, r.precio, r.moneda, r.model_id, ${tituloMlSql('r')} AS titulo
+                ,(SELECT i.url FROM catalog.model_images i WHERE i.representation_id = r.id AND i.vigente_hasta IS NULL
+                  ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto
            FROM catalog.identity_cases c
            ${PUBLICACION}
           WHERE c.id = $1 AND c.company_id = $2`, [req.params.id, auth.empresa])).rows[0];
@@ -321,7 +323,7 @@ export function registrarIdentidadInterna(
         publicacion: c.recurso ? {
           recurso: c.recurso, variacion: c.variacion_normalizada, titulo: c.titulo ?? null, sku_observado: c.sku_observado ?? null,
           estado: c.estado_remoto ?? null, stock: c.stock_canal ?? null, precio: c.precio ?? null, moneda: c.moneda ?? null,
-          link_ml: linkMl(String(c.recurso)), atributos: Object.fromEntries(atributosMl),
+          link_ml: linkMl(String(c.recurso)), foto: c.foto ?? null, atributos: Object.fromEntries(atributosMl),
         } : null,
         candidatos,
         auto_sku_en_sombra: sombra ? { decision_id: sombra.id, sku: sombra.sku ?? null, creado_en: sombra.creado_en } : null,

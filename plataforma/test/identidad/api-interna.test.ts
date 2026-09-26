@@ -307,6 +307,29 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${randomUUID()}`)).status).toBe(404);
   });
 
+  it('el detalle devuelve la primera foto vigente de la representación ML, o null si no existe', async () => {
+    const conFoto = await caso('MLA_FOTO');
+    const sinFoto = await caso('MLA_SIN_FOTO');
+    const vencida = await caso('MLA_FOTO_VENCIDA');
+    await admin.query(
+      `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en)
+       SELECT $1, r.id, x.url, x.orden, now() - interval '1 hour'
+       FROM catalog.external_representations r
+       CROSS JOIN (VALUES ('https://img/vigente.jpg', 2), ('https://img/primera.jpg', 1)) x(url, orden)
+       WHERE r.recurso = 'MLA_FOTO'`,
+      [conFoto.modelo],
+    );
+    await admin.query(
+      `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en, vigente_hasta)
+       SELECT $1, r.id, 'https://img/vencida.jpg', 1, now() - interval '2 hours', now() - interval '1 hour'
+       FROM catalog.external_representations r WHERE r.recurso = 'MLA_FOTO_VENCIDA'`, [vencida.modelo],
+    );
+
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${conFoto.id}`)).body.publicacion.foto).toBe('https://img/primera.jpg');
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${sinFoto.id}`)).body.publicacion.foto).toBeNull();
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${vencida.id}`)).body.publicacion.foto).toBeNull();
+  });
+
   /*
    * Bug reportado por opt-16 (2026-09-24, revisión de las decisiones de José): sin título ML (representación
    * ya colgada de una variante woo_*, sin ml_simple/ml_clasico propio ni titulo_observado), el motor no

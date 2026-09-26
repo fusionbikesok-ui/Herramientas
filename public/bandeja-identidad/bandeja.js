@@ -544,7 +544,7 @@
 
   function celdaFija(opcion, tipo, esMl, caso) {
     var c = el('div', 'celda');
-    var src = esMl ? { titulo: caso.publicacion.titulo, sku: caso.publicacion.sku_observado, precio: caso.publicacion.precio, moneda: caso.publicacion.moneda, stock: caso.publicacion.stock, foto: null } : opcion;
+    var src = esMl ? { titulo: caso.publicacion.titulo, sku: caso.publicacion.sku_observado, precio: caso.publicacion.precio, moneda: caso.publicacion.moneda, stock: caso.publicacion.stock, foto: caso.publicacion.foto } : opcion;
     if (tipo === 'foto') {
       if (src.foto) {
         var b = el('button', 'foto-btn', null, { type: 'button', 'data-foto-url': src.foto, 'data-foto-titulo': src.titulo || '', 'data-foto-sku': src.sku || '', 'aria-label': 'Ampliar foto de ' + (src.titulo || 'la variante') });
@@ -849,7 +849,7 @@
 
       var confirmable = S.cola[S.idx] && S.cola[S.idx].confirmar;
       var nCandidatos = L.opcionesDe(S.detalle.candidatos, S.busqueda).length;
-      var accion = L.accionDeTecla(k, { confirmable: confirmable, nCandidatos: nCandidatos, tipoCaso: S.detalle.tipo_caso });
+      var accion = L.accionDeTecla(k, { confirmable: confirmable, nCandidatos: nCandidatos, tipoCaso: S.detalle.tipo });
 
       if (!accion) return;
       ev.preventDefault();
