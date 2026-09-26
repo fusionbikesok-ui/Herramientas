@@ -161,6 +161,13 @@ export function openDb(dbPath) {
   // CREATE TABLE IF NOT EXISTS del router no puede ampliar una tabla existente.
   migrateMlClaims(db);
   migrateClaimsBackbone(db);
+  const productosCacheMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_productos_cache_114'").get();
+  if (!productosCacheMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '114_ml_productos_cache.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_productos_cache_114')").run();
+    })();
+  }
   const recepcionUrgenteMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='recepcion_aliases_proveedor_109'").get();
   if (!recepcionUrgenteMigration) {
     db.transaction(() => {

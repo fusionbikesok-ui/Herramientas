@@ -242,7 +242,7 @@ async function compararProductos(id,btn){
       var m=x.coincide_nuevo===true?'<span class="cf-ok">coincide</span>':x.coincide_nuevo===false?'<span class="cf-mal">no coincide</span>':'—';
       return '<tr><td>'+esc(x.nombre)+'</td><td>'+esc(x.viejo==null?'—':x.viejo)+'</td><td>'+esc(x.nuevo==null?'—':x.nuevo)+'</td><td>'+esc(x.publicacion==null?'—':x.publicacion)+'</td><td>'+m+'</td></tr>';
     }).join('');
-    caja.innerHTML=cfProducto('Anterior',d.viejo)+cfProducto('Nuevo',d.nuevo)+'<div>'+v+'</div>'
+    caja.innerHTML=cfProducto('Anterior',d.viejo)+cfProducto('Nuevo',d.nuevo)+'<div>'+v+' <span class="cf-cambio">('+(d.comparados||0)+' atributos comparados)</span></div>'
       +(filas?'<div class="cf-tabla-wrap"><table class="cf-tabla"><thead><tr><th>Atributo</th><th>Anterior</th><th>Nuevo</th><th>Tu publicación</th><th>Nuevo vs. publicación</th></tr></thead><tbody>'+filas+'</tbody></table></div>':'<div>Los productos no difieren en atributos.</div>');
   }catch(e){ caja.textContent='No se pudo comparar: '+e.message; }
   btn.disabled=false;
