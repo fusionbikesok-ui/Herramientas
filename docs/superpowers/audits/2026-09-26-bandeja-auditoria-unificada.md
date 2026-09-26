@@ -2,7 +2,7 @@
 
 **Fecha:** 2026-09-26. Une dos auditorías independientes:
 - `2026-09-26-bandeja-auditoria-codex.md`: Codex leyó el código e investigó buenas prácticas, con fuentes.
-- `2026-09-26-bandeja-auditoria-sesion.md`: la otra sesión abrió la pantalla real con Playwright y dejó 20 capturas en `capturas-2026-09-26/`. Límite: se probó con un harness que usa el `public/` real, una API simulada y 5 casos sintéticos. No se usó la base anonimizada, porque QA no levanta la plataforma.
+- `2026-09-26-bandeja-auditoria-sesion.md`: la otra sesión abrió la pantalla real con Playwright y tomó 20 capturas (no versionadas; las cifras medidas están en este documento). Límite: se probó con un harness que usa el `public/` real, una API simulada y 5 casos sintéticos. No se usó la base anonimizada, porque QA no levanta la plataforma.
 
 **Criterio de José (textual):** "debería ser usable las veces que sean necesarias y no canse avanzar en ella; actualmente no da ni ganas de entrar, es fea, inservible, no es rápida de tomar la decisión; lo único rescatable es el concepto de la comparación de productos, pero no como está implementado". También pidió: nada cortado, fotos fáciles de ver, diferencias bien a la vista, poco scroll. El motor todavía no está calibrado.
 
@@ -106,6 +106,6 @@ Las auditorías no coinciden. Codex propone una tecla (`1` vincula directo). La 
 
 ## 7. Cierre de la implementación (rama `feature/bandeja-estacion`)
 
-T1–T7 implementadas. Capturas conservadas: `capturas-despues/` (antes y después a 1440×900 de 2 casos); el resto de las capturas de QA no se versiona (`.gitignore`).
+T1–T7 implementadas. Las capturas de QA no se versionan (`.gitignore`); las cifras medidas están escritas en este documento.
 
 **Evidencia de probador-e2e (aceptada por José el 2026-09-26):** el Chromium del MCP de Playwright no arranca como root, así que la prueba se corrió con Playwright `--no-sandbox` sobre el harness real (`scripts/qa/bandeja-real/`, plataforma real + datos sintéticos). Resultado: a 1440×900, 1280×800, 390×844 y 640×400 (zoom 200 %) 0 px de scroll horizontal y vertical y barra de decisión visible; foco al título con aria-live; 2+Enter vincula y `z` revierte; visor `f` con zoom 576/1163/1745 px y Esc cierra; sin errores de consola; axe (wcag2a/2aa/22aa) sin violaciones en caso, visor y búsqueda.

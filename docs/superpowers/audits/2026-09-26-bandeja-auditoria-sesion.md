@@ -1,7 +1,7 @@
 # Bandeja de identidad — auditoría con pantalla real (sesión)
 
 **Fecha:** 2026-09-26. Complementa `2026-09-26-bandeja-auditoria-codex.md` (Codex sólo leyó código).
-**Método y límites:** Chromium (Playwright) contra un harness local (`scripts/qa/bandeja-harness/`) que sirve el `public/` real y simula la API con **5 casos sintéticos** (sin candidatos, sku_pendiente, atributo_divergente, user_product_divergente, 3 candidatos). **No es la base anonimizada**: QA (`qa.sh`) no levanta la plataforma que responde `/api/bandeja-identidad`, así que la bandeja no se puede ver ahí. Las fotos son SVG 800×600 generados; los títulos largos son realistas. Los tamaños de foto dependen del layout, no del contenido; el alto de las matrices depende de la cantidad de atributos (aquí 4–6). Capturas: `capturas-2026-09-26/` (`<res>-<caso>-pliegue.png` y `-completa.png`).
+**Método y límites:** Chromium (Playwright) contra un harness local (`scripts/qa/bandeja-harness/`) que sirve el `public/` real y simula la API con **5 casos sintéticos** (sin candidatos, sku_pendiente, atributo_divergente, user_product_divergente, 3 candidatos). **No es la base anonimizada**: QA (`qa.sh`) no levanta la plataforma que responde `/api/bandeja-identidad`, así que la bandeja no se puede ver ahí. Las fotos son SVG 800×600 generados; los títulos largos son realistas. Los tamaños de foto dependen del layout, no del contenido; el alto de las matrices depende de la cantidad de atributos (aquí 4–6). Las capturas no se versionan; las cifras medidas están en este documento.
 
 ## Medición (viewport → alto total del documento; botones de decisión)
 
