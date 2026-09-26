@@ -307,7 +307,7 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
    `parked` (`reconciliar_distinto`).
 7. Caso a `verified` y `version+1`; evento de auditoría `identidad.auto_sku_aplicado` con el antes y el después.
 
-- [ ] **Paso 1: Tests que fallan:**
+- [x] **Paso 1: Tests que fallan:**
   - `[esc:auto-sku-unico]` vincula;
   - `[esc:aplicar-no-supera-sombra]` cuando hay una `auto_sku`/`sombra` vigente para la misma clave: la decisión `aplicar` se inserta con `supersede_a = NULL` y NO la supera (`superada_en` de la sombra sigue NULL después); las dos coexisten en la tabla;
   - SKU que dejó de ser único → `bandeja` y sin decisión;
@@ -316,10 +316,10 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
   - la bandeja decide en paralelo: dos transacciones concurrentes (patrón del test `[esc:409-dos-operadores]` de `decidir.test.ts`) → exactamente una decisión vigente y ningún efecto parcial;
   - reintentar `aplicarAutoSku` sobre una clave ya vinculada → `ya_resuelto`, sin segunda decisión;
   - si `reconciliarClave` no vincula → rollback completo (0 decisiones nuevas y caso sin cambios).
-- [ ] **Paso 2: Ver que fallan** → `/tmp/claude-0/c3-t4-rojo.txt`
-- [ ] **Paso 3: Implementar.**
-- [ ] **Paso 4: Verde** → `/tmp/claude-0/c3-t4-verde.txt`
-- [ ] **Paso 5: Commit.**
+- [x] **Paso 2: Ver que fallan** → `/tmp/claude-0/c3-t4-rojo.txt`
+- [x] **Paso 3: Implementar.**
+- [x] **Paso 4: Verde** → `/tmp/claude-0/c3-t4-verde.txt`
+- [x] **Paso 5: Commit.**
 
 ### Tarea 5: Canario: congelar, correr, cerrar con D6
 
