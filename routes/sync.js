@@ -207,7 +207,7 @@ function upsertMlStockEstado(db, clave, sku, cantidad) {
  * límite de fotos por categoría) y puede rechazar el update con HTTP 400 aunque
  * el stock en sí sea válido. El endpoint puntual solo toca esa variación.
  */
-function buildMlStockUpdate(itemId, variationId, cantidad) {
+export function buildMlStockUpdate(itemId, variationId, cantidad) {
   if (variationId) {
     return { path: `/items/${itemId}/variations/${variationId}`, body: { available_quantity: cantidad } };
   }
