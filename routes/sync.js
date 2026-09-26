@@ -8,6 +8,7 @@
  */
 
 import { Router } from 'express';
+import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
@@ -3166,6 +3167,16 @@ export function syncRouter(db, cfg) {
       ORDER BY detectado_en DESC, id DESC
     `).all().map(r => ({ ...r, ids: JSON.parse(r.ids) }));
     res.json({ ok: true, data, total: data.length });
+  });
+
+  // Comparación de los dos productos de un aviso de migración. Se pide al abrir la tarjeta, no por render;
+  // las lecturas a ML quedan cacheadas en sqlite (lib/comparacionProductos.js).
+  router.get('/cambios-formato/:id/comparacion', async (req, res) => {
+    const c = db.prepare('SELECT * FROM ml_publicacion_cambios WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ ok: false, error: 'Cambio no encontrado' });
+    if (c.campo !== 'catalog_product_id') return res.json({ ok: false, error: 'Sólo aplica a cambios de producto de catálogo' });
+    const pub = db.prepare('SELECT atributos_json FROM ml_publicaciones_cache WHERE clave=?').get(c.clave);
+    res.json(await compararProductos(db, cfg?.ml, c, pub));
   });
 
   // Revisar cierra el aviso. Con `reactivar: true` además despausa: es el ÚNICO camino por el

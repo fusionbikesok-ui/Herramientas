@@ -90,6 +90,13 @@
   .cf-despues{color:var(--amber,#F5B942);font-weight:700;}
   .cf-acciones{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;}
   .cf-acciones .btn{min-height:44px;display:inline-flex;align-items:center;}
+  .cf-comp{flex-basis:100%;font-size:12.5px;line-height:1.5;}
+  .cf-comp .cf-prod{margin:4px 0;}
+  .cf-tabla-wrap{overflow-x:auto;}
+  .cf-tabla{border-collapse:collapse;width:100%;min-width:420px;margin-top:6px;}
+  .cf-tabla th,.cf-tabla td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border,#24304A);}
+  .cf-ok{color:var(--green,#4ADE80);font-weight:700;}
+  .cf-mal{color:var(--red,#F87171);font-weight:700;}
   @media(max-width:600px){.cf-acciones{margin-left:0;width:100%;}.cf-acciones .btn{flex:1;justify-content:center;}}
 </style>
 </head>
@@ -208,9 +215,37 @@ async function cargarCambiosFormato(){
         +'<button class="btn sec" onclick="revisarCambio('+c.id+',false)">Dejar pausada</button>'
         +'<button class="btn" onclick="revisarCambio('+c.id+',true)">Estaba bien, reactivar</button>'
         +(c.permalink?'<a class="btn sec" href="'+esc(c.permalink)+'" target="_blank" rel="noopener">Ver en ML ↗</a>':'')
-        +'</div></div>';
+        +(c.campo==='catalog_product_id'?'<button class="btn sec" onclick="compararProductos('+c.id+',this)">Comparar productos</button>':'')
+        +'</div><div class="cf-comp" id="cf-comp-'+c.id+'" hidden></div></div>';
     }).join('');
   }catch(e){ caja.hidden=true; }
+}
+
+function cfProducto(etq,p){
+  var txt=esc(etq)+': <b>'+esc(p.nombre||p.id||'(sin nombre)')+'</b> <span class="cf-cambio">'+esc(p.id||'')+'</span>';
+  if(p.borrado)txt+=' · <span class="cf-mal">borrado por ML</span>';
+  else if(p.link)txt+=' · <a href="'+esc(p.link)+'" target="_blank" rel="noopener">Ficha pública ↗</a>';
+  return '<div class="cf-prod">'+txt+'</div>';
+}
+async function compararProductos(id,btn){
+  var caja=document.getElementById('cf-comp-'+id);
+  if(!caja)return;
+  if(!caja.hidden){caja.hidden=true;return;}
+  caja.hidden=false;caja.textContent='Consultando a MercadoLibre…';btn.disabled=true;
+  try{
+    var r=await fetch('/api/sync/cambios-formato/'+id+'/comparacion');
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    var v=d.veredicto==='coincide'?'<span class="cf-ok">Coincide con la publicación</span>'
+      :d.veredicto==='no_coincide'?'<span class="cf-mal">No coincide con la publicación</span>':'<span>Sin datos suficientes para comparar</span>';
+    var filas=(d.diferencias||[]).map(function(x){
+      var m=x.coincide_nuevo===true?'<span class="cf-ok">coincide</span>':x.coincide_nuevo===false?'<span class="cf-mal">no coincide</span>':'—';
+      return '<tr><td>'+esc(x.nombre)+'</td><td>'+esc(x.viejo==null?'—':x.viejo)+'</td><td>'+esc(x.nuevo==null?'—':x.nuevo)+'</td><td>'+esc(x.publicacion==null?'—':x.publicacion)+'</td><td>'+m+'</td></tr>';
+    }).join('');
+    caja.innerHTML=cfProducto('Anterior',d.viejo)+cfProducto('Nuevo',d.nuevo)+'<div>'+v+'</div>'
+      +(filas?'<div class="cf-tabla-wrap"><table class="cf-tabla"><thead><tr><th>Atributo</th><th>Anterior</th><th>Nuevo</th><th>Tu publicación</th><th>Nuevo vs. publicación</th></tr></thead><tbody>'+filas+'</tbody></table></div>':'<div>Los productos no difieren en atributos.</div>');
+  }catch(e){ caja.textContent='No se pudo comparar: '+e.message; }
+  btn.disabled=false;
 }
 
 async function revisarCambio(id, reactivar){
