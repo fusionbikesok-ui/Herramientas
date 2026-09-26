@@ -12,67 +12,83 @@ import { buildMlStockUpdate } from '../routes/sync.js';
 export function seleccionar(db) {
   return db.prepare(`SELECT p.clave, p.item_id, p.variation_id, p.status, p.sub_status, p.available_quantity, p.titulo
     FROM ml_publicaciones_cache p
-    WHERE COALESCE(TRIM(p.seller_sku),'') = '' AND p.available_quantity > 0
+    WHERE COALESCE(TRIM(p.seller_sku),'') = '' AND p.available_quantity > 0 AND p.status IN ('active','paused')
       AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave AND d.accion IN ('asignar','confirmar'))
       AND NOT EXISTS (SELECT 1 FROM ml_stock_estado e WHERE e.clave = p.clave)
     ORDER BY p.item_id, p.variation_id`).all();
 }
 
+function seleccionarSinVinculo(db) {
+  return db.prepare(`SELECT p.clave FROM ml_publicaciones_cache p
+    WHERE COALESCE(TRIM(p.seller_sku),'') = ''
+      AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave = p.clave AND d.accion IN ('asignar','confirmar'))
+      AND NOT EXISTS (SELECT 1 FROM ml_stock_estado e WHERE e.clave = p.clave)`).all().map((r) => r.clave);
+}
+
 const pausadaPorVendedor = (f) => String(f.sub_status || '').includes('paused_by_seller');
-const rutaLectura = (f) => (f.variation_id ? `/items/${f.item_id}/variations/${f.variation_id}` : `/items/${f.item_id}?attributes=id,available_quantity`);
+const rutaLectura = (f) => (f.variation_id ? `/items/${f.item_id}/variations/${f.variation_id}` : `/items/${f.item_id}?attributes=id,available_quantity,variations`);
 
 async function leerCantidad(db, cfg, f, fetcher) {
   const r = await fetcher(db, cfg, 'get', rutaLectura(f));
   if (r.status === 429) return { corte: true };
   if (r.status !== 200 || !Number.isInteger(r.data?.available_quantity)) return { resultado: `omitido_lectura_${r.status}` };
+  if (!f.variation_id && Array.isArray(r.data?.variations) && r.data.variations.length) return { resultado: 'omitido_item_con_variaciones' };
   return { cantidad: r.data.available_quantity };
 }
 
-export async function poner0(db, cfg, { apply = false, fetcher = mlFetch } = {}) {
+export async function poner0(db, cfg, { apply = false, fetcher = mlFetch, csv = null } = {}) {
   const seleccion = seleccionar(db);
   const pausadasVendedor = seleccion.filter(pausadaPorVendedor);
   const filas = [];
   let cortado = false;
+  const registrar = (x) => { filas.push(x); if (csv) agregarFila(csv, x); };
   for (const f of seleccion.filter((x) => !pausadaPorVendedor(x))) {
-    if (cortado) { filas.push({ ...f, previa: '', resultado: 'no_intentado_429' }); continue; }
+   try {
+    if (cortado) { registrar({ ...f, previa: '', resultado: 'no_intentado_429' }); continue; }
     const l = await leerCantidad(db, cfg, f, fetcher);
-    if (l.corte) { cortado = true; filas.push({ ...f, previa: '', resultado: 'no_intentado_429' }); continue; }
-    if (l.resultado) { filas.push({ ...f, previa: '', resultado: l.resultado }); continue; }
-    if (l.cantidad === 0) { filas.push({ ...f, previa: 0, resultado: 'omitido_ya_0' }); continue; }
-    if (!apply) { filas.push({ ...f, previa: l.cantidad, resultado: 'dry_run' }); continue; }
+    if (l.corte) { cortado = true; registrar({ ...f, previa: '', resultado: 'no_intentado_429' }); continue; }
+    if (l.resultado) { registrar({ ...f, previa: '', resultado: l.resultado }); continue; }
+    if (l.cantidad === 0) { registrar({ ...f, previa: 0, resultado: 'omitido_ya_0' }); continue; }
+    if (!apply) { registrar({ ...f, previa: l.cantidad, resultado: 'dry_run' }); continue; }
     const { path: p, body } = buildMlStockUpdate(f.item_id, f.variation_id || '', 0);
     const w = await fetcher(db, cfg, 'put', p, body);
-    if (w.status === 429) { cortado = true; filas.push({ ...f, previa: l.cantidad, resultado: 'no_intentado_429' }); continue; }
-    filas.push({ ...f, previa: l.cantidad, resultado: w.status === 200 ? 'ok' : `error_${w.status}` });
+    if (w.status === 429) { cortado = true; registrar({ ...f, previa: l.cantidad, resultado: 'no_intentado_429' }); continue; }
+    registrar({ ...f, previa: l.cantidad, resultado: w.status === 200 ? 'ok' : `error_${w.status}` });
+   } catch (e) { registrar({ ...f, previa: '', resultado: `error_excepcion_${String(e?.message || e).slice(0, 40).replace(/\s/g, '_')}` }); }
   }
   return { filas, pausadasVendedor, cortado };
 }
 
-export function escribirCsv(filas, dir) {
+export function abrirCsv(dir) {
   fs.mkdirSync(dir, { recursive: true });
-  const archivo = path.join(dir, `ml-stock0-sin-vinculo-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`);
-  const lineas = ['clave,item_id,variation_id,cantidad_previa,resultado', ...filas.map((f) => [f.clave, f.item_id, f.variation_id || '', f.previa, f.resultado].join(','))];
-  fs.writeFileSync(archivo, lineas.join('\n') + '\n');
+  const archivo = path.join(dir, `ml-stock0-sin-vinculo-${new Date().toISOString().replace(/[:.]/g, '-')}.tsv`);
+  fs.writeFileSync(archivo, 'clave\titem_id\tvariation_id\tcantidad_previa\tresultado\n');
   return archivo;
 }
+export const agregarFila = (archivo, f) => fs.appendFileSync(archivo, [f.clave, f.item_id, f.variation_id || '', f.previa, f.resultado].join('\t') + '\n');
 
 export async function rollback(db, cfg, csv, { fetcher = mlFetch } = {}) {
   const [, ...lineas] = fs.readFileSync(csv, 'utf8').trim().split('\n');
+  const sinVinculo = new Set(seleccionarSinVinculo(db));
   const filas = [];
   let cortado = false;
   for (const l of lineas) {
-    const [clave, item_id, variation_id, previa, resultado] = l.split(',');
+    const [clave, item_id, variation_id, previa, resultado] = l.split('\t');
     const f = { clave, item_id, variation_id, previa: Number(previa) };
     if (resultado !== 'ok') continue;
-    if (cortado) { filas.push({ ...f, resultado: 'no_intentado_429' }); continue; }
-    const cur = await leerCantidad(db, cfg, f, fetcher);
-    if (cur.corte) { cortado = true; filas.push({ ...f, resultado: 'no_intentado_429' }); continue; }
-    if (cur.resultado) { filas.push({ ...f, resultado: cur.resultado }); continue; }
-    if (cur.cantidad !== 0) { filas.push({ ...f, resultado: `omitido_stock_actual_${cur.cantidad}` }); continue; }
-    const { path: p, body } = buildMlStockUpdate(item_id, variation_id, f.previa);
-    const w = await fetcher(db, cfg, 'put', p, body);
-    if (w.status === 429) { cortado = true; filas.push({ ...f, resultado: 'no_intentado_429' }); continue; }
-    filas.push({ ...f, resultado: w.status === 200 ? 'restaurado' : `error_${w.status}` });
+    if (!item_id || !Number.isInteger(f.previa) || f.previa < 0) { filas.push({ ...f, resultado: 'fila_invalida' }); continue; }
+    if (!sinVinculo.has(clave)) { filas.push({ ...f, resultado: 'omitido_ya_vinculada' }); continue; }
+    try {
+      if (cortado) { filas.push({ ...f, resultado: 'no_intentado_429' }); continue; }
+      const cur = await leerCantidad(db, cfg, f, fetcher);
+      if (cur.corte) { cortado = true; filas.push({ ...f, resultado: 'no_intentado_429' }); continue; }
+      if (cur.resultado) { filas.push({ ...f, resultado: cur.resultado }); continue; }
+      if (cur.cantidad !== 0) { filas.push({ ...f, resultado: `omitido_stock_actual_${cur.cantidad}` }); continue; }
+      const { path: p, body } = buildMlStockUpdate(item_id, variation_id, f.previa);
+      const w = await fetcher(db, cfg, 'put', p, body);
+      if (w.status === 429) { cortado = true; filas.push({ ...f, resultado: 'no_intentado_429' }); continue; }
+      filas.push({ ...f, resultado: w.status === 200 ? 'restaurado' : `error_${w.status}` });
+    } catch (e) { filas.push({ ...f, resultado: 'error_excepcion' }); }
   }
   return { filas, cortado };
 }
@@ -90,11 +106,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (r.cortado) console.log('CORTADO por 429: reintentar más tarde (idempotente).');
   } else {
     const apply = args.includes('--apply');
-    const r = await poner0(db, cfg, { apply });
+    const csv = apply ? abrirCsv(dir) : null;
+    const r = await poner0(db, cfg, { apply, csv });
     for (const f of r.filas) console.log(`${f.clave}\t${f.previa}\t${f.resultado}`);
     console.log(`\nPausadas con paused_by_seller (NO se tocan; decide José): ${r.pausadasVendedor.length}`);
     for (const f of r.pausadasVendedor) console.log(`  ${f.clave}\t${f.available_quantity}\t${f.titulo}`);
-    if (apply) console.log(`CSV: ${escribirCsv(r.filas, dir)}`);
+    if (apply) console.log(`CSV: ${csv}`);
     else console.log('DRY-RUN: sin escrituras a ML ni CSV.');
     if (r.cortado) console.log('CORTADO por 429: reintentar más tarde (idempotente).');
   }

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn(), bootstrapToken: vi.fn(), getAccessToken: vi.fn() }));
 import { openDb } from '../db/index.js';
-import { seleccionar, poner0, escribirCsv, rollback } from '../scripts/ml-stock0-sin-vinculo.mjs';
+import { seleccionar, poner0, abrirCsv, rollback } from '../scripts/ml-stock0-sin-vinculo.mjs';
 
 const TEST_DB = './test/ml-stock0.sqlite';
 describe('ml-stock0-sin-vinculo', () => {
@@ -42,12 +42,41 @@ describe('ml-stock0-sin-vinculo', () => {
     expect(f.mock.calls.some((c) => c[2] === 'put')).toBe(false);
   });
 
+  it('excepción a mitad: el CSV ya tiene lo hecho y sigue con el resto', async () => {
+    pub('A|', 'A', ''); pub('B|', 'B', '');
+    f.mockImplementation(async (_d, _c, m, p) => { if (p.includes('/B')) throw new Error('red'); return m === 'get' ? { status: 200, data: { available_quantity: 3 } } : { status: 200, data: {} }; });
+    const csv = abrirCsv(fs.mkdtempSync(path.join(os.tmpdir(), 's0-')));
+    const r = await poner0(db, {}, { apply: true, fetcher: f, csv });
+    expect(r.filas.map((x) => x.resultado)).toEqual(['ok', 'error_excepcion_red']);
+    expect(fs.readFileSync(csv, 'utf8')).toContain('A|\tA\t\t3\tok');
+  });
+
+  it('item sin variation_id que en ML tiene variaciones se omite', async () => {
+    pub('A|', 'A', '');
+    f.mockResolvedValue({ status: 200, data: { available_quantity: 5, variations: [{ id: 1 }] } });
+    const r = await poner0(db, {}, { apply: true, fetcher: f });
+    expect(r.filas[0].resultado).toBe('omitido_item_con_variaciones');
+    expect(f.mock.calls.some((c) => c[2] === 'put')).toBe(false);
+  });
+
+  it('rollback no re-infla una publicación que ya se vinculó', async () => {
+    pub('A|', 'A', '');
+    f.mockResolvedValue({ status: 200, data: { available_quantity: 7 } });
+    const csv = abrirCsv(fs.mkdtempSync(path.join(os.tmpdir(), 's0-')));
+    await poner0(db, {}, { apply: true, fetcher: f, csv });
+    db.prepare("INSERT INTO sku_matcher_decisiones (clave,sku,accion,actualizado_en) VALUES ('A|','S','asignar','n')").run();
+    const g = vi.fn();
+    const rb = await rollback(db, {}, csv, { fetcher: g });
+    expect(rb.filas[0].resultado).toBe('omitido_ya_vinculada');
+    expect(g).not.toHaveBeenCalled();
+  });
+
   it('CSV y rollback restauran solo lo que sigue en 0', async () => {
     pub('A|', 'A', ''); pub('B|', 'B', '');
     f.mockImplementation(async (_d, _c, m) => (m === 'get' ? { status: 200, data: { available_quantity: 7 } } : { status: 200, data: {} }));
-    const r = await poner0(db, {}, { apply: true, fetcher: f });
-    const csv = escribirCsv(r.filas, fs.mkdtempSync(path.join(os.tmpdir(), 's0-')));
-    expect(fs.readFileSync(csv, 'utf8')).toContain('A|,A,,7,ok');
+    const csv = abrirCsv(fs.mkdtempSync(path.join(os.tmpdir(), 's0-')));
+    await poner0(db, {}, { apply: true, fetcher: f, csv });
+    expect(fs.readFileSync(csv, 'utf8')).toContain('A|\tA\t\t7\tok');
     const g = vi.fn(async (_d, _c, m, p) => (m === 'get' ? { status: 200, data: { available_quantity: p.includes('/A') ? 0 : 2 } } : { status: 200, data: {} }));
     const rb = await rollback(db, {}, csv, { fetcher: g });
     expect(rb.filas.map((x) => x.resultado)).toEqual(['restaurado', 'omitido_stock_actual_2']);
