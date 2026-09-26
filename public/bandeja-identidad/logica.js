@@ -345,6 +345,14 @@
   function textoDiferencias(n) {
     return n === 0 ? 'sin diferencias' : n + (n === 1 ? ' diferencia' : ' diferencias');
   }
+  function resumenCandidato(opcion) {
+    var titulo = opcion && opcion.titulo ? String(opcion.titulo) : 'Sin título';
+    var limite = 28;
+    return {
+      titulo: titulo.length > limite ? titulo.slice(0, limite - 1) + '…' : titulo,
+      diferencias: diferenciasVisibles(opcion && opcion.explicacion).diferencias.length
+    };
+  }
   function textoDecision(opcion, diferencias) {
     if (!opcion) return 'Elegí una acción para este caso';
     var sku = opcion.sku || 'este candidato';
@@ -360,7 +368,7 @@
     indiceNoSalteado: indiceNoSalteado,
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
     porQue: porQue, atributosIguales: atributosIguales, fraseTipo: fraseTipo, diferenciasVisibles: diferenciasVisibles,
-    textoDiferencias: textoDiferencias, textoDecision: textoDecision,
+    textoDiferencias: textoDiferencias, resumenCandidato: resumenCandidato, textoDecision: textoDecision,
     GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

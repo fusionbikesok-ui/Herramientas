@@ -305,7 +305,10 @@
 .caso { min-height: 0; overflow: hidden; padding-bottom: 4.5rem; }
 .caso-header { display: flex; align-items: center; gap: var(--sp-1); min-height: 44px; padding: 0; overflow: hidden; }
 .caso-header > * { min-width: 0; }
-.caso-header > * + *::before { content: '·'; color: var(--muted); margin-inline: var(--sp-1); }
+.caso-header-izquierda, .caso-header-derecha { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.caso-header-izquierda { overflow: hidden; }
+.caso-header-izquierda > * + *::before { content: '·'; color: var(--muted); margin-inline: var(--sp-1); }
+.caso-header-derecha { margin-inline-start: auto; flex: 0 0 auto; }
 .caso-id, .caso-titulo, .caso-prioridad, .caso-link-ml { flex: 0 0 auto; white-space: nowrap; }
 .caso-titulo { font-size: var(--fs-md); margin: 0; }
 .caso-tipo-ayuda { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -326,7 +329,9 @@
 .diferencia .marca-texto { color: inherit; font-weight: 700; }
 .otros-candidatos { display: flex; align-items: center; gap: var(--sp-1); min-height: 36px; overflow-x: auto; white-space: nowrap; }
 .otros-label { color: var(--muted); font-size: var(--fs-sm); }
-.candidato-chip { min-height: 32px; max-width: 24rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); color: var(--text); padding: 0 var(--sp-2); cursor: pointer; }
+.candidato-chip { display: inline-flex; align-items: center; min-height: 32px; max-width: 100%; overflow: hidden; white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); color: var(--text); padding: 0 var(--sp-2); cursor: pointer; }
+.candidato-chip-rango, .candidato-chip-separador, .candidato-chip-conteo { flex: 0 0 auto; }
+.candidato-chip-titulo { min-width: 0; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .historial-evidencia { border-top: 1px solid var(--border); color: var(--muted); font-size: var(--fs-sm); }
 .historial-evidencia summary { cursor: pointer; padding: var(--sp-1) 0; }
 .barra-decision { position: fixed; z-index: 50; inset-inline: 0; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); padding: var(--sp-2) var(--sp-3); background: var(--surface); border-top: 2px solid var(--accent); box-shadow: 0 -4px 14px rgba(0,0,0,.25); }

@@ -36,6 +36,34 @@ describe('bandeja: logica pura', () => {
     expect(L.textoDiferencias(2)).toBe('2 diferencias');
     expect(L.textoDecision({ sku: 'FB-1' }, { diferencias: [{ marca: 'difiere' }] })).toMatch(/FB-1 \(1 diferencia\)/);
   });
+
+  it('resume un candidato contando sólo diferenciasVisibles y acortando únicamente el título', () => {
+    const explicacion = {
+      atributos: [
+        { nombre: 'marca', marca: 'coincide' },
+        { nombre: 'modelo', marca: 'coincide' },
+        { nombre: 'color', marca: 'coincide' },
+        { nombre: 'talle', marca: 'coincide' },
+        { nombre: 'rodado', marca: 'difiere' }
+      ]
+    };
+    const resumen = L.resumenCandidato({
+      titulo: 'Bicicleta urbana con canasto delantero y cambios',
+      explicacion
+    });
+
+    expect(resumen.diferencias).toBe(1);
+    expect(resumen.titulo).toHaveLength(28);
+    expect(resumen.titulo.endsWith('…')).toBe(true);
+
+    const sóloCoinciden = { atributos: [
+      { nombre: 'marca', marca: 'coincide' },
+      { nombre: 'modelo', marca: 'coincide' },
+      { nombre: 'color', marca: 'coincide' },
+      { nombre: 'talle', marca: 'coincide' }
+    ] };
+    expect(L.resumenCandidato({ titulo: 'Candidato exacto', explicacion: sóloCoinciden }).diferencias).toBe(0);
+  });
   it('marcas: símbolo + texto para cada una y no se rompe con una desconocida', () => {
     expect(L.marca('coincide')).toMatchObject({ simbolo: '✓', texto: 'coincide' });
     expect(L.marca('difiere').simbolo).toBe('≠');
@@ -399,5 +427,20 @@ describe('bandeja: estación compacta y confirmación por SKU', () => {
     expect(js).toMatch(/cs\.confirmar[\s\S]*renderFicha\(confirmable/);
     expect(js).toMatch(/SKU A CONFIRMAR/);
     expect(js).not.toMatch(/No hay candidato confiable; buscá por SKU o título/);
+  });
+
+  it('separa el encabezado en grupos: sólo el grupo izquierdo dibuja separadores', () => {
+    expect(js).toMatch(/caso-header-izquierda/);
+    expect(js).toMatch(/caso-header-derecha/);
+    expect(css).toMatch(/\.caso-header-izquierda\s*>\s*\*\s*\+\s*\*::before/);
+    expect(css).not.toMatch(/\.caso-header\s*>\s*\*\s*\+\s*\*::before/);
+  });
+
+  it('mantiene completo el conteo del chip y pone el title completo en el título corto', () => {
+    expect(js).toMatch(/L\.resumenCandidato\(o\)/);
+    expect(js).toMatch(/title:\s*o\.titulo\s*\|\|\s*'Sin título'/);
+    expect(js).toMatch(/resumen\.diferencias \+ ' dif\.'/);
+    expect(css).toMatch(/\.candidato-chip\s*\{[\s\S]*display:\s*inline-flex/);
+    expect(css).toMatch(/\.candidato-chip-titulo\s*\{[\s\S]*text-overflow:\s*ellipsis/);
   });
 });
