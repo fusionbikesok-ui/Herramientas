@@ -151,6 +151,10 @@ const Esquema = z.object({
   // quedar en valores distintos por un typo en un solo servicio.
   E3_BANDEJA: z.enum(['0', '1']).default('0'),
   E3_MOTOR: z.enum(['0', '1']).default('0'),
+  // E3 corte 3: apagados por omisión; nada se enciende sin José y sin E1 aceptada (PM-187).
+  E3_CANARIO: z.enum(['0', '1']).default('0'),
+  E3_AUTO_SKU: z.enum(['0', '1']).default('0'),
+  E3_INTERVENTION: z.enum(['0', '1']).default('0'),
   E3_MOTOR_PAUSA_MS: z.coerce.number().int().min(1000).default(1_800_000), // 30 minutos, el default del plan.
 });
 

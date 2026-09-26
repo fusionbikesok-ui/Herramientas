@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import { registrarEvento } from '../audit/auditoria.ts';
 import type { Consultable } from '../db/pool.ts';
-import { decisionVigente } from '../identidad/autoridad.ts';
+import { decisionVigente, type ModoAutoSku } from '../identidad/autoridad.ts';
 
 /**
  * Candado de las decisiones de una cuenta, hasta el fin de la transacción. Lo toman los eventos, las copias, el
@@ -45,7 +45,7 @@ const CASOS_DE_PENDIENTE = ['sku_pendiente', 'sku_inexistente_en_woo'];
 
 export async function reconciliarClave(
   tx: Consultable, cuenta: string, recurso: string, variacion: string, motivo: string,
-  o: { bandeja: boolean },
+  o: { bandeja: boolean; autoSku?: ModoAutoSku },
 ): Promise<Reconciliacion> {
   // Toma el candado ella misma (hallazgo BAJO de la revisión de Codex sobre T2): `pg_advisory_xact_lock` es
   // reentrante dentro de la misma transacción, así que si el llamador ya lo tomó esto no cuesta nada extra;
@@ -62,7 +62,7 @@ export async function reconciliarClave(
 
   const dec = await decisionVigente(tx, cuenta, recurso, variacion, o);
   let deseado: Deseado;
-  if (dec?.fuente === 'humano' && dec.eleccion === 'vincular') {
+  if ((dec?.fuente === 'humano' || dec?.fuente === 'auto_sku') && dec.eleccion === 'vincular') {
     deseado = { tipo: 'variante', variante: dec.variantId };
   } else if (dec?.fuente === 'humano' && (dec.eleccion === 'omitir' || dec.eleccion === 'mantener_omision')) {
     deseado = { tipo: 'omitida' };

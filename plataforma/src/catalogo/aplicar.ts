@@ -13,7 +13,7 @@
  *     una fusión o una revocación, y eso lo hace `decisiones.ts` (tarea 8), con su evento y su auditoría.
  */
 import type { Consultable } from '../db/pool.ts';
-import { decisionVigente } from '../identidad/autoridad.ts';
+import { decisionVigente, modoAutoSku } from '../identidad/autoridad.ts';
 import { estructuraItemMl, registrarFormato } from '../identidad/formato.ts';
 import { valoresRelacionados } from './atributos.ts';
 import { bloquearDecisiones, reconciliarSku } from './decisiones.ts';
@@ -32,6 +32,8 @@ export interface ContextoAplicacion {
   /** E3_BANDEJA: si una decisión humana de la bandeja manda sobre la copiada del legado. Por defecto NO
    *  (comportamiento idéntico a antes de E3, bit a bit: decisionVigente ni consulta identity_decisions). */
   bandeja?: boolean;
+  /** E3 corte 3: flags del auto-SKU. Ausentes = apagados (mismo comportamiento que antes del corte). */
+  flagsAutoSku?: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean };
   /**
    * E3 corte 3 tarea 1: el payload CRUDO de `ml.items` (antes de proyectarItemMl), sólo para
    * `canal === 'mercadolibre'`. `formato.ts` necesita la estructura del payload tal como lo mandó ML, no
@@ -244,9 +246,11 @@ async function vincularMl(
   // Mismo candado que los eventos: si no, un evento que llega mientras esta publicación nueva todavía no está
   // confirmada no la encuentra, y acá se lee "sin decisión": quedaría pendiente con una decisión vigente.
   await bloquearDecisiones(tx, ctx.cuenta);
-  const decision = await decisionVigente(tx, ctx.cuenta, obs.recurso, obs.variacion, { bandeja: ctx.bandeja ?? false });
+  const autoSku = ctx.flagsAutoSku
+    ? await modoAutoSku(tx, ctx.cuenta, obs.recurso, obs.variacion, ctx.flagsAutoSku) : 'apagado';
+  const decision = await decisionVigente(tx, ctx.cuenta, obs.recurso, obs.variacion, { bandeja: ctx.bandeja ?? false, autoSku });
 
-  if (decision?.fuente === 'humano' && decision.eleccion === 'vincular') {
+  if ((decision?.fuente === 'humano' || decision?.fuente === 'auto_sku') && decision.eleccion === 'vincular') {
     return { modelo: null, variante: decision.variantId, omitida: false };
   }
   if (decision?.fuente === 'humano' && (decision.eleccion === 'omitir' || decision.eleccion === 'mantener_omision')) {

@@ -4,10 +4,9 @@
  * Orden de consulta (spec E3 §3):
  *   1. Decisión HUMANA vigente de la bandeja (`catalog.identity_decisions`, origen='humano', efecto='aplicar').
  *   2. Decisión copiada del legado (`catalog.matcher_decisions`), como historia.
- *   3. (Corte 3) sólo con el flag E3_AUTO_SKU o durante el canario: decisión E3 auto_sku.
+ *   3. (Corte 3 tarea 3) sólo con `autoSku: 'aplicado'`: decisión E3 `auto_sku`/`aplicar` vigente. Una
+ *      `auto_sku`/`sombra` nunca se devuelve, en ningún modo: es sólo observación (D2), no autoridad.
  *   4. Si no hay ninguna, sku_pendiente.
- *
- * Este corte no tiene auto_sku aplicado (D2): el paso 3 no existe todavía.
  *
  * `decisionVigente` es la ÚNICA función que consulta la autoridad — `vincularMl` (aplicar.ts) y
  * `reconciliarClave` (decisiones.ts) la llaman en vez de tener cada una su propio SELECT sobre
@@ -31,10 +30,26 @@ export type Vigente =
   | { fuente: 'humano'; eleccion: 'omitir' | 'mantener_omision' | 'sin_candidato'; decisionId: string }
   | { fuente: 'legado'; accion: 'omitir' }
   | { fuente: 'legado'; accion: 'confirmar' | 'asignar'; sku: string }
+  | { fuente: 'auto_sku'; eleccion: 'vincular'; variantId: string; decisionId: string }
   | null;
 
+export type ModoAutoSku = 'apagado' | 'aplicado';
+
+/**
+ * Decide en qué modo consulta el llamador el paso 3. Hoy sólo `E3_AUTO_SKU=1` lo prende: con `E3_CANARIO=1`
+ * a secas devuelve 'apagado' (fail-closed) porque la corrida de canario (`e3_canario_*`) todavía no existe
+ * en este corte; la tarea 5 agrega ahí la rama "la clave está en la corrida abierta".
+ */
+export async function modoAutoSku(
+  _tx: Consultable, _cuenta: string, _recurso: string, _variacion: string,
+  flags: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean },
+): Promise<ModoAutoSku> {
+  return flags.E3_AUTO_SKU ? 'aplicado' : 'apagado';
+}
+
 export async function decisionVigente(
-  tx: Consultable, cuenta: string, recurso: string, variacion: string, o: { bandeja: boolean },
+  tx: Consultable, cuenta: string, recurso: string, variacion: string,
+  o: { bandeja: boolean; autoSku?: ModoAutoSku },
 ): Promise<Vigente> {
   if (o.bandeja) {
     const humana = (await tx.query<{ id: string; eleccion: string; variant_id: string | null }>(
@@ -58,10 +73,20 @@ export async function decisionVigente(
     `SELECT accion, sku FROM catalog.matcher_decisions
       WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND vigente_hasta IS NULL`,
     [cuenta, recurso, variacion])).rows[0];
-  if (!legado) return null;
-  if (legado.accion === 'omitir') return { fuente: 'legado', accion: 'omitir' };
-  if ((legado.accion === 'confirmar' || legado.accion === 'asignar') && legado.sku) {
-    return { fuente: 'legado', accion: legado.accion, sku: legado.sku };
+  if (legado) {
+    if (legado.accion === 'omitir') return { fuente: 'legado', accion: 'omitir' };
+    if ((legado.accion === 'confirmar' || legado.accion === 'asignar') && legado.sku) {
+      return { fuente: 'legado', accion: legado.accion, sku: legado.sku };
+    }
+    return null;
   }
-  return null;
+
+  if (o.autoSku !== 'aplicado') return null;
+  const auto = (await tx.query<{ id: string; variant_id: string }>(
+    `SELECT id, variant_id FROM catalog.identity_decisions
+      WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3
+        AND origen = 'auto_sku' AND efecto = 'aplicar' AND eleccion = 'vincular'
+        AND variant_id IS NOT NULL AND superada_en IS NULL`,
+    [cuenta, recurso, variacion])).rows[0];
+  return auto ? { fuente: 'auto_sku', eleccion: 'vincular', variantId: auto.variant_id, decisionId: auto.id } : null;
 }

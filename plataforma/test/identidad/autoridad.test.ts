@@ -12,7 +12,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { aplicarEvento, type EventoDecision } from '../../src/catalogo/copias.ts';
 import { crearProyector, type OpcionesProyector } from '../../src/catalogo/proyector.ts';
 import { encolarInbox } from '../../src/colas/colas.ts';
-import { crearPool, enTransaccion } from '../../src/db/pool.ts';
+import { crearPool, enTransaccion, type Consultable } from '../../src/db/pool.ts';
+import { decisionVigente, modoAutoSku } from '../../src/identidad/autoridad.ts';
 import { cifrarSobre, type KeyringSobre } from '../../src/seguridad/sobre.ts';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 
@@ -295,11 +296,11 @@ describe('E3-AUT-02 auto_sku/aplicar detrás de un modo (corte 3, tarea 3)', () 
        (company_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto, hash_payload_ml)
      VALUES ($1, $2, $3, '', 'vincular', $4, 'auto_sku', 'e3-canario', $5, $6) RETURNING id`,
     [empresa, ml, recurso, variantId, efecto, efecto === 'aplicar' ? 'deadbeef' : null]);
-  const decisionHumana = (recurso: string, eleccion: 'vincular' | 'omitir', variantId: string | null) => admin.query(
+  const decisionHumana = (recurso: string, eleccion: 'vincular' | 'omitir', variantId: string | null, supersedeA: string | null = null) => admin.query(
     `INSERT INTO catalog.identity_decisions
-       (company_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
-     VALUES ($1, $2, $3, '', $4, $5, 'humano', 'jose', 'aplicar')`,
-    [empresa, ml, recurso, eleccion, variantId]);
+       (company_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto, supersede_a)
+     VALUES ($1, $2, $3, '', $4, $5, 'humano', 'jose', 'aplicar', $6)`,
+    [empresa, ml, recurso, eleccion, variantId, supersedeA]);
   const decisionLegado = (recurso: string, accion: string, sku: string | null) => admin.query(
     `INSERT INTO catalog.matcher_decisions (company_id, channel_account_id, canal, recurso, variacion_normalizada, sku, accion, origen, actor)
      VALUES ($1, $2, 'mercadolibre', $3, '', $4, $5, 'copia', 'persona')`, [empresa, ml, recurso, sku, accion]);
@@ -329,8 +330,9 @@ describe('E3-AUT-02 auto_sku/aplicar detrás de un modo (corte 3, tarea 3)', () 
   it('"aplicado" con una humana: gana la humana', async () => {
     const vHumana = await variante('FB-203');
     const vAuto = await variante('FB-204');
-    await decisionAutoSku('MLA23', vAuto);
-    await decisionHumana('MLA23', 'vincular', vHumana);
+    // El UNIQUE parcial (clave, efecto) impide dos `aplicar` vigentes: la humana entra superando a la auto_sku.
+    const idAuto = (await decisionAutoSku('MLA23', vAuto)).rows[0].id as string;
+    await decisionHumana('MLA23', 'vincular', vHumana, idAuto);
     const r = await decisionVigente(app, ml, 'MLA23', '', { bandeja: true, autoSku: 'aplicado' });
     expect(r).toEqual({ fuente: 'humano', eleccion: 'vincular', variantId: vHumana, decisionId: expect.any(String) });
   });
@@ -359,13 +361,13 @@ describe('E3-AUT-02 auto_sku/aplicar detrás de un modo (corte 3, tarea 3)', () 
 
   it('invariante: con E3_CANARIO=0 y E3_AUTO_SKU=0, decisionVigente con autoSku "apagado" no ejecuta el paso 3 (no hace la query de auto_sku)', async () => {
     let consultas = 0;
-    const espia: Consultable = {
+    const espia = {
       query: (async (sql: string, params?: unknown[]) => {
         if (/identity_decisions/.test(sql) && /auto_sku/.test(sql)) consultas++;
         return app.query(sql, params as never);
       }) as Consultable['query'],
     };
-    await decisionVigente(espia, ml, 'MLA28', '', { bandeja: false, autoSku: 'apagado' });
+    await decisionVigente(espia as unknown as Consultable, ml, 'MLA28', '', { bandeja: false, autoSku: 'apagado' });
     expect(consultas).toBe(0);
   });
 });
