@@ -8,6 +8,22 @@ const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.Bande
 const ev = (o = {}) => ({ key: 'j', target: { tagName: 'DIV', closest: () => null }, ...o });
 
 describe('bandeja: logica pura', () => {
+  it('tipo de caso y precio tienen copy legible para la estación', () => {
+    expect(L.fraseTipo('sku_pendiente')).toMatch(/SKU/i);
+    expect(L.fraseTipo('tipo_nuevo')).toMatch(/compar/i);
+    expect(L.formatoPrecio(189900, 'ARS')).toBe('189.900 ARS');
+  });
+
+  it('diferencias se ordenan difiere, falta, equivalente y coincide', () => {
+    const o = { explicacion: { atributos: [
+      { nombre: 'igual', marca: 'coincide', valor: 'x' },
+      { nombre: 'falta', marca: 'falta' },
+      { nombre: 'cambia', marca: 'difiere', valor: 'y' },
+      { nombre: 'equiv', marca: 'equivalente', valor: 'z' }
+    ] } };
+    expect(L.diferenciasVisibles(o, { atributos: { cambia: 'm' } }).map((x) => x.marca)).toEqual(['difiere', 'falta', 'equivalente', 'coincide']);
+    expect(L.textoDecision({ sku: 'FB-1' }, L.diferenciasVisibles(o, {}))).toMatch(/FB-1 \(2 diferencias\)/);
+  });
   it('marcas: símbolo + texto para cada una y no se rompe con una desconocida', () => {
     expect(L.marca('coincide')).toMatchObject({ simbolo: '✓', texto: 'coincide' });
     expect(L.marca('difiere').simbolo).toBe('≠');
@@ -72,7 +88,7 @@ describe('bandeja: logica pura', () => {
 
   it('precio y stock sin dato no dicen «null»', () => {
     expect(L.formatoPrecio(null, null)).toBe('Sin precio');
-    expect(L.formatoPrecio(1500, 'ARS')).toBe('1500 ARS');
+    expect(L.formatoPrecio(1500, 'ARS')).toBe('1.500 ARS');
     expect(L.formatoStock(null)).toBe('Stock sin dato');
     expect(L.formatoStock(0)).toBe('0 en stock');
   });

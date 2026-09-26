@@ -630,7 +630,7 @@
     return m;
   }
 
-  function render() {
+  function renderLegacy() {
     var d = S.detalle, root = $('root');
     var enfocado = document.activeElement && document.activeElement.id;
     vaciar(root);
@@ -759,6 +759,61 @@
     if (enfocado === 'input-buscar' && $('input-buscar')) $('input-buscar').focus();
   }
 
+  function render() {
+    var d = S.detalle, root = $('root');
+    var enfocado = document.activeElement && document.activeElement.id;
+    vaciar(root);
+    if (!d) return;
+    var cs = S.cola[S.idx] || {}, opciones = L.opcionesDe(d.candidatos, S.busqueda);
+    var seleccionado = opciones.filter(function (o) { return o.variant_id === S.sel; })[0] || opciones[0];
+    if (seleccionado && S.sel == null) S.sel = seleccionado.variant_id;
+    var diferencias = L.diferenciasVisibles(seleccionado, d.publicacion || {});
+    var head = el('header', 'caso-header', null, { tabindex: '-1', id: 'caso-focus' });
+    head.appendChild(el('div', 'caso-id', 'Caso ' + Math.min(S.hechos + 1, Math.max(S.totalInicial, S.hechos + 1)) + ' de ' + Math.max(S.totalInicial, S.hechos + 1)));
+    var tipo = d.tipo || d.tipo_caso || 'caso';
+    head.appendChild(el('h1', 'caso-titulo', tipo.replace(/_/g, ' ').toUpperCase()));
+    head.appendChild(el('p', 'caso-tipo-ayuda', L.fraseTipo(tipo)));
+    head.appendChild(el('p', 'caso-prioridad', 'Prioridad: ' + (cs.grupo !== undefined ? L.GRUPO_NOMBRE[cs.grupo] : 'Resto')));
+    if (d.publicacion && d.publicacion.link_ml) head.appendChild(el('a', 'caso-link-ml', 'Abrir en ML', { href: d.publicacion.link_ml, target: '_blank', rel: 'noopener noreferrer' }));
+    root.appendChild(head);
+    if (!d.publicacion) { root.appendChild(el('div', 'api-estado api-estado--error', L.copyError('caso_sin_publicacion'))); return; }
+    if (S.conflicto) root.appendChild(el('div', 'aviso-conflicto', '⚠ Este caso cambió mientras lo revisabas; tu elección se conserva.', { role: 'alert' }));
+    if (S.buscando) {
+      var buscar = el('div', 'buscador-variantes');
+      var input = el('input', 'buscador-input', null, { type: 'search', id: 'input-buscar', placeholder: 'Buscar por SKU o título (Esc vuelve al caso)', 'aria-label': 'Buscar otra variante' }); input.value = S.consulta || ''; buscar.appendChild(input); root.appendChild(buscar);
+    }
+    var compare = el('section', 'estacion-paneles', null, { 'aria-label': 'Publicación y candidato seleccionados' });
+    compare.appendChild(renderFicha(d.publicacion, 'PUBLICACIÓN ML', true, d));
+    if (seleccionado) compare.appendChild(renderFicha(seleccionado, 'CANDIDATO ' + (opciones.indexOf(seleccionado) + 1) + ' de ' + opciones.length, false, d));
+    else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('p', null, 'No hay candidato confiable; buscá por SKU o título')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
+    root.appendChild(compare);
+    var diff = el('section', 'diferencias', null, { 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
+    var visibles = diferencias.filter(function (x) { return x.marca !== 'coincide' && (x.marca !== 'equivalente' || S.mostrarIguales); });
+    visibles.slice(0, 8).forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca); row.appendChild(el('span', 'mk', L.marca(x.marca).simbolo, { 'aria-label': L.marca(x.marca).texto })); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.ml)); row.appendChild(el('span', null, 'Woo tiene: ' + x.woo)); diff.appendChild(row); });
+    var iguales = diferencias.filter(function (x) { return x.marca === 'coincide' || x.marca === 'equivalente'; }).length;
+    if (iguales) { var ib = el('button', 'btn-iguales', '✓ ' + iguales + ' atributos coinciden · ' + (S.mostrarIguales ? 'ocultar' : 'expandir'), { type: 'button', 'aria-expanded': S.mostrarIguales ? 'true' : 'false' }); ib.addEventListener('click', function () { S.mostrarIguales = !S.mostrarIguales; render(); }); diff.appendChild(ib); }
+    root.appendChild(diff);
+    var tira = el('nav', 'otros-candidatos', null, { 'aria-label': 'Otros candidatos' }); tira.appendChild(el('span', 'otros-label', 'Otros:'));
+    opciones.forEach(function (o, i) { if (o === seleccionado) return; var b = el('button', 'candidato-chip', '[' + (i + 1) + '] ' + (o.titulo || 'Sin título').slice(0, 38) + ' · ' + L.diferenciasVisibles(o, d.publicacion).filter(function (x) { return x.marca === 'difiere' || x.marca === 'falta'; }).length + ' dif', { type: 'button', 'data-candidato': o.variant_id, 'aria-label': 'Seleccionar candidato ' + (i + 1) }); tira.appendChild(b); });
+    var busc = el('button', 'btn btn--compact', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' }); tira.appendChild(busc); root.appendChild(tira);
+    var hist = el('details', 'historial-evidencia', null, { id: 'historial' }); hist.appendChild(el('summary', null, 'Historial y evidencia (h)')); (d.historial || []).concat(d.evidencia || []).slice(0, 20).forEach(function (x) { hist.appendChild(el('div', 'historial-item', JSON.stringify(x))); }); root.appendChild(hist);
+    var bar = el('footer', 'barra-decision', null, { id: 'barra-decision', role: 'region', 'aria-label': 'Barra de decisión' });
+    if (seleccionado && !cs.confirmar) bar.appendChild(el('button', 'btn btn--primary btn-decision-principal', L.textoDecision(seleccionado, diferencias), { type: 'button', id: 'btn-vincular', 'aria-keyshortcuts': 'Enter' }));
+    if (cs.confirmar) bar.appendChild(el('button', 'btn btn--primary btn-decision-principal', 'Enter = CONFIRMAR ' + (cs.confirmar.sku || 'SKU vinculado'), { type: 'button', id: 'btn-confirmar', 'aria-keyshortcuts': 'Enter' }));
+    if (cs.confirmar) bar.appendChild(el('button', 'btn', 'x No es ninguno', { type: 'button', id: 'btn-rechazar', 'aria-keyshortcuts': 'x' }));
+    bar.appendChild(el('button', 'btn', '? No estoy seguro', { type: 'button', id: 'btn-apartar', 'aria-keyshortcuts': '?' })); bar.appendChild(el('button', 'btn', 'o Omitir por ahora', { type: 'button', id: 'btn-omitir-ahora', 'aria-keyshortcuts': 'o' }));
+    if (!cs.confirmar) bar.appendChild(el('button', 'btn', 'n No existe', { type: 'button', id: 'btn-no-existe', 'aria-keyshortcuts': 'n' }));
+    bar.appendChild(el('span', 'deshacer-ayuda', 'Deshacer: z (10 s)')); root.appendChild(bar);
+    root.querySelectorAll('[data-candidato]').forEach(function (b) { b.addEventListener('click', function () { S.sel = b.getAttribute('data-candidato'); render(); }); });
+    if (enfocado === 'input-buscar' && $('input-buscar')) $('input-buscar').focus();
+  }
+
+  function renderFicha(src, titulo, esMl, caso) {
+    var f = el('section', 'ficha', null, { 'aria-label': titulo }); f.appendChild(el('h2', null, titulo));
+    var foto = src.foto || (esMl && src.thumbnail); if (foto) { var b = el('button', 'foto-btn', null, { type: 'button', 'data-foto-url': foto, 'data-foto-titulo': src.titulo || '', 'data-foto-sku': src.sku || '' }); var im = el('img', null, null, { alt: 'Foto de ' + (src.titulo || titulo), loading: 'lazy' }); im.src = foto; b.appendChild(im); f.appendChild(b); } else f.appendChild(el('div', 'foto-sin-disponible', esMl ? 'Sin foto · Abrir en ML' : 'Sin foto'));
+    f.appendChild(el('h3', 'ficha-titulo', src.titulo || 'Sin título')); f.appendChild(el('code', 'sku', 'SKU: ' + (src.sku || src.sku_observado || 'Sin SKU'))); f.appendChild(el('p', 'ficha-meta', L.formatoPrecio(src.precio, src.moneda) + ' · ' + L.formatoStock(src.stock))); return f;
+  }
+
   function banda() {
     var b = $('banda'); if (!b) return;
     var pend = S.pendientes.size;
@@ -805,6 +860,7 @@
       var t = ev.target.closest('button, input[type="radio"]'); if (!t) return;
       if (t.id === 'btn-confirmar') confirmarCasoActual();
       else if (t.id === 'btn-vincular') { if (S.sel) decidir('vincular', S.sel); else { anunciar('Elegí un candidato'); aviso('elegir', 'Elegí un candidato antes de vincular.'); } }
+      else if (t.hasAttribute('data-candidato')) { S.sel = t.getAttribute('data-candidato'); render(); }
       else if (t.id === 'btn-no-vincular') decidir('omitir');
       else if (t.id === 'btn-no-es-este') decidir('mantener_omision');
       else if (t.id === 'btn-rechazar') decidir('sin_candidato');

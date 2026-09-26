@@ -83,7 +83,9 @@
 
   function formatoPrecio(precio, moneda) {
     if (precio === null || precio === undefined || precio === '') return 'Sin precio';
-    return String(precio) + (moneda ? ' ' + moneda : '');
+    var n = Number(precio);
+    var valor = Number.isFinite(n) ? new Intl.NumberFormat('es-AR').format(n) : String(precio);
+    return valor + (moneda ? ' ' + moneda : '');
   }
   function formatoStock(stock) {
     if (stock === null || stock === undefined) return 'Stock sin dato';
@@ -292,6 +294,39 @@
     });
   }
 
+  var FRASES_TIPO = {
+    sku_pendiente: 'revisá si el SKU observado corresponde al candidato',
+    omitida_revisar: 'revisá la publicación que quedó apartada',
+    sku_inexistente_en_woo: 'confirmá si existe una variante Woo para este SKU',
+    woo_sin_sku: 'revisá título y atributos porque Woo no tiene SKU',
+    woo_sku_duplicado: 'revisá la duplicación del SKU antes de vincular',
+    woo_sku_no_canonico: 'revisá si el SKU de Woo es el canónico',
+    decision_en_conflicto: 'compará la decisión vigente con la nueva evidencia',
+    identidad_legado: 'revisá la identidad heredada y sus datos principales',
+    user_product_divergente: 'revisá si ML y Woo representan la misma variante',
+    atributo_divergente: 'revisá los atributos que difieren',
+    categoria_en_desacuerdo: 'revisá la categoría en ambos canales',
+    categoria_sin_mapeo: 'revisá la categoría sin mapeo',
+    categoria_persona_contradicha: 'revisá la categoría sugerida y la evidencia',
+    sku_cambiado: 'revisá el cambio de SKU',
+    formato_cambiado: 'revisá el formato y la variante publicada'
+  };
+  function fraseTipo(tipo) { return FRASES_TIPO[tipo] || 'compará publicación y candidato antes de decidir'; }
+  function diferenciasVisibles(opcion, publicacion) {
+    var e = (opcion && opcion.explicacion) || {}, lista = (e.atributos || []).concat(e.otros_atributos || []);
+    var grupos = { difiere: [], falta: [], equivalente: [], coincide: [] };
+    lista.forEach(function (a) { var marca = a.marca === 'coincide' || a.marca === 'equivalente' ? a.marca : (a.marca === 'falta' ? 'falta' : 'difiere'); grupos[marca].push(a); });
+    return ['difiere', 'falta', 'equivalente', 'coincide'].reduce(function (out, marca) { return out.concat(grupos[marca].map(function (a) {
+      var ml = publicacion && publicacion.atributos && publicacion.atributos[a.nombre];
+      return { nombre: a.nombre, marca: marca, ml: ml == null ? '—' : String(ml), woo: a.valor == null ? '—' : String(a.valor), explicacion: a.explicacion };
+    })); }, []);
+  }
+  function textoDecision(opcion, diferencias) {
+    if (!opcion) return 'Elegí una acción para este caso';
+    var sku = opcion.sku || 'este candidato';
+    return 'Enter = VINCULAR a ' + sku + ' (' + (diferencias || []).filter(function (d) { return d.marca === 'difiere' || d.marca === 'falta'; }).length + ' diferencias)';
+  }
+
   var api = {
     marca: marca, copyError: copyError, puedeDispararAtajo: puedeDispararAtajo, esReintentable: esReintentable,
     demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
@@ -299,7 +334,7 @@
     filaVisible: filaVisible, accionDeTecla: accionDeTecla, siguienteNoSalteado: siguienteNoSalteado,
     indiceNoSalteado: indiceNoSalteado,
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
-    porQue: porQue, atributosIguales: atributosIguales,
+    porQue: porQue, atributosIguales: atributosIguales, fraseTipo: fraseTipo, diferenciasVisibles: diferenciasVisibles, textoDecision: textoDecision,
     GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
