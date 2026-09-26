@@ -312,7 +312,6 @@
     entry.promise = enviar(entry).then(function (r) { alTerminar(entry, r); return entry; });
     S.ultima = { entry: entry, ts: Date.now(), consumida: false };
     S.hechos++;
-    mostrarDeshacer(textoDecision(entry));
     banda();
     avanzar();
   }
@@ -380,7 +379,7 @@
     if (r.status === 200 || !L.esReintentable(r.status)) S.pendientes.delete(entry.key);
     if (r.status === 200) {
       entry.estado = 'ok'; entry.decisionId = r.data.decision_id; entry.versionNueva = r.data.version;
-      anunciar('Guardado'); banda(); return;
+      anunciar('Guardado'); mostrarDeshacer(textoDecision(entry)); banda(); return;
     }
     if (L.esReintentable(r.status)) return fallido(entry);
     entry.estado = 'error';
@@ -432,18 +431,28 @@
   // ───────────────────────── deshacer ─────────────────────────
   function mostrarDeshacer(texto) {
     var a = $('aviso-deshacer');
-    $('aviso-deshacer-texto').textContent = texto + ' Podés deshacerlo unos segundos.';
+    var segundos = Math.ceil(L.VENTANA_DESHACER_MS / 1000);
+    $('aviso-deshacer-texto').textContent = 'Decisión guardada: ' + texto + ' · ' + L.textoCuentaRegresiva(segundos);
     a.classList.remove('aviso-deshacer--oculto');
     var barra = a.querySelector('.aviso-deshacer-barra');
     if (barra) { barra.style.animation = 'none'; void barra.offsetWidth; barra.style.animation = ''; }
-    clearTimeout(S.timerDeshacer);
-    S.timerDeshacer = setTimeout(function () { a.classList.add('aviso-deshacer--oculto'); }, L.VENTANA_DESHACER_MS);
+    clearInterval(S.timerDeshacer);
+    S.timerDeshacer = setInterval(function () {
+      segundos -= 1;
+      if (segundos <= 0) {
+        clearInterval(S.timerDeshacer); S.timerDeshacer = null;
+        a.classList.add('aviso-deshacer--oculto');
+        return;
+      }
+      $('aviso-deshacer-texto').textContent = 'Decisión guardada: ' + texto + ' · ' + L.textoCuentaRegresiva(segundos);
+    }, 1000);
   }
 
   function deshacer() {
     var u = S.ultima;
     if (!L.puedeDeshacer(u, Date.now())) { aviso('deshacer', 'No hay nada para deshacer.'); return; }
     quitarAviso('deshacer');
+    clearInterval(S.timerDeshacer); S.timerDeshacer = null;
     u.consumida = true;
     $('aviso-deshacer').classList.add('aviso-deshacer--oculto');
     anunciar('Deshaciendo…');
@@ -837,8 +846,8 @@
     if (cs.confirmar) bar.appendChild(el('button', 'btn', 'x No es ninguno', { type: 'button', id: 'btn-rechazar', 'aria-keyshortcuts': 'x' }));
     bar.appendChild(el('button', 'btn', '? No estoy seguro', { type: 'button', id: 'btn-apartar', 'aria-keyshortcuts': '?' })); bar.appendChild(el('button', 'btn', 'o Omitir por ahora', { type: 'button', id: 'btn-omitir-ahora', 'aria-keyshortcuts': 'o' }));
     if (!cs.confirmar) bar.appendChild(el('button', 'btn', 'n No existe', { type: 'button', id: 'btn-no-existe', 'aria-keyshortcuts': 'n' }));
+    if (!cs.confirmar) bar.appendChild(el('button', 'btn', 'x No vincular', { type: 'button', id: 'btn-no-vincular', 'aria-keyshortcuts': 'x' }));
     bar.appendChild(el('span', 'deshacer-ayuda', 'Deshacer: z (10 s)')); root.appendChild(bar);
-    root.querySelectorAll('[data-candidato]').forEach(function (b) { b.addEventListener('click', function () { S.sel = b.getAttribute('data-candidato'); render(); }); });
     if (enfocado === 'input-buscar' && $('input-buscar')) $('input-buscar').focus();
   }
 
@@ -876,9 +885,9 @@
     var opciones = L.opcionesDe(S.detalle && S.detalle.candidatos, S.busqueda);
     var o = opciones[n - 1]; if (!o) return;
     S.sel = o.variant_id; quitarAviso('elegir');
-    var r = document.querySelector('input[name="candidato"][value="' + (window.CSS && CSS.escape ? CSS.escape(o.variant_id) : o.variant_id) + '"]');
-    if (r) r.checked = true;
-    anunciar('Seleccionado: ' + (o.titulo || o.sku));
+    render();
+    var diferencias = L.resumenCandidato(o).diferencias;
+    anunciar('Candidato ' + n + ' de ' + opciones.length + ': ' + (o.titulo || o.sku || 'Sin título') + ', ' + diferencias + ' ' + (diferencias === 1 ? 'diferencia' : 'diferencias'));
   }
 
   function abrirVisor(btn) {
@@ -942,7 +951,11 @@
       var t = ev.target.closest('button, input[type="radio"]'); if (!t) return;
       if (t.id === 'btn-confirmar') confirmarCasoActual();
       else if (t.id === 'btn-vincular') { if (S.sel) decidir('vincular', S.sel); else { anunciar('Elegí un candidato'); aviso('elegir', 'Elegí un candidato antes de vincular.'); } }
-      else if (t.hasAttribute('data-candidato')) { S.sel = t.getAttribute('data-candidato'); render(); }
+      else if (t.hasAttribute('data-candidato')) {
+        var candidatas = L.opcionesDe(S.detalle && S.detalle.candidatos, S.busqueda);
+        var numero = candidatas.findIndex(function (o) { return o.variant_id === t.getAttribute('data-candidato'); }) + 1;
+        seleccionarPorNumero(numero);
+      }
       else if (t.id === 'btn-no-vincular') decidir('omitir');
       else if (t.id === 'btn-no-es-este') decidir('mantener_omision');
       else if (t.id === 'btn-rechazar') decidir('sin_candidato');
@@ -990,7 +1003,8 @@
       }
       if (!L.puedeDispararAtajo(ev, S.atajos)) return;
       var k = ev.key;
-      if (ev.target.closest && ev.target.closest('button, a, summary') && (k === 'Enter' || k === ' ')) return; // el botón enfocado manda
+      if (k === 'Enter' && ev.target && /^(BUTTON|INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName || '')) return; // el control enfocado manda
+      if (ev.target.closest && ev.target.closest('button, a, summary') && (k === 'Enter' || k === ' ')) return; // el botón o link enfocado manda
       var enRadio = ev.target.type === 'radio';
       if ((k === 'ArrowDown' || k === 'ArrowUp') && enRadio) return; // en un radio, las flechas cambian la opción
 
@@ -1008,9 +1022,13 @@
 
       var confirmable = S.cola[S.idx] && S.cola[S.idx].confirmar;
       var nCandidatos = L.opcionesDe(S.detalle.candidatos, S.busqueda).length;
-      var accion = L.accionDeTecla(k, { confirmable: confirmable, nCandidatos: nCandidatos, tipoCaso: S.detalle.tipo });
+      var accion = L.accionDeTecla(k, { confirmable: confirmable, nCandidatos: nCandidatos,
+        candidatoVisible: S.sel !== null && S.sel !== undefined, tipoCaso: S.detalle.tipo });
 
-      if (!accion) return;
+      if (!accion) {
+        if (k === 'Enter' && !confirmable) anunciar('Elegí un candidato con 1/2/3 o buscá con /');
+        return;
+      }
       ev.preventDefault();
 
       switch (accion.tipo) {
@@ -1032,6 +1050,9 @@
           var cs = S.cola[S.idx];
           if (cs && cs.d5 === true) decidir('mantener_omision');
           else decidir('sin_candidato');
+          break;
+        case 'no_vincular':
+          decidir('omitir');
           break;
         case 'buscar':
           abrirBusqueda();
@@ -1077,6 +1098,7 @@
     tg.checked = S.atajos;
     tg.addEventListener('change', function () { S.atajos = tg.checked; guardarAtajos(S.atajos); });
     $('btn-deshacer-aviso').addEventListener('click', deshacer);
+    window.addEventListener('pagehide', function () { clearInterval(S.timerDeshacer); S.timerDeshacer = null; clearTimeout(S.timerBusqueda); });
 
     window.addEventListener('beforeunload', function (ev) {
       if (S.pendientes.size) { ev.preventDefault(); ev.returnValue = ''; }

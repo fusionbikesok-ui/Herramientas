@@ -47,10 +47,35 @@ const operador = { id: 2, username: 'maria', is_admin: false, permisos: [{ herra
 const auditor = { id: 3, username: 'auditor', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'read' }] };
 
 describe('E3 T3 — lógica pura de teclas y acciones', () => {
-  it('1/2/3 seleccionan si existe el candidato y Enter vincula', () => {
+  it('1/2/3 seleccionan si existe el candidato y Enter vincula al visible', () => {
     expect(L.accionDeTecla('2', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'seleccionar', n: 2 });
-    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular' });
+    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, candidatoVisible: true, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular' });
+    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, candidatoVisible: false, tipoCaso: 'sku_pendiente' })).toBeNull();
     expect(L.accionDeTecla('3', { confirmable: false, nCandidatos: 2, tipoCaso: 'sku_pendiente' })).toBeNull();
+  });
+
+  it('x reutiliza omitir en todos los casos normales y no cambia el camino confirmable', () => {
+    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 0, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'no_vincular' });
+    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 3, tipoCaso: 'conflicto' })).toEqual({ tipo: 'no_vincular' });
+    expect(L.accionDeTecla('x', { confirmable: true, nCandidatos: 0, tipoCaso: 'omitida_revisar' })).toEqual({ tipo: 'rechazar' });
+  });
+
+  it('no vincular usa el mismo payload omitir que usaba el botón histórico', () => {
+    const decisiones = [];
+    L.ejecutarAccion({ tipo: 'no_vincular' }, {
+      cola: [{ id: 'caso-1' }], idx: 0, sel: null, detalle: { version: 7 }
+    }, { decidir: (cuerpo) => decisiones.push(cuerpo) });
+    expect(decisiones).toEqual([{ expected_version: 7, eleccion: 'omitir' }]);
+  });
+
+  it('Enter confirmable sigue actuando aunque no haya candidato visible', () => {
+    expect(L.accionDeTecla('Enter', { confirmable: true, nCandidatos: 0, candidatoVisible: false, tipoCaso: 'omitida_revisar' })).toEqual({ tipo: 'confirmar' });
+  });
+
+  it('textoCuentaRegresiva muestra la duración real restante', () => {
+    expect(L.textoCuentaRegresiva(10)).toBe('Deshacer: z (10 s)');
+    expect(L.textoCuentaRegresiva(1)).toBe('Deshacer: z (1 s)');
+    expect(L.textoCuentaRegresiva(0)).toBe('Deshacer: z (0 s)');
   });
 
   it('? aparta, a es ayuda, O omite por ahora, N no existe', () => {

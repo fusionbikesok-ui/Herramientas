@@ -65,6 +65,10 @@
   }
 
   var VENTANA_DESHACER_MS = 10000;
+  function textoCuentaRegresiva(segundos) {
+    var n = Math.max(0, Math.ceil(Number(segundos) || 0));
+    return 'Deshacer: z (' + n + ' s)';
+  }
   function puedeDeshacer(ultima, ahora) {
     return !!ultima && !ultima.consumida && ahora - ultima.ts <= VENTANA_DESHACER_MS;
   }
@@ -156,7 +160,8 @@
         if (n > nCandidatos) return null; // candidato no existe
         return { tipo: 'seleccionar', n: n };
       }
-      if (k === 'enter') return { tipo: 'vincular' };
+      if (k === 'enter') return ctx.candidatoVisible && nCandidatos > 0 ? { tipo: 'vincular' } : null;
+      if (k === 'x') return { tipo: 'no_vincular' };
       if (k === '?') return { tipo: 'apartar' };
       if (k === 'o') return { tipo: 'omitir_por_ahora' };
       if (k === 'n') return { tipo: 'no_existe' };
@@ -240,6 +245,10 @@
       case 'vincular':
         if (estado.sel === null || estado.sel === undefined) { api.mostrar('Elegí un candidato'); return; }
         api.decidir({ expected_version: estado.detalle && estado.detalle.version, eleccion: 'vincular', variant_id: estado.sel });
+        return;
+
+      case 'no_vincular':
+        api.decidir({ expected_version: estado.detalle && estado.detalle.version, eleccion: 'omitir' });
         return;
 
       case 'no_existe':
@@ -395,7 +404,7 @@
 
   var api = {
     marca: marca, copyError: copyError, puedeDispararAtajo: puedeDispararAtajo, esReintentable: esReintentable,
-    demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
+    demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, textoCuentaRegresiva: textoCuentaRegresiva, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
     formatoStock: formatoStock, opcionesDe: opcionesDe, nombresAtributos: nombresAtributos, atributoDe: atributoDe,
     filaVisible: filaVisible, accionDeTecla: accionDeTecla, siguienteNoSalteado: siguienteNoSalteado,
     indiceNoSalteado: indiceNoSalteado,

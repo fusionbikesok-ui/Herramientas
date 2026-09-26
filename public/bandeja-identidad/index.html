@@ -342,7 +342,7 @@
     /* Aviso de deshacer (10s) */
     .aviso-deshacer {
       position: fixed;
-      bottom: 0;
+      bottom: 4.5rem;
       left: 0;
       right: 0;
       background: var(--surface2);
@@ -354,7 +354,7 @@
       align-items: center;
       gap: var(--sp-2);
       font-size: var(--fs-md);
-      z-index: 50;
+      z-index: 60;
     }
     .aviso-deshacer--oculto {
       display: none;
@@ -452,6 +452,9 @@
       inline-size: var(--tap-min);
       block-size: var(--tap-min);
     }
+    @media (max-width: 40rem) {
+      .aviso-deshacer { bottom: 5.5rem; }
+    }
   </style>
 </head>
 <body>
@@ -535,12 +538,16 @@
       </thead>
       <tbody>
         <tr>
-          <td><kbd>j</kbd> / <kbd>↓</kbd></td>
+          <td><kbd>j</kbd></td>
           <td>Siguiente caso</td>
         </tr>
         <tr>
-          <td><kbd>k</kbd> / <kbd>↑</kbd></td>
+          <td><kbd>k</kbd></td>
           <td>Anterior caso</td>
+        </tr>
+        <tr>
+          <td><kbd>←</kbd> / <kbd>→</kbd></td>
+          <td>Cambiar candidato en el visor</td>
         </tr>
         <tr>
           <td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td>
@@ -552,7 +559,7 @@
         </tr>
         <tr>
           <td><kbd>X</kbd></td>
-          <td>Rechazar (sólo en confirmable)</td>
+          <td>No vincular / No es ninguno</td>
         </tr>
         <tr>
           <td><kbd>/</kbd></td>
@@ -571,10 +578,6 @@
           <td>No existe en el catálogo</td>
         </tr>
         <tr>
-          <td><kbd>D</kbd></td>
-          <td>Sólo diferencias</td>
-        </tr>
-        <tr>
           <td><kbd>F</kbd></td>
           <td>Ampliar foto</td>
         </tr>
@@ -583,16 +586,8 @@
           <td>Deshacer</td>
         </tr>
         <tr>
-          <td><kbd>H</kbd></td>
-          <td>Historial</td>
-        </tr>
-        <tr>
           <td><kbd>A</kbd></td>
           <td>Ayuda</td>
-        </tr>
-        <tr>
-          <td><kbd>Esc</kbd></td>
-          <td>Cerrar diálogos</td>
         </tr>
       </tbody>
     </table>

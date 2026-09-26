@@ -383,10 +383,44 @@ describe('bandeja: aria-keyshortcuts (chequeo estático sobre bandeja.js, patró
     expect(m[0]).toMatch(/\([^)]+\)/);
   });
 
-  it('el botón "No vincular esta publicación" no tiene tecla asignada (S1): sin aria-keyshortcuts', () => {
-    const m = js.match(/el\('button'[^;]*?id: 'btn-no-vincular'[^}]*\}\)/);
-    expect(m).not.toBeNull();
-    expect(m[0]).not.toMatch(/aria-keyshortcuts/);
+  it('la barra de decisión asigna x a No vincular en casos normales', () => {
+    const botones = [...js.matchAll(/el\('button'[^;]*?id: 'btn-no-vincular'[^}]*\}\)/g)].map((m) => m[0]);
+    expect(botones.length).toBeGreaterThan(0);
+    expect(botones.some((m) => m.includes("aria-keyshortcuts': 'x'"))).toBe(true);
+  });
+});
+
+describe('bandeja: teclado fase 1 y deshacer visible', () => {
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
+
+  it('al seleccionar por número o chip renderiza el candidato grande y anuncia posición y diferencias', () => {
+    expect(js).toMatch(/function seleccionarPorNumero\(n\)[\s\S]*?S\.sel = o\.variant_id;[\s\S]*?render\(\);[\s\S]*?Candidato .*?de .*?diferencia/);
+    expect(js).toMatch(/data-candidato[\s\S]*?seleccionarPorNumero\(numero\)/);
+  });
+
+  it('Enter sin candidato anuncia cómo elegirlo y no dispara una decisión', () => {
+    expect(js).toMatch(/if \(k === 'Enter' && !confirmable\) anunciar\('Elegí un candidato con 1\/2\/3 o buscá con \/'\)/);
+    expect(js).toMatch(/candidatoVisible: S\.sel !== null && S\.sel !== undefined/);
+  });
+
+  it('la cuenta regresiva visible se actualiza cada segundo y limpia su intervalo al salir', () => {
+    expect(js).toMatch(/Decisión guardada: ' \+ texto \+ ' · ' \+ L\.textoCuentaRegresiva\(segundos\)/);
+    expect(js).toMatch(/S\.timerDeshacer = setInterval\(/);
+    expect(js).toMatch(/clearInterval\(S\.timerDeshacer\)/);
+    expect(js).toMatch(/window\.addEventListener\('pagehide'/);
+  });
+
+  it('el aviso de deshacer queda sobre la barra sin sumar altura al documento', () => {
+    expect(html).toMatch(/\.aviso-deshacer\s*\{[\s\S]*position:\s*fixed[\s\S]*bottom:\s*4\.5rem[\s\S]*z-index:\s*60/);
+  });
+
+  it('la ayuda enumera los atajos vigentes de la fase 1', () => {
+    for (const texto of ['1', '2', '3', 'Enter', 'X', '?', 'O', 'N', 'Z', 'F', '/', 'j', 'k', '←', '→']) {
+      expect(html).toContain('<kbd>' + texto + '</kbd>');
+    }
+    expect(html).not.toContain('<kbd>D</kbd>');
+    expect(html).not.toContain('<kbd>H</kbd>');
   });
 });
 
