@@ -158,20 +158,25 @@
 
   // Precarga: detalle de los vecinos, fotos del siguiente, y la próxima página de la cola cuando quedan pocos.
   function precargar() {
+    var token = S.navToken;
     [S.idx + 1, S.idx + 2, S.idx - 1].forEach(function (i, n) {
       var c = S.cola[i];
       if (!c) return;
       detalleDe(c.id).then(function (d) {
-        if (n === 0) precargarFotos(d);
+        if (n === 0) precargarFotos(d, token, { publicacion: false, candidato: true });
       }, function () { /* se reintenta al abrir */ });
     });
     if (S.siguiente && S.cola.length - S.idx <= 10) traerMas();
   }
 
-  function precargarFotos(d) {
-    (d && d.candidatos || []).forEach(function (o) {
-      var foto = o && (o.foto || o.thumbnail);
-      if (foto) { var im = new Image(); im.src = foto; }
+  function precargarFotos(d, token, opciones) {
+    opciones = opciones || { publicacion: true, candidato: true };
+    if (token !== undefined && token !== S.navToken) return;
+    var fotos = [];
+    if (opciones.publicacion && d && d.publicacion) fotos.push(d.publicacion.foto || d.publicacion.thumbnail);
+    if (opciones.candidato && d && d.candidatos && d.candidatos[0]) fotos.push(d.candidatos[0].foto || d.candidatos[0].thumbnail);
+    fotos.forEach(function (foto) {
+      if (foto) { var im = new Image(); im.decoding = 'async'; im.src = foto; }
     });
   }
 
@@ -188,15 +193,15 @@
       if (d.cerrado_en) { anunciar('Ese caso ya se resolvió. Pasamos al siguiente.'); S.cola.splice(i, 1); return S.cola.length ? abrirCaso(Math.min(i, S.cola.length - 1), opts) : vacio(); }
       S.tokenBusqueda++;
       S.detalle = d; S.consulta = ''; S.busqueda = []; S.buscando = !(d.candidatos || []).length; S.resultadoElegido = false; S.resultadoIndice = -1; S.estadoBusqueda = 'vacio'; S.candidatoAnterior = null; S.mostrarIguales = false; // T4: no una preferencia de sesión como soloDif
-      precargarFotos(d);
+      precargarFotos(d, token, { publicacion: true, candidato: false });
       if (opts.sel !== undefined) S.sel = opts.sel; else S.sel = null;
       if (!opts.conservarConflicto) S.conflicto = null;
       render();
       var activo = document.activeElement;
       var escribiendo = activo && (activo.tagName === 'INPUT' || activo.tagName === 'TEXTAREA');
-      if (S.buscando && $('input-buscar')) $('input-buscar').focus();
-      else if (opts.foco && !escribiendo) { var h = $('caso-focus'); if (h) h.focus(); }
-      anunciar('Caso ' + (S.hechos + 1) + ' de ' + Math.max(S.totalInicial, S.hechos + 1));
+      if (opts.foco && !escribiendo) { var h = $('caso-focus'); if (h) h.focus(); }
+      var tipoAnunciado = (d.tipo || d.tipo_caso || 'caso').replace(/_/g, ' ');
+      anunciar('Caso ' + (S.hechos + 1) + ' de ' + Math.max(S.totalInicial, S.hechos + 1) + ': ' + tipoAnunciado);
       banda();
       precargar();
     }, function (e) {
@@ -573,10 +578,11 @@
     else if (S.estadoBusqueda === 'vacio') estado.textContent = 'Escribí al menos 2 caracteres.';
     panel.appendChild(estado);
     var lista = el('div', 'resultados-busqueda', null, { id: 'resultados-busqueda', role: 'listbox', 'aria-label': 'Resultados de variantes' });
+    if (S.resultadoIndice >= 0) input.setAttribute('aria-activedescendant', 'resultado-busqueda-' + S.resultadoIndice);
     S.busqueda.forEach(function (resultado, i) {
       var fila = L.formatoFilaResultado(resultado);
-      var b = el('button', 'resultado-variante' + (S.resultadoIndice === i ? ' resultado-variante--activo' : ''), null, { type: 'button', role: 'option', 'data-busqueda': String(i), 'aria-selected': S.resultadoIndice === i ? 'true' : 'false' });
-      if (fila.foto) { var im = el('img', 'resultado-variante-foto', null, { alt: '', loading: 'lazy' }); im.src = fila.foto; b.appendChild(im); }
+      var b = el('button', 'resultado-variante' + (S.resultadoIndice === i ? ' resultado-variante--activo' : ''), null, { type: 'button', role: 'option', id: 'resultado-busqueda-' + i, 'data-busqueda': String(i), 'aria-selected': S.resultadoIndice === i ? 'true' : 'false' });
+      if (fila.foto) { var im = el('img', 'resultado-variante-foto', null, { alt: '', loading: 'lazy', decoding: 'async' }); im.src = fila.foto; b.appendChild(im); }
       else b.appendChild(el('span', 'resultado-variante-foto resultado-variante-foto--vacio', '—', { 'aria-hidden': 'true' }));
       var datos = el('span', 'resultado-variante-datos');
       datos.appendChild(el('strong', 'resultado-variante-titulo', fila.titulo));
@@ -615,7 +621,7 @@
     if (tipo === 'foto') {
       if (src.foto) {
         var b = el('button', 'foto-btn', null, { type: 'button', 'data-foto-url': src.foto, 'data-foto-titulo': src.titulo || '', 'data-foto-sku': src.sku || '', 'aria-label': 'Ampliar foto de ' + (src.titulo || 'la variante') });
-        var im = el('img', null, null, { alt: '', loading: 'lazy' }); im.src = src.foto; b.appendChild(im); c.appendChild(b);
+        var im = el('img', null, null, { alt: '', loading: 'lazy', decoding: 'async' }); im.src = src.foto; b.appendChild(im); c.appendChild(b);
       } else c.appendChild(el('div', 'foto-sin-disponible', esMl ? 'Sin foto ML' : 'Sin foto'));
     } else if (tipo === 'titulo') c.appendChild(el('strong', null, src.titulo || 'Sin título'));
     else if (tipo === 'sku') c.appendChild(el('code', 'sku', src.sku || 'Sin SKU'));
@@ -711,10 +717,10 @@
     }
 
     var opciones = L.opcionesDe(d.candidatos, S.busqueda);
-    var head = el('div', 'caso-header', null, { tabindex: '-1', id: 'caso-focus' });
+    var head = el('div', 'caso-header', null, { tabindex: '-1' });
     var izquierda = el('div', 'caso-header-izquierda');
     izquierda.appendChild(el('div', 'caso-id', 'Caso ' + Math.min(S.hechos + 1, Math.max(S.totalInicial, S.hechos + 1)) + ' de ' + Math.max(S.totalInicial, S.hechos + 1) + ' · ' + (d.candidatos || []).length + ' candidatos'));
-    izquierda.appendChild(el('h1', 'caso-titulo', (d.publicacion && d.publicacion.titulo) || 'Sin título'));
+    izquierda.appendChild(el('h1', 'caso-titulo', (d.publicacion && d.publicacion.titulo) || 'Sin título', { tabindex: '-1', id: 'caso-focus' }));
     head.appendChild(izquierda);
     var derecha = el('div', 'caso-header-derecha');
     var cs = S.cola[S.idx];
@@ -739,10 +745,10 @@
     root.appendChild(renderMatriz(d, opciones));
 
     if (opciones.length) {
-      var fs = el('fieldset', 'candidatos');
+      var fs = el('fieldset', 'candidatos', null, { role: 'list', 'aria-label': 'Candidatos disponibles' });
       fs.appendChild(el('legend', 'candidatos-legend', 'Elegí la variante (teclas 1, 2, 3…)'));
       opciones.forEach(function (o, i) {
-        var box = el('div', 'cand');
+        var box = el('div', 'cand', null, { role: 'listitem' });
         var h = el('div', 'cand-header');
         var rid = 'radio-' + i;
         var r = el('input', null, null, { type: 'radio', id: rid, name: 'candidato', 'aria-keyshortcuts': String(i + 1) });
@@ -841,11 +847,11 @@
     if (seleccionado && S.sel == null) S.sel = seleccionado.variant_id;
     var resumenDiferencias = L.diferenciasVisibles(seleccionado && seleccionado.explicacion);
     var diferencias = resumenDiferencias.diferencias;
-    var head = el('header', 'caso-header', null, { tabindex: '-1', id: 'caso-focus' });
+    var head = el('header', 'caso-header', null, { tabindex: '-1' });
     var izquierda = el('div', 'caso-header-izquierda');
     izquierda.appendChild(el('span', 'caso-id', 'Caso ' + Math.min(S.hechos + 1, Math.max(S.totalInicial, S.hechos + 1)) + ' de ' + Math.max(S.totalInicial, S.hechos + 1)));
     var tipo = d.tipo || d.tipo_caso || 'caso';
-    izquierda.appendChild(el('h1', 'caso-titulo', tipo.replace(/_/g, ' ').toUpperCase()));
+    izquierda.appendChild(el('h1', 'caso-titulo', tipo.replace(/_/g, ' ').toUpperCase(), { tabindex: '-1', id: 'caso-focus' }));
     var frase = L.fraseTipo(tipo);
     izquierda.appendChild(el('span', 'caso-tipo-ayuda', frase, { title: frase }));
     head.appendChild(izquierda);
@@ -868,17 +874,17 @@
     else if (confirmable) compare.appendChild(renderFicha(confirmable, 'SKU A CONFIRMAR', false, d));
     else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
     root.appendChild(compare);
-    var diff = el('section', 'diferencias', null, { 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
+    var diff = el('section', 'diferencias', null, { role: 'list', 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
     var visibles = diferencias.slice();
-    visibles.slice(0, 8).forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
+    visibles.slice(0, 8).forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca, null, { role: 'listitem' }); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
     var iguales = resumenDiferencias.iguales;
     if (iguales) { var ib = el('button', 'btn-iguales', '✓ ' + iguales + ' atributos coinciden', { type: 'button', 'aria-expanded': 'false' }); diff.appendChild(ib); }
     root.appendChild(diff);
-    var tira = el('nav', 'otros-candidatos', null, { 'aria-label': 'Otros candidatos' }); tira.appendChild(el('span', 'otros-label', 'Otros:'));
+    var tira = el('nav', 'otros-candidatos', null, { role: 'list', 'aria-label': 'Otros candidatos' }); tira.appendChild(el('span', 'otros-label', 'Otros:'));
     opciones.forEach(function (o, i) {
       if (o === seleccionado) return;
       var resumen = L.resumenCandidato(o);
-      var b = el('button', 'candidato-chip', null, { type: 'button', 'data-candidato': o.variant_id, 'aria-label': 'Seleccionar candidato ' + (i + 1) });
+      var b = el('button', 'candidato-chip', null, { type: 'button', role: 'listitem', 'data-candidato': o.variant_id, 'aria-label': 'Seleccionar candidato ' + (i + 1) });
       b.appendChild(el('span', 'candidato-chip-rango', '[' + (i + 1) + ']'));
       b.appendChild(el('span', 'candidato-chip-titulo', resumen.titulo, { title: o.titulo || 'Sin título' }));
       b.appendChild(el('span', 'candidato-chip-separador', '·', { 'aria-hidden': 'true' }));
@@ -901,7 +907,7 @@
 
   function renderFicha(src, titulo, esMl, caso) {
     var f = el('section', 'ficha', null, { 'aria-label': titulo }); f.appendChild(el('h2', null, titulo));
-    var foto = src.foto || (esMl && src.thumbnail); if (foto) { var b = el('button', 'foto-btn', null, { type: 'button', 'data-foto-url': foto, 'data-foto-titulo': src.titulo || '', 'data-foto-sku': src.sku || '' }); var im = el('img', null, null, { alt: 'Foto de ' + (src.titulo || titulo), loading: 'lazy' }); im.src = foto; b.appendChild(im); f.appendChild(b); } else f.appendChild(el('div', 'foto-sin-disponible', esMl ? 'Sin foto · Abrir en ML' : 'Sin foto'));
+    var foto = src.foto || (esMl && src.thumbnail); if (foto) { var b = el('button', 'foto-btn', null, { type: 'button', 'data-foto-url': foto, 'data-foto-titulo': src.titulo || '', 'data-foto-sku': src.sku || '', 'aria-label': 'Ampliar foto de ' + (src.titulo || titulo) }); var im = el('img', null, null, { alt: 'Foto de ' + (src.titulo || titulo), loading: 'lazy', decoding: 'async' }); im.src = foto; b.appendChild(im); f.appendChild(b); } else f.appendChild(el('div', 'foto-sin-disponible', esMl ? 'Sin foto · Abrir en ML' : 'Sin foto'));
     var tituloFicha = src.titulo || 'Sin título';
     f.appendChild(el('h3', 'ficha-titulo', tituloFicha, { title: tituloFicha })); f.appendChild(el('code', 'sku', 'SKU: ' + (src.sku || src.sku_observado || 'Sin SKU'))); f.appendChild(el('p', 'ficha-meta', L.formatoPrecio(src.precio, src.moneda) + ' · ' + L.formatoStock(src.stock))); return f;
   }
@@ -959,7 +965,7 @@
       var marco = el('div', 'visor-foto-marco', null, { tabindex: '0', 'data-visor-lado': parte[0], 'aria-label': 'Foto ' + parte[2] });
       if (parte[1]) {
         if (parte[1].foto) {
-          var im = el('img', 'visor-foto-imagen', null, { alt: 'Foto de ' + parte[1].titulo }); im.src = parte[1].foto;
+          var im = el('img', 'visor-foto-imagen', null, { alt: 'Foto de ' + parte[1].titulo, decoding: 'async' }); im.src = parte[1].foto;
           marco.appendChild(im);
         } else marco.appendChild(el('div', 'visor-foto-sin-disponible', 'Sin foto'));
       } else marco.appendChild(el('div', 'visor-foto-sin-disponible', 'Sin foto'));

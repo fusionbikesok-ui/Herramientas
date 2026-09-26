@@ -395,6 +395,12 @@
     return actual === 3 ? 1 : actual + 1;
   }
 
+  function tamanoZoom(nivel) {
+    var n = Number(nivel);
+    if (n !== 1 && n !== 2 && n !== 3) n = 1;
+    return { nivel: n, porcentaje: n * 100 };
+  }
+
   function indiceCandidatoVisor(actual, n, delta) {
     n = Number(n) || 0;
     if (n < 1) return -1;
@@ -430,7 +436,7 @@
     porQue: porQue, atributosIguales: atributosIguales, fraseTipo: fraseTipo, diferenciasVisibles: diferenciasVisibles,
     textoDiferencias: textoDiferencias, resumenCandidato: resumenCandidato, diferenciasDeResultado: diferenciasDeResultado,
     formatoFilaResultado: formatoFilaResultado, indiceResultadoBusqueda: indiceResultadoBusqueda, textoDecision: textoDecision,
-    siguienteNivelZoom: siguienteNivelZoom, indiceCandidatoVisor: indiceCandidatoVisor, paresParaVisor: paresParaVisor,
+    siguienteNivelZoom: siguienteNivelZoom, tamanoZoom: tamanoZoom, indiceCandidatoVisor: indiceCandidatoVisor, paresParaVisor: paresParaVisor,
     GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

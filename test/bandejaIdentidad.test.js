@@ -16,6 +16,15 @@ import { crearOrigenes, verificarInterna } from '../plataforma/src/seguridad/int
 const mod = await import('../public/bandeja-identidad/logica.js');
 const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.BandejaLogica ?? globalThis.window?.BandejaLogica);
 
+describe('E3 T7 — zoom puro del visor comparativo', () => {
+  it('cada nivel conserva una escala real y el valor inválido vuelve a 1x', () => {
+    expect(L.tamanoZoom(1)).toEqual({ nivel: 1, porcentaje: 100 });
+    expect(L.tamanoZoom(2)).toEqual({ nivel: 2, porcentaje: 200 });
+    expect(L.tamanoZoom(3)).toEqual({ nivel: 3, porcentaje: 300 });
+    expect(L.tamanoZoom(0)).toEqual({ nivel: 1, porcentaje: 100 });
+  });
+});
+
 const clave = crypto.randomBytes(32);
 const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
 const origenes = crearOrigenes('127.0.0.1/32');

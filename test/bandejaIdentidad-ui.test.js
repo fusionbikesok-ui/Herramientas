@@ -259,6 +259,55 @@ describe('bandeja: visor comparativo', () => {
     });
     expect(L.paresParaVisor(caso, null).candidato).toBeNull();
   });
+
+  it('mantiene tamaños de imagen distintos en cada nivel del zoom', () => {
+    expect(L.tamanoZoom(1)).toEqual({ nivel: 1, porcentaje: 100 });
+    expect(L.tamanoZoom(2)).toEqual({ nivel: 2, porcentaje: 200 });
+    expect(L.tamanoZoom(3)).toEqual({ nivel: 3, porcentaje: 300 });
+    expect(L.tamanoZoom(99)).toEqual({ nivel: 1, porcentaje: 100 });
+
+    const css = readFileSync(new URL('../public/bandeja-identidad/bandeja.css', import.meta.url), 'utf8');
+    const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
+    expect(css).toMatch(/\.visor-pares\[data-zoom="2"\][\s\S]*?width:\s*200%[\s\S]*?max-inline-size:\s*none/);
+    expect(css).toMatch(/\.visor-pares\[data-zoom="3"\][\s\S]*?width:\s*300%[\s\S]*?max-inline-size:\s*none/);
+    expect(html).toMatch(/\.visor-foto-imagen[\s\S]*?max-inline-size:\s*100%/);
+  });
+});
+
+describe('bandeja: contrato estático de accesibilidad y responsive', () => {
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../public/bandeja-identidad/bandeja.css', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
+
+  it('enuncia el caso y enfoca su título al cambiar de caso', () => {
+    expect(js).toMatch(/el\('h1',[\s\S]*?tabindex: '-1', id: 'caso-focus'/);
+    expect(js).toMatch(/Caso '\s*\+ \(S\.hechos \+ 1\)[\s\S]*?de[\s\S]*?: '\s*\+ tipo/);
+    expect(js).toMatch(/var h = \$\('caso-focus'\); if \(h\) h\.focus\(\)/);
+  });
+
+  it('expone listas, opciones activas, diferencias y toasts con roles accesibles', () => {
+    expect(js).toMatch(/role: 'list'/);
+    expect(js).toMatch(/role: 'listitem'/);
+    expect(js).toMatch(/aria-activedescendant/);
+    expect(js).toMatch(/role: 'option'/);
+    expect(html).toMatch(/id="aviso-deshacer"[^>]*role="status"/);
+  });
+
+  it('declara foco visible, reduce movimiento y no permite overflow horizontal al zoom', () => {
+    expect(css + html).toMatch(/:focus-visible[\s\S]*outline/);
+    expect(css + html).toMatch(/prefers-reduced-motion/);
+    expect(css + html).toMatch(/overflow-x:\s*(hidden|clip)/);
+    expect(css).toMatch(/\.barra-decision[\s\S]*max-inline-size:\s*100%/);
+    expect(css).toMatch(/min-inline-size:\s*0/);
+  });
+
+  it('precarga la publicación actual y el primer candidato del siguiente caso, con decodificación async', () => {
+    expect(js).toMatch(/precargarFotos\(d, token, \{ publicacion: true/);
+    expect(js).toMatch(/precargarFotos\(d, token, \{ publicacion: false, candidato: true/);
+    expect(js).toMatch(/new Image\(\)[\s\S]*?decoding\s*=\s*['"]async['"]/);
+    expect(js).toMatch(/token !== S\.navToken/);
+    expect(js).toMatch(/loading: 'lazy'/);
+  });
 });
 
 describe('bandeja: consume el nombre real del tipo del detalle', () => {
@@ -543,7 +592,7 @@ describe('bandeja: estación compacta y confirmación por SKU', () => {
     expect(css).toMatch(/\.visor-foto-imagen\s*\{[\s\S]*object-fit:\s*contain/);
     expect(css).toMatch(/\.visor-pares\[data-zoom="2"\]/);
     expect(css).toMatch(/\.visor-pares\[data-zoom="3"\]/);
-    expect(js).toMatch(/precargarFotos\(d\)/);
+    expect(js).toMatch(/precargarFotos\(d, token/);
     expect(js).toMatch(/new Image\(\)/);
   });
 
