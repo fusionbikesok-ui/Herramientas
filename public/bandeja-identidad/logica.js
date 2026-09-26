@@ -55,6 +55,41 @@
   // Sólo se reintenta lo que puede arreglarse solo: red caída (status 0), 5xx y 429. Un 4xx es una respuesta definitiva.
   function esReintentable(status) { return status === 0 || status === 429 || status >= 500; }
 
+  // Guardia por caso: una decisión incierta no se puede reemplazar por otra elección ni por otra clave.
+  // La UI puede navegar mientras el POST está en vuelo, por eso el índice actual no alcanza como bloqueo.
+  function crearGuardiaDecisiones(crearClave) {
+    var porCaso = new Map();
+    function iniciar(datos) {
+      var existente = porCaso.get(datos.caseId);
+      if (existente) return { entrada: existente, nueva: false };
+      var entrada = Object.assign({}, datos, { key: crearClave(), estado: 'pendiente' });
+      porCaso.set(entrada.caseId, entrada);
+      return { entrada: entrada, nueva: true };
+    }
+    function terminar(entrada, respuesta) {
+      if (respuesta.status === 200 || !esReintentable(respuesta.status)) {
+        porCaso.delete(entrada.caseId);
+        return;
+      }
+      entrada.estado = 'fallido';
+    }
+    function reintentar(entrada) {
+      if (porCaso.get(entrada.caseId) !== entrada) return null;
+      entrada.estado = 'pendiente';
+      return entrada;
+    }
+    return {
+      iniciar: iniciar,
+      terminar: terminar,
+      reintentar: reintentar,
+      estaBloqueado: function (caseId) { return porCaso.has(caseId); }
+    };
+  }
+
+  function puedeAvanzarTrasGuardar(cola, idx, caseId) {
+    return !!(cola && cola[idx] && cola[idx].id === caseId);
+  }
+
   // Backoff exponencial con jitter (±25 %), tope de 15 s por espera y de 5 intentos en total: con la plataforma
   // caída el operador ve el error en ~30 s en vez de esperar para siempre.
   var MAX_INTENTOS = 5;
@@ -437,7 +472,8 @@
     textoDiferencias: textoDiferencias, resumenCandidato: resumenCandidato, diferenciasDeResultado: diferenciasDeResultado,
     formatoFilaResultado: formatoFilaResultado, indiceResultadoBusqueda: indiceResultadoBusqueda, textoDecision: textoDecision,
     siguienteNivelZoom: siguienteNivelZoom, tamanoZoom: tamanoZoom, indiceCandidatoVisor: indiceCandidatoVisor, paresParaVisor: paresParaVisor,
-    GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
+    GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS,
+    crearGuardiaDecisiones: crearGuardiaDecisiones, puedeAvanzarTrasGuardar: puedeAvanzarTrasGuardar
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BandejaLogica = api;

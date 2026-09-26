@@ -3,8 +3,7 @@
  * Mismo patrón que test/catalogo/api-interna.test.ts.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { crearApi } from '../../src/api/app.ts';
 import { PREFIJO_IDENTIDAD } from '../../src/api/identidad-interna.ts';
 import type { Canal } from '../../src/api/senales.ts';
@@ -478,12 +477,40 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-100&caso_id=no-es-uuid`)).status).toBe(422);
   });
 
-  it('buscar otra variante agrupa los atributos de candidatos en una sola consulta', () => {
-    const fuente = readFileSync(new URL('../../src/api/identidad-interna.ts', import.meta.url), 'utf8');
-    const bloque = fuente.slice(fuente.indexOf("sub.get(`${PREFIJO_IDENTIDAD}/variantes`"));
-    expect(bloque).toMatch(/model_id = ANY\(\$1::uuid\[\]\)/);
-    expect(bloque).toMatch(/Map<string, Atributos>/);
-    expect(bloque).not.toMatch(/for \(const f of r\.rows\)[\s\S]*await explicacionCandidato/);
+  it('buscar otra variante obtiene los atributos de todos los candidatos con una consulta real agrupada', async () => {
+    const c = await caso('MLA_CONTEO_CONSULTAS');
+    const candidatos = [
+      await variante('Casco Bell Negro', 'FB-8101'),
+      await variante('Casco Bell Negro', 'FB-8102'),
+      await variante('Casco Bell Negro', 'FB-8103'),
+    ];
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, 'marca', 'negro', now() FROM catalog.external_representations r WHERE r.recurso = 'MLA_CONTEO_CONSULTAS'`, [c.modelo],
+    );
+    for (const [i, candidato] of candidatos.entries()) {
+      const recurso = `WOO_CONTEO_CONSULTAS_${i}`;
+      await admin.query(
+        `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, estado_remoto)
+         VALUES ($1, $2, 'woocommerce', 'vendible', $3, '', $4, 'publish')`, [empresa, ml, recurso, candidato.variante],
+      );
+      await admin.query(
+        `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+         SELECT $1, r.id, 'marca', 'rojo', now() FROM catalog.external_representations r WHERE r.recurso = $2`, [candidato.modelo, recurso],
+      );
+    }
+
+    const consultas = vi.spyOn(pool, 'query');
+    consultas.mockClear();
+    const resultado = await get(`${PREFIJO_IDENTIDAD}/variantes?q=Casco&caso_id=${c.id}`);
+    const consultasDeAtributos = consultas.mock.calls.filter(([sql]) => typeof sql === 'string' && sql.includes('catalog.model_attributes'));
+    consultas.mockRestore();
+
+    expect(resultado.status).toBe(200);
+    expect(resultado.body.variantes).toHaveLength(3);
+    // Una consulta carga los atributos de la publicación ML y una segunda agrupa los tres modelos Woo.
+    expect(consultasDeAtributos).toHaveLength(2);
+    expect(consultasDeAtributos.some(([sql]) => String(sql).includes('model_id = ANY($1::uuid[])'))).toBe(true);
   });
 
   it('buscar otra variante rechaza con 404 un caso de otra empresa', async () => {

@@ -344,20 +344,6 @@ describe('bandeja: tecla X en confirmable — d5 (T5, hallazgo Alto de Codex)', 
 describe('bandeja: regresiones de concurrencia y decisiones contextuales', () => {
   const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
 
-  it('invalidar detalle y bloquear decisiones usa un snapshot del caso antes de enviar', () => {
-    const abrir = js.match(/function abrirCaso\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
-    const decidir = js.match(/function decidir\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
-    expect(abrir).toMatch(/S\.detalle = null/);
-    expect(decidir).toMatch(/decisionEnVuelo/);
-    expect(decidir).toMatch(/Object\.freeze\(\{[\s\S]*caseId[\s\S]*version[\s\S]*variantId/);
-    expect(decidir).toMatch(/S\.detalle\.id !== S\.cola\[S\.idx\]\.id/);
-  });
-
-  it('dos decisiones de la misma vista no generan dos envíos', () => {
-    expect(js).toMatch(/if \(S\.decisionEnVuelo && S\.decisionEnVuelo\.caseId === snapshot\.caseId\)/);
-    expect(js).toMatch(/S\.decisionEnVuelo = snapshot/);
-  });
-
   it('el aviso de deshacer sólo se actualiza si sigue siendo la última entrada', () => {
     expect(js).toMatch(/function mostrarDeshacer\(texto, entry\)/);
     expect(js).toMatch(/S\.ultima\.entry === entry/);
@@ -488,6 +474,58 @@ describe('bandeja: ejecutarAccion — Paso 2 de T3, sin DOM (decisión pura de q
   it('grupos: apartados (7) está en GRUPOS y GRUPO_NOMBRE', () => {
     expect(L.GRUPOS.apartados).toBe(7);
     expect(L.GRUPO_NOMBRE[7]).toMatch(/apartado/i);
+  });
+});
+
+describe('bandeja: concurrencia de decisiones — comportamiento observable', () => {
+  it('A/B/A reutiliza la entrada pendiente de A y su misma Idempotency-Key', () => {
+    let siguienteClave = 0;
+    const guardia = L.crearGuardiaDecisiones(() => 'clave-' + (++siguienteClave));
+    const enviar = vi.fn();
+
+    const a1 = guardia.iniciar({ caseId: 'A', version: 1, enviar });
+    const b = guardia.iniciar({ caseId: 'B', version: 2, enviar });
+    const a2 = guardia.iniciar({ caseId: 'A', version: 1, enviar });
+
+    expect(a1.nueva).toBe(true);
+    expect(b.nueva).toBe(true);
+    expect(a2.nueva).toBe(false);
+    expect(a2.entrada).toBe(a1.entrada);
+    expect(a2.entrada.key).toBe('clave-1');
+    expect(siguienteClave).toBe(2);
+    expect(enviar).not.toHaveBeenCalled();
+  });
+
+  it('una respuesta ambigua deja bloqueado el caso y reintentar conserva entrada y clave', () => {
+    const guardia = L.crearGuardiaDecisiones(() => 'clave-original');
+    const enviar = vi.fn();
+    const primera = guardia.iniciar({ caseId: 'A', version: 1, enviar }).entrada;
+
+    guardia.terminar(primera, { status: 0 });
+    const nuevaDecision = guardia.iniciar({ caseId: 'A', version: 1, enviar });
+    const reintento = guardia.reintentar(primera);
+
+    expect(nuevaDecision.nueva).toBe(false);
+    expect(nuevaDecision.entrada).toBe(primera);
+    expect(reintento).toBe(primera);
+    expect(primera.estado).toBe('pendiente');
+    expect(primera.key).toBe('clave-original');
+  });
+
+  it('libera el bloqueo sólo ante una respuesta terminal conocida', () => {
+    const guardia = L.crearGuardiaDecisiones(() => 'clave-1');
+    const entrada = guardia.iniciar({ caseId: 'A', version: 1 }).entrada;
+
+    guardia.terminar(entrada, { status: 409 });
+
+    const siguiente = guardia.iniciar({ caseId: 'A', version: 2 });
+    expect(siguiente.nueva).toBe(true);
+    expect(siguiente.entrada.key).toBe('clave-1');
+  });
+
+  it('apartar sólo avanza si la cola todavía muestra el caso capturado', () => {
+    expect(L.puedeAvanzarTrasGuardar([{ id: 'B' }, { id: 'C' }], 0, 'A')).toBe(false);
+    expect(L.puedeAvanzarTrasGuardar([{ id: 'A' }, { id: 'B' }], 0, 'A')).toBe(true);
   });
 });
 

@@ -21,9 +21,11 @@
     pendientes: new Map(),  // Idempotency-Key → entry (guardado en segundo plano)
     ultima: null,           // { tipo: 'decision'|'apartado'|'salteado', ... } para deshacer
     salteados: new Set(),   // Set de IDs de casos omitidos por ahora (sólo en la sesión)
-    atajos: leerAtajos(), navToken: 0, decisionEnVuelo: null, timerDeshacer: null, timerBusqueda: null, tokenBusqueda: 0, candidatoAnterior: null,
+    atajos: leerAtajos(), navToken: 0, timerDeshacer: null, timerBusqueda: null, tokenBusqueda: 0, candidatoAnterior: null,
+    guardiaDecisiones: null,
     visor: null
   };
+  S.guardiaDecisiones = L.crearGuardiaDecisiones(function () { return crypto.randomUUID(); });
 
   function leerAtajos() { try { return localStorage.getItem('bandeja-atajos') !== 'false'; } catch (e) { return true; } }
   function guardarAtajos(v) { try { localStorage.setItem('bandeja-atajos', v ? 'true' : 'false'); } catch (e) { /* sin storage */ } }
@@ -136,9 +138,10 @@
     if (!S.siguiente || S.cargandoMas) return;
     S.cargandoMas = true;
     var grupoAlPedir = S.grupo;
+    var tokenAlPedir = S.navToken;
     http('GET', rutaCola(S.siguiente)).then(function (r) {
       S.cargandoMas = false;
-      if (r.status !== 200 || grupoAlPedir !== S.grupo) return;
+      if (r.status !== 200 || grupoAlPedir !== S.grupo || tokenAlPedir !== S.navToken) return;
       var ya = {}; S.cola.forEach(function (c) { ya[c.id] = true; });
       (r.data.casos || []).forEach(function (c) { if (!ya[c.id]) S.cola.push(c); });
       S.siguiente = r.data.siguiente || null;
@@ -240,7 +243,10 @@
 
     // Si no hay más casos no salteados en la cola actual, cargar más
     if (S.siguiente) {
+      var tokenAlPedir = S.navToken;
+      var grupoAlPedir = S.grupo;
       return http('GET', rutaCola(S.siguiente)).then(function (r) {
+        if (tokenAlPedir !== S.navToken || grupoAlPedir !== S.grupo) return;
         if (r.status !== 200) return falloCarga(r);
         S.cola = S.cola.concat(r.data.casos || []); S.siguiente = r.data.siguiente || null;
         var siguienteCargado = L.siguienteNoSalteado(S.cola, S.idx, S.salteados);
@@ -303,12 +309,10 @@
     if (!d) return;
     if (!S.cola[S.idx] || S.detalle.id !== S.cola[S.idx].id) return;
     var snapshot = Object.freeze({ caseId: d.id, version: d.version, variantId: variantId || null });
-    if (S.decisionEnVuelo && S.decisionEnVuelo.caseId === snapshot.caseId) return;
     if (eleccion === 'vincular' && !variantId) {
       aviso('elegir', 'Elegí un candidato antes de vincular.');
       return;
     }
-    S.decisionEnVuelo = snapshot;
     quitarAviso('elegir'); quitarAviso('rechazo');
     var opcion = variantId ? L.opcionesDe(d.candidatos, S.busqueda).filter(function (o) { return o.variant_id === variantId; })[0] : null;
     // Confirmar (punto A): la variante no está en candidatos/búsqueda — el SKU viene de cs.confirmar, guardado
@@ -319,11 +323,12 @@
     if (eleccion === 'vincular') cuerpo.variant_id = variantId;
     if (motivo) cuerpo.motivo = motivo;
     if (confirmar) cuerpo.confirmar = true;
-    var entry = {
-      key: crypto.randomUUID(), casoId: snapshot.caseId, cuerpo: cuerpo, eleccion: eleccion, variantId: snapshot.variantId,
+    var guardia = S.guardiaDecisiones.iniciar({
+      caseId: snapshot.caseId, casoId: snapshot.caseId, snapshot: snapshot, cuerpo: cuerpo, eleccion: eleccion, variantId: snapshot.variantId,
       marcas: opcion ? marcasDe(opcion) : '', sku: opcion ? opcion.sku : skuConfirmado, estado: 'pendiente', reintentos: 0,
-      snapshot: snapshot
-    };
+    });
+    if (!guardia.nueva) return;
+    var entry = guardia.entrada;
     // Sin `actor`: el usuario y es_admin los pone el proxy desde la sesión, nunca el cliente.
     S.pendientes.set(entry.key, entry);
     entry.promise = enviar(entry).then(function (r) { alTerminar(entry, r); return entry; });
@@ -370,7 +375,7 @@
         banda();
         return;
       }
-      if (S.ultima === undo) avanzar();
+      if (S.ultima === undo && L.puedeAvanzarTrasGuardar(S.cola, S.idx, caseId)) avanzar();
     });
   }
 
@@ -394,8 +399,8 @@
   }
 
   function alTerminar(entry, r) {
-    if (S.decisionEnVuelo === entry.snapshot) S.decisionEnVuelo = null;
-    if (r.status === 200 || !L.esReintentable(r.status)) S.pendientes.delete(entry.key);
+    S.guardiaDecisiones.terminar(entry, r);
+    if (!S.guardiaDecisiones.estaBloqueado(entry.casoId)) S.pendientes.delete(entry.key);
     if (r.status === 200) {
       entry.estado = 'ok'; entry.decisionId = r.data.decision_id; entry.versionNueva = r.data.version;
       anunciar('Guardado'); mostrarDeshacer(textoDecision(entry), entry); banda(); return;
@@ -422,7 +427,7 @@
     entry.estado = 'fallido'; entry.reintentos = 0; banda();
     var b = aviso('fallo-' + entry.key, 'No se pudo guardar la decisión (' + textoDecision(entry).replace(/\.$/, '') + '). Tu elección se conserva.', [{
       texto: 'Reintentar', alClick: function () {
-        quitarAviso('fallo-' + entry.key); entry.estado = 'pendiente';
+        quitarAviso('fallo-' + entry.key); S.guardiaDecisiones.reintentar(entry);
         entry.promise = enviar(entry).then(function (r) { alTerminar(entry, r); return entry; });
         banda();
       }
