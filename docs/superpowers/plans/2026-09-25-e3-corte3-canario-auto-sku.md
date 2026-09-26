@@ -354,7 +354,7 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
         camino que deshacer).
   - `cerrarCanario(pool, { corridaId }): Promise<ClasificacionD6>`, con `ClasificacionD6 = { errores: Array<{ tipo: 'corregido_por_jose'|'parked_sin_resolver'; recurso: string }>; noErrores: Record<'redundante'|'intervention'|'dejo_de_ser_unico'|'no_disponible', number>; veredicto: 'cero_errores'|'con_errores'|'abortado' }`.
 
-- [ ] **Paso 1: Migración (parte 3):**
+- [x] **Paso 1: Migración (parte 3):**
 
 ```sql
 -- Parte 3: conjunto congelado del día de canario (spec §7.1).
@@ -382,7 +382,7 @@ CREATE TABLE catalog.e3_canario_casos (
   PRIMARY KEY (corrida_id, case_id));
 ```
 
-- [ ] **Paso 2: Tests que fallan:**
+- [x] **Paso 2: Tests que fallan:**
   - `congelar` excluye D5, las que tienen humana o legado, y SKU `varias`;
   - una segunda `congelar` el mismo día falla (UNIQUE) y no toca la primera;
   - un caso abierto DESPUÉS del congelado no entra;
@@ -396,10 +396,10 @@ CREATE TABLE catalog.e3_canario_casos (
     - una decisión humana posterior a otra variante cuenta como error `corregido_por_jose`;
     - una humana igual cuenta como `redundante`;
     - el veredicto es `cero_errores` sólo si no hay ningún error.
-- [ ] **Paso 3: Ver que fallan** → `/tmp/claude-0/c3-t5-rojo.txt`
-- [ ] **Paso 4: Implementar `canario.ts` y el CLI.** El CLI arma el relector igual que `src/worker/main.ts:53-60` (transporte por cuenta desde el registro), usa `DATABASE_URL` y `CATALOGO_KEYRING_FILE` como el backfill, e imprime un resumen sin PII (conteos y recursos MLA).
-- [ ] **Paso 5: Verde** → `/tmp/claude-0/c3-t5-verde.txt`
-- [ ] **Paso 6: Commit.**
+- [x] **Paso 3: Ver que fallan** → `/tmp/claude-0/c3-t5-rojo.txt`
+- [x] **Paso 4: Implementar `canario.ts` y el CLI.** El CLI arma el relector igual que `src/worker/main.ts:53-60` (transporte por cuenta desde el registro), usa `DATABASE_URL` y `CATALOGO_KEYRING_FILE` como el backfill, e imprime un resumen sin PII (conteos y recursos MLA).
+- [x] **Paso 5: Verde** → `/tmp/claude-0/c3-t5-verde.txt`
+- [x] **Paso 6: Commit.**
 
 ### Tarea 6: Transición `verified → intervention` por cambio posterior (§8)
 

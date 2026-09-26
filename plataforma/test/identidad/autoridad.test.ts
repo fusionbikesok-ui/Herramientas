@@ -346,7 +346,10 @@ describe('E3-AUT-02 auto_sku/aplicar detrás de un modo (corte 3, tarea 3)', () 
 
   it('[esc:e3-canario-sin-t5] E3_CANARIO=1 sólo aplica dentro de una corrida abierta', async () => {
     const corrida = (await admin.query<{ id: string }>(`INSERT INTO catalog.e3_canario_corridas (company_id, dia) VALUES ($1, '2026-09-26') RETURNING id`, [empresa])).rows[0]!.id;
-    await admin.query(`INSERT INTO catalog.e3_canario_casos (corrida_id, case_id, channel_account_id, recurso, variacion_normalizada, sku_congelado, variant_id_congelada) VALUES ($1, (SELECT id FROM catalog.identity_cases LIMIT 1), $2, 'MLA25', '', 'FB-25', (SELECT id FROM catalog.sellable_variants LIMIT 1))`, [corrida, ml]);
+    const m = (await admin.query<{ id: string }>(`INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'ml_simple', 'MLA25', 'x') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    const v = (await admin.query<{ id: string }>('INSERT INTO catalog.sellable_variants (company_id, model_id) VALUES ($1, $2) RETURNING id', [empresa, m])).rows[0]!.id;
+    const c = (await admin.query<{ id: string }>("INSERT INTO catalog.identity_cases (company_id, tipo, variant_id) VALUES ($1, 'sku_pendiente', $2) RETURNING id", [empresa, v])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.e3_canario_casos (corrida_id, case_id, channel_account_id, recurso, variacion_normalizada, sku_congelado, variant_id_congelada) VALUES ($1, $2, $3, 'MLA25', '', 'FB-25', $4)`, [corrida, c, ml, v]);
     expect(await modoAutoSku(app, ml, 'MLA25', '', { E3_AUTO_SKU: false, E3_CANARIO: true })).toBe('aplicado');
     expect(await modoAutoSku(app, ml, 'MLA26', '', { E3_AUTO_SKU: false, E3_CANARIO: true })).toBe('apagado');
   });
