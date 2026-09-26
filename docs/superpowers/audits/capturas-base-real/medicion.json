@@ -1,0 +1,706 @@
+{
+  "generadoEn": "2026-09-26T21:29:45.262Z",
+  "url": "http://127.0.0.1:45979/herramientas/bandeja-identidad/",
+  "resultados": [
+    {
+      "documento": 1836,
+      "viewport": "1440x900",
+      "scrollNecesario": 936,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 504.625,
+          "h": 377.96875,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA conflicto 14",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1836,
+      "viewport": "1440x900",
+      "scrollNecesario": 936,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 504.625,
+          "h": 377.96875,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA conflicto 7",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1933,
+      "viewport": "1440x900",
+      "scrollNecesario": 1033,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 270.265625,
+          "h": 202.1875,
+          "natural": "800x600"
+        },
+        {
+          "w": 270.265625,
+          "h": 202.1875,
+          "natural": "800x400"
+        },
+        {
+          "w": 270.28125,
+          "h": 202.203125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA con_3_candidatos 12",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1836,
+      "viewport": "1440x900",
+      "scrollNecesario": 936,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 504.625,
+          "h": 377.96875,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA user_product_divergente 11",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1716,
+      "viewport": "1440x900",
+      "scrollNecesario": 816,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA sin_candidatos 8",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1836,
+      "viewport": "1440x900",
+      "scrollNecesario": 936,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 504.625,
+          "h": 377.96875,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA atributo_divergente 3",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1836,
+      "viewport": "1440x900",
+      "scrollNecesario": 936,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 504.625,
+          "h": 377.96875,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA sku_pendiente 2",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1836,
+      "viewport": "1440x900",
+      "scrollNecesario": 936,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 504.625,
+          "h": 377.96875,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA sku_pendiente 9",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1933,
+      "viewport": "1440x900",
+      "scrollNecesario": 1033,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 270.265625,
+          "h": 202.1875,
+          "natural": "800x600"
+        },
+        {
+          "w": 270.265625,
+          "h": 202.1875,
+          "natural": "800x400"
+        },
+        {
+          "w": 270.28125,
+          "h": 202.203125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA con_3_candidatos 5",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1772,
+      "viewport": "1440x900",
+      "scrollNecesario": 872,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA confirmable 13",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1836,
+      "viewport": "1440x900",
+      "scrollNecesario": 936,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 504.625,
+          "h": 377.96875,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA atributo_divergente 10",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1772,
+      "viewport": "1440x900",
+      "scrollNecesario": 872,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA confirmable 6",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1836,
+      "viewport": "1440x900",
+      "scrollNecesario": 936,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 504.625,
+          "h": 377.96875,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA user_product_divergente 4",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1772,
+      "viewport": "1440x900",
+      "scrollNecesario": 872,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA sin_candidatos 1",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1753,
+      "viewport": "1280x800",
+      "scrollNecesario": 953,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 445.609375,
+          "h": 333.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA conflicto 14",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1753,
+      "viewport": "1280x800",
+      "scrollNecesario": 953,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 445.609375,
+          "h": 333.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA conflicto 7",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1864,
+      "viewport": "1280x800",
+      "scrollNecesario": 1064,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 237.609375,
+          "h": 177.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 237.609375,
+          "h": 177.703125,
+          "natural": "800x400"
+        },
+        {
+          "w": 237.609375,
+          "h": 177.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA con_3_candidatos 12",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1753,
+      "viewport": "1280x800",
+      "scrollNecesario": 953,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 445.609375,
+          "h": 333.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA user_product_divergente 11",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1614,
+      "viewport": "1280x800",
+      "scrollNecesario": 814,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA sin_candidatos 8",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1753,
+      "viewport": "1280x800",
+      "scrollNecesario": 953,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 445.609375,
+          "h": 333.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA atributo_divergente 3",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1753,
+      "viewport": "1280x800",
+      "scrollNecesario": 953,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 445.609375,
+          "h": 333.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA sku_pendiente 2",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1753,
+      "viewport": "1280x800",
+      "scrollNecesario": 953,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 445.609375,
+          "h": 333.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA sku_pendiente 9",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1864,
+      "viewport": "1280x800",
+      "scrollNecesario": 1064,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 237.609375,
+          "h": 177.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 237.609375,
+          "h": 177.703125,
+          "natural": "800x400"
+        },
+        {
+          "w": 237.609375,
+          "h": 177.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA con_3_candidatos 5",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1669,
+      "viewport": "1280x800",
+      "scrollNecesario": 869,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA confirmable 13",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1753,
+      "viewport": "1280x800",
+      "scrollNecesario": 953,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 445.609375,
+          "h": 333.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA atributo_divergente 10",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1669,
+      "viewport": "1280x800",
+      "scrollNecesario": 869,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA confirmable 6",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1753,
+      "viewport": "1280x800",
+      "scrollNecesario": 953,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 445.609375,
+          "h": 333.703125,
+          "natural": "800x600"
+        },
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA user_product_divergente 4",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    },
+    {
+      "documento": 1669,
+      "viewport": "1280x800",
+      "scrollNecesario": 869,
+      "vincularVisibleSinScroll": false,
+      "fotos": [
+        {
+          "w": 0,
+          "h": 0,
+          "natural": "0x0"
+        }
+      ],
+      "caso": "QA sin_candidatos 1",
+      "teclas": [
+        "1",
+        "Enter"
+      ],
+      "clics": 0,
+      "segundos": 0.15
+    }
+  ]
+}
