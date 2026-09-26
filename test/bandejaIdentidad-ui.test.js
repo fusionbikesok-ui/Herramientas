@@ -14,15 +14,27 @@ describe('bandeja: logica pura', () => {
     expect(L.formatoPrecio(189900, 'ARS')).toBe('189.900 ARS');
   });
 
-  it('diferencias se ordenan difiere, falta, equivalente y coincide', () => {
-    const o = { explicacion: { atributos: [
-      { nombre: 'igual', marca: 'coincide', valor: 'x' },
-      { nombre: 'falta', marca: 'falta' },
-      { nombre: 'cambia', marca: 'difiere', valor: 'y' },
-      { nombre: 'equiv', marca: 'equivalente', valor: 'z' }
-    ] } };
-    expect(L.diferenciasVisibles(o, { atributos: { cambia: 'm' } }).map((x) => x.marca)).toEqual(['difiere', 'falta', 'equivalente', 'coincide']);
-    expect(L.textoDecision({ sku: 'FB-1' }, L.diferenciasVisibles(o, {}))).toMatch(/FB-1 \(2 diferencias\)/);
+  it('diferenciasVisibles devuelve diferencias priorizadas, iguales y nombres sin duplicar', () => {
+    const explicacion = { atributos: [
+      { nombre: 'igual', marca: 'coincide', valorMl: 'x', valorCandidato: 'x' },
+      { nombre: 'falta', marca: 'falta', valorMl: '', valorCandidato: '' },
+      { nombre: 'cambia', marca: 'difiere', valorMl: 'm', valorCandidato: 'y', valorMlOriginal: 'ML m', valorCandidatoOriginal: 'Woo y' },
+      { nombre: 'equiv', marca: 'equivalente', valorMl: 'negro', valorCandidato: 'negro mate' },
+      { nombre: 'cambia', marca: 'difiere', valorMl: 'duplicado', valorCandidato: 'descartado' }
+    ], otros_atributos: [{ nombre: 'marca', marca: 'difiere', valorMl: 'Shimano', valorCandidato: 'Trek' }] };
+    const resultado = L.diferenciasVisibles(explicacion);
+    expect(resultado.diferencias.map((x) => x.marca)).toEqual(['difiere', 'difiere', 'falta', 'equivalente']);
+    expect(resultado.diferencias.map((x) => x.nombre)).toEqual(['cambia', 'marca', 'falta', 'equiv']);
+    expect(resultado.diferencias[0]).toMatchObject({ texto: 'difiere', simbolo: '≠', valorMl: 'ML m', valorCandidato: 'Woo y' });
+    expect(resultado.iguales).toBe(1);
+    expect(resultado.nombresIguales).toEqual(['igual']);
+  });
+
+  it('pluraliza la barra y los chips, incluso cuando no hay diferencias', () => {
+    expect(L.textoDiferencias(0)).toBe('sin diferencias');
+    expect(L.textoDiferencias(1)).toBe('1 diferencia');
+    expect(L.textoDiferencias(2)).toBe('2 diferencias');
+    expect(L.textoDecision({ sku: 'FB-1' }, { diferencias: [{ marca: 'difiere' }] })).toMatch(/FB-1 \(1 diferencia\)/);
   });
   it('marcas: símbolo + texto para cada una y no se rompe con una desconocida', () => {
     expect(L.marca('coincide')).toMatchObject({ simbolo: '✓', texto: 'coincide' });

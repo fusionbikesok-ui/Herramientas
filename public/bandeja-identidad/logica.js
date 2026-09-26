@@ -312,19 +312,44 @@
     formato_cambiado: 'revisá el formato y la variante publicada'
   };
   function fraseTipo(tipo) { return FRASES_TIPO[tipo] || 'compará publicación y candidato antes de decidir'; }
-  function diferenciasVisibles(opcion, publicacion) {
-    var e = (opcion && opcion.explicacion) || {}, lista = (e.atributos || []).concat(e.otros_atributos || []);
+  function valorAtributo(a, lado) {
+    var original = lado === 'ml' ? a.valorMlOriginal : a.valorCandidatoOriginal;
+    var valor = lado === 'ml' ? a.valorMl : a.valorCandidato;
+    if (original !== undefined && original !== null && String(original).trim() !== '') return String(original);
+    if (valor !== undefined && valor !== null && String(valor).trim() !== '') return String(valor);
+    return '—';
+  }
+  function diferenciasVisibles(explicacion) {
+    var e = explicacion && explicacion.explicacion ? explicacion.explicacion : (explicacion || {});
+    var vistos = {};
+    var lista = (e.atributos || []).concat(e.otros_atributos || []).filter(function (a) {
+      if (!a || !a.nombre || vistos[a.nombre]) return false;
+      vistos[a.nombre] = true;
+      return true;
+    });
     var grupos = { difiere: [], falta: [], equivalente: [], coincide: [] };
-    lista.forEach(function (a) { var marca = a.marca === 'coincide' || a.marca === 'equivalente' ? a.marca : (a.marca === 'falta' ? 'falta' : 'difiere'); grupos[marca].push(a); });
-    return ['difiere', 'falta', 'equivalente', 'coincide'].reduce(function (out, marca) { return out.concat(grupos[marca].map(function (a) {
-      var ml = publicacion && publicacion.atributos && publicacion.atributos[a.nombre];
-      return { nombre: a.nombre, marca: marca, ml: ml == null ? '—' : String(ml), woo: a.valor == null ? '—' : String(a.valor), explicacion: a.explicacion };
-    })); }, []);
+    lista.forEach(function (a) {
+      var marcaActual = a.marca === 'coincide' || a.marca === 'equivalente' ? a.marca : (a.marca === 'falta' ? 'falta' : 'difiere');
+      var copy = marca(marcaActual);
+      var fila = { nombre: a.nombre, marca: marcaActual, simbolo: copy.simbolo, texto: copy.texto,
+        valorMl: valorAtributo(a, 'ml'), valorCandidato: valorAtributo(a, 'candidato') };
+      grupos[marcaActual].push(fila);
+    });
+    var orden = ['difiere', 'falta', 'equivalente'];
+    return {
+      diferencias: orden.reduce(function (out, marca) { return out.concat(grupos[marca]); }, []),
+      iguales: grupos.coincide.length,
+      nombresIguales: grupos.coincide.map(function (a) { return a.nombre; })
+    };
+  }
+  function textoDiferencias(n) {
+    return n === 0 ? 'sin diferencias' : n + (n === 1 ? ' diferencia' : ' diferencias');
   }
   function textoDecision(opcion, diferencias) {
     if (!opcion) return 'Elegí una acción para este caso';
     var sku = opcion.sku || 'este candidato';
-    return 'Enter = VINCULAR a ' + sku + ' (' + (diferencias || []).filter(function (d) { return d.marca === 'difiere' || d.marca === 'falta'; }).length + ' diferencias)';
+    var lista = diferencias && diferencias.diferencias ? diferencias.diferencias : (diferencias || []);
+    return 'Enter = VINCULAR a ' + sku + ' (' + textoDiferencias(lista.length) + ')';
   }
 
   var api = {
@@ -334,7 +359,8 @@
     filaVisible: filaVisible, accionDeTecla: accionDeTecla, siguienteNoSalteado: siguienteNoSalteado,
     indiceNoSalteado: indiceNoSalteado,
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
-    porQue: porQue, atributosIguales: atributosIguales, fraseTipo: fraseTipo, diferenciasVisibles: diferenciasVisibles, textoDecision: textoDecision,
+    porQue: porQue, atributosIguales: atributosIguales, fraseTipo: fraseTipo, diferenciasVisibles: diferenciasVisibles,
+    textoDiferencias: textoDiferencias, textoDecision: textoDecision,
     GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

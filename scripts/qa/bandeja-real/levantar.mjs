@@ -41,6 +41,8 @@ async function seed(url) {
       const variant = (await c.query('INSERT INTO catalog.sellable_variants(company_id,model_id,sku) VALUES ($1,$2,$3) RETURNING id', [company, model, sku])).rows[0].id;
       await c.query("INSERT INTO catalog.external_representations(company_id,channel_account_id,canal,tipo,recurso,variacion_normalizada,variant_id,sku_observado,estado_remoto,stock_canal,precio,moneda,titulo_observado,user_product_id) VALUES ($1,$2,'mercadolibre','vendible',$3,'',$4,$5,'active',$6,175000,'ARS',$7,$8)", [company, ml, `MLAQA${i + 1}`, variant, sku ?? `OBS-${i}`, i % 4 === 0 ? 0 : 3, titulo, `UP-${Math.floor(i / 2)}`]);
       const rep = (await c.query('SELECT id FROM catalog.external_representations WHERE recurso=$1', [`MLAQA${i + 1}`])).rows[0].id;
+      const mlAtributos = i % 4 === 1 ? [['marca', 'Shimano'], ['material', 'aluminio']] : i % 4 === 2 ? [['marca', 'Shimano'], ['rodado', '29']] : [['marca', 'Shimano'], ['rodado', '29'], ['material', 'aluminio']];
+      for (const [nombre, valor] of mlAtributos) await c.query('INSERT INTO catalog.model_attributes(model_id,representation_id,nombre_normalizado,valor,observado_en) VALUES ($1,$2,$3,$4,now())', [model, rep, nombre, valor]);
       const tipo = qa === 'conflicto' ? 'decision_en_conflicto' : ['atributo_divergente', 'user_product_divergente'].includes(qa) ? qa : 'sku_pendiente';
       const detalle = { qa_tipo: qa, ...(qa === 'conflicto' ? { conflicto: true } : {}), ...(qa === 'atributo_divergente' ? { atributos: { color: ['azul', 'negro'] } } : {}) };
       const caso = (await c.query('INSERT INTO catalog.identity_cases(company_id,tipo,variant_id,representation_id,estado,detalle,abierto_en) VALUES ($1,$2,$3,$4,$5,$6,now()-($7||\' hours\')::interval) RETURNING id', [company, tipo, variant, rep, qa === 'conflicto' ? 'conflict' : 'actionable', JSON.stringify(detalle), String(i)])).rows[0].id;
@@ -53,7 +55,17 @@ async function seed(url) {
           const cv = (await c.query('INSERT INTO catalog.sellable_variants(company_id,model_id,sku) VALUES ($1,$2,$3) RETURNING id', [company, cm, `FB-${10000 + i * 10 + rank}`])).rows[0].id;
           const wrep = (await c.query("INSERT INTO catalog.external_representations(company_id,channel_account_id,canal,tipo,recurso,variacion_normalizada,variant_id,sku_observado,estado_remoto,stock_canal,precio,moneda,titulo_observado) VALUES ($1,$2,'woocommerce','vendible',$3,'',$4,$5,'active',4,169000,'ARS',$6) RETURNING id", [company, woo, `WQA-${i}-${rank}`, cv, `FB-${10000 + i * 10 + rank}`, `QA candidato ${rank}`])).rows[0].id;
           await c.query('INSERT INTO catalog.model_images(model_id,representation_id,url,orden,observado_en) VALUES ($1,$2,$3,1,now())', [cm, wrep, `/fotos/c${i + 1}-800x${rank === 2 ? 400 : 600}.svg`]);
-          await c.query('INSERT INTO catalog.identity_candidates(case_id,run_id,variant_id,rank,puntaje,explicacion,engine_version) VALUES ($1,$2,$3,$4,$5,$6,\'qa-real\')', [caso, runId, cv, rank, 0.8 - rank / 10, JSON.stringify({ atributos: [{ nombre: 'marca', estado: rank === 1 ? 'coincide' : 'difiere', valorCandidato: 'Shimano', valorMl: 'Shimano' }] })]);
+          const variacion = i % 4;
+          const atributos = variacion === 0
+            ? [{ nombre: 'color', marca: 'coincide', valorMl: 'negro', valorCandidato: 'negro', valorMlOriginal: 'Negro', valorCandidatoOriginal: 'Negro' }, { nombre: 'talle', marca: 'coincide', valorMl: 'M', valorCandidato: 'M', valorMlOriginal: 'M', valorCandidatoOriginal: 'M' }]
+            : variacion === 1
+              ? [{ nombre: 'color', marca: 'difiere', valorMl: 'rojo', valorCandidato: 'azul', valorMlOriginal: 'Rojo', valorCandidatoOriginal: 'Azul' }, { nombre: 'talle', marca: 'difiere', valorMl: 'S', valorCandidato: 'M', valorMlOriginal: 'S', valorCandidatoOriginal: 'M' }]
+              : variacion === 2
+                ? [{ nombre: 'color', marca: 'falta', valorMl: '', valorCandidato: 'azul', valorMlOriginal: '', valorCandidatoOriginal: 'Azul' }, { nombre: 'talle', marca: 'equivalente', valorMl: 'M', valorCandidato: 'mediano', valorMlOriginal: 'M', valorCandidatoOriginal: 'Mediano' }]
+                : [{ nombre: 'color', marca: 'equivalente', valorMl: 'negro', valorCandidato: 'negro mate', valorMlOriginal: 'Negro', valorCandidatoOriginal: 'Negro mate' }, { nombre: 'talle', marca: 'coincide', valorMl: 'L', valorCandidato: 'L', valorMlOriginal: 'L', valorCandidatoOriginal: 'L' }];
+          const candAtributos = rank === 1 ? [['marca', 'Shimano'], ['rodado', '29'], ['material', 'aluminio']] : [['marca', 'Trek'], ['rodado', '27.5'], ['material', 'carbono']];
+          for (const [nombre, valor] of candAtributos) await c.query('INSERT INTO catalog.model_attributes(model_id,representation_id,nombre_normalizado,valor,observado_en) VALUES ($1,$2,$3,$4,now())', [cm, wrep, nombre, valor]);
+          await c.query('INSERT INTO catalog.identity_candidates(case_id,run_id,variant_id,rank,puntaje,explicacion,engine_version) VALUES ($1,$2,$3,$4,$5,$6,\'qa-real\')', [caso, runId, cv, rank, 0.8 - rank / 10, JSON.stringify({ atributos })]);
         }
       }
       await c.query("INSERT INTO catalog.identity_evidence(case_id,fuente,campos) VALUES ($1,'ml',$2)", [caso, JSON.stringify({ qa_tipo: qa, foto: `/fotos/ml-${i + 1}-1200x900.svg` })]);

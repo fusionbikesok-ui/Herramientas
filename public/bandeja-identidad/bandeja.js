@@ -767,7 +767,8 @@
     var cs = S.cola[S.idx] || {}, opciones = L.opcionesDe(d.candidatos, S.busqueda);
     var seleccionado = opciones.filter(function (o) { return o.variant_id === S.sel; })[0] || opciones[0];
     if (seleccionado && S.sel == null) S.sel = seleccionado.variant_id;
-    var diferencias = L.diferenciasVisibles(seleccionado, d.publicacion || {});
+    var resumenDiferencias = L.diferenciasVisibles(seleccionado && seleccionado.explicacion);
+    var diferencias = resumenDiferencias.diferencias;
     var head = el('header', 'caso-header', null, { tabindex: '-1', id: 'caso-focus' });
     head.appendChild(el('span', 'caso-id', 'Caso ' + Math.min(S.hechos + 1, Math.max(S.totalInicial, S.hechos + 1)) + ' de ' + Math.max(S.totalInicial, S.hechos + 1)));
     var tipo = d.tipo || d.tipo_caso || 'caso';
@@ -795,13 +796,13 @@
     else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
     root.appendChild(compare);
     var diff = el('section', 'diferencias', null, { 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
-    var visibles = diferencias.filter(function (x) { return x.marca !== 'coincide' && (x.marca !== 'equivalente' || S.mostrarIguales); });
-    visibles.slice(0, 8).forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca); row.appendChild(el('span', 'mk', L.marca(x.marca).simbolo, { 'aria-label': L.marca(x.marca).texto })); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.ml)); row.appendChild(el('span', null, 'Woo tiene: ' + x.woo)); diff.appendChild(row); });
-    var iguales = diferencias.filter(function (x) { return x.marca === 'coincide' || x.marca === 'equivalente'; }).length;
-    if (iguales) { var ib = el('button', 'btn-iguales', '✓ ' + iguales + ' atributos coinciden · ' + (S.mostrarIguales ? 'ocultar' : 'expandir'), { type: 'button', 'aria-expanded': S.mostrarIguales ? 'true' : 'false' }); ib.addEventListener('click', function () { S.mostrarIguales = !S.mostrarIguales; render(); }); diff.appendChild(ib); }
+    var visibles = diferencias.slice();
+    visibles.slice(0, 8).forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
+    var iguales = resumenDiferencias.iguales;
+    if (iguales) { var ib = el('button', 'btn-iguales', '✓ ' + iguales + ' atributos coinciden', { type: 'button', 'aria-expanded': 'false' }); diff.appendChild(ib); }
     root.appendChild(diff);
     var tira = el('nav', 'otros-candidatos', null, { 'aria-label': 'Otros candidatos' }); tira.appendChild(el('span', 'otros-label', 'Otros:'));
-    opciones.forEach(function (o, i) { if (o === seleccionado) return; var b = el('button', 'candidato-chip', '[' + (i + 1) + '] ' + (o.titulo || 'Sin título').slice(0, 38) + ' · ' + L.diferenciasVisibles(o, d.publicacion).filter(function (x) { return x.marca === 'difiere' || x.marca === 'falta'; }).length + ' dif', { type: 'button', 'data-candidato': o.variant_id, 'aria-label': 'Seleccionar candidato ' + (i + 1) }); tira.appendChild(b); });
+    opciones.forEach(function (o, i) { if (o === seleccionado) return; var n = L.diferenciasVisibles(o.explicacion).diferencias.length; var b = el('button', 'candidato-chip', '[' + (i + 1) + '] ' + (o.titulo || 'Sin título').slice(0, 38) + ' · ' + L.textoDiferencias(n), { type: 'button', 'data-candidato': o.variant_id, 'aria-label': 'Seleccionar candidato ' + (i + 1) }); tira.appendChild(b); });
     var busc = el('button', 'btn btn--compact', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' }); tira.appendChild(busc); root.appendChild(tira);
     var hist = el('details', 'historial-evidencia', null, { id: 'historial' }); hist.appendChild(el('summary', null, 'Historial y evidencia (h)')); (d.historial || []).concat(d.evidencia || []).slice(0, 20).forEach(function (x) { hist.appendChild(el('div', 'historial-item', JSON.stringify(x))); }); root.appendChild(hist);
     var bar = el('footer', 'barra-decision', null, { id: 'barra-decision', role: 'region', 'aria-label': 'Barra de decisión' });
