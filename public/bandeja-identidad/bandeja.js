@@ -874,17 +874,17 @@
     else if (confirmable) compare.appendChild(renderFicha(confirmable, 'SKU A CONFIRMAR', false, d));
     else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
     root.appendChild(compare);
-    var diff = el('section', 'diferencias', null, { role: 'list', 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
+    var diff = el('section', 'diferencias', null, { 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
     var visibles = diferencias.slice();
-    visibles.slice(0, 8).forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca, null, { role: 'listitem' }); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
+    visibles.slice(0, 8).forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca, null, { role: 'group', 'aria-label': x.nombre + ': ' + x.texto }); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
     var iguales = resumenDiferencias.iguales;
     if (iguales) { var ib = el('button', 'btn-iguales', '✓ ' + iguales + ' atributos coinciden', { type: 'button', 'aria-expanded': 'false' }); diff.appendChild(ib); }
     root.appendChild(diff);
-    var tira = el('nav', 'otros-candidatos', null, { role: 'list', 'aria-label': 'Otros candidatos' }); tira.appendChild(el('span', 'otros-label', 'Otros:'));
+    var tira = el('nav', 'otros-candidatos', null, { 'aria-label': 'Otros candidatos' }); tira.appendChild(el('span', 'otros-label', 'Otros:'));
     opciones.forEach(function (o, i) {
       if (o === seleccionado) return;
       var resumen = L.resumenCandidato(o);
-      var b = el('button', 'candidato-chip', null, { type: 'button', role: 'listitem', 'data-candidato': o.variant_id, 'aria-label': 'Seleccionar candidato ' + (i + 1) });
+      var b = el('button', 'candidato-chip', null, { type: 'button', role: 'group', 'data-candidato': o.variant_id, 'aria-label': 'Seleccionar candidato ' + (i + 1) });
       b.appendChild(el('span', 'candidato-chip-rango', '[' + (i + 1) + ']'));
       b.appendChild(el('span', 'candidato-chip-titulo', resumen.titulo, { title: o.titulo || 'Sin título' }));
       b.appendChild(el('span', 'candidato-chip-separador', '·', { 'aria-hidden': 'true' }));

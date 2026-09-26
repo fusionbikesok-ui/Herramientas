@@ -3553,3 +3553,8 @@ Compara los productos de catálogo de un aviso de migración (`catalog_product_i
 `/{nuevo}` de ML con caché sqlite (`ml_productos_cache`, 6 h; 1 h si ML devolvió 404; 429/5xx no se cachean).
 Devuelve `{ ok, viejo, nuevo, diferencias[], veredicto: coincide|no_coincide|sin_datos, comparados }`; cada producto trae
 `{ id, nombre, borrado, activo, link }` (`link` solo si está activo). `ok:false` con `error` ante fallo de ML.
+
+### GET /api/bandeja-identidad/casos/:id y GET /api/bandeja-identidad/variantes (estación de decisión)
+Proxy firmado (HMAC) a la plataforma; el actor sale de la sesión.
+- `GET /casos/:id`: `publicacion.foto` (URL de la primera imagen vigente de ML en `catalog.model_images`, o `null`) y `tipo` (tipo del caso).
+- `GET /variantes?q=<texto>[&caso_id=<uuid>]`: búsqueda manual (SKU exacto primero, luego título, máx. 20; cada variante trae `foto`, `precio`, `stock`). Con `caso_id` agrega `explicacion` (`atributos`, `otros_atributos`) contra la publicación ML del caso. Errores: 400 `caso_id` no-UUID, 404 caso de otra empresa o inexistente, 422 `caso_sin_publicacion`.
