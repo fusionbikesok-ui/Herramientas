@@ -327,7 +327,18 @@
       caseId: snapshot.caseId, casoId: snapshot.caseId, snapshot: snapshot, cuerpo: cuerpo, eleccion: eleccion, variantId: snapshot.variantId,
       marcas: opcion ? marcasDe(opcion) : '', sku: opcion ? opcion.sku : skuConfirmado, estado: 'pendiente', reintentos: 0,
     });
-    if (!guardia.nueva) return;
+    if (!guardia.nueva) {
+      var pendiente = guardia.entrada;
+      if (pendiente.estado === 'fallido') {
+        aviso('fallo-' + pendiente.key, 'Hay una decisión sin confirmar para este caso.', [
+          { texto: 'Reintentar', alClick: function () { reintentarEntrada(pendiente); } },
+          { texto: 'Descartar', alClick: function () { descartarEntrada(pendiente); } }
+        ]);
+      } else {
+        aviso('vuelo-' + pendiente.key, 'Esperando confirmación…');
+      }
+      return;
+    }
     var entry = guardia.entrada;
     // Sin `actor`: el usuario y es_admin los pone el proxy desde la sesión, nunca el cliente.
     S.pendientes.set(entry.key, entry);
@@ -336,6 +347,35 @@
     S.hechos++;
     banda();
     avanzar();
+  }
+
+  function reintentarEntrada(entry) {
+    quitarAviso('fallo-' + entry.key);
+    quitarAviso('vuelo-' + entry.key);
+    if (!S.guardiaDecisiones.reintentar(entry)) return;
+    entry.promise = enviar(entry).then(function (r) { alTerminar(entry, r); return entry; });
+    banda();
+  }
+
+  function descartarEntrada(entry) {
+    // El POST pudo haber llegado al servidor aunque el cliente haya agotado sus reintentos:
+    // releer el caso es la reconciliación antes de liberar la guardia.
+    S.cache.delete(entry.casoId);
+    detalleDe(entry.casoId).then(function () {
+      if (!S.guardiaDecisiones.cancelar(entry, { status: 200 })) return;
+      S.pendientes.forEach(function (pendiente, clave) {
+        if (pendiente.casoId === entry.casoId) S.pendientes.delete(clave);
+      });
+      quitarAviso('fallo-' + entry.key);
+      quitarAviso('vuelo-' + entry.key);
+      anunciar('Decisión descartada. El caso fue reconciliado.');
+      banda();
+    }, function () {
+      aviso('fallo-' + entry.key, 'No se pudo reconciliar el caso. La decisión sigue bloqueada.', [
+        { texto: 'Reintentar', alClick: function () { reintentarEntrada(entry); } },
+        { texto: 'Descartar', alClick: function () { descartarEntrada(entry); } }
+      ]);
+    });
   }
 
   // Punto A: confirmar el SKU que el caso ya trae vinculado (grupo 5), sin pasar por el buscador de
@@ -1227,6 +1267,10 @@
       conectarUnaVez();
       return cargarCola();
     }, function () { window.location.href = '/herramientas/home/'; });
+  }
+
+  if (window.__bandejaIdentidadTest) {
+    window.__bandejaIdentidadTest = { state: S, decidir: decidir };
   }
 
   document.addEventListener('DOMContentLoaded', inicializar);

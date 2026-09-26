@@ -78,10 +78,16 @@
       entrada.estado = 'pendiente';
       return entrada;
     }
+    function cancelar(entrada, reconciliacion) {
+      if (porCaso.get(entrada.caseId) !== entrada || !reconciliacion || reconciliacion.status !== 200) return false;
+      porCaso.delete(entrada.caseId);
+      return true;
+    }
     return {
       iniciar: iniciar,
       terminar: terminar,
       reintentar: reintentar,
+      cancelar: cancelar,
       estaBloqueado: function (caseId) { return porCaso.has(caseId); }
     };
   }

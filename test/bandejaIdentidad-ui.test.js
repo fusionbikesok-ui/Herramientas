@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 // Prueba el código real de public/bandeja-identidad/logica.js (no una copia).
 // logica.js es un script clásico (UMD): en vitest se exporta como CommonJS-interop o cuelga de globalThis, como en el navegador.
@@ -7,7 +8,65 @@ const mod = await import('../public/bandeja-identidad/logica.js');
 const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.BandejaLogica ?? globalThis.window?.BandejaLogica);
 const ev = (o = {}) => ({ key: 'j', target: { tagName: 'DIV', closest: () => null }, ...o });
 
+function cargarBandejaConDomInyectado() {
+  function nodo(tagName = 'DIV') {
+    return {
+      tagName, children: [], textContent: '', className: '', style: {},
+      setAttribute() {},
+      appendChild(hijo) { this.children.push(hijo); return hijo; },
+      addEventListener(tipo, fn) { this.listeners = this.listeners || {}; this.listeners[tipo] = fn; },
+      querySelector(selector) {
+        if (selector === '.btn') return this.children.find((hijo) => hijo.tagName === 'BUTTON') || null;
+        if (selector.startsWith('[data-clave="')) {
+          const clave = selector.slice(13, -2);
+          return this.children.find((hijo) => hijo.attrs?.['data-clave'] === clave) || null;
+        }
+        return null;
+      },
+      removeChild(hijo) { this.children = this.children.filter((x) => x !== hijo); },
+    };
+  }
+  const avisos = nodo();
+  const elementos = new Map([['avisos', avisos]]);
+  const document = {
+    getElementById(id) { if (!elementos.has(id)) elementos.set(id, nodo()); return elementos.get(id); },
+    createElement(tag) { const h = nodo(tag.toUpperCase()); const set = h.setAttribute; h.setAttribute = (k, v) => { h.attrs = h.attrs || {}; h.attrs[k] = v; set.call(h, k, v); }; return h; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+  const window = { __bandejaIdentidadTest: true, BandejaLogica: L, addEventListener() {}, removeEventListener() {}, localStorage: { getItem() { return null; }, setItem() {} }, navigator: { onLine: true } };
+  window.window = window;
+  const sandbox = { window, document, crypto: { randomUUID: () => 'generated-key' }, fetch() { return Promise.resolve({}); }, navigator: window.navigator, URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval, console };
+  vm.createContext(sandbox);
+  vm.runInContext(readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8'), sandbox);
+  return { app: sandbox.window.__bandejaIdentidadTest, avisos };
+}
+
 describe('bandeja: logica pura', () => {
+  it('cancelar sólo libera la decisión después de reconciliar el caso', () => {
+    const claves = ['clave-1', 'clave-2'];
+    const guardia = L.crearGuardiaDecisiones(() => claves.shift());
+    const primera = guardia.iniciar({ caseId: 'caso-1', cuerpo: { eleccion: 'omitir' } }).entrada;
+
+    expect(guardia.cancelar(primera, { status: 503 })).toBe(false);
+    expect(guardia.estaBloqueado('caso-1')).toBe(true);
+    expect(guardia.cancelar(primera, { status: 200 })).toBe(true);
+    expect(guardia.estaBloqueado('caso-1')).toBe(false);
+  });
+
+  it('después de cancelar una decisión, la siguiente entrada usa una clave nueva', () => {
+    const guardia = L.crearGuardiaDecisiones((() => {
+      const claves = ['clave-1', 'clave-2'];
+      return () => claves.shift();
+    })());
+    const primera = guardia.iniciar({ caseId: 'caso-1' });
+    expect(guardia.cancelar(primera.entrada, { status: 200 })).toBe(true);
+    const segunda = guardia.iniciar({ caseId: 'caso-1' });
+    expect(segunda.nueva).toBe(true);
+    expect(segunda.entrada.key).toBe('clave-2');
+  });
+
   it('tipo de caso y precio tienen copy legible para la estación', () => {
     expect(L.fraseTipo('sku_pendiente')).toMatch(/SKU/i);
     expect(L.fraseTipo('tipo_nuevo')).toMatch(/compar/i);
@@ -200,6 +259,37 @@ describe('bandeja: atajos sobre radios', () => {
     expect(L.puedeDispararAtajo({ key: 'n', target: { tagName: 'INPUT', type: 'radio', closest: () => null } }, true)).toBe(true);
     expect(L.puedeDispararAtajo({ key: 'n', target: { tagName: 'INPUT', type: 'search', closest: () => null } }, true)).toBe(false);
     expect(L.puedeDispararAtajo({ key: 'n', target: { tagName: 'INPUT', type: 'text', closest: () => null } }, true)).toBe(false);
+  });
+});
+
+describe('bandeja: decisión bloqueada comunica el estado en el DOM', () => {
+  it('una decisión fallida muestra aviso claro con Reintentar y Descartar', () => {
+    const { app, avisos } = cargarBandejaConDomInyectado();
+    app.state.cola = [{ id: 'caso-1' }];
+    app.state.idx = 0;
+    app.state.detalle = { id: 'caso-1', version: 4, candidatos: [] };
+    const entrada = app.state.guardiaDecisiones.iniciar({ caseId: 'caso-1', cuerpo: {} }).entrada;
+    app.state.guardiaDecisiones.terminar(entrada, { status: 503 });
+
+    app.decidir('omitir');
+
+    expect(avisos.children[0].children.map((hijo) => hijo.textContent).join(' ')).toContain('Hay una decisión sin confirmar para este caso.');
+    expect(avisos.children.filter((aviso) => aviso.children.some((hijo) => hijo.textContent === 'Reintentar'))).toHaveLength(1);
+    expect(avisos.children[0].children.some((hijo) => hijo.textContent === 'Descartar')).toBe(true);
+  });
+
+  it('una decisión en vuelo sólo avisa que espera confirmación y no ofrece Descartar', () => {
+    const { app, avisos } = cargarBandejaConDomInyectado();
+    app.state.cola = [{ id: 'caso-2' }];
+    app.state.idx = 0;
+    app.state.detalle = { id: 'caso-2', version: 1, candidatos: [] };
+    app.state.guardiaDecisiones.iniciar({ caseId: 'caso-2', cuerpo: {} });
+
+    app.decidir('omitir');
+
+    const textos = avisos.children[0].children.map((hijo) => hijo.textContent).join(' ');
+    expect(textos).toContain('Esperando confirmación…');
+    expect(textos).not.toContain('Descartar');
   });
 });
 
