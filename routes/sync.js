@@ -8,6 +8,7 @@
  */
 
 import { Router } from 'express';
+import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
@@ -1928,7 +1929,17 @@ export async function procesarReintentos(db, cfg) {
  * disponible en la web y están mapeadas. Devuelve filas por variación.
  * (El agrupado por publicación lo hace el router para el display.)
  */
+export function reabrirAvisosSinStock(db) {
+  const rows = db.prepare(`${COMPUTED_STOCK_CTE}
+    SELECT c.id FROM ml_publicacion_cambios c JOIN computed x ON x.clave=c.clave
+    WHERE c.bloquea_reactivador=1 AND c.revisado_en IS NOT NULL AND x.stock_disponible_ml > 0`).all();
+  const upd = db.prepare("UPDATE ml_publicacion_cambios SET revisado_en=NULL, revisado_por=NULL, bloquea_reactivador=0, pausa_error=COALESCE(pausa_error,'') || ' | reabierto: volvió el stock' WHERE id=?");
+  db.transaction(() => rows.forEach(r => upd.run(r.id)))();
+  return rows.length;
+}
+
 export function getReactivablesRows(db, itemIds = null) {
+  reabrirAvisosSinStock(db);
   let sql = `
     ${COMPUTED_STOCK_CTE}
     SELECT cm.clave, cm.sku, cm.stock_disponible_ml,
@@ -1941,7 +1952,7 @@ export function getReactivablesRows(db, itemIds = null) {
       AND cm.stock_disponible_ml > 0
       AND NOT EXISTS (
         SELECT 1 FROM ml_publicacion_cambios vc
-        WHERE vc.clave = p.clave AND vc.revisado_en IS NULL
+        WHERE vc.clave = p.clave AND (vc.revisado_en IS NULL OR vc.bloquea_reactivador = 1)
       )`;
   const params = [];
   if (Array.isArray(itemIds) && itemIds.length) {
@@ -3147,14 +3158,25 @@ export function syncRouter(db, cfg) {
   // título para que la pantalla no muestre sólo un MLA.
   router.get('/cambios-formato', (_req, res) => {
     const data = db.prepare(`
-      SELECT c.id, c.clave, c.item_id, c.sku, c.campo, c.valor_anterior, c.valor_nuevo,
-             c.pausada, c.pausa_error, c.detectado_en, p.titulo, p.thumbnail, p.permalink
+      SELECT MIN(c.id) id, json_group_array(c.id) ids, COUNT(DISTINCT c.clave) variaciones, MIN(c.clave) clave, c.item_id, MIN(c.sku) sku, c.campo, c.valor_anterior, c.valor_nuevo,
+             MAX(c.pausada) pausada, MAX(c.pausa_error) pausa_error, MAX(c.detectado_en) detectado_en, p.titulo, p.thumbnail, p.permalink
       FROM ml_publicacion_cambios c
       LEFT JOIN ml_publicaciones_cache p ON p.clave = c.clave
       WHERE c.revisado_en IS NULL
-      ORDER BY c.detectado_en DESC, c.id DESC
-    `).all();
-    res.json({ ok: true, data });
+      GROUP BY c.item_id, c.campo, c.valor_nuevo
+      ORDER BY detectado_en DESC, id DESC
+    `).all().map(r => ({ ...r, ids: JSON.parse(r.ids) }));
+    res.json({ ok: true, data, total: data.length });
+  });
+
+  // Comparación de los dos productos de un aviso de migración. Se pide al abrir la tarjeta, no por render;
+  // las lecturas a ML quedan cacheadas en sqlite (lib/comparacionProductos.js).
+  router.get('/cambios-formato/:id/comparacion', async (req, res) => {
+    const c = db.prepare('SELECT * FROM ml_publicacion_cambios WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ ok: false, error: 'Cambio no encontrado' });
+    if (c.campo !== 'catalog_product_id') return res.json({ ok: false, error: 'Sólo aplica a cambios de producto de catálogo' });
+    const pub = db.prepare('SELECT atributos_json FROM ml_publicaciones_cache WHERE clave=?').get(c.clave);
+    res.json(await compararProductos(db, cfg?.ml, c, pub));
   });
 
   // Revisar cierra el aviso. Con `reactivar: true` además despausa: es el ÚNICO camino por el
@@ -3195,7 +3217,7 @@ export function syncRouter(db, cfg) {
     }
     // El vigía abre un aviso por variación: se cierran las variaciones del MISMO cambio (campo y
     // valor nuevo). Un cambio de otro campo en la misma publicación sigue abierto para decidirlo aparte.
-    const cerrados = db.prepare(`UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=?
+    const cerrados = db.prepare(`UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=?, bloquea_reactivador=0
       WHERE item_id=? AND campo=? AND valor_nuevo IS ? AND revisado_en IS NULL`)
       .run(new Date().toISOString(), req.user?.username || null, fila.item_id, fila.campo, fila.valor_nuevo).changes;
     res.json({ ok: true, reactivada, pendiente_stock: pendienteStock, cerrados });

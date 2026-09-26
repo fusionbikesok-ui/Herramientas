@@ -55,6 +55,29 @@ describe('el reactivador respeta las pausas del vigía', () => {
     expect(getReactivablesRows(db).map(r => r.clave)).toContain('MLA1|');
   });
 
+  it('stock vuelto reabre el aviso bloqueado y no lo lista hasta revisión humana', () => {
+    sembrarPausada(db);
+    const id = db.prepare(`INSERT INTO ml_publicacion_cambios
+      (clave,item_id,campo,valor_anterior,valor_nuevo,pausada,pausa_error,detectado_en,revisado_en,revisado_por,bloquea_reactivador)
+      VALUES ('MLA1|','MLA1','catalog_product_id',NULL,'MLA2',0,'sin stock',datetime('now'),datetime('now'),'vigia-auto',1)`).run().lastInsertRowid;
+    db.prepare("UPDATE ml_publicaciones_cache SET available_quantity=3").run();
+    expect(getReactivablesRows(db)).toHaveLength(0);
+    expect(db.prepare('SELECT revisado_en,bloquea_reactivador,pausa_error FROM ml_publicacion_cambios WHERE id=?').get(id))
+      .toMatchObject({ revisado_en: null, bloquea_reactivador: 0 });
+    expect(db.prepare('SELECT pausa_error FROM ml_publicacion_cambios WHERE id=?').get(id).pausa_error).toContain('reabierto: volvió el stock');
+  });
+
+  it('GET cambios-formato agrupa variaciones y conserva sus ids', async () => {
+    sembrarPausada(db);
+    const ins = db.prepare(`INSERT INTO ml_publicacion_cambios (clave,item_id,sku,campo,valor_anterior,valor_nuevo,pausada,detectado_en)
+      VALUES (?, 'MLA1', ?, 'catalog_product_id', NULL, 'MLA2', 1, datetime('now'))`);
+    ins.run('MLA1|11','FB-1'); ins.run('MLA1|12','FB-2');
+    const r = await request(app).get('/api/sync/cambios-formato');
+    expect(r.body.data).toHaveLength(1);
+    expect(r.body.data[0].ids).toHaveLength(2);
+    expect(r.body.total).toBe(1);
+  });
+
   it('GET /cambios-formato devuelve los sin revisar con su antes y después', async () => {
     sembrarPausada(db);
     db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, sku, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
@@ -123,6 +146,15 @@ describe('el reactivador respeta las pausas del vigía', () => {
     expect(r.status).toBe(200);
     expect(r.body.cerrados).toBe(3);
     expect(db.prepare("SELECT COUNT(*) n FROM ml_publicacion_cambios WHERE item_id='MLA1' AND revisado_en IS NULL").get().n).toBe(0);
+  });
+
+  it('revisar limpia bloquea_reactivador de lo que cierra', async () => {
+    sembrarPausada(db);
+    const id = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, bloquea_reactivador, detectado_en)
+      VALUES ('MLA1|', 'MLA1', 'catalog_product_id', NULL, 'MLA9', 0, 1, datetime('now'))`).run().lastInsertRowid;
+    const r = await request(app).post(`/api/sync/cambios-formato/${id}/revisar`).send({});
+    expect(r.status).toBe(200);
+    expect(db.prepare('SELECT bloquea_reactivador b FROM ml_publicacion_cambios WHERE id=?').get(id).b).toBe(0);
   });
 
   it('revisar NO cierra un cambio de otro campo de la misma publicación', async () => {
