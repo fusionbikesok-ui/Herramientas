@@ -68,7 +68,7 @@
 
 ## Continuidad
 
-- **Próxima acción exacta:** implementar el **tramo 5** (PM-188, `specs/2026-09-25-e1-tramo5-cupo-por-corriente-design.md`) — cupo del gateway sombra por corriente en vez de un bucket único, que hoy deja `ml.shipments` y `ml.messages` en 0 barridos OK y `ml.items` en dead letter, bloqueando la campaña de 7 días verdes. Con T5 desplegado arranca el día 0 de la **campaña de 7 días verdes seguidos con ML en canario**; al cerrar, se ajusta el tope de ML con la medición y se pide la revisión de José. T1–T4 están implementados y **desplegados en producción**: la tarea 16 se hizo el 2026-09-18 y el 2026-09-20 se confirmó que `audit.audit_daily_manifests` acumula los manifiestos del 17, 18 y 19 firmados con `e1-2026-09` en modo `compliance`, con el scheduler cerrando la vuelta diaria sin fallos. T5 es lo único que queda por desplegar de E1.
+- **T5 desplegado en producción el 2026-09-26 (~00:55 UTC):** cupo del gateway sombra por corriente en vez de un bucket único (PM-188, `specs/2026-09-25-e1-tramo5-cupo-por-corriente-design.md`). Migraciones 0022–0024 aplicadas (producción en 24 migraciones); plataforma con la imagen `fusion-plataforma:e1t5-fix` (worker/scheduler); API sin tocar. El primer intento de deploy (imagen de `cf73453d`) crash-loopeó el worker por un import cruzado fuera del build context de `plataforma/`; corregido en `fix/e1-t5-import-plataforma` (`4d74f7ff`, merge `025c8219`) con revisor OK y auditor verde con prueba de humo real de la imagen. Detalle completo, incidente y lección en `evidence/e1/2026-09-26-E1-T5-despliegue.md`. Con el deploy arrancó la **Tarea 0 de medición (24–48 h)**; el día 0 de la **campaña de 7 días verdes seguidos con ML en canario (PM-186)** arranca sólo si la Tarea 0 cumple sus criterios. T1–T4 están implementados y **desplegados en producción**: la tarea 16 se hizo el 2026-09-18 y el 2026-09-20 se confirmó que `audit.audit_daily_manifests` acumula los manifiestos del 17, 18 y 19 firmados con `e1-2026-09` en modo `compliance`, con el scheduler cerrando la vuelta diaria sin fallos. La migración `0025_e3_auto_sku_aplicar.sql` (E3) sigue sin mergear en `feature/e3-auto-sku-aplicar`, no forma parte de este despliegue. **Próxima acción exacta:** confirmar la Tarea 0 y, si cumple, dar por iniciado el día 0 de PM-186.
 - **Tarea 16 (puesta en producción) hecha el 2026-09-18:** informes firmados encendidos a las 12:29 UTC. La primera
   vuelta (día 17) subió manifiesto y reporte a `bucket-produccion` en compliance, mandó el email y su firma se
   verificó con `npm run verificar-informe` sobre los objetos bajados de B2; el reporte salió amarillo, honesto
@@ -78,8 +78,9 @@
 - **Estado del canario de ML:** se encendió el 2026-09-17 16:38 UTC pero descartó todo durante 5 h por una
   cuenta sin configurar, y el monitor aplicó el aborto del SOP a las 21:40 UTC. Corregido el 2026-09-18: cuenta
   sembrada, `SENALES_CUENTAS` y el registro del worker completos, copia reencendida a las 03:48:30 UTC
-  (`evidence/e1/2026-09-18-E1-C10-incidente-canario-ml.md`). Falta ajustar el tope con la medición de 7 días
-  (23/09) y una verificación previa que contraste las tres piezas de configuración antes de encender un canal.
+  (`evidence/e1/2026-09-18-E1-C10-incidente-canario-ml.md`). Con T5 desplegado el 2026-09-26, el tope de ML
+  pasó a `GATEWAY_ML_SHADOW_RPM=60` repartido por corriente; falta que la Tarea 0 (24–48 h) confirme que las
+  6 corrientes barren sin backlog creciente y, con eso, iniciar la campaña de 7 días verdes de PM-186.
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
