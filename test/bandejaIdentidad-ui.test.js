@@ -362,3 +362,30 @@ describe('bandeja: renderMatriz — fila «Por qué» y fila «Iguales» colapsa
     expect(abrirCaso).toMatch(/S\.mostrarIguales = false/);
   });
 });
+
+describe('bandeja: estación compacta y confirmación por SKU', () => {
+  const css = readFileSync(new URL('../public/bandeja-identidad/bandeja.css', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+
+  it('usa el viewport como layout y deja el scroll sólo a diferencias', () => {
+    expect(html).toMatch(/body\s*\{[\s\S]*height:\s*100dvh[\s\S]*overflow:\s*hidden/);
+    expect(css).toMatch(/\.bandeja-wrap\s*\{[\s\S]*min-height:\s*0[\s\S]*flex:\s*1/);
+    expect(css).toMatch(/\.caso\s*\{[\s\S]*min-height:\s*0[\s\S]*overflow:\s*hidden/);
+    expect(css).toMatch(/\.diferencias\s*\{[\s\S]*overflow-y:\s*auto/);
+  });
+
+  it('compacta filtros y estado en una sola banda y limita fotos a 30vh', () => {
+    expect(css).toMatch(/\.chips-header\s*\{[\s\S]*flex-wrap:\s*nowrap/);
+    expect(css).toMatch(/\.chip-pri\s*\{[\s\S]*min-height:\s*32px/);
+    expect(css).toMatch(/\.ficha \.foto-btn, \.ficha \.foto-sin-disponible\s*\{[\s\S]*clamp\(200px,\s*30vh,\s*300px\)/);
+    expect(js).toMatch(/querySelector\('\.chips-header'\)/);
+    expect(js).toMatch(/chips\.appendChild\(banda\)/);
+  });
+
+  it('renderiza el SKU confirmable en el panel cuando no hay candidato sugerido', () => {
+    expect(js).toMatch(/cs\.confirmar[\s\S]*renderFicha\(confirmable/);
+    expect(js).toMatch(/SKU A CONFIRMAR/);
+    expect(js).not.toMatch(/No hay candidato confiable; buscá por SKU o título/);
+  });
+});

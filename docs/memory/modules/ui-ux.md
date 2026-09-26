@@ -44,6 +44,7 @@
 - La bandeja de identidad consume `publicacion.foto` y `tipo` desde el detalle interno; la foto ML es la primera imagen vigente de su representación, ordenada por `orden` e `id`.
 - Bandeja de identidad (`public/bandeja-identidad/`, E3): decidir avanza al instante y guarda en segundo plano (varias decisiones en vuelo, misma `Idempotency-Key` en cada reintento; sólo se reintenta red/5xx/429). «Guardado» sólo tras el 200. Deshacer (`z`, 10 s, una vez) espera al 200 porque el `revierte` necesita el `decision_id` y la versión devueltos. Los chips filtran por `grupo` (0–4) en la API. Sin preselección de candidato; el cliente nunca manda `actor` (lo pone el proxy desde la sesión). Errores = avisos persistentes `role=alert`, nunca `alert()`. Lógica pura en `logica.js` (testeada en `test/bandejaIdentidad-ui.test.js`).
 - La estación de decisión de identidad mantiene una sola ficha ML y un candidato visible, diferencias priorizadas y una barra `#barra-decision` fija en escritorio; `1/2/3` sólo cambia el candidato y `Enter` vincula. `medir.mjs --verificar` valida documento ≤ viewport y visibilidad del primario. La foto usa `object-fit: contain`, el historial/evidencia queda colapsado y los precios se formatean con miles.
+- La estación de decisión compacta usa `body` en `100dvh` con flex column, filtros y estado de guardado en una sola banda, encabezado del caso de una línea, fotos de `clamp(200px, 30vh, 300px)` y scroll interno sólo en diferencias; el panel confirmable muestra el SKU de `caso.confirmar` cuando no hay candidato sugerido.
 
 ## Cuándo actualizar
 

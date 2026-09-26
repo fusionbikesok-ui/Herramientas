@@ -8,12 +8,16 @@
   <link rel="stylesheet" href="bandeja.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-padding-block: 6rem; }
+    html { height: 100%; scroll-padding-block: 6rem; }
     body {
       background: var(--bg);
       color: var(--text);
       font-family: -apple-system, 'Segoe UI', sans-serif;
+      height: 100dvh;
       min-height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
       line-height: 1.5;
     }
     a { color: inherit; }
@@ -29,8 +33,7 @@
 
     /* Topbar sticky */
     .topbar {
-      position: sticky;
-      top: 0;
+      position: relative;
       z-index: 40;
       background: rgba(12, 15, 22, 0.92);
       backdrop-filter: blur(14px);
@@ -41,6 +44,7 @@
       justify-content: space-between;
       gap: 8px;
       height: 54px;
+      flex: 0 0 54px;
     }
     .topbar-title {
       font-size: 0.9rem;
@@ -63,21 +67,24 @@
 
     /* Chips de prioridad */
     .chips-header {
-      position: sticky;
-      top: 54px;
+      position: relative;
       z-index: 35;
       background: var(--bg);
       border-bottom: 1px solid var(--border);
-      padding: var(--sp-2);
+      padding: 5px var(--sp-2);
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      align-items: center;
       gap: var(--sp-1);
+      min-height: 42px;
+      overflow: hidden;
     }
     .chip-pri {
       display: inline-flex;
       align-items: center;
       gap: 0.4em;
-      min-height: var(--tap-min);
+      min-height: 32px;
+      height: 32px;
       padding: 0 var(--sp-2);
       border-radius: var(--radius-pill);
       min-width: 0;
@@ -112,7 +119,8 @@
     /* Contenedor principal */
     .bandeja-wrap {
       display: flex;
-      min-height: calc(100vh - 54px);
+      min-height: 0;
+      flex: 1;
       flex-direction: column;
     }
 

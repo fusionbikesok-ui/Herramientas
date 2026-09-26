@@ -769,11 +769,12 @@
     if (seleccionado && S.sel == null) S.sel = seleccionado.variant_id;
     var diferencias = L.diferenciasVisibles(seleccionado, d.publicacion || {});
     var head = el('header', 'caso-header', null, { tabindex: '-1', id: 'caso-focus' });
-    head.appendChild(el('div', 'caso-id', 'Caso ' + Math.min(S.hechos + 1, Math.max(S.totalInicial, S.hechos + 1)) + ' de ' + Math.max(S.totalInicial, S.hechos + 1)));
+    head.appendChild(el('span', 'caso-id', 'Caso ' + Math.min(S.hechos + 1, Math.max(S.totalInicial, S.hechos + 1)) + ' de ' + Math.max(S.totalInicial, S.hechos + 1)));
     var tipo = d.tipo || d.tipo_caso || 'caso';
     head.appendChild(el('h1', 'caso-titulo', tipo.replace(/_/g, ' ').toUpperCase()));
-    head.appendChild(el('p', 'caso-tipo-ayuda', L.fraseTipo(tipo)));
-    head.appendChild(el('p', 'caso-prioridad', 'Prioridad: ' + (cs.grupo !== undefined ? L.GRUPO_NOMBRE[cs.grupo] : 'Resto')));
+    var frase = L.fraseTipo(tipo);
+    head.appendChild(el('span', 'caso-tipo-ayuda', frase, { title: frase }));
+    head.appendChild(el('span', 'caso-prioridad', 'Prioridad: ' + (cs.grupo !== undefined ? L.GRUPO_NOMBRE[cs.grupo] : 'Resto')));
     if (d.publicacion && d.publicacion.link_ml) head.appendChild(el('a', 'caso-link-ml', 'Abrir en ML', { href: d.publicacion.link_ml, target: '_blank', rel: 'noopener noreferrer' }));
     root.appendChild(head);
     if (!d.publicacion) { root.appendChild(el('div', 'api-estado api-estado--error', L.copyError('caso_sin_publicacion'))); return; }
@@ -784,8 +785,14 @@
     }
     var compare = el('section', 'estacion-paneles', null, { 'aria-label': 'Publicación y candidato seleccionados' });
     compare.appendChild(renderFicha(d.publicacion, 'PUBLICACIÓN ML', true, d));
+    var confirmable = cs.confirmar ? Object.assign({}, cs.confirmar, d.confirmar || {}) : null;
+    if (confirmable && !seleccionado) {
+      var detalleConfirmable = (d.candidatos || []).find(function (o) { return o.variant_id === confirmable.variant_id; });
+      confirmable = Object.assign({}, confirmable, detalleConfirmable || {});
+    }
     if (seleccionado) compare.appendChild(renderFicha(seleccionado, 'CANDIDATO ' + (opciones.indexOf(seleccionado) + 1) + ' de ' + opciones.length, false, d));
-    else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('p', null, 'No hay candidato confiable; buscá por SKU o título')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
+    else if (confirmable) compare.appendChild(renderFicha(confirmable, 'SKU A CONFIRMAR', false, d));
+    else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
     root.appendChild(compare);
     var diff = el('section', 'diferencias', null, { 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
     var visibles = diferencias.filter(function (x) { return x.marca !== 'coincide' && (x.marca !== 'equivalente' || S.mostrarIguales); });
@@ -811,7 +818,8 @@
   function renderFicha(src, titulo, esMl, caso) {
     var f = el('section', 'ficha', null, { 'aria-label': titulo }); f.appendChild(el('h2', null, titulo));
     var foto = src.foto || (esMl && src.thumbnail); if (foto) { var b = el('button', 'foto-btn', null, { type: 'button', 'data-foto-url': foto, 'data-foto-titulo': src.titulo || '', 'data-foto-sku': src.sku || '' }); var im = el('img', null, null, { alt: 'Foto de ' + (src.titulo || titulo), loading: 'lazy' }); im.src = foto; b.appendChild(im); f.appendChild(b); } else f.appendChild(el('div', 'foto-sin-disponible', esMl ? 'Sin foto · Abrir en ML' : 'Sin foto'));
-    f.appendChild(el('h3', 'ficha-titulo', src.titulo || 'Sin título')); f.appendChild(el('code', 'sku', 'SKU: ' + (src.sku || src.sku_observado || 'Sin SKU'))); f.appendChild(el('p', 'ficha-meta', L.formatoPrecio(src.precio, src.moneda) + ' · ' + L.formatoStock(src.stock))); return f;
+    var tituloFicha = src.titulo || 'Sin título';
+    f.appendChild(el('h3', 'ficha-titulo', tituloFicha, { title: tituloFicha })); f.appendChild(el('code', 'sku', 'SKU: ' + (src.sku || src.sku_observado || 'Sin SKU'))); f.appendChild(el('p', 'ficha-meta', L.formatoPrecio(src.precio, src.moneda) + ' · ' + L.formatoStock(src.stock))); return f;
   }
 
   function banda() {
@@ -986,7 +994,8 @@
     var banda = el('div', 'indicador-guardado', 'Todo guardado', { id: 'banda', role: 'status' });
     var avisos = el('div', 'avisos', null, { id: 'avisos' });
     var anuncio = el('div', 'sr-only-status', null, { id: 'anuncio', role: 'status' });
-    wrap.parentNode.insertBefore(banda, wrap);
+    var chips = document.querySelector('.chips-header');
+    chips.appendChild(banda);
     wrap.parentNode.insertBefore(avisos, wrap);
     document.body.appendChild(anuncio);
   }
