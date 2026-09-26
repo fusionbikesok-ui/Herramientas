@@ -419,10 +419,6 @@ export function registrarIdentidadInterna(
     // ───────────────────────── buscar otra variante ─────────────────────────
     sub.get(`${PREFIJO_IDENTIDAD}/variantes`, async (req, reply) => {
       const auth = await autenticar(req, reply, 'GET'); if (!auth) return reply;
-      const rawCasoId = (req.query as { caso_id?: unknown }).caso_id;
-      if (rawCasoId !== undefined && (typeof rawCasoId !== 'string' || !z.uuid().safeParse(rawCasoId).success)) {
-        return error(req, reply, 400, 'invalid_query', 'El caso_id no es un UUID válido.');
-      }
       const q = ConsultaVariantes.safeParse(req.query);
       if (!q.success) return error(req, reply, 422, 'invalid_query', 'Falta el texto a buscar.');
       let atributosMl: Atributos | null = null;
@@ -450,11 +446,24 @@ export function registrarIdentidadInterna(
                                ORDER BY observado_en DESC LIMIT 1) w ON true
           WHERE v.company_id = $1 AND v.archivado_en IS NULL AND (upper(trim(v.sku)) = upper(trim($2)) OR m.titulo ILIKE $3)
           ORDER BY (upper(trim(v.sku)) = upper(trim($2))) DESC, m.titulo, v.sku LIMIT 20`, [auth.empresa, q.data.q, patron]);
+      const modelIds = [...new Set(r.rows.map((f) => String(f.model_id)))];
+      const atributosPorModelo = new Map<string, Atributos>();
+      if (atributosMl && modelIds.length) {
+        const atributos = await pool.query<{ model_id: string; nombre: string; valor: string }>(
+          `SELECT model_id, nombre_normalizado AS nombre, valor
+             FROM catalog.model_attributes
+            WHERE model_id = ANY($1::uuid[]) AND vigente_hasta IS NULL`, [modelIds]);
+        for (const f of atributos.rows) {
+          let mapa = atributosPorModelo.get(String(f.model_id));
+          if (!mapa) { mapa = new Map(); atributosPorModelo.set(String(f.model_id), mapa); }
+          mapa.set(f.nombre, mapa.has(f.nombre) ? `${mapa.get(f.nombre)} / ${f.valor}` : f.valor);
+        }
+      }
       const variantes = [];
       for (const f of r.rows) {
         const variante = { variant_id: f.variant_id, sku: f.sku ?? null, titulo: f.titulo, foto: f.foto ?? null,
           precio: f.precio ?? null, moneda: f.moneda ?? null, stock: f.stock ?? null } as Record<string, unknown>;
-        if (atributosMl) variante.explicacion = await explicacionCandidato(pool, atributosMl, String(f.model_id));
+        if (atributosMl) variante.explicacion = { atributos: [], otros_atributos: otrosAtributos(atributosMl, atributosPorModelo.get(String(f.model_id)) || new Map()) };
         variantes.push(variante);
       }
       return { variantes };

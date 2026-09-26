@@ -3,6 +3,7 @@
  * Mismo patrón que test/catalogo/api-interna.test.ts.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { crearApi } from '../../src/api/app.ts';
 import { PREFIJO_IDENTIDAD } from '../../src/api/identidad-interna.ts';
@@ -473,8 +474,16 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(sinCaso.body.variantes[0]).not.toHaveProperty('explicacion');
   });
 
-  it('buscar otra variante rechaza caso_id inválido con 400', async () => {
-    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-100&caso_id=no-es-uuid`)).status).toBe(400);
+  it('buscar otra variante rechaza caso_id inválido con el único contrato de validación 422', async () => {
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-100&caso_id=no-es-uuid`)).status).toBe(422);
+  });
+
+  it('buscar otra variante agrupa los atributos de candidatos en una sola consulta', () => {
+    const fuente = readFileSync(new URL('../../src/api/identidad-interna.ts', import.meta.url), 'utf8');
+    const bloque = fuente.slice(fuente.indexOf("sub.get(`${PREFIJO_IDENTIDAD}/variantes`"));
+    expect(bloque).toMatch(/model_id = ANY\(\$1::uuid\[\]\)/);
+    expect(bloque).toMatch(/Map<string, Atributos>/);
+    expect(bloque).not.toMatch(/for \(const f of r\.rows\)[\s\S]*await explicacionCandidato/);
   });
 
   it('buscar otra variante rechaza con 404 un caso de otra empresa', async () => {

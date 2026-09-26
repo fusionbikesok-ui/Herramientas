@@ -219,11 +219,11 @@ describe('bandeja: deshacer() no se dispara dos veces (regresión de T3)', () =>
   it('las 3 formas de S.ultima (decisión, apartado, salteado) siempre incluyen ts y consumida', () => {
     // apartar(): S.ultima = { tipo: 'apartado', ... }
     const apartar = js.match(/function apartar\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
-    expect(apartar).toMatch(/S\.ultima = \{[^}]*ts: Date\.now\(\)[^}]*consumida: false[^}]*\}/);
+    expect(apartar).toMatch(/(?:var|const) undo = \{[^}]*ts: Date\.now\(\)[^}]*consumida: false[^}]*\}/);
     // omitirPorAhora(): S.ultima = { tipo: 'salteado', ... }
     const omitir = js.match(/function omitirPorAhora\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
     expect(omitir).toMatch(/S\.ultima = \{[^}]*ts: Date\.now\(\)[^}]*consumida: false[^}]*\}/);
-    // decidir(): S.ultima = { entry, ts, consumida } (forma vieja, sin tocar)
+    // decidir(): S.ultima = { entry, ts, consumida }
     const decidir = js.match(/function decidir\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
     expect(decidir).toMatch(/S\.ultima = \{ entry: entry, ts: Date\.now\(\), consumida: false \}/);
   });
@@ -329,19 +329,78 @@ describe('bandeja: tecla X en confirmable — d5 (T5, hallazgo Alto de Codex)', 
   const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
 
   it("la rama 'rechazar' lee cs.d5 (plano), no cs.detalle.d5 (anidado, no existe en la fila de cola)", () => {
-    const cuerpo = js.match(/case 'rechazar':[\s\S]*?break;/)[0];
-    // El código ejecutable (línea del if) usa cs.d5; el bug corregido se documenta en un comentario que
-    // sí menciona "cs.detalle" entre comillas — por eso se chequea la línea del if, no todo el bloque.
-    const lineaIf = cuerpo.split('\n').find((l) => l.includes('if (cs'));
-    expect(lineaIf).toMatch(/cs\.d5 === true/);
-    expect(lineaIf).not.toMatch(/cs\.detalle/);
+    const cuerpo = js.match(/function eleccionNoEsNinguno\(\)[\s\S]*?\n {2}\}/)[0];
+    expect(cuerpo).toMatch(/cs\.d5 === true/);
+    expect(cuerpo).not.toMatch(/cs\.detalle/);
   });
 
   it("el botón 'No es este' en modo confirmable sí puede seguir leyendo d.detalle.d5 (el detalle, no la fila de cola)", () => {
     // d.detalle.d5 es correcto ACÁ porque `d` es el detalle de GET /casos/:id, que sí anida `detalle: c.detalle`.
     // No es el mismo bug: no hay que "unificar" los dos accesos, son formas distintas a propósito.
-    const cuerpo = js.match(/var omisionVigente = [\s\S]*?No es este \(X\)[\s\S]*?\n {4}\}/)[0];
-    expect(cuerpo).toMatch(/d\.detalle && d\.detalle\.d5 === true/);
+    expect(js).toMatch(/S\.detalle\.detalle && S\.detalle\.detalle\.d5 === true/);
+  });
+});
+
+describe('bandeja: regresiones de concurrencia y decisiones contextuales', () => {
+  const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
+
+  it('invalidar detalle y bloquear decisiones usa un snapshot del caso antes de enviar', () => {
+    const abrir = js.match(/function abrirCaso\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
+    const decidir = js.match(/function decidir\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
+    expect(abrir).toMatch(/S\.detalle = null/);
+    expect(decidir).toMatch(/decisionEnVuelo/);
+    expect(decidir).toMatch(/Object\.freeze\(\{[\s\S]*caseId[\s\S]*version[\s\S]*variantId/);
+    expect(decidir).toMatch(/S\.detalle\.id !== S\.cola\[S\.idx\]\.id/);
+  });
+
+  it('dos decisiones de la misma vista no generan dos envíos', () => {
+    expect(js).toMatch(/if \(S\.decisionEnVuelo && S\.decisionEnVuelo\.caseId === snapshot\.caseId\)/);
+    expect(js).toMatch(/S\.decisionEnVuelo = snapshot/);
+  });
+
+  it('el aviso de deshacer sólo se actualiza si sigue siendo la última entrada', () => {
+    expect(js).toMatch(/function mostrarDeshacer\(texto, entry\)/);
+    expect(js).toMatch(/S\.ultima\.entry === entry/);
+    expect(js).toMatch(/mostrarDeshacer\(textoDecision\(entry\), entry\)/);
+  });
+
+  it('Apartar conserva su undo y no avanza si otra acción lo reemplazó', () => {
+    const apartar = js.match(/function apartar\([^)]*\) \{[\s\S]*?\n {2}\}/)[0];
+    expect(apartar).toMatch(/const undo =/);
+    expect(apartar).toMatch(/undo\.versionNueva/);
+    expect(apartar).toMatch(/S\.ultima === undo/);
+  });
+
+  it('renderiza todas las diferencias dentro del scroll interno', () => {
+    expect(js).toMatch(/diferencias\.forEach\(function \(x\)/);
+    expect(js).not.toMatch(/diferencias\.slice\(0, 8\)/);
+  });
+
+  it('teclado y clic usan la misma elección contextual para No es ninguno', () => {
+    expect(js).toMatch(/function eleccionNoEsNinguno\(\)/);
+    const rechazar = js.match(/case 'rechazar':[\s\S]*?break;/)[0];
+    expect(rechazar).toMatch(/eleccionNoEsNinguno\(\)/);
+    expect(js).toMatch(/t\.id === 'btn-rechazar'\) decidir\(eleccionNoEsNinguno\(\)\)/);
+    expect(js).not.toMatch(/t\.id === 'btn-rechazar'\) decidir\('sin_candidato'\)/);
+    expect(js).not.toMatch(/case 'rechazar':[\s\S]*?decidir\('omitir'\)/);
+  });
+
+  it('descarta la respuesta vieja de una carga de cola', () => {
+    const cargar = js.match(/function cargarCola\(\) \{[\s\S]*?\n {2}\}/)[0];
+    expect(cargar).toMatch(/var cargaToken = \+\+S\.navToken/);
+    expect(cargar).toMatch(/grupoCarga/);
+    expect(cargar).toMatch(/cargaToken !== S\.navToken/);
+  });
+});
+
+describe('bandeja: objetivos táctiles', () => {
+  const css = readFileSync(new URL('../public/bandeja-identidad/bandeja.css', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
+
+  it('chips de filtro y candidato respetan el mínimo táctil de 44px', () => {
+    expect(css).toMatch(/\.candidato-chip\s*\{[\s\S]*min-height:\s*var\(--tap-min\)/);
+    expect(css).toMatch(/\.chip-pri\s*\{[\s\S]*min-height:\s*var\(--tap-min\)/);
+    expect(html).toMatch(/\.chip-pri\s*\{[\s\S]*min-height:\s*var\(--tap-min\)/);
   });
 });
 
@@ -549,7 +608,7 @@ describe('bandeja: estación compacta y confirmación por SKU', () => {
 
   it('compacta filtros y estado en una sola banda y limita fotos a 30vh', () => {
     expect(css).toMatch(/\.chips-header\s*\{[\s\S]*flex-wrap:\s*nowrap/);
-    expect(css).toMatch(/\.chip-pri\s*\{[\s\S]*min-height:\s*32px/);
+    expect(css).toMatch(/\.chip-pri\s*\{[\s\S]*min-height:\s*var\(--tap-min\)/);
     expect(css).toMatch(/\.ficha \.foto-btn, \.ficha \.foto-sin-disponible\s*\{[\s\S]*clamp\(200px,\s*30vh,\s*300px\)/);
     expect(js).toMatch(/querySelector\('\.chips-header'\)/);
     expect(js).toMatch(/chips\.appendChild\(banda\)/);

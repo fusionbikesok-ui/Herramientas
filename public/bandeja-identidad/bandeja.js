@@ -21,7 +21,7 @@
     pendientes: new Map(),  // Idempotency-Key → entry (guardado en segundo plano)
     ultima: null,           // { tipo: 'decision'|'apartado'|'salteado', ... } para deshacer
     salteados: new Set(),   // Set de IDs de casos omitidos por ahora (sólo en la sesión)
-    atajos: leerAtajos(), navToken: 0, timerDeshacer: null, timerBusqueda: null, tokenBusqueda: 0, candidatoAnterior: null,
+    atajos: leerAtajos(), navToken: 0, decisionEnVuelo: null, timerDeshacer: null, timerBusqueda: null, tokenBusqueda: 0, candidatoAnterior: null,
     visor: null
   };
 
@@ -88,10 +88,12 @@
   }
 
   function cargarCola() {
-    S.navToken++;
+    var cargaToken = ++S.navToken;
+    var grupoCarga = S.grupo;
     quitarAviso('carga');
     mostrarEstado('Cargando casos…', 'status');
     return http('GET', rutaCola(null)).then(function (r) {
+      if (cargaToken !== S.navToken || grupoCarga !== S.grupo) return;
       if (r.status !== 200) return falloCarga(r);
       S.cola = r.data.casos || []; S.siguiente = r.data.siguiente || null; S.contadores = r.data.contadores || {};
       S.totalInicial = L.totalFiltro(S.contadores, S.grupo); S.hechos = 0;
@@ -186,6 +188,8 @@
     if (!caso) return Promise.resolve();
     var token = ++S.navToken;
     S.idx = i;
+    S.detalle = null;
+    S.sel = null;
     var listo = S.cache.has(caso.id);
     if (!listo) mostrarEstado('Cargando caso…', 'status');
     return detalleDe(caso.id).then(function (d) {
@@ -297,7 +301,12 @@
   function decidir(eleccion, variantId, motivo, confirmar) {
     var d = S.detalle;
     if (!d) return;
+    if (!S.cola[S.idx] || S.detalle.id !== S.cola[S.idx].id) return;
+    var snapshot = Object.freeze({ caseId: d.id, version: d.version, variantId: variantId || null });
+    if (S.decisionEnVuelo && S.decisionEnVuelo.caseId === snapshot.caseId) return;
+    S.decisionEnVuelo = snapshot;
     if (eleccion === 'vincular' && !variantId) {
+      S.decisionEnVuelo = null;
       aviso('elegir', 'Elegí un candidato antes de vincular.');
       return;
     }
@@ -307,13 +316,14 @@
     // al armar el botón (ver disparaConfirmar). Sin esto, el chip de "vinculado a" en el aviso de deshacer
     // quedaría con SKU null aunque la decisión en sí es correcta.
     var skuConfirmado = confirmar && !opcion ? (S.cola[S.idx] && S.cola[S.idx].confirmar && S.cola[S.idx].confirmar.sku) : null;
-    var cuerpo = { expected_version: d.version, eleccion: eleccion };
+    var cuerpo = { expected_version: snapshot.version, eleccion: eleccion };
     if (eleccion === 'vincular') cuerpo.variant_id = variantId;
     if (motivo) cuerpo.motivo = motivo;
     if (confirmar) cuerpo.confirmar = true;
     var entry = {
-      key: crypto.randomUUID(), casoId: d.id, cuerpo: cuerpo, eleccion: eleccion, variantId: variantId || null,
-      marcas: opcion ? marcasDe(opcion) : '', sku: opcion ? opcion.sku : skuConfirmado, estado: 'pendiente', reintentos: 0
+      key: crypto.randomUUID(), casoId: snapshot.caseId, cuerpo: cuerpo, eleccion: eleccion, variantId: snapshot.variantId,
+      marcas: opcion ? marcasDe(opcion) : '', sku: opcion ? opcion.sku : skuConfirmado, estado: 'pendiente', reintentos: 0,
+      snapshot: snapshot
     };
     // Sin `actor`: el usuario y es_admin los pone el proxy desde la sesión, nunca el cliente.
     S.pendientes.set(entry.key, entry);
@@ -340,14 +350,15 @@
     var promesa = conReintentos(function () {
       return http('POST', '/casos/' + encodeURIComponent(caseId) + '/apartar', { expected_version: v }, clave);
     });
-    S.ultima = { tipo: 'apartado', casoId: caseId, promesa: promesa, versionActual: v, versionNueva: null, ts: Date.now(), consumida: false };
+    const undo = { tipo: 'apartado', casoId: caseId, promesa: promesa, versionActual: v, versionNueva: null, ts: Date.now(), consumida: false };
+    S.ultima = undo;
     S.hechos++;
-    mostrarDeshacer('Apartado para revisar después. Z deshace');
+    mostrarDeshacer('Apartado para revisar después. Z deshace', undo);
     banda();
     // Esperar que la promesa se resuelva para saber la versión nueva, luego avanzar
     promesa.then(function (r) {
       if (r.status === 200) {
-        S.ultima.versionNueva = r.data.version;
+        undo.versionNueva = r.data.version;
         anunciar('Apartado');
       } else {
         S.hechos = Math.max(0, S.hechos - 1);
@@ -360,7 +371,7 @@
         banda();
         return;
       }
-      avanzar();
+      if (S.ultima === undo) avanzar();
     });
   }
 
@@ -384,10 +395,11 @@
   }
 
   function alTerminar(entry, r) {
+    if (S.decisionEnVuelo === entry.snapshot) S.decisionEnVuelo = null;
     if (r.status === 200 || !L.esReintentable(r.status)) S.pendientes.delete(entry.key);
     if (r.status === 200) {
       entry.estado = 'ok'; entry.decisionId = r.data.decision_id; entry.versionNueva = r.data.version;
-      anunciar('Guardado'); mostrarDeshacer(textoDecision(entry)); banda(); return;
+      anunciar('Guardado'); mostrarDeshacer(textoDecision(entry), entry); banda(); return;
     }
     if (L.esReintentable(r.status)) return fallido(entry);
     entry.estado = 'error';
@@ -437,7 +449,9 @@
   }
 
   // ───────────────────────── deshacer ─────────────────────────
-  function mostrarDeshacer(texto) {
+  function mostrarDeshacer(texto, entry) {
+    var esUltima = !entry || S.ultima === entry || (S.ultima && S.ultima.entry === entry);
+    if (!esUltima) return;
     var a = $('aviso-deshacer');
     var segundos = Math.ceil(L.VENTANA_DESHACER_MS / 1000);
     $('aviso-deshacer-texto').textContent = 'Decisión guardada: ' + texto + ' · ' + L.textoCuentaRegresiva(segundos);
@@ -446,6 +460,9 @@
     if (barra) { barra.style.animation = 'none'; void barra.offsetWidth; barra.style.animation = ''; }
     clearInterval(S.timerDeshacer);
     S.timerDeshacer = setInterval(function () {
+      if (entry && !(S.ultima === entry || (S.ultima && S.ultima.entry === entry))) {
+        clearInterval(S.timerDeshacer); S.timerDeshacer = null; a.classList.add('aviso-deshacer--oculto'); return;
+      }
       segundos -= 1;
       if (segundos <= 0) {
         clearInterval(S.timerDeshacer); S.timerDeshacer = null;
@@ -454,6 +471,13 @@
       }
       $('aviso-deshacer-texto').textContent = 'Decisión guardada: ' + texto + ' · ' + L.textoCuentaRegresiva(segundos);
     }, 1000);
+  }
+
+  function eleccionNoEsNinguno() {
+    var cs = S.cola[S.idx];
+    if ((S.detalle && S.detalle.tipo === 'omitida_revisar') || (cs && cs.d5 === true)
+      || (S.detalle && S.detalle.detalle && S.detalle.detalle.d5 === true)) return 'mantener_omision';
+    return 'sin_candidato';
   }
 
   function deshacer() {
@@ -875,8 +899,7 @@
     else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
     root.appendChild(compare);
     var diff = el('section', 'diferencias', null, { 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
-    var visibles = diferencias.slice();
-    visibles.slice(0, 8).forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca, null, { role: 'group', 'aria-label': x.nombre + ': ' + x.texto }); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
+    diferencias.forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca, null, { role: 'group', 'aria-label': x.nombre + ': ' + x.texto }); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
     var iguales = resumenDiferencias.iguales;
     if (iguales) { var ib = el('button', 'btn-iguales', '✓ ' + iguales + ' atributos coinciden', { type: 'button', 'aria-expanded': 'false' }); diff.appendChild(ib); }
     root.appendChild(diff);
@@ -1013,7 +1036,7 @@
       else if (t.hasAttribute('data-busqueda')) elegirResultado(Number(t.getAttribute('data-busqueda')));
       else if (t.id === 'btn-no-vincular') decidir('omitir');
       else if (t.id === 'btn-no-es-este') decidir('mantener_omision');
-      else if (t.id === 'btn-rechazar') decidir('sin_candidato');
+      else if (t.id === 'btn-rechazar') decidir(eleccionNoEsNinguno());
       else if (t.id === 'btn-no-existe') decidir('sin_candidato');
       else if (t.id === 'btn-buscar') abrirBusqueda();
       else if (t.id === 'btn-apartar' || t.id === 'btn-omitir-ahora') {
@@ -1123,10 +1146,7 @@
           // api/identidad-interna.ts), no anidado bajo `.detalle` como en GET /casos/:id — bug real
           // preexistente (Alto, hallazgo de Codex): esto leía `cs.detalle.d5`, que nunca existe en `cs`
           // (una fila de cola), así que siempre caía en 'sin_candidato' aunque D5 estuviera vigente.
-          var cs = S.cola[S.idx];
-          if (S.detalle && S.detalle.tipo === 'omitida_revisar') decidir('mantener_omision');
-          else if (cs && cs.d5 === true) decidir('mantener_omision');
-          else decidir('sin_candidato');
+          decidir(eleccionNoEsNinguno());
           break;
         case 'buscar':
           abrirBusqueda();
