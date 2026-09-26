@@ -78,7 +78,11 @@ export async function aplicarAutoSku(
          AND origen = 'auto_sku' AND efecto = 'aplicar' AND superada_en IS NULL LIMIT 1`,
       [e.cuenta, e.recurso, e.variacion],
     )).rowCount;
-    if (humana || aplicada) return { resultado: 'ya_resuelto' };
+    const legado = (await tx.query(
+      `SELECT 1 FROM catalog.matcher_decisions
+       WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND vigente_hasta IS NULL LIMIT 1`,
+      [e.cuenta, e.recurso, e.variacion])).rowCount;
+    if (humana || aplicada || legado) return { resultado: 'ya_resuelto' };
 
     if (relectura.tipo === 'no_disponible') {
       const detalle = { motivo: relectura.motivo };

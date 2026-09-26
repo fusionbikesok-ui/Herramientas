@@ -36,9 +36,9 @@ export type Vigente =
 export type ModoAutoSku = 'apagado' | 'aplicado';
 
 /**
- * Decide en qué modo consulta el llamador el paso 3. Hoy sólo `E3_AUTO_SKU=1` lo prende: con `E3_CANARIO=1`
- * a secas devuelve 'apagado' (fail-closed) porque la corrida de canario (`e3_canario_*`) todavía no existe
- * en este corte; la tarea 5 agrega ahí la rama "la clave está en la corrida abierta".
+ * Decide en qué modo consulta el llamador el paso 3: 'aplicado' con `E3_AUTO_SKU=1`, o con `E3_CANARIO=1` si la clave
+ * está en una corrida de canario ABIERTA en estado pendiente/parked/vinculado (un parked cuenta: se reintenta en la
+ * próxima corrida y su decisión, si ya existe, debe seguir mandando). Sin ninguno, 'apagado' (fail-closed).
  */
 export async function modoAutoSku(
   tx: Consultable, cuenta: string, recurso: string, variacion: string,

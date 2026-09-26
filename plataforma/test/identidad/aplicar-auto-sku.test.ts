@@ -82,6 +82,14 @@ describe('E3-APL-01 aplicarAutoSku', () => {
     expect((await estadoCaso(e.caso)).estado).toBe('actionable');
   });
 
+  it('una decisión vigente del legado corta antes: ya_resuelto, sin decisión auto_sku', async () => {
+    const e = await escenario('MLA77', 'FB-770');
+    await admin.query(`INSERT INTO catalog.matcher_decisions (company_id, channel_account_id, canal, recurso, variacion_normalizada, accion, sku, origen, actor)
+      VALUES ($1, $2, 'mercadolibre', 'MLA77', '', 'confirmar', 'FB-770', 'copia', 'persona')`, [empresa, ml]);
+    expect(await aplicarAutoSku(app, e.entrada, ok('MLA77'), { bandeja: true })).toMatchObject({ resultado: 'ya_resuelto' });
+    expect(await decisiones('MLA77')).toEqual([]);
+  });
+
   it('[esc:relectura-cambio] pasa a intervention, sin vínculo ni decisión', async () => {
     const e = await escenario('MLA4', 'FB-103');
     const r = await aplicarAutoSku(app, e.entrada, { tipo: 'cambio', que: 'sku', detalle: { nuevo: 'FB-999' } }, { bandeja: true });
