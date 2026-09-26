@@ -12,6 +12,9 @@ const apply = args.includes('--apply');
 const valor = (nombre: string): string => { const i = args.indexOf(nombre); return i >= 0 && args[i + 1] ? args[i + 1]! : ''; };
 if (!process.env.DATABASE_URL || !process.env.CATALOGO_KEYRING_FILE) throw new Error('faltan DATABASE_URL y/o CATALOGO_KEYRING_FILE');
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+if (comando === 'congelar' && (!UUID.test(valor('--empresa')) || !/^\d{4}-\d{2}-\d{2}$/.test(valor('--dia')))) throw new Error('congelar requiere --empresa <uuid> y --dia AAAA-MM-DD');
+if ((comando === 'correr' || comando === 'cerrar' || comando === 'estado') && !UUID.test(valor('--corrida'))) throw new Error(`${comando} requiere --corrida <uuid>`);
 try {
   if (!apply && comando !== 'estado') { console.log('DRY-RUN: se requiere --apply para escribir'); process.exitCode = 2; }
   else if (comando === 'congelar') {

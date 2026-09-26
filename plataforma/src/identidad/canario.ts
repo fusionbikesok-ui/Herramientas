@@ -9,7 +9,7 @@ export interface ResumenCanario { procesados: number; vinculados: number; bandej
 export interface ClasificacionD6 {
   errores: Array<{ tipo: 'corregido_por_jose' | 'parked_sin_resolver'; recurso: string }>;
   noErrores: Record<'redundante' | 'intervention' | 'dejo_de_ser_unico' | 'no_disponible', number>;
-  veredicto: 'cero_errores' | 'con_errores' | 'abortado';
+  veredicto: 'cero_errores' | 'con_errores' | 'abortado' | 'incompleto';
 }
 
 export async function congelarCanario(pool: pg.Pool, o: { empresa: string; dia: string }): Promise<{ corridaId: string; casos: number; excluidosD5: number }> {
@@ -64,7 +64,7 @@ export async function correrCanario(pool: pg.Pool, relector: Relector, o: Entrad
     const lectura = await releerParaAutoSku(relector, { recurso: caso.recurso, variacion: caso.variacion_normalizada, skuCongelado: caso.sku_congelado, hashFormatoPrevio: previo.rows[0]?.hash ?? null }, o.esperar ? { esperar: o.esperar } : {});
     if (lectura.tipo === 'abortar') { await enTransaccion(pool, async (tx) => { await tx.query(`UPDATE catalog.e3_canario_corridas SET estado='abortada' WHERE id=$1`, [o.corridaId]); await tx.query(`UPDATE catalog.e3_canario_casos SET estado='pendiente', tomado_por=NULL, tomado_hasta=NULL WHERE corrida_id=$1 AND case_id=$2`, [o.corridaId, caso.case_id]); }); resumen.abortado = true; break; }
     const aplicado = await aplicarAutoSku(pool, { casoId: caso.case_id, cuenta: caso.channel_account_id, recurso: caso.recurso, variacion: caso.variacion_normalizada, skuCongelado: caso.sku_congelado, variantIdCongelada: caso.variant_id_congelada }, lectura as ResultadoRelecturaAutoSku, { bandeja: o.bandeja });
-    await pool.query(`UPDATE catalog.e3_canario_casos SET estado=$3, detalle=$4, tomado_por=NULL, tomado_hasta=NULL WHERE corrida_id=$1 AND case_id=$2`, [o.corridaId, caso.case_id, aplicado.resultado === 'abortar' ? 'pendiente' : aplicado.resultado, JSON.stringify(aplicado.detalle ?? {})]);
+    await pool.query(`UPDATE catalog.e3_canario_casos SET estado=$3, detalle=$4, tomado_por=NULL, tomado_hasta=NULL WHERE corrida_id=$1 AND case_id=$2 AND tomado_por=$5`, [o.corridaId, caso.case_id, aplicado.resultado === 'abortar' ? 'pendiente' : aplicado.resultado, JSON.stringify(aplicado.detalle ?? {}), worker]);
     if (aplicado.resultado === 'vinculado') resumen.vinculados++; else if (aplicado.resultado === 'parked') resumen.parked++; else resumen.bandeja++;
   }
   return resumen;
@@ -74,6 +74,7 @@ export async function cerrarCanario(pool: pg.Pool, o: { corridaId: string }): Pr
   return enTransaccion(pool, async (tx) => {
     const corrida = (await tx.query<{ estado: string; congelado_en: Date }>(`SELECT estado, congelado_en FROM catalog.e3_canario_corridas WHERE id=$1 FOR UPDATE`, [o.corridaId])).rows[0];
     if (!corrida) throw new Error('canario: corrida inexistente');
+    if (corrida.estado === 'cerrada') throw new Error('canario: la corrida ya está cerrada');
     const filas = (await tx.query<{ recurso: string; estado: string; detalle: { motivo?: string } | null; humana: string | null; variant_id_congelada: string }>(
       `SELECT k.recurso, k.estado, k.detalle, k.variant_id_congelada,
               (SELECT d.variant_id FROM catalog.identity_decisions d
@@ -90,6 +91,9 @@ export async function cerrarCanario(pool: pg.Pool, o: { corridaId: string }): Pr
       else if (f.estado === 'intervention') noErrores.intervention++;
       else if (f.estado === 'bandeja') { if (f.detalle?.motivo === 'sku_no_unico_o_cambiado') noErrores.dejo_de_ser_unico++; else noErrores.no_disponible++; }
     }
+    const pendientes = filas.filter((f) => f.estado === 'pendiente').length;
+    // Con casos sin procesar no hay veredicto D6 posible: no se cierra (cero_errores sería un falso positivo).
+    if (pendientes > 0 && corrida.estado !== 'abortada') return { errores, noErrores, veredicto: 'incompleto' };
     const veredicto = corrida.estado === 'abortada' ? 'abortado' : errores.length ? 'con_errores' : 'cero_errores';
     const r: ClasificacionD6 = { errores, noErrores, veredicto };
     await tx.query(`UPDATE catalog.e3_canario_corridas SET estado = CASE WHEN estado = 'abortada' THEN estado ELSE 'cerrada' END, cerrado_en = now(), clasificacion = $2 WHERE id = $1`, [o.corridaId, JSON.stringify(r)]);

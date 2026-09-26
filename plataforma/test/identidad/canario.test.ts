@@ -157,6 +157,15 @@ describe('E3-CAN-01 canario', () => {
       expect(r.veredicto).toBe('con_errores');
     });
 
+    it('con casos pendientes es incompleto y no cierra; una corrida cerrada no se cierra dos veces', async () => {
+      await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+      expect((await cerrarCanario(app, { corridaId })).veredicto).toBe('incompleto');
+      expect((await q<{ estado: string }>('SELECT estado FROM catalog.e3_canario_corridas'))[0]!.estado).toBe('abierta');
+      await admin.query("UPDATE catalog.e3_canario_casos SET estado='vinculado'");
+      expect((await cerrarCanario(app, { corridaId })).veredicto).toBe('cero_errores');
+      await expect(cerrarCanario(app, { corridaId })).rejects.toThrow('ya está cerrada');
+    });
+
     it('sin errores el veredicto es cero_errores y la corrida queda cerrada', async () => {
       const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
       await correrCanario(app, relectorOk({ [e.recurso]: e.sku }), { corridaId, bandeja: true });
