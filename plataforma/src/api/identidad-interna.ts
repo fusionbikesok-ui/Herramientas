@@ -135,6 +135,7 @@ async function atributosDe(pool: pg.Pool, sql: string, id: string): Promise<Atri
 export function registrarIdentidadInterna(
   app: FastifyInstance<Server, IncomingMessage, ServerResponse, Logger>, pool: pg.Pool, logger: Logger,
   opciones: OpcionesSenales, ahora: () => Date, bandeja: boolean,
+  flagsAutoSku?: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean },
 ): void {
   void app.register(async (sub) => {
     sub.addContentTypeParser('application/json', { parseAs: 'buffer', bodyLimit: LIMITE_CUERPO }, (_req, cuerpo, listo) => listo(null, cuerpo));
@@ -363,7 +364,7 @@ export function registrarIdentidadInterna(
         caseId: req.params.id, expectedVersion: d.data.expected_version, eleccion: d.data.eleccion,
         ...(d.data.variant_id ? { variantId: d.data.variant_id } : {}), actor: d.data.actor.usuario, esAdmin: d.data.actor.es_admin,
         ...(motivo ? { motivo } : {}), idempotencyKey: clave, ...(d.data.revierte ? { revierte: d.data.revierte } : {}),
-      }, { bandeja });
+      }, { bandeja, ...(flagsAutoSku ? { flagsAutoSku } : {}) });
       if (r.ok) return reply.code(200).send({ decision_id: r.decisionId, version: r.version, vinculo: r.vinculo });
       return error(req, reply, STATUS_DECISION[r.code], r.code, `No se pudo decidir: ${r.code}.`, r.details ? { details: r.details } : {});
     });

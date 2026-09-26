@@ -33,7 +33,7 @@ if (senales) {
 }
 const app = crearApi({
   pool, logger, estadoPgDir: config.estadoPgDir, heartbeatMaxS: config.heartbeatMaxS,
-  bandejaCatalogo: config.bandeja, ...(senales ? { senales } : {}),
+  bandejaCatalogo: config.bandeja, flagsAutoSku: config.flagsAutoSku, ...(senales ? { senales } : {}),
 });
 alApagar(logger, async () => { detenerLatidos(); await app.close(); await pool.end(); });
 await app.listen({ host: '0.0.0.0', port: config.apiPuerto });

@@ -217,7 +217,7 @@ El SKU de la variación: si `variacion` no es `''`, se toma el `seller_custom_fi
 - Produce: `decisionVigente(tx, cuenta, recurso, variacion, o: { bandeja: boolean; autoSku?: 'apagado'|'aplicado' })`. Con `'aplicado'`, el orden es el de §3: humano → legado → auto_sku. El auto_sku aplicado sólo se consulta si no hay humana ni legado. Devuelve `{ fuente: 'auto_sku'; eleccion: 'vincular'; variantId; decisionId }`.
 - El modo se decide en el llamador: `'aplicado'` si `E3_AUTO_SKU=1`, o si `E3_CANARIO=1` y la clave está en la corrida de canario abierta (Tarea 5). Para eso: `modoAutoSku(tx, cuenta, recurso, variacion, flags): Promise<'apagado'|'aplicado'>` en `autoridad.ts`.
 
-- [ ] **Paso 1: Migración (parte 2):**
+- [x] **Paso 1: Migración (parte 2):**
 
 `hash_payload_ml` ya existe (0020:38, nulable): esta parte NO lo agrega de nuevo. Lo que sí hay que
 reemplazar es el CHECK sin nombre de 0020:45 (`CHECK (origen <> 'auto_sku' OR efecto = 'sombra')`), que hoy
@@ -257,22 +257,22 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
   CHECK (origen <> 'auto_sku' OR efecto = 'sombra' OR (efecto = 'aplicar' AND hash_payload_ml IS NOT NULL));
 ```
 
-- [ ] **Paso 1b: Tests de esquema** (antes o junto con el Paso 2): un INSERT `auto_sku`/`aplicar` SIN
+- [x] **Paso 1b: Tests de esquema** (antes o junto con el Paso 2): un INSERT `auto_sku`/`aplicar` SIN
   `hash_payload_ml` es rechazado por el CHECK; el mismo INSERT CON `hash_payload_ml` pasa (y ya NO es
   rechazado por el CHECK viejo: confirma que 0020:45 quedó reemplazado y no sólo agregado uno nuevo al
   lado); un INSERT `humano`/`sombra` (combinación inválida por el otro CHECK de 0020:44) sigue rechazado.
   Corren contra la base de prueba ya migrada, no contra producción.
 
-- [ ] **Paso 2: Tests que fallan** en `autoridad.test.ts`:
+- [x] **Paso 2: Tests que fallan** en `autoridad.test.ts`:
   - `[esc:flag-apagado]` con `autoSku` omitido o `'apagado'`: una `auto_sku`/`aplicar` vigente es INVISIBLE (devuelve lo mismo que hoy);
   - con `'aplicado'` y sin humana ni legado: devuelve la `auto_sku`;
   - con `'aplicado'` y un legado `omitir`: gana el legado;
   - con `'aplicado'` y una humana: gana la humana;
   - una `auto_sku` con efecto `sombra` nunca se devuelve, en ningún modo.
-- [ ] **Paso 3: Ver que fallan** → `/tmp/claude-0/c3-t3-rojo.txt`
-- [ ] **Paso 4: Implementar** en `autoridad.ts` y pasar el modo desde cada llamador. **Invariante:** con `E3_CANARIO=0` y `E3_AUTO_SKU=0`, ningún llamador consulta `e3_canario_*` ni la rama nueva. Test que lo afirma contando queries con un `Consultable` espía.
-- [ ] **Paso 5: Verde** (`autoridad.test.ts`, `decidir.test.ts`, `motor.test.ts` y los tests de `catalogo/` que usan `decisionVigente`) → `/tmp/claude-0/c3-t3-verde.txt`
-- [ ] **Paso 6: Commit.**
+- [x] **Paso 3: Ver que fallan** → `/tmp/claude-0/c3-t3-rojo.txt`
+- [x] **Paso 4: Implementar** en `autoridad.ts` y pasar el modo desde cada llamador. **Invariante:** con `E3_CANARIO=0` y `E3_AUTO_SKU=0`, ningún llamador consulta `e3_canario_*` ni la rama nueva. Test que lo afirma contando queries con un `Consultable` espía.
+- [x] **Paso 5: Verde** (`autoridad.test.ts`, `decidir.test.ts`, `motor.test.ts` y los tests de `catalogo/` que usan `decisionVigente`) → `/tmp/claude-0/c3-t3-verde.txt`
+- [x] **Paso 6: Commit.**
 
 ### Tarea 4: Aplicar un auto-SKU (§6, una transacción)
 

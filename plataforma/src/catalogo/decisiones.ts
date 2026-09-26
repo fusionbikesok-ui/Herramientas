@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import { registrarEvento } from '../audit/auditoria.ts';
 import type { Consultable } from '../db/pool.ts';
-import { decisionVigente, type ModoAutoSku } from '../identidad/autoridad.ts';
+import { decisionVigente, modoAutoSku, type ModoAutoSku } from '../identidad/autoridad.ts';
 
 /**
  * Candado de las decisiones de una cuenta, hasta el fin de la transacción. Lo toman los eventos, las copias, el
@@ -41,11 +41,20 @@ type Deseado =
   | { tipo: 'omitida' }
   | { tipo: 'pendiente'; caso: 'sku_pendiente' | 'sku_inexistente_en_woo'; sku: string | null };
 
+/** Opciones de autoridad que viajan desde el llamador hasta `decisionVigente`. */
+export interface OpcionesAutoridad {
+  bandeja: boolean;
+  /** Modo explícito (lo usa aplicarAutoSku, que acaba de insertar la decisión `aplicar`). */
+  autoSku?: ModoAutoSku;
+  /** Flags del entorno: si `autoSku` no viene, el modo se decide con `modoAutoSku`. Ausentes = apagado. */
+  flagsAutoSku?: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean };
+}
+
 const CASOS_DE_PENDIENTE = ['sku_pendiente', 'sku_inexistente_en_woo'];
 
 export async function reconciliarClave(
   tx: Consultable, cuenta: string, recurso: string, variacion: string, motivo: string,
-  o: { bandeja: boolean; autoSku?: ModoAutoSku },
+  o: OpcionesAutoridad,
 ): Promise<Reconciliacion> {
   // Toma el candado ella misma (hallazgo BAJO de la revisión de Codex sobre T2): `pg_advisory_xact_lock` es
   // reentrante dentro de la misma transacción, así que si el llamador ya lo tomó esto no cuesta nada extra;
@@ -60,7 +69,8 @@ export async function reconciliarClave(
   if (!rep) return 'sin_representacion';
   const empresa = rep.company_id;
 
-  const dec = await decisionVigente(tx, cuenta, recurso, variacion, o);
+  const autoSku = o.autoSku ?? (o.flagsAutoSku ? await modoAutoSku(tx, cuenta, recurso, variacion, o.flagsAutoSku) : 'apagado');
+  const dec = await decisionVigente(tx, cuenta, recurso, variacion, { bandeja: o.bandeja, autoSku });
   let deseado: Deseado;
   if ((dec?.fuente === 'humano' || dec?.fuente === 'auto_sku') && dec.eleccion === 'vincular') {
     deseado = { tipo: 'variante', variante: dec.variantId };
@@ -150,7 +160,7 @@ export async function reconciliarClave(
  * consultar si había una decisión HUMANA vigente que debía seguir mandando — pisándola en silencio.
  */
 export async function reconciliarSku(
-  tx: Consultable, empresa: string, sku: string, motivo: string, o: { bandeja: boolean },
+  tx: Consultable, empresa: string, sku: string, motivo: string, o: OpcionesAutoridad,
 ): Promise<number> {
   const claves = (await tx.query<{ channel_account_id: string; recurso: string; variacion_normalizada: string }>(
     `SELECT channel_account_id, recurso, variacion_normalizada FROM catalog.matcher_decisions

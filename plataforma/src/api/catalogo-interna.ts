@@ -67,6 +67,7 @@ function error(req: FastifyRequest, reply: FastifyReply, status: number, code: s
 export function registrarCatalogoInterno(
   app: FastifyInstance<Server, IncomingMessage, ServerResponse, Logger>, pool: pg.Pool, logger: Logger,
   opciones: OpcionesSenales, ahora: () => Date, bandeja: boolean,
+  flagsAutoSku?: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean },
 ): void {
   void app.register(async (sub) => {
     sub.addContentTypeParser('application/json', { parseAs: 'buffer', bodyLimit: LIMITE_CUERPO_CATALOGO }, (_req, cuerpo, listo) => listo(null, cuerpo));
@@ -141,7 +142,7 @@ export function registrarCatalogoInterno(
 
     sub.post<{ Params: { id: string } }>(`${PREFIJO_CATALOGO}/copias/:id/confirmar`, (req, reply) => autenticado(req, reply, async (tx, _cuerpo, cuenta) => {
       if (!z.uuid().safeParse(req.params.id).success) return fallo(400, 'invalid_body', 'Copia inválida.');
-      const r = await confirmarCopia(tx, req.params.id, cuenta, { bandeja });
+      const r = await confirmarCopia(tx, req.params.id, cuenta, { bandeja, ...(flagsAutoSku ? { flagsAutoSku } : {}) });
       logger.info({ copia: req.params.id, ...r }, 'copia del catálogo confirmada');
       return { status: 200, body: { ...r } };
     }));
@@ -149,7 +150,7 @@ export function registrarCatalogoInterno(
     sub.post(`${PREFIJO_CATALOGO}/eventos`, (req, reply) => autenticado(req, reply, async (tx, cuerpo, cuenta, empresa) => {
       const d = Evento.safeParse(cuerpo);
       if (!d.success) return fallo(400, 'invalid_body', 'El evento no es válido.');
-      const resultado = await aplicarEvento(tx, empresa, cuenta, d.data, { bandeja });
+      const resultado = await aplicarEvento(tx, empresa, cuenta, d.data, { bandeja, ...(flagsAutoSku ? { flagsAutoSku } : {}) });
       return { status: 200, body: { resultado } };
     }));
 

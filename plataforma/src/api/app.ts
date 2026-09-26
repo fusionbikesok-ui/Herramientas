@@ -30,6 +30,7 @@ export interface OpcionesApi {
   passkeys?: OpcionesPasskeys;
   /** E3 corte 1: si la decisión humana de la bandeja manda sobre el legado en /internal/v1/catalogo. */
   bandejaCatalogo?: boolean;
+  flagsAutoSku?: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean };
 }
 
 const TOPICOS = new Set(['ml.orders', 'ml.shipments', 'ml.questions', 'ml.messages', 'ml.claims', 'ml.items', 'woo.orders', 'woo.products']);
@@ -146,9 +147,9 @@ export function crearApi(opciones: OpcionesApi) {
     registrarEstadoInformes(app, opciones.pool, opciones.logger, opciones.senales, ahora);
     // Igual el catálogo interno (E2 T1): sólo escribe en catalog.matcher_decisions e identity_cases, y sin
     // la outbox del legado encendida nadie lo llama.
-    registrarCatalogoInterno(app, opciones.pool, opciones.logger, opciones.senales, ahora, opciones.bandejaCatalogo ?? false);
+    registrarCatalogoInterno(app, opciones.pool, opciones.logger, opciones.senales, ahora, opciones.bandejaCatalogo ?? false, opciones.flagsAutoSku);
     // La bandeja de identidad (E3 T5): misma firma y orígenes; decidir además exige E3_BANDEJA (503 si está apagada).
-    registrarIdentidadInterna(app, opciones.pool, opciones.logger, opciones.senales, ahora, opciones.bandejaCatalogo ?? false);
+    registrarIdentidadInterna(app, opciones.pool, opciones.logger, opciones.senales, ahora, opciones.bandejaCatalogo ?? false, opciones.flagsAutoSku);
   }
   return app;
 }

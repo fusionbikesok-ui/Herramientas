@@ -16,7 +16,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { registrarEvento } from '../audit/auditoria.ts';
-import { bloquearDecisiones, reconciliarClave, type Reconciliacion } from '../catalogo/decisiones.ts';
+import { bloquearDecisiones, reconciliarClave, type OpcionesAutoridad, type Reconciliacion } from '../catalogo/decisiones.ts';
 import { enTransaccion, type Consultable } from '../db/pool.ts';
 import { canonizar } from '../informes/jcs.ts';
 
@@ -38,7 +38,7 @@ function hashPedido(p: PedidoDecision): string {
   return createHash('sha256').update(canonizar(resto)).digest('hex');
 }
 
-export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja: boolean }): Promise<ResultadoDecision> {
+export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: OpcionesAutoridad): Promise<ResultadoDecision> {
   if (!o.bandeja) return { ok: false, code: 'bandeja_apagada' };
 
   const hash = hashPedido(p);
@@ -207,7 +207,7 @@ export async function decidirCaso(pool: pg.Pool, p: PedidoDecision, o: { bandeja
     // ya se salió en el paso 0 con bandeja_apagada; pasar `true` fijo en vez de `o.bandeja` funcionaba igual
     // en la práctica, pero atarlo al parámetro es lo correcto — hallazgo de la segunda opinión de Codex).
     const vinculo = await reconciliarClave(
-      tx as Consultable, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, `bandeja: ${p.actor}`, { bandeja: o.bandeja });
+      tx as Consultable, rep.channel_account_id, rep.recurso, rep.variacion_normalizada, `bandeja: ${p.actor}`, { bandeja: o.bandeja, ...(o.flagsAutoSku ? { flagsAutoSku: o.flagsAutoSku } : {}) });
 
     // Paso 10: cerrar el caso, y sólo si el vínculo real quedó donde la decisión mandaba — no basta con que
     // `reconciliarClave` haya corrido, porque devuelve 'sin_cambios' tanto cuando ya estaba bien (hay que
