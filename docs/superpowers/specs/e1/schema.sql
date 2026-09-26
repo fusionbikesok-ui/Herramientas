@@ -923,7 +923,8 @@ CREATE TABLE catalog.identity_cases (
                     -- atributos en conflicto. Se revisa, nunca se fusiona sola.
                     'atributo_divergente',
                     -- Clasificación en el árbol (0019): cuelgan del MODELO, no de una publicación.
-                    'categoria_en_desacuerdo', 'categoria_sin_mapeo', 'categoria_persona_contradicha')),
+                    'categoria_en_desacuerdo', 'categoria_sin_mapeo', 'categoria_persona_contradicha',
+                    'sku_cambiado', 'formato_cambiado')),
   prioridad       text NOT NULL DEFAULT 'normal' CHECK (prioridad IN ('baja', 'normal', 'urgente')),
   variant_id      uuid REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
   representation_id uuid REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
@@ -1480,3 +1481,11 @@ CREATE TABLE catalog.e3_canario_casos (
   channel_account_id uuid NOT NULL, recurso text NOT NULL, variacion_normalizada text NOT NULL, sku_congelado text NOT NULL, variant_id_congelada uuid NOT NULL,
   estado text NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente','vinculado','bandeja','intervention','parked','ya_resuelto')),
   intentos int NOT NULL DEFAULT 0, detalle jsonb, tomado_por text, tomado_hasta timestamptz, PRIMARY KEY (corrida_id, case_id));
+
+CREATE TABLE catalog.identity_commands (
+  id uuid PRIMARY KEY DEFAULT uuidv7(), case_id uuid NOT NULL REFERENCES catalog.identity_cases(id),
+  tipo text NOT NULL CHECK (tipo IN ('pausar_publicacion')),
+  estado text NOT NULL DEFAULT 'parked' CHECK (estado IN ('parked')), motivo text NOT NULL,
+  creado_en timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX identity_commands_un_case_tipo ON catalog.identity_commands (case_id, tipo);

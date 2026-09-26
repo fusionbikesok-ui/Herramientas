@@ -427,7 +427,7 @@ CREATE TABLE catalog.e3_canario_casos (
   - si el formato dio `resultado: 'cambio'` (con `que: 'formato'`; `que: 'sku'` ya lo cubre la rama anterior) → caso `intervention` + un `identity_commands` `pausar_publicacion` `parked`. El vínculo NO cambia;
   - en los dos casos, evento de auditoría `identidad.intervention`.
 
-- [ ] **Paso 1: Tests que fallan:**
+- [x] **Paso 1: Tests que fallan:**
   - cambio de SKU → intervention sin tocar `variant_id`;
   - cambio de formato → intervention + 1 comando parked;
   - la misma observación repetida no duplica el caso ni el comando;
@@ -436,10 +436,10 @@ CREATE TABLE catalog.e3_canario_casos (
   - `E3_INTERVENTION=1` con `E3_CANARIO=0` y `E3_AUTO_SKU=0`: SÍ abre casos `intervention` igual (es sombra, no depende del canario ni del auto-SKU aplicado);
   - `E3_INTERVENTION=1` sobre una clave con decisión VIGENTE humana `vincular` (sin ninguna `auto_sku`): también abre `intervention` si cambia el SKU o el formato — el flag gatea la transición en sí, no sólo el camino del auto-SKU;
   - con `E3_INTERVENTION=0`, `registrarFormato` y la observación de `sku_observado` SIGUEN corriendo (se ve la fila nueva en `format_observations`), sólo la apertura del caso `intervention` queda desactivada — confirma que el flag no desactiva la observación, sólo la reacción.
-- [ ] **Paso 2: Rojo** → `/tmp/claude-0/c3-t6-rojo.txt`
-- [ ] **Paso 3: Implementar.** Verificar en 0020 que `'intervention'` esté en el CHECK de `estado` (lo está) y si `tipo` tiene CHECK; si lo tiene, agregar `'sku_cambiado'` en la parte 4.
-- [ ] **Paso 4: Verde** → `/tmp/claude-0/c3-t6-verde.txt`
-- [ ] **Paso 5: Commit.**
+- [x] **Paso 2: Rojo** → `/tmp/claude-0/c3-t6-rojo.txt`
+- [x] **Paso 3: Implementar.** Verificar en 0020 que `'intervention'` esté en el CHECK de `estado` (lo está) y si `tipo` tiene CHECK; si lo tiene, agregar `'sku_cambiado'` en la parte 4.
+- [x] **Paso 4: Verde** → `/tmp/claude-0/c3-t6-verde.txt`
+- [x] **Paso 5: Commit.**
 
 ### Tarea 7: Replay previo al canario (§7.2)
 

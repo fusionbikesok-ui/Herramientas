@@ -48,6 +48,7 @@ export interface OpcionesProyector {
   bandeja?: boolean;
   /** E3 corte 3: flags del auto-SKU (ausentes = apagados). */
   flagsAutoSku?: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean };
+  intervencion?: boolean;
   /** 6b: dónde registrar que una clasificación falló tras aplicar la proyección. Por defecto, silencioso. */
   log?: RegistroProyector;
 }
@@ -97,7 +98,7 @@ export function crearProyector(o: OpcionesProyector): Proyector {
     const proyeccion = canal === 'woocommerce' ? proyectarProductoWoo(payload) : proyectarItemMl(payload);
     if (esRechazo(proyeccion)) throw new ErrorRechazoProyeccion(proyeccion.rechazo);
     const resumen = await aplicarProyeccion({ tx, cuenta: r.channelAccountId, canal, versionRemota: r.remoteVersion,
-      compararAtributos: o.compararAtributos ?? false, bandeja: o.bandeja ?? false, ...(o.flagsAutoSku ? { flagsAutoSku: o.flagsAutoSku } : {}),
+      compararAtributos: o.compararAtributos ?? false, bandeja: o.bandeja ?? false, intervencion: o.intervencion ?? false, ...(o.flagsAutoSku ? { flagsAutoSku: o.flagsAutoSku } : {}),
       payloadMl: canal === 'mercadolibre' ? payload : undefined }, proyeccion);
 
     // 6b: clasificar lo que esta proyección tocó, en la misma transacción, pero sin que un problema de taxonomía
