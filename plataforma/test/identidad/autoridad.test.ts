@@ -344,9 +344,11 @@ describe('E3-AUT-02 auto_sku/aplicar detrás de un modo (corte 3, tarea 3)', () 
     expect(await decisionVigente(app, ml, 'MLA24', '', { bandeja: false, autoSku: 'aplicado' })).toBeNull();
   });
 
-  it('[esc:e3-canario-sin-t5] E3_CANARIO=1 sin Tarea 5 → modoAutoSku devuelve "apagado" (fail-closed; TODO Tarea 5 reemplaza este test)', async () => {
-    const modo = await modoAutoSku(app, ml, 'MLA25', '', { E3_AUTO_SKU: false, E3_CANARIO: true });
-    expect(modo).toBe('apagado');
+  it('[esc:e3-canario-sin-t5] E3_CANARIO=1 sólo aplica dentro de una corrida abierta', async () => {
+    const corrida = (await admin.query<{ id: string }>(`INSERT INTO catalog.e3_canario_corridas (company_id, dia) VALUES ($1, '2026-09-26') RETURNING id`, [empresa])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.e3_canario_casos (corrida_id, case_id, channel_account_id, recurso, variacion_normalizada, sku_congelado, variant_id_congelada) VALUES ($1, (SELECT id FROM catalog.identity_cases LIMIT 1), $2, 'MLA25', '', 'FB-25', (SELECT id FROM catalog.sellable_variants LIMIT 1))`, [corrida, ml]);
+    expect(await modoAutoSku(app, ml, 'MLA25', '', { E3_AUTO_SKU: false, E3_CANARIO: true })).toBe('aplicado');
+    expect(await modoAutoSku(app, ml, 'MLA26', '', { E3_AUTO_SKU: false, E3_CANARIO: true })).toBe('apagado');
   });
 
   it('modoAutoSku: E3_AUTO_SKU=1 → "aplicado"', async () => {

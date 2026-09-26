@@ -41,10 +41,15 @@ export type ModoAutoSku = 'apagado' | 'aplicado';
  * en este corte; la tarea 5 agrega ahí la rama "la clave está en la corrida abierta".
  */
 export async function modoAutoSku(
-  _tx: Consultable, _cuenta: string, _recurso: string, _variacion: string,
+  tx: Consultable, cuenta: string, recurso: string, variacion: string,
   flags: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean },
 ): Promise<ModoAutoSku> {
-  return flags.E3_AUTO_SKU ? 'aplicado' : 'apagado';
+  if (flags.E3_AUTO_SKU) return 'aplicado';
+  if (!flags.E3_CANARIO) return 'apagado';
+  const r = await tx.query(`SELECT 1 FROM catalog.e3_canario_casos c JOIN catalog.e3_canario_corridas r ON r.id = c.corrida_id
+    WHERE c.channel_account_id = $1 AND c.recurso = $2 AND c.variacion_normalizada = $3
+      AND r.estado = 'abierta' AND c.estado IN ('pendiente','parked','vinculado') LIMIT 1`, [cuenta, recurso, variacion]);
+  return r.rowCount ? 'aplicado' : 'apagado';
 }
 
 export async function decisionVigente(
