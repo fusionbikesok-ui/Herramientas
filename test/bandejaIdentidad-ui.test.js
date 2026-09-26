@@ -214,6 +214,38 @@ describe('bandeja: deshacer() no se dispara dos veces (regresión de T3)', () =>
   });
 });
 
+describe('bandeja: visor comparativo', () => {
+  it('cambia el nivel de zoom entre 1x, 2x y 3x y 0 vuelve a 1x', () => {
+    expect(L.siguienteNivelZoom(1, 'click')).toBe(2);
+    expect(L.siguienteNivelZoom(2, 'click')).toBe(3);
+    expect(L.siguienteNivelZoom(3, 'click')).toBe(1);
+    expect(L.siguienteNivelZoom(1, '+')).toBe(2);
+    expect(L.siguienteNivelZoom(3, '+')).toBe(1);
+    expect(L.siguienteNivelZoom(3, '-')).toBe(2);
+    expect(L.siguienteNivelZoom(1, '-')).toBe(3);
+    expect(L.siguienteNivelZoom(3, '0')).toBe(1);
+  });
+
+  it('cambia el candidato de forma circular', () => {
+    expect(L.indiceCandidatoVisor(0, 3, 1)).toBe(1);
+    expect(L.indiceCandidatoVisor(2, 3, 1)).toBe(0);
+    expect(L.indiceCandidatoVisor(0, 3, -1)).toBe(2);
+    expect(L.indiceCandidatoVisor(-1, 0, 1)).toBe(-1);
+  });
+
+  it('arma el par ML/candidato conservando título y SKU y deja null si no hay candidato', () => {
+    const caso = {
+      publicacion: { foto: 'ml.jpg', thumbnail: 'thumb.jpg', titulo: 'Casco ML', sku_observado: 'ML-1' },
+      candidatos: [{ foto: 'woo.jpg', titulo: 'Casco Woo', sku: 'FB-1' }]
+    };
+    expect(L.paresParaVisor(caso, caso.candidatos[0])).toEqual({
+      ml: { foto: 'ml.jpg', titulo: 'Casco ML', sku: 'ML-1' },
+      candidato: { foto: 'woo.jpg', titulo: 'Casco Woo', sku: 'FB-1' }
+    });
+    expect(L.paresParaVisor(caso, null).candidato).toBeNull();
+  });
+});
+
 describe('bandeja: consume el nombre real del tipo del detalle', () => {
   const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
 
@@ -442,5 +474,31 @@ describe('bandeja: estación compacta y confirmación por SKU', () => {
     expect(js).toMatch(/resumen\.diferencias \+ ' dif\.'/);
     expect(css).toMatch(/\.candidato-chip\s*\{[\s\S]*display:\s*inline-flex/);
     expect(css).toMatch(/\.candidato-chip-titulo\s*\{[\s\S]*text-overflow:\s*ellipsis/);
+  });
+
+  it('el visor compara las dos fotos, mantiene el espacio sin foto y conserva foco/aria', () => {
+    expect(html).toMatch(/id="visor-foto-dialog"[^>]*aria-modal="true"/);
+    expect(html).toMatch(/id="visor-pares"/);
+    expect(js).toMatch(/L\.paresParaVisor\(S\.detalle, opcion\)/);
+    expect(js).toMatch(/function cerrarVisor\(\)/);
+    expect(js).toMatch(/v\.opener\.focus\(\)/);
+    expect(js).toMatch(/aria-live.*polite/);
+    expect(js).toMatch(/function moverVisor\(delta\)/);
+  });
+
+  it('el zoom es sincronizado y el visor ocupa el alto disponible sin scroll de página', () => {
+    expect(css).toMatch(/\.visor-pares\s*\{[\s\S]*grid-template-columns:\s*repeat\(2/);
+    expect(css).toMatch(/\.visor-foto-marco\s*\{[\s\S]*overflow:\s*auto/);
+    expect(css).toMatch(/\.visor-foto-imagen\s*\{[\s\S]*object-fit:\s*contain/);
+    expect(css).toMatch(/\.visor-pares\[data-zoom="2"\]/);
+    expect(css).toMatch(/\.visor-pares\[data-zoom="3"\]/);
+    expect(js).toMatch(/precargarFotos\(d\)/);
+    expect(js).toMatch(/new Image\(\)/);
+  });
+
+  it('separa el rango del título del chip y evita separadores de encabezado al inicio', () => {
+    expect(css).toMatch(/\.candidato-chip-rango\s*\{[\s\S]*margin-inline-end/);
+    expect(css).toMatch(/\.caso-header-izquierda\s*>\s*\*\s*\+\s*\*::before/);
+    expect(css).not.toMatch(/\.caso-header\s*>\s*\*\s*\+\s*\*::before/);
   });
 });

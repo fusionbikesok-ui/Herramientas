@@ -508,11 +508,13 @@
   </div>
 
   <!-- Diálogo: Visor de foto -->
-  <dialog id="visor-foto-dialog" class="visor-foto-dialog">
-    <button type="button" id="btn-cerrar-visor" class="btn" style="align-self: flex-end;">Cerrar (Esc)</button>
-    <h2 id="visor-titulo" style="font-size: var(--fs-md); margin-top: var(--sp-2);"></h2>
-    <img id="visor-imagen" src="" alt="" class="visor-foto-imagen">
-    <p id="visor-sku" class="sku" style="color: var(--muted); font-size: var(--fs-sm);"></p>
+  <dialog id="visor-foto-dialog" class="visor-foto-dialog" aria-modal="true" aria-labelledby="visor-titulo">
+    <div class="visor-cabecera">
+      <h2 id="visor-titulo">Comparar fotos</h2>
+      <button type="button" id="btn-cerrar-visor" class="btn">Cerrar (Esc)</button>
+    </div>
+    <p class="visor-ayuda">Clic o +/− cambia el zoom · 0 restablece · ←/→ o 1/2/3 cambia el candidato</p>
+    <div id="visor-pares" class="visor-pares"></div>
   </dialog>
 
   <!-- Diálogo: Ayuda -->

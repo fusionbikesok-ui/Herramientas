@@ -20,7 +20,8 @@
     pendientes: new Map(),  // Idempotency-Key → entry (guardado en segundo plano)
     ultima: null,           // { tipo: 'decision'|'apartado'|'salteado', ... } para deshacer
     salteados: new Set(),   // Set de IDs de casos omitidos por ahora (sólo en la sesión)
-    atajos: leerAtajos(), navToken: 0, timerDeshacer: null, timerBusqueda: null
+    atajos: leerAtajos(), navToken: 0, timerDeshacer: null, timerBusqueda: null,
+    visor: null
   };
 
   function leerAtajos() { try { return localStorage.getItem('bandeja-atajos') !== 'false'; } catch (e) { return true; } }
@@ -160,10 +161,17 @@
       var c = S.cola[i];
       if (!c) return;
       detalleDe(c.id).then(function (d) {
-        if (n === 0) (d.candidatos || []).forEach(function (o) { if (o.foto) { var im = new Image(); im.src = o.foto; } });
+        if (n === 0) precargarFotos(d);
       }, function () { /* se reintenta al abrir */ });
     });
     if (S.siguiente && S.cola.length - S.idx <= 10) traerMas();
+  }
+
+  function precargarFotos(d) {
+    (d && d.candidatos || []).forEach(function (o) {
+      var foto = o && (o.foto || o.thumbnail);
+      if (foto) { var im = new Image(); im.src = foto; }
+    });
   }
 
   function abrirCaso(i, opts) {
@@ -178,6 +186,7 @@
       if (token !== S.navToken) return;
       if (d.cerrado_en) { anunciar('Ese caso ya se resolvió. Pasamos al siguiente.'); S.cola.splice(i, 1); return S.cola.length ? abrirCaso(Math.min(i, S.cola.length - 1), opts) : vacio(); }
       S.detalle = d; S.busqueda = []; S.buscando = false; S.mostrarIguales = false; // T4: por caso, no una preferencia de sesión como soloDif
+      precargarFotos(d);
       if (opts.sel !== undefined) S.sel = opts.sel; else S.sel = null;
       if (!opts.conservarConflicto) S.conflicto = null;
       render();
@@ -873,11 +882,58 @@
   }
 
   function abrirVisor(btn) {
-    var dlg = $('visor-foto-dialog'); if (!dlg) return;
-    $('visor-titulo').textContent = btn.getAttribute('data-foto-titulo');
-    var im = $('visor-imagen'); im.src = btn.getAttribute('data-foto-url'); im.alt = 'Foto de ' + btn.getAttribute('data-foto-titulo');
-    $('visor-sku').textContent = btn.getAttribute('data-foto-sku');
+    var dlg = $('visor-foto-dialog'); if (!dlg || !S.detalle) return;
+    var opciones = L.opcionesDe(S.detalle.candidatos, S.busqueda);
+    var opcion = opciones.filter(function (o) { return o.variant_id === S.sel; })[0] || null;
+    S.visor = { opener: btn, opciones: opciones, indice: opcion ? opciones.indexOf(opcion) : -1, nivel: 1 };
+    renderVisor();
     dlg.showModal();
+    var cerrar = $('btn-cerrar-visor'); if (cerrar) cerrar.focus();
+  }
+
+  function renderVisor() {
+    var v = S.visor, cont = $('visor-pares'); if (!v || !cont) return;
+    vaciar(cont);
+    var opcion = v.indice >= 0 ? v.opciones[v.indice] : null;
+    var pares = L.paresParaVisor(S.detalle, opcion);
+    [['ml', pares.ml, 'PUBLICACIÓN ML'], ['candidato', pares.candidato, 'CANDIDATO ' + (v.indice + 1) + ' de ' + v.opciones.length]].forEach(function (parte) {
+      var lado = el('section', 'visor-par', null, { 'aria-label': parte[2] });
+      lado.appendChild(el('h3', null, parte[2]));
+      var marco = el('div', 'visor-foto-marco', null, { tabindex: '0', 'data-visor-lado': parte[0], 'aria-label': 'Foto ' + parte[2] });
+      if (parte[1]) {
+        if (parte[1].foto) {
+          var im = el('img', 'visor-foto-imagen', null, { alt: 'Foto de ' + parte[1].titulo }); im.src = parte[1].foto;
+          marco.appendChild(im);
+        } else marco.appendChild(el('div', 'visor-foto-sin-disponible', 'Sin foto'));
+      } else marco.appendChild(el('div', 'visor-foto-sin-disponible', 'Sin foto'));
+      lado.appendChild(marco);
+      lado.appendChild(el('p', 'visor-foto-titulo', parte[1] ? parte[1].titulo : 'Sin candidato'));
+      lado.appendChild(el('p', 'visor-foto-sku sku', parte[1] ? 'SKU: ' + parte[1].sku : ''));
+      cont.appendChild(lado);
+    });
+    cont.setAttribute('data-zoom', String(v.nivel));
+    anunciar(v.indice >= 0 ? 'Comparando candidato ' + (v.indice + 1) + ' de ' + v.opciones.length : 'Visor: publicación ML sin candidato');
+  }
+
+  function cambiarZoom(accion) {
+    if (!S.visor) return;
+    S.visor.nivel = L.siguienteNivelZoom(S.visor.nivel, accion);
+    var cont = $('visor-pares'); if (cont) cont.setAttribute('data-zoom', String(S.visor.nivel));
+    anunciar('Zoom ' + S.visor.nivel + 'x');
+  }
+
+  function cerrarVisor() {
+    var v = S.visor, dlg = $('visor-foto-dialog');
+    S.visor = null;
+    if (dlg && dlg.open) dlg.close();
+    if (v && v.opener && document.contains(v.opener)) v.opener.focus();
+  }
+
+  function moverVisor(delta) {
+    if (!S.visor || !S.visor.opciones.length) return;
+    S.visor.indice = L.indiceCandidatoVisor(S.visor.indice, S.visor.opciones.length, delta);
+    S.sel = S.visor.opciones[S.visor.indice].variant_id;
+    renderVisor();
   }
 
   function conectarUnaVez() {
@@ -911,6 +967,27 @@
     });
 
     document.addEventListener('keydown', function (ev) {
+      var dlg = $('visor-foto-dialog');
+      if (S.visor && dlg && dlg.open) {
+        if (ev.key === 'Escape') { ev.preventDefault(); cerrarVisor(); return; }
+        if (ev.key === '+' || ev.key === '=' || ev.key === '-' || ev.key === '0') { ev.preventDefault(); cambiarZoom(ev.key === '=' ? '+' : ev.key); return; }
+        if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight' || /^[123]$/.test(ev.key)) {
+          ev.preventDefault();
+          if (/^[123]$/.test(ev.key)) {
+            var n = Number(ev.key) - 1;
+            if (S.visor.opciones[n]) { S.visor.indice = n; S.sel = S.visor.opciones[n].variant_id; renderVisor(); }
+          } else moverVisor(ev.key === 'ArrowRight' ? 1 : -1);
+          return;
+        }
+        if (ev.key === 'Tab') {
+          var foc = dlg.querySelectorAll('button, [tabindex="0"]');
+          if (!foc.length) return;
+          var pos = Array.prototype.indexOf.call(foc, document.activeElement);
+          var next = ev.shiftKey ? (pos <= 0 ? foc.length - 1 : pos - 1) : (pos === foc.length - 1 ? 0 : pos + 1);
+          ev.preventDefault(); foc[next].focus(); return;
+        }
+        return;
+      }
       if (!L.puedeDispararAtajo(ev, S.atajos)) return;
       var k = ev.key;
       if (ev.target.closest && ev.target.closest('button, a, summary') && (k === 'Enter' || k === ' ')) return; // el botón enfocado manda
@@ -923,7 +1000,7 @@
 
       // Teclas que siempre aplican
       if (k === 'd') { ev.preventDefault(); S.soloDif = !S.soloDif; render(); return; }
-      if (k === 'f') { ev.preventDefault(); var fb = document.querySelector('.foto-btn'); if (fb) abrirVisor(fb); return; }
+      if (k === 'f') { ev.preventDefault(); var fb = document.querySelector('.estacion-paneles .foto-btn') || document.querySelector('.estacion-paneles'); if (S.detalle) abrirVisor(fb); return; }
       if (k === 'h') { ev.preventDefault(); var hh = $('historial'); if (hh) hh.open = !hh.open; return; }
 
       // Otras teclas dependen del detalle
@@ -987,7 +1064,12 @@
     });
 
     var dlgV = $('visor-foto-dialog');
-    $('btn-cerrar-visor').addEventListener('click', function () { dlgV.close(); });
+    $('btn-cerrar-visor').addEventListener('click', cerrarVisor);
+    dlgV.addEventListener('cancel', function (ev) { ev.preventDefault(); cerrarVisor(); });
+    dlgV.addEventListener('click', function (ev) {
+      var marco = ev.target.closest && ev.target.closest('.visor-foto-marco');
+      if (marco) cambiarZoom('click');
+    });
     var dlgA = $('ayuda-dialog');
     $('btn-ayuda').addEventListener('click', function () { dlgA.showModal(); });
     $('btn-cerrar-ayuda').addEventListener('click', function () { dlgA.close(); });
@@ -1011,7 +1093,7 @@
     var wrap = document.querySelector('.bandeja-wrap');
     var banda = el('div', 'indicador-guardado', 'Todo guardado', { id: 'banda', role: 'status' });
     var avisos = el('div', 'avisos', null, { id: 'avisos' });
-    var anuncio = el('div', 'sr-only-status', null, { id: 'anuncio', role: 'status' });
+    var anuncio = el('div', 'sr-only-status', null, { id: 'anuncio', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
     var chips = document.querySelector('.chips-header');
     chips.appendChild(banda);
     wrap.parentNode.insertBefore(avisos, wrap);

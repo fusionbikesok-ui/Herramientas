@@ -360,6 +360,39 @@
     return 'Enter = VINCULAR a ' + sku + ' (' + textoDiferencias(lista.length) + ')';
   }
 
+  function siguienteNivelZoom(nivel, accion) {
+    var actual = Number(nivel);
+    if (actual !== 1 && actual !== 2 && actual !== 3) actual = 1;
+    if (accion === '0') return 1;
+    if (accion === '-' || accion === 'menos') return actual === 1 ? 3 : actual - 1;
+    return actual === 3 ? 1 : actual + 1;
+  }
+
+  function indiceCandidatoVisor(actual, n, delta) {
+    n = Number(n) || 0;
+    if (n < 1) return -1;
+    var i = Number(actual);
+    if (!Number.isInteger(i) || i < 0 || i >= n) i = delta < 0 ? 0 : -1;
+    return (i + (Number(delta) < 0 ? -1 : 1) + n) % n;
+  }
+
+  function paresParaVisor(caso, opcion) {
+    var publicacion = (caso && caso.publicacion) || {};
+    var candidato = opcion || null;
+    return {
+      ml: {
+        foto: publicacion.foto || publicacion.thumbnail || null,
+        titulo: publicacion.titulo || 'Sin título',
+        sku: publicacion.sku_observado || publicacion.sku || 'Sin SKU'
+      },
+      candidato: candidato ? {
+        foto: candidato.foto || candidato.thumbnail || null,
+        titulo: candidato.titulo || 'Sin título',
+        sku: candidato.sku || 'Sin SKU'
+      } : null
+    };
+  }
+
   var api = {
     marca: marca, copyError: copyError, puedeDispararAtajo: puedeDispararAtajo, esReintentable: esReintentable,
     demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
@@ -369,6 +402,7 @@
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
     porQue: porQue, atributosIguales: atributosIguales, fraseTipo: fraseTipo, diferenciasVisibles: diferenciasVisibles,
     textoDiferencias: textoDiferencias, resumenCandidato: resumenCandidato, textoDecision: textoDecision,
+    siguienteNivelZoom: siguienteNivelZoom, indiceCandidatoVisor: indiceCandidatoVisor, paresParaVisor: paresParaVisor,
     GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
