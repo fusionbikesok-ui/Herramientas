@@ -304,12 +304,11 @@
     if (!S.cola[S.idx] || S.detalle.id !== S.cola[S.idx].id) return;
     var snapshot = Object.freeze({ caseId: d.id, version: d.version, variantId: variantId || null });
     if (S.decisionEnVuelo && S.decisionEnVuelo.caseId === snapshot.caseId) return;
-    S.decisionEnVuelo = snapshot;
     if (eleccion === 'vincular' && !variantId) {
-      S.decisionEnVuelo = null;
       aviso('elegir', 'Elegí un candidato antes de vincular.');
       return;
     }
+    S.decisionEnVuelo = snapshot;
     quitarAviso('elegir'); quitarAviso('rechazo');
     var opcion = variantId ? L.opcionesDe(d.candidatos, S.busqueda).filter(function (o) { return o.variant_id === variantId; })[0] : null;
     // Confirmar (punto A): la variante no está en candidatos/búsqueda — el SKU viene de cs.confirmar, guardado
