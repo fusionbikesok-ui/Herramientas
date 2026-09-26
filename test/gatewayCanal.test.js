@@ -7,6 +7,7 @@ import {
   ErrorOperacionInvalida, OPERACIONES, TOPIC_A_CORRIENTE, validarConfiguracionCupoSombra,
 } from '../lib/gatewayCanal.js';
 import { crearOrigenesInternos, firmarInterno } from '../lib/internoHmac.js';
+import { TOPIC_A_CORRIENTE as TOPIC_A_CORRIENTE_PLATAFORMA } from '../plataforma/src/reconciliacion/corrientes.ts';
 
 const { buildApp } = await import('../server.js');
 const DB = './test/tmp-gateway-canal.sqlite';
@@ -99,6 +100,15 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
       if (op === 'ml.missed_feeds' || op.startsWith('woo.')) continue;
       expect(() => corrienteDe(op, {}), op).not.toThrow();
     }
+  });
+
+  // La plataforma no puede importar `lib/gatewayCanal.js` del legado (se empaqueta con `plataforma/` como
+  // build context; el legado no existe dentro de esa imagen — la causa real del incidente de deploy de
+  // E1 T5). `plataforma/src/reconciliacion/corrientes.ts` mantiene una copia deliberada de esta tabla; este
+  // test es la única defensa contra que diverjan en silencio, ya que el legado sí puede leer `plataforma/`
+  // (mismo checkout) aunque la plataforma no pueda leer el legado.
+  it('E1-T5 la copia de TOPIC_A_CORRIENTE en plataforma/src/reconciliacion/corrientes.ts no diverge de ésta', () => {
+    expect(TOPIC_A_CORRIENTE_PLATAFORMA).toEqual(TOPIC_A_CORRIENTE);
   });
 
   it('E1-T5 cupo por corriente: bucket independiente por corriente y techo global encima', () => {

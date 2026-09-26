@@ -5,10 +5,11 @@ import type { KeyringSobre } from '../seguridad/sobre.ts';
 import {
   ErrorCanalTerminal, ErrorDestinoProhibido, parsearRetryAfter, type RespuestaCanal, type TransporteCanal,
 } from './cliente-http.ts';
-// Fuente única del mapeo tópico→corriente (E1 T5 spec §2.1): la validación de `missed_feeds` no mantiene
-// su propia lista de tópicos aceptados, se deriva de la misma tabla que usa el gateway del legado.
-// @ts-expect-error módulo JS del legado sin tipos
-import { TOPIC_A_CORRIENTE } from '../../../lib/gatewayCanal.js';
+// Tabla tópico→corriente (E1 T5 spec §2.1): la validación de `missed_feeds` no mantiene su propia lista
+// de tópicos aceptados, se deriva de esta misma tabla. Copia deliberada de la de `lib/gatewayCanal.js`
+// (la plataforma no puede importar fuera de `plataforma/`, ver corrientes.ts); un test del legado exige
+// que ambas coincidan.
+import { TOPIC_A_CORRIENTE } from './corrientes.ts';
 
 const TOPICOS_MISSED_FEEDS = new Set(Object.keys(TOPIC_A_CORRIENTE as Record<string, string>));
 

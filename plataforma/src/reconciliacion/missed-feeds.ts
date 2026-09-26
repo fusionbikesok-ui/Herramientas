@@ -1,9 +1,10 @@
 import type pg from 'pg';
 import { esRegistro, idTexto } from './adaptadores/comun.ts';
 import { ErrorCanalTerminal, type TransporteCanal } from './cliente-http.ts';
-// Fuente única del mapeo tópico→corriente (E1 T5 spec §2.1): evita que este listado diverja del gateway.
-// @ts-expect-error módulo JS del legado sin tipos
-import { TOPIC_A_CORRIENTE } from '../../../lib/gatewayCanal.js';
+// Tabla tópico→corriente (E1 T5 spec §2.1): evita que este listado diverja del gateway. Copia deliberada
+// de la de `lib/gatewayCanal.js` (la plataforma no puede importar fuera de `plataforma/`, ver
+// corrientes.ts); un test del legado exige que ambas coincidan.
+import { TOPIC_A_CORRIENTE } from './corrientes.ts';
 
 /**
  * `missed_feeds` de Mercado Libre (E1 T3 §10, corte C7): avisos que ML no pudo entregar con 200, hasta
