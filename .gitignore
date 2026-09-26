@@ -34,3 +34,8 @@ docs/.obsidian/cache
 docs/.obsidian/plugins/
 docs/.obsidian/themes/
 docs/.obsidian/snippets/
+
+# Capturas de QA de auditorías: solo se versionan las 4 de antes/después
+docs/superpowers/audits/capturas-*/*
+!docs/superpowers/audits/capturas-despues/
+!docs/superpowers/audits/capturas-despues/*.png

@@ -103,3 +103,9 @@ Las auditorías no coinciden. Codex propone una tecla (`1` vincula directo). La 
 2. Teclado: ¿fase 1 (se mantiene S3) y medir, o reabrís S3 ya para los candidatos sin diferencias?
 3. ¿El rediseño sale junto con la actualización de la API, en lugar de desplegar ahora la bandeja actual?
 4. ¿Se hace primero la tarea 0 (harness con la plataforma real y medición base)? Es la única forma de demostrar que mejoró.
+
+## 7. Cierre de la implementación (rama `feature/bandeja-estacion`)
+
+T1–T7 implementadas. Capturas conservadas: `capturas-despues/` (antes y después a 1440×900 de 2 casos); el resto de las capturas de QA no se versiona (`.gitignore`).
+
+**Evidencia de probador-e2e (aceptada por José el 2026-09-26):** el Chromium del MCP de Playwright no arranca como root, así que la prueba se corrió con Playwright `--no-sandbox` sobre el harness real (`scripts/qa/bandeja-real/`, plataforma real + datos sintéticos). Resultado: a 1440×900, 1280×800, 390×844 y 640×400 (zoom 200 %) 0 px de scroll horizontal y vertical y barra de decisión visible; foco al título con aria-live; 2+Enter vincula y `z` revierte; visor `f` con zoom 576/1163/1745 px y Esc cierra; sin errores de consola; axe (wcag2a/2aa/22aa) sin violaciones en caso, visor y búsqueda.
