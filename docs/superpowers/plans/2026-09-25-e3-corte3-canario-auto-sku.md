@@ -469,17 +469,17 @@ verdad contra la cual comparar, así que ni suma a `coinciden` ni a `difieren`. 
 seguro») no es una decisión (invariante ya establecida en `identity_cases.apartado_en`, rediseño de
 bandeja) y tampoco entra.
 
-- [ ] **Paso 1: Tests que fallan:**
+- [x] **Paso 1: Tests que fallan:**
   - una `auto_sku`/`sombra` igual a la humana `vincular` → coincide;
   - una distinta → `difieren` y `no_apto`;
   - una humana `sin_candidato` sobre una clave con `auto_sku` → cuenta en `difieren` (el humano dijo que no es esa);
   - una humana `mantener_omision` sobre una clave con `auto_sku` → cuenta en `difieren`, igual que `omitir`;
   - una humana `apartado` (no es decisión) no cuenta;
   - una `auto_sku` sobre una clave SIN ninguna decisión humana (ni vincular ni sin_candidato/omitir) → no entra en el denominador: no suma ni a `coinciden` ni a `difieren`.
-- [ ] **Paso 2: Rojo** → `/tmp/claude-0/c3-t7-rojo.txt`
-- [ ] **Paso 3: Implementar**, más el CLI: sólo lectura, imprime el JSON.
-- [ ] **Paso 4: Verde** → `/tmp/claude-0/c3-t7-verde.txt`
-- [ ] **Paso 5: Commit.**
+- [x] **Paso 2: Rojo** → `/tmp/claude-0/c3-t7-rojo.txt`
+- [x] **Paso 3: Implementar**, más el CLI: sólo lectura, imprime el JSON.
+- [x] **Paso 4: Verde** → `/tmp/claude-0/c3-t7-verde.txt`
+- [x] **Paso 5: Commit.**
 
 ### Tarea 8: `test:e3` completo y cierre
 
