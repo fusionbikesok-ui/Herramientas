@@ -91,6 +91,21 @@ describe('vigiaPausado', () => {
     expect(db.prepare('SELECT pausa_error FROM ml_publicacion_cambios').get().pausa_error).toContain('sin stock');
   });
 
+  it('sin stock no cuenta para el umbral masivo y se asienta aunque el resto exceda', async () => {
+    const n = UMBRAL_PAUSA_MASIVA + 1;
+    const lote = [];
+    for (let i = 1; i <= n; i++) {
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave,item_id,variation_id,titulo,status,sub_status,available_quantity,actualizado_en)
+        VALUES (?,?,'','x','paused','out_of_stock',0,datetime('now'))`).run(`MLA${i}|`, `MLA${i}`);
+      lote.push(cambio(i));
+    }
+    const r = await procesarCambios(db, CFG, lote);
+    expect(r.sin_stock).toBe(n);
+    expect(r.omitidos_por_umbral).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM ml_publicacion_cambios WHERE bloquea_reactivador=1 AND revisado_en IS NOT NULL').get().n).toBe(n);
+  });
+
   it('clasifica como migración una pareja repetida sin llamar a ML', async () => {
     db.prepare(`INSERT INTO ml_publicacion_cambios
       (clave,item_id,campo,valor_anterior,valor_nuevo,detectado_en)

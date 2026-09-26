@@ -148,6 +148,15 @@ describe('el reactivador respeta las pausas del vigía', () => {
     expect(db.prepare("SELECT COUNT(*) n FROM ml_publicacion_cambios WHERE item_id='MLA1' AND revisado_en IS NULL").get().n).toBe(0);
   });
 
+  it('revisar limpia bloquea_reactivador de lo que cierra', async () => {
+    sembrarPausada(db);
+    const id = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, bloquea_reactivador, detectado_en)
+      VALUES ('MLA1|', 'MLA1', 'catalog_product_id', NULL, 'MLA9', 0, 1, datetime('now'))`).run().lastInsertRowid;
+    const r = await request(app).post(`/api/sync/cambios-formato/${id}/revisar`).send({});
+    expect(r.status).toBe(200);
+    expect(db.prepare('SELECT bloquea_reactivador b FROM ml_publicacion_cambios WHERE id=?').get(id).b).toBe(0);
+  });
+
   it('revisar NO cierra un cambio de otro campo de la misma publicación', async () => {
     sembrarPausada(db);
     const a = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)

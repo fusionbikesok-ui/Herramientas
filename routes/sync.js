@@ -3206,7 +3206,7 @@ export function syncRouter(db, cfg) {
     }
     // El vigía abre un aviso por variación: se cierran las variaciones del MISMO cambio (campo y
     // valor nuevo). Un cambio de otro campo en la misma publicación sigue abierto para decidirlo aparte.
-    const cerrados = db.prepare(`UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=?
+    const cerrados = db.prepare(`UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=?, bloquea_reactivador=0
       WHERE item_id=? AND campo=? AND valor_nuevo IS ? AND revisado_en IS NULL`)
       .run(new Date().toISOString(), req.user?.username || null, fila.item_id, fila.campo, fila.valor_nuevo).changes;
     res.json({ ok: true, reactivada, pendiente_stock: pendienteStock, cerrados });
