@@ -486,8 +486,8 @@ bandeja) y tampoco entra.
 **Archivos:**
 - Modificar: `plataforma/test/identidad/cobertura-e3.test.ts`: los tres `it.todo` de E3-COV-02 pasan a exigir `[esc:relectura-cambio]`, `[esc:relectura-5xx]` y `[esc:canario-401]`.
 
-- [ ] **Paso 1:** Reemplazar los `it.todo` por claves en una lista `C3` con el mismo `it.each` que `C1`.
-- [ ] **Paso 2:** `npm run test:e3` (dentro de `plataforma`) → `/tmp/claude-0/c3-t8-teste3.txt`. Tiene que pasar y no puede quedar ningún `todo`.
+- [x] **Paso 1:** Reemplazar los `it.todo` por claves en una lista `C3` con el mismo `it.each` que `C1`.
+- [x] **Paso 2:** `npm run test:e3` (dentro de `plataforma`) → `/tmp/claude-0/c3-t8-teste3.txt`. Tiene que pasar y no puede quedar ningún `todo`.
 - [ ] **Paso 3:** Segunda opinión de Codex sobre el diff COMPLETO del corte → `/tmp/claude-0/codex-c3-final.txt`.
 - [ ] **Paso 4:** Avisar a opt-55. opt-55 revisa y corre la suite completa una vez.
 - [ ] **Paso 5 (con José):**
