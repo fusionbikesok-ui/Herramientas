@@ -90,9 +90,9 @@
   .cf-despues{color:var(--amber,#F5B942);font-weight:700;}
   .cf-acciones{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;}
   .cf-acciones .btn{min-height:44px;display:inline-flex;align-items:center;}
-  .cf-comp{flex-basis:100%;font-size:12.5px;line-height:1.5;}
+  .cf-comp{flex-basis:100%;min-width:0;max-width:100%;overflow-wrap:anywhere;font-size:12.5px;line-height:1.5;}
   .cf-comp .cf-prod{margin:4px 0;}
-  .cf-tabla-wrap{overflow-x:auto;}
+  .cf-tabla-wrap{overflow-x:auto;max-width:100%;}
   .cf-tabla{border-collapse:collapse;width:100%;min-width:420px;margin-top:6px;}
   .cf-tabla th,.cf-tabla td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border,#24304A);}
   .cf-ok{color:var(--green,#4ADE80);font-weight:700;}
@@ -222,7 +222,7 @@ async function cargarCambiosFormato(){
 }
 
 function cfProducto(etq,p){
-  var txt=esc(etq)+': <b>'+esc(p.nombre||p.id||'(sin nombre)')+'</b> <span class="cf-cambio">'+esc(p.id||'')+'</span>';
+  var txt=esc(etq)+': <b>'+esc(p.nombre||'(sin nombre)')+'</b> <span class="cf-cambio">'+esc(p.id||'')+'</span>';
   if(p.borrado)txt+=' · <span class="cf-mal">borrado por ML</span>';
   else if(p.link)txt+=' · <a href="'+esc(p.link)+'" target="_blank" rel="noopener">Ficha pública ↗</a>';
   return '<div class="cf-prod">'+txt+'</div>';
