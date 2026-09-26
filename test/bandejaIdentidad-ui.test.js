@@ -30,6 +30,21 @@ describe('bandeja: logica pura', () => {
     expect(resultado.nombresIguales).toEqual(['igual']);
   });
 
+  it('formatea una fila de resultado con los datos visibles y su conteo', () => {
+    const fila = L.formatoFilaResultado({ variant_id: 'v1', titulo: 'Casco Bell', sku: 'FB-1', precio: 12500, moneda: 'ARS', stock: 3, foto: '/casco.jpg', explicacion: { atributos: [{ nombre: 'color', marca: 'difiere' }] } });
+    expect(fila).toMatchObject({ variant_id: 'v1', titulo: 'Casco Bell', sku: 'FB-1', foto: '/casco.jpg', precio: '12.500 ARS', stock: '3 en stock', diferencias: 1, textoDiferencias: '1 dif.' });
+  });
+
+  it('cuenta N dif. de un resultado usando diferenciasVisibles', () => {
+    expect(L.diferenciasDeResultado({ explicacion: { atributos: [{ nombre: 'color', marca: 'difiere' }, { nombre: 'marca', marca: 'coincide' }], otros_atributos: [{ nombre: 'talle', marca: 'falta' }] } })).toBe(2);
+  });
+
+  it('navega resultados arriba/abajo de forma circular', () => {
+    expect(L.indiceResultadoBusqueda(0, 3, -1)).toBe(2);
+    expect(L.indiceResultadoBusqueda(2, 3, 1)).toBe(0);
+    expect(L.indiceResultadoBusqueda(-1, 3, 1)).toBe(0);
+  });
+
   it('pluraliza la barra y los chips, incluso cuando no hay diferencias', () => {
     expect(L.textoDiferencias(0)).toBe('sin diferencias');
     expect(L.textoDiferencias(1)).toBe('1 diferencia');
@@ -383,10 +398,12 @@ describe('bandeja: aria-keyshortcuts (chequeo estático sobre bandeja.js, patró
     expect(m[0]).toMatch(/\([^)]+\)/);
   });
 
-  it('la barra de decisión asigna x a No vincular en casos normales', () => {
-    const botones = [...js.matchAll(/el\('button'[^;]*?id: 'btn-no-vincular'[^}]*\}\)/g)].map((m) => m[0]);
-    expect(botones.length).toBeGreaterThan(0);
-    expect(botones.some((m) => m.includes("aria-keyshortcuts': 'x'"))).toBe(true);
+  it('x es No es ninguno (rechazar) y el botón No vincular no tiene tecla', () => {
+    const rech = [...js.matchAll(/el\('button'[^;]*?id: 'btn-rechazar'[^}]*\}\)/g)].map((m) => m[0]);
+    expect(rech.some((m) => m.includes("aria-keyshortcuts': 'x'"))).toBe(true);
+    const nov = [...js.matchAll(/el\('button'[^;]*?id: 'btn-no-vincular'[^}]*\}\)/g)].map((m) => m[0]);
+    expect(nov.length).toBeGreaterThan(0);
+    expect(nov.some((m) => m.includes('aria-keyshortcuts'))).toBe(false);
   });
 });
 

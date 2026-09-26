@@ -56,7 +56,7 @@ const ConsultaCola = z.strictObject({
   tipo: z.string().max(64).optional(), estado: z.string().max(32).optional(), grupo: z.coerce.number().int().min(0).max(7).optional(),
   cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(LIMITE_MAXIMO).default(LIMITE_POR_DEFECTO),
 });
-const ConsultaVariantes = z.strictObject({ q: z.string().trim().min(1).max(200) });
+const ConsultaVariantes = z.strictObject({ q: z.string().trim().min(1).max(200), caso_id: z.uuid().optional() });
 /** Rediseño de la bandeja: apartar/desapartar («No estoy seguro»), con Idempotency-Key igual que decidir. */
 const Apartar = z.strictObject({
   expected_version: z.number().int().min(1),
@@ -130,6 +130,15 @@ async function atributosDe(pool: pg.Pool, sql: string, id: string): Promise<Atri
   const m: Atributos = new Map();
   for (const f of r.rows) m.set(f.nombre, m.has(f.nombre) ? `${m.get(f.nombre)} / ${f.valor}` : f.valor);
   return m;
+}
+
+/** Explicación de un candidato contra la publicación ML del caso. Es la misma proyección que usa el detalle. */
+async function explicacionCandidato(
+  pool: pg.Pool, atributosMl: Atributos, modelId: string, atributosMotor: unknown[] = [],
+) {
+  const atrCand = await atributosDe(pool,
+    'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE model_id = $1 AND vigente_hasta IS NULL', modelId);
+  return { atributos: atributosMotor, otros_atributos: otrosAtributos(atributosMl, atrCand) };
 }
 
 export function registrarIdentidadInterna(
@@ -271,12 +280,11 @@ export function registrarIdentidadInterna(
           ORDER BY k.rank`, [c.id])).rows;
       const candidatos = [];
       for (const k of cands) {
-        const atrCand = await atributosDe(pool, 'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE model_id = $1 AND vigente_hasta IS NULL', String(k.model_id));
         const atributos = (k.explicacion as { atributos?: unknown[] } | null)?.atributos ?? [];
         candidatos.push({
           rank: k.rank, variant_id: k.variant_id, sku: k.sku ?? null, titulo: k.titulo, foto: k.foto ?? null,
           precio: k.precio ?? null, moneda: k.moneda ?? null, stock: k.stock ?? null,
-          explicacion: { atributos, otros_atributos: otrosAtributos(atributosMl, atrCand) },
+          explicacion: await explicacionCandidato(pool, atributosMl, String(k.model_id), atributos),
         });
       }
 
@@ -308,11 +316,10 @@ export function registrarIdentidadInterna(
                                  ORDER BY observado_en DESC LIMIT 1) w ON true
             WHERE v.id = $1 AND v.archivado_en IS NULL`, [sombra.variant_id])).rows[0];
         if (v) {
-          const atrCand = await atributosDe(pool, 'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE model_id = $1 AND vigente_hasta IS NULL', String(v.model_id));
           candidatos.unshift({
             rank: 0, variant_id: v.variant_id, sku: v.sku ?? null, titulo: v.titulo, foto: v.foto ?? null,
             precio: v.precio ?? null, moneda: v.moneda ?? null, stock: v.stock ?? null,
-            explicacion: { atributos: [], otros_atributos: otrosAtributos(atributosMl, atrCand) },
+            explicacion: await explicacionCandidato(pool, atributosMl, String(v.model_id)),
           });
         }
       }
@@ -412,11 +419,27 @@ export function registrarIdentidadInterna(
     // ───────────────────────── buscar otra variante ─────────────────────────
     sub.get(`${PREFIJO_IDENTIDAD}/variantes`, async (req, reply) => {
       const auth = await autenticar(req, reply, 'GET'); if (!auth) return reply;
+      const rawCasoId = (req.query as { caso_id?: unknown }).caso_id;
+      if (rawCasoId !== undefined && (typeof rawCasoId !== 'string' || !z.uuid().safeParse(rawCasoId).success)) {
+        return error(req, reply, 400, 'invalid_query', 'El caso_id no es un UUID válido.');
+      }
       const q = ConsultaVariantes.safeParse(req.query);
       if (!q.success) return error(req, reply, 422, 'invalid_query', 'Falta el texto a buscar.');
+      let atributosMl: Atributos | null = null;
+      if (q.data.caso_id) {
+        const caso = (await pool.query<Fila>(
+          `SELECT c.id, r.id AS rep_id
+             FROM catalog.identity_cases c
+             ${PUBLICACION}
+            WHERE c.id = $1 AND c.company_id = $2`, [q.data.caso_id, auth.empresa])).rows[0];
+        if (!caso) return error(req, reply, 404, 'caso_inexistente', 'No existe el caso.');
+        if (!caso.rep_id) return error(req, reply, 422, 'caso_sin_publicacion', 'El caso no tiene una publicación única.');
+        atributosMl = await atributosDe(pool,
+          'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE representation_id = $1 AND vigente_hasta IS NULL', String(caso.rep_id));
+      }
       const patron = '%' + q.data.q.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
       const r = await pool.query<Fila>(
-        `SELECT v.id AS variant_id, v.sku, m.titulo,
+        `SELECT v.id AS variant_id, v.sku, v.model_id, m.titulo,
                 (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
                   ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto,
                 w.precio, w.moneda, w.stock_canal AS stock
@@ -427,8 +450,14 @@ export function registrarIdentidadInterna(
                                ORDER BY observado_en DESC LIMIT 1) w ON true
           WHERE v.company_id = $1 AND v.archivado_en IS NULL AND (upper(trim(v.sku)) = upper(trim($2)) OR m.titulo ILIKE $3)
           ORDER BY (upper(trim(v.sku)) = upper(trim($2))) DESC, m.titulo, v.sku LIMIT 20`, [auth.empresa, q.data.q, patron]);
-      return { variantes: r.rows.map((f) => ({ variant_id: f.variant_id, sku: f.sku ?? null, titulo: f.titulo, foto: f.foto ?? null,
-        precio: f.precio ?? null, moneda: f.moneda ?? null, stock: f.stock ?? null })) };
+      const variantes = [];
+      for (const f of r.rows) {
+        const variante = { variant_id: f.variant_id, sku: f.sku ?? null, titulo: f.titulo, foto: f.foto ?? null,
+          precio: f.precio ?? null, moneda: f.moneda ?? null, stock: f.stock ?? null } as Record<string, unknown>;
+        if (atributosMl) variante.explicacion = await explicacionCandidato(pool, atributosMl, String(f.model_id));
+        variantes.push(variante);
+      }
+      return { variantes };
     });
   });
 }

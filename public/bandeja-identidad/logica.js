@@ -161,7 +161,7 @@
         return { tipo: 'seleccionar', n: n };
       }
       if (k === 'enter') return ctx.candidatoVisible && nCandidatos > 0 ? { tipo: 'vincular' } : null;
-      if (k === 'x') return { tipo: 'no_vincular' };
+      if (k === 'x') return { tipo: 'rechazar' };
       if (k === '?') return { tipo: 'apartar' };
       if (k === 'o') return { tipo: 'omitir_por_ahora' };
       if (k === 'n') return { tipo: 'no_existe' };
@@ -245,10 +245,6 @@
       case 'vincular':
         if (estado.sel === null || estado.sel === undefined) { api.mostrar('Elegí un candidato'); return; }
         api.decidir({ expected_version: estado.detalle && estado.detalle.version, eleccion: 'vincular', variant_id: estado.sel });
-        return;
-
-      case 'no_vincular':
-        api.decidir({ expected_version: estado.detalle && estado.detalle.version, eleccion: 'omitir' });
         return;
 
       case 'no_existe':
@@ -362,6 +358,28 @@
       diferencias: diferenciasVisibles(opcion && opcion.explicacion).diferencias.length
     };
   }
+  function diferenciasDeResultado(resultado) {
+    return diferenciasVisibles(resultado && resultado.explicacion).diferencias.length;
+  }
+  function formatoFilaResultado(resultado) {
+    var diferencias = diferenciasDeResultado(resultado);
+    return {
+      variant_id: resultado && resultado.variant_id,
+      titulo: resultado && resultado.titulo ? String(resultado.titulo) : 'Sin título',
+      sku: resultado && resultado.sku ? String(resultado.sku) : 'Sin SKU',
+      foto: resultado && resultado.foto ? resultado.foto : null,
+      precio: formatoPrecio(resultado && resultado.precio, resultado && resultado.moneda),
+      stock: formatoStock(resultado && resultado.stock),
+      diferencias: diferencias,
+      textoDiferencias: diferencias + ' dif.'
+    };
+  }
+  function indiceResultadoBusqueda(actual, cantidad, delta) {
+    var n = Number(cantidad) || 0;
+    if (n < 1) return -1;
+    var i = Number.isInteger(Number(actual)) ? Number(actual) : -1;
+    return (i + (Number(delta) < 0 ? -1 : 1) + n) % n;
+  }
   function textoDecision(opcion, diferencias) {
     if (!opcion) return 'Elegí una acción para este caso';
     var sku = opcion.sku || 'este candidato';
@@ -410,7 +428,8 @@
     indiceNoSalteado: indiceNoSalteado,
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
     porQue: porQue, atributosIguales: atributosIguales, fraseTipo: fraseTipo, diferenciasVisibles: diferenciasVisibles,
-    textoDiferencias: textoDiferencias, resumenCandidato: resumenCandidato, textoDecision: textoDecision,
+    textoDiferencias: textoDiferencias, resumenCandidato: resumenCandidato, diferenciasDeResultado: diferenciasDeResultado,
+    formatoFilaResultado: formatoFilaResultado, indiceResultadoBusqueda: indiceResultadoBusqueda, textoDecision: textoDecision,
     siguienteNivelZoom: siguienteNivelZoom, indiceCandidatoVisor: indiceCandidatoVisor, paresParaVisor: paresParaVisor,
     GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
   };

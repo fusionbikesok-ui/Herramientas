@@ -14,13 +14,14 @@
     grupo: null,            // filtro activo: null o 0..7
     cola: [], siguiente: null, cargandoMas: false,
     contadores: {}, totalInicial: 0, hechos: 0,
-    idx: -1, detalle: null, sel: null, busqueda: [], buscando: false, soloDif: false, mostrarIguales: false,
+    idx: -1, detalle: null, sel: null, busqueda: [], buscando: false, resultadoElegido: false, resultadoIndice: -1,
+    estadoBusqueda: 'vacio', soloDif: false, mostrarIguales: false,
     conflicto: null,        // { entry, details } tras un 409
     cache: new Map(),       // id de caso → Promise del detalle
     pendientes: new Map(),  // Idempotency-Key → entry (guardado en segundo plano)
     ultima: null,           // { tipo: 'decision'|'apartado'|'salteado', ... } para deshacer
     salteados: new Set(),   // Set de IDs de casos omitidos por ahora (sólo en la sesión)
-    atajos: leerAtajos(), navToken: 0, timerDeshacer: null, timerBusqueda: null,
+    atajos: leerAtajos(), navToken: 0, timerDeshacer: null, timerBusqueda: null, tokenBusqueda: 0, candidatoAnterior: null,
     visor: null
   };
 
@@ -185,14 +186,16 @@
     return detalleDe(caso.id).then(function (d) {
       if (token !== S.navToken) return;
       if (d.cerrado_en) { anunciar('Ese caso ya se resolvió. Pasamos al siguiente.'); S.cola.splice(i, 1); return S.cola.length ? abrirCaso(Math.min(i, S.cola.length - 1), opts) : vacio(); }
-      S.detalle = d; S.busqueda = []; S.buscando = false; S.mostrarIguales = false; // T4: por caso, no una preferencia de sesión como soloDif
+      S.tokenBusqueda++;
+      S.detalle = d; S.consulta = ''; S.busqueda = []; S.buscando = !(d.candidatos || []).length; S.resultadoElegido = false; S.resultadoIndice = -1; S.estadoBusqueda = 'vacio'; S.candidatoAnterior = null; S.mostrarIguales = false; // T4: no una preferencia de sesión como soloDif
       precargarFotos(d);
       if (opts.sel !== undefined) S.sel = opts.sel; else S.sel = null;
       if (!opts.conservarConflicto) S.conflicto = null;
       render();
       var activo = document.activeElement;
       var escribiendo = activo && (activo.tagName === 'INPUT' || activo.tagName === 'TEXTAREA');
-      if (opts.foco && !escribiendo) { var h = $('caso-focus'); if (h) h.focus(); }
+      if (S.buscando && $('input-buscar')) $('input-buscar').focus();
+      else if (opts.foco && !escribiendo) { var h = $('caso-focus'); if (h) h.focus(); }
       anunciar('Caso ' + (S.hechos + 1) + ' de ' + Math.max(S.totalInicial, S.hechos + 1));
       banda();
       precargar();
@@ -521,26 +524,72 @@
 
   // ───────────────────────── búsqueda de otra variante ─────────────────────────
   function abrirBusqueda() {
-    S.buscando = true; render();
-    $('input-buscar').focus();
+    S.candidatoAnterior = S.sel; S.consulta = ''; S.busqueda = []; S.buscando = true; S.resultadoElegido = false; S.resultadoIndice = -1; S.estadoBusqueda = 'vacio'; render();
+    if ($('input-buscar')) $('input-buscar').focus();
     anunciar('Buscar variante. Escribí SKU o título; Esc vuelve al caso.');
   }
   function cerrarBusqueda() {
-    S.buscando = false; S.busqueda = []; render();
+    clearTimeout(S.timerBusqueda); S.tokenBusqueda++;
+    var anterior = S.candidatoAnterior;
+    S.buscando = false; S.busqueda = []; S.resultadoElegido = false; S.resultadoIndice = -1; S.estadoBusqueda = 'vacio'; S.candidatoAnterior = null;
+    S.sel = anterior || null; render();
     var h = $('caso-focus'); if (h) h.focus();
+  }
+  function elegirResultado(indice) {
+    var resultado = S.busqueda[indice]; if (!resultado) return;
+    if (!S.resultadoElegido) S.candidatoAnterior = S.sel;
+    S.resultadoIndice = indice; S.resultadoElegido = true; S.sel = resultado.variant_id; render();
+    anunciar('Candidato de búsqueda ' + (resultado.sku || resultado.titulo || 'seleccionado') + '. Enter vincula.');
   }
   function buscar(q) {
     clearTimeout(S.timerBusqueda);
-    if (q.trim().length < 2) { S.busqueda = []; render(); return; }
+    S.consulta = q;
+    S.resultadoElegido = false; S.resultadoIndice = -1; S.busqueda = [];
+    if (q.trim().length < 2) { S.estadoBusqueda = 'vacio'; render(); return; }
+    S.estadoBusqueda = 'cargando'; render();
+    var token = ++S.tokenBusqueda;
     S.timerBusqueda = setTimeout(function () {
-      http('GET', '/variantes?q=' + encodeURIComponent(q.trim())).then(function (r) {
+      var casoId = S.detalle && S.detalle.id ? '&caso_id=' + encodeURIComponent(S.detalle.id) : '';
+      http('GET', '/variantes?q=' + encodeURIComponent(q.trim()) + casoId).then(function (r) {
+        if (token !== S.tokenBusqueda || (S.detalle && S.detalle.id && token !== S.tokenBusqueda)) return;
         if ($('input-buscar') && $('input-buscar').value.trim() !== q.trim()) return;
+        S.estadoBusqueda = r.status === 200 ? 'listo' : 'error';
         S.busqueda = r.status === 200 ? (r.data.variantes || []) : [];
         render();
         anunciar(S.busqueda.length + ' resultados');
         if (r.status !== 200) aviso('busqueda', 'No pudimos buscar. Probá de nuevo.');
       });
     }, 250);
+  }
+
+  function renderBuscador(caso, seleccionado) {
+    var panel = el('section', 'candidato-busqueda-panel', null, { 'aria-label': 'Buscar candidato' });
+    var input = el('input', 'buscador-input', null, { type: 'search', id: 'input-buscar', placeholder: 'Buscar por SKU o título', 'aria-label': 'Buscar otra variante', 'aria-controls': 'resultados-busqueda' });
+    input.value = S.consulta || ''; panel.appendChild(input);
+    var estado = el('div', 'busqueda-estado', null, { id: 'estado-busqueda', role: 'status', 'aria-live': 'polite' });
+    if (S.estadoBusqueda === 'cargando') estado.textContent = 'Buscando…';
+    else if (S.estadoBusqueda === 'error') estado.textContent = 'No pudimos buscar. Probá de nuevo.';
+    else if (S.estadoBusqueda === 'listo' && !S.busqueda.length) estado.textContent = 'No encontramos variantes.';
+    else if (S.estadoBusqueda === 'vacio') estado.textContent = 'Escribí al menos 2 caracteres.';
+    panel.appendChild(estado);
+    var lista = el('div', 'resultados-busqueda', null, { id: 'resultados-busqueda', role: 'listbox', 'aria-label': 'Resultados de variantes' });
+    S.busqueda.forEach(function (resultado, i) {
+      var fila = L.formatoFilaResultado(resultado);
+      var b = el('button', 'resultado-variante' + (S.resultadoIndice === i ? ' resultado-variante--activo' : ''), null, { type: 'button', role: 'option', 'data-busqueda': String(i), 'aria-selected': S.resultadoIndice === i ? 'true' : 'false' });
+      if (fila.foto) { var im = el('img', 'resultado-variante-foto', null, { alt: '', loading: 'lazy' }); im.src = fila.foto; b.appendChild(im); }
+      else b.appendChild(el('span', 'resultado-variante-foto resultado-variante-foto--vacio', '—', { 'aria-hidden': 'true' }));
+      var datos = el('span', 'resultado-variante-datos');
+      datos.appendChild(el('strong', 'resultado-variante-titulo', fila.titulo));
+      datos.appendChild(el('span', 'resultado-variante-meta', fila.sku + ' · ' + fila.precio + ' · ' + fila.stock));
+      datos.appendChild(el('span', 'resultado-variante-dif', fila.textoDiferencias));
+      b.appendChild(datos); lista.appendChild(b);
+    });
+    if (!seleccionado || !S.resultadoElegido) panel.appendChild(lista);
+    if (seleccionado && S.resultadoElegido) {
+      panel.appendChild(el('div', 'resultado-elegido', 'Candidato seleccionado · Enter vincula a ' + (seleccionado.sku || 'este SKU')));
+      panel.appendChild(renderFicha(seleccionado, 'CANDIDATO DE BÚSQUEDA', false, caso));
+    }
+    return panel;
   }
 
   // ───────────────────────── render ─────────────────────────
@@ -786,8 +835,9 @@
     var enfocado = document.activeElement && document.activeElement.id;
     vaciar(root);
     if (!d) return;
-    var cs = S.cola[S.idx] || {}, opciones = L.opcionesDe(d.candidatos, S.busqueda);
-    var seleccionado = opciones.filter(function (o) { return o.variant_id === S.sel; })[0] || opciones[0];
+    var cs = S.cola[S.idx] || {}, opciones = L.opcionesDe(d.candidatos, []);
+    var resultadoElegido = S.resultadoElegido ? S.busqueda.filter(function (o) { return o.variant_id === S.sel; })[0] : null;
+    var seleccionado = resultadoElegido || opciones.filter(function (o) { return o.variant_id === S.sel; })[0] || opciones[0];
     if (seleccionado && S.sel == null) S.sel = seleccionado.variant_id;
     var resumenDiferencias = L.diferenciasVisibles(seleccionado && seleccionado.explicacion);
     var diferencias = resumenDiferencias.diferencias;
@@ -806,10 +856,6 @@
     root.appendChild(head);
     if (!d.publicacion) { root.appendChild(el('div', 'api-estado api-estado--error', L.copyError('caso_sin_publicacion'))); return; }
     if (S.conflicto) root.appendChild(el('div', 'aviso-conflicto', '⚠ Este caso cambió mientras lo revisabas; tu elección se conserva.', { role: 'alert' }));
-    if (S.buscando) {
-      var buscar = el('div', 'buscador-variantes');
-      var input = el('input', 'buscador-input', null, { type: 'search', id: 'input-buscar', placeholder: 'Buscar por SKU o título (Esc vuelve al caso)', 'aria-label': 'Buscar otra variante' }); input.value = S.consulta || ''; buscar.appendChild(input); root.appendChild(buscar);
-    }
     var compare = el('section', 'estacion-paneles', null, { 'aria-label': 'Publicación y candidato seleccionados' });
     compare.appendChild(renderFicha(d.publicacion, 'PUBLICACIÓN ML', true, d));
     var confirmable = cs.confirmar ? Object.assign({}, cs.confirmar, d.confirmar || {}) : null;
@@ -817,7 +863,8 @@
       var detalleConfirmable = (d.candidatos || []).find(function (o) { return o.variant_id === confirmable.variant_id; });
       confirmable = Object.assign({}, confirmable, detalleConfirmable || {});
     }
-    if (seleccionado) compare.appendChild(renderFicha(seleccionado, 'CANDIDATO ' + (opciones.indexOf(seleccionado) + 1) + ' de ' + opciones.length, false, d));
+    if (S.buscando) compare.appendChild(renderBuscador(d, seleccionado));
+    else if (seleccionado) compare.appendChild(renderFicha(seleccionado, 'CANDIDATO ' + (opciones.indexOf(seleccionado) + 1) + ' de ' + opciones.length, false, d));
     else if (confirmable) compare.appendChild(renderFicha(confirmable, 'SKU A CONFIRMAR', false, d));
     else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
     root.appendChild(compare);
@@ -838,7 +885,8 @@
       b.appendChild(el('span', 'candidato-chip-conteo', resumen.diferencias + ' dif.'));
       tira.appendChild(b);
     });
-    var busc = el('button', 'btn btn--compact', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' }); tira.appendChild(busc); root.appendChild(tira);
+    if (!S.buscando) { var busc = el('button', 'btn btn--compact', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' }); tira.appendChild(busc); }
+    root.appendChild(tira);
     var hist = el('details', 'historial-evidencia', null, { id: 'historial' }); hist.appendChild(el('summary', null, 'Historial y evidencia (h)')); (d.historial || []).concat(d.evidencia || []).slice(0, 20).forEach(function (x) { hist.appendChild(el('div', 'historial-item', JSON.stringify(x))); }); root.appendChild(hist);
     var bar = el('footer', 'barra-decision', null, { id: 'barra-decision', role: 'region', 'aria-label': 'Barra de decisión' });
     if (seleccionado && !cs.confirmar) bar.appendChild(el('button', 'btn btn--primary btn-decision-principal', L.textoDecision(seleccionado, diferencias), { type: 'button', id: 'btn-vincular', 'aria-keyshortcuts': 'Enter' }));
@@ -846,7 +894,7 @@
     if (cs.confirmar) bar.appendChild(el('button', 'btn', 'x No es ninguno', { type: 'button', id: 'btn-rechazar', 'aria-keyshortcuts': 'x' }));
     bar.appendChild(el('button', 'btn', '? No estoy seguro', { type: 'button', id: 'btn-apartar', 'aria-keyshortcuts': '?' })); bar.appendChild(el('button', 'btn', 'o Omitir por ahora', { type: 'button', id: 'btn-omitir-ahora', 'aria-keyshortcuts': 'o' }));
     if (!cs.confirmar) bar.appendChild(el('button', 'btn', 'n No existe', { type: 'button', id: 'btn-no-existe', 'aria-keyshortcuts': 'n' }));
-    if (!cs.confirmar) bar.appendChild(el('button', 'btn', 'x No vincular', { type: 'button', id: 'btn-no-vincular', 'aria-keyshortcuts': 'x' }));
+    if (!cs.confirmar) bar.appendChild(el('button', 'btn', 'x No es ninguno', { type: 'button', id: 'btn-rechazar', 'aria-keyshortcuts': 'x' }));
     bar.appendChild(el('span', 'deshacer-ayuda', 'Deshacer: z (10 s)')); root.appendChild(bar);
     if (enfocado === 'input-buscar' && $('input-buscar')) $('input-buscar').focus();
   }
@@ -956,6 +1004,7 @@
         var numero = candidatas.findIndex(function (o) { return o.variant_id === t.getAttribute('data-candidato'); }) + 1;
         seleccionarPorNumero(numero);
       }
+      else if (t.hasAttribute('data-busqueda')) elegirResultado(Number(t.getAttribute('data-busqueda')));
       else if (t.id === 'btn-no-vincular') decidir('omitir');
       else if (t.id === 'btn-no-es-este') decidir('mantener_omision');
       else if (t.id === 'btn-rechazar') decidir('sin_candidato');
@@ -976,7 +1025,28 @@
       if (ev.target.id === 'input-buscar') { S.consulta = ev.target.value; buscar(ev.target.value); }
     });
     root.addEventListener('keydown', function (ev) {
-      if (ev.target.id === 'input-buscar' && ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); cerrarBusqueda(); }
+      if (S.buscando && ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); cerrarBusqueda(); return; }
+      if (ev.target.id === 'input-buscar') {
+        if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+          if (!S.busqueda.length) return;
+          ev.preventDefault();
+          S.resultadoIndice = L.indiceResultadoBusqueda(S.resultadoIndice, S.busqueda.length, ev.key === 'ArrowDown' ? 1 : -1);
+          render();
+          var fila = document.querySelector('[data-busqueda="' + S.resultadoIndice + '"]'); if (fila) fila.focus();
+          return;
+        }
+        if (ev.key === 'Enter' && S.resultadoIndice >= 0) { ev.preventDefault(); elegirResultado(S.resultadoIndice); }
+      }
+      if (S.buscando && ev.target.hasAttribute && ev.target.hasAttribute('data-busqueda')) {
+        if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+          ev.preventDefault();
+          S.resultadoIndice = L.indiceResultadoBusqueda(S.resultadoIndice, S.busqueda.length, ev.key === 'ArrowDown' ? 1 : -1);
+          render();
+          var siguiente = document.querySelector('[data-busqueda="' + S.resultadoIndice + '"]'); if (siguiente) siguiente.focus();
+        } else if (ev.key === 'Enter') {
+          ev.preventDefault(); elegirResultado(Number(ev.target.getAttribute('data-busqueda')));
+        }
+      }
     });
 
     document.addEventListener('keydown', function (ev) {
@@ -1048,11 +1118,9 @@
           // preexistente (Alto, hallazgo de Codex): esto leía `cs.detalle.d5`, que nunca existe en `cs`
           // (una fila de cola), así que siempre caía en 'sin_candidato' aunque D5 estuviera vigente.
           var cs = S.cola[S.idx];
-          if (cs && cs.d5 === true) decidir('mantener_omision');
+          if (S.detalle && S.detalle.tipo === 'omitida_revisar') decidir('mantener_omision');
+          else if (cs && cs.d5 === true) decidir('mantener_omision');
           else decidir('sin_candidato');
-          break;
-        case 'no_vincular':
-          decidir('omitir');
           break;
         case 'buscar':
           abrirBusqueda();

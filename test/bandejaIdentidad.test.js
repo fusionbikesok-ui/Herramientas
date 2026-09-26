@@ -54,18 +54,18 @@ describe('E3 T3 — lógica pura de teclas y acciones', () => {
     expect(L.accionDeTecla('3', { confirmable: false, nCandidatos: 2, tipoCaso: 'sku_pendiente' })).toBeNull();
   });
 
-  it('x reutiliza omitir en todos los casos normales y no cambia el camino confirmable', () => {
-    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 0, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'no_vincular' });
-    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 3, tipoCaso: 'conflicto' })).toEqual({ tipo: 'no_vincular' });
+  it('x es rechazar en todos los casos y ninguna tecla manda eleccion omitir', () => {
+    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 0, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'rechazar' });
+    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 3, tipoCaso: 'conflicto' })).toEqual({ tipo: 'rechazar' });
     expect(L.accionDeTecla('x', { confirmable: true, nCandidatos: 0, tipoCaso: 'omitida_revisar' })).toEqual({ tipo: 'rechazar' });
-  });
-
-  it('no vincular usa el mismo payload omitir que usaba el botón histórico', () => {
-    const decisiones = [];
-    L.ejecutarAccion({ tipo: 'no_vincular' }, {
-      cola: [{ id: 'caso-1' }], idx: 0, sel: null, detalle: { version: 7 }
-    }, { decidir: (cuerpo) => decisiones.push(cuerpo) });
-    expect(decisiones).toEqual([{ expected_version: 7, eleccion: 'omitir' }]);
+    const teclas = ['1','2','3','x','s','n','o','?','/','z','a','Enter','d','f'];
+    for (const conf of [false, true]) for (const k of teclas) {
+      const acc = L.accionDeTecla(k, { confirmable: conf, nCandidatos: 3, candidatoVisible: true, tipoCaso: 'sku_pendiente' });
+      const decisiones = [];
+      if (acc) L.ejecutarAccion(acc, { cola: [{ id: 'c' }], idx: 0, sel: 'v1', detalle: { version: 1 } },
+        { decidir: (c) => decisiones.push(c), omitir: () => {}, mostrar: () => {}, apartar: () => {}, deshacer: () => {}, buscar: () => {}, ayuda: () => {}, confirmar: () => {} });
+      expect(decisiones.some((d) => d.eleccion === 'omitir')).toBe(false);
+    }
   });
 
   it('Enter confirmable sigue actuando aunque no haya candidato visible', () => {
@@ -257,6 +257,15 @@ describe('E3 T6 proxy de la bandeja de identidad', () => {
     expect(p.recibidos.map((x) => x.firmaValida)).toEqual([true, true]);
     expect(decodeURIComponent(p.recibidos[0].ruta.split('q=')[1].replace(/\+/g, ' '))).toBe('casco ñandú 50% a_b');
     expect(p.recibidos[1].ruta).not.toContain('extra');
+  });
+
+  it('búsqueda manual conserva caso_id en la query firmada', async () => {
+    const p = plataformaFalsa();
+    await request(app({ user: operador, fetch: p.fetch })).get('/api/bandeja-identidad/variantes')
+      .query({ q: 'casco', caso_id: ID });
+    expect(new URL(p.recibidos[0].ruta, 'http://x').searchParams.get('q')).toBe('casco');
+    expect(new URL(p.recibidos[0].ruta, 'http://x').searchParams.get('caso_id')).toBe(ID);
+    expect(p.recibidos[0].firmaValida).toBe(true);
   });
 
   it('el filtro por grupo de los chips llega a la plataforma (y firmado)', async () => {
