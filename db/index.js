@@ -909,6 +909,10 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_publicacion_cambios_103')").run();
     })();
   }
+  // Se agrega aparte porque hay bases productivas que ya tienen la tabla 103 aplicada.
+  try { db.exec('ALTER TABLE ml_publicacion_cambios ADD COLUMN bloquea_reactivador INTEGER NOT NULL DEFAULT 0'); } catch (e) {
+    if (!String(e.message || e).includes('duplicate column name')) throw e;
+  }
   // E1 T3 C1: ciclo de vida de la copia de sombra sobre integration_events. Las columnas se agregan
   // una por una según PRAGMA para que una base con la migración a medio aplicar se complete sola; los
   // índices del .sql son idempotentes. Ninguna columna lleva CHECK: SQLite no puede agregar

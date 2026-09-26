@@ -180,6 +180,8 @@ var LABELS_PRECIO={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:
    Publicaciones que pasaron a describir otra cosa (cambió su producto de catálogo, sus
    unidades por pack o su formato de venta) y el vigía pausó. Reactivar es siempre una
    decisión humana: el vigía nunca despausa solo. */
+// Avisos que el vigía dejó abiertos A PROPÓSITO sin pausar (migración de ML): no son un error de pausa.
+function esMotivoSinPausa(c){return !c.pausada&&/^migración de ML/.test(c.pausa_error||'');}
 async function cargarCambiosFormato(){
   var caja=document.getElementById('cambios-formato');
   if(!caja)return;
@@ -187,12 +189,8 @@ async function cargarCambiosFormato(){
     var r=await fetch('/api/sync/cambios-formato');
     var d=await r.json();
     var todas=(d&&d.data)||[];
-    // Una tarjeta por cambio de una publicación (mismo campo y valor nuevo): el vigía abre un
-    // aviso por variación y revisar cierra esas variaciones, no los cambios de otros campos.
-    var claveCambio=function(c){return c.item_id+'|'+c.campo+'|'+(c.valor_nuevo==null?'':c.valor_nuevo);};
-    var vistos={}, variaciones={};
-    todas.forEach(function(c){var k=claveCambio(c);(variaciones[k]=variaciones[k]||{})[c.clave]=true;});
-    var filas=todas.filter(function(c){var k=claveCambio(c);if(vistos[k])return false;vistos[k]=true;return true;});
+    // El servidor ya agrupa por publicación, campo y valor nuevo: una tarjeta por cambio, con el conteo de variaciones.
+    var filas=todas;
     caja.hidden=!filas.length;
     if(!filas.length)return;
     document.getElementById('cambios-formato-lista').innerHTML=filas.map(function(c){
@@ -200,10 +198,11 @@ async function cargarCambiosFormato(){
       var despues=c.valor_nuevo==null?'(vacío)':c.valor_nuevo;
       return '<div class="cf-fila">'
         +'<div style="min-width:0">'
-        +'<div><b>'+esc(c.titulo||c.item_id)+'</b>'+(c.sku?' · '+esc(c.sku):'')+(Object.keys(variaciones[claveCambio(c)]).length>1?' · '+Object.keys(variaciones[claveCambio(c)]).length+' variaciones':'')+'</div>'
+        +'<div><b>'+esc(c.titulo||c.item_id)+'</b>'+(c.sku?' · '+esc(c.sku):'')+(c.variaciones>1?' · '+c.variaciones+' variaciones':'')+'</div>'
         +'<div class="cf-cambio">'+esc(c.campo)+': <span class="cf-antes">'+esc(antes)+'</span> → <span class="cf-despues">'+esc(despues)+'</span></div>'
-        +(c.pausada?'':'<div style="font-size:12px;color:var(--amber,#F5B942)">No se pausó (freno de mano o error).</div>')
-        +(c.pausa_error?'<div style="font-size:12px;color:var(--red,#F87171)">No se pudo pausar: '+esc(c.pausa_error)+'</div>':'')
+        +(esMotivoSinPausa(c)?'<div style="font-size:12px;color:var(--amber,#F5B942)">'+esc(c.pausa_error)+'. Revisalo igual.</div>'
+          :(c.pausada?'':'<div style="font-size:12px;color:var(--amber,#F5B942)">No se pausó (freno de mano o error).</div>')
+          +(c.pausa_error?'<div style="font-size:12px;color:var(--red,#F87171)">No se pudo pausar: '+esc(c.pausa_error)+'</div>':''))
         +'</div>'
         +'<div class="cf-acciones">'
         +'<button class="btn sec" onclick="revisarCambio('+c.id+',false)">Dejar pausada</button>'

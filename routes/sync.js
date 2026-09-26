@@ -1928,7 +1928,17 @@ export async function procesarReintentos(db, cfg) {
  * disponible en la web y están mapeadas. Devuelve filas por variación.
  * (El agrupado por publicación lo hace el router para el display.)
  */
+export function reabrirAvisosSinStock(db) {
+  const rows = db.prepare(`${COMPUTED_STOCK_CTE}
+    SELECT c.id FROM ml_publicacion_cambios c JOIN computed x ON x.clave=c.clave
+    WHERE c.bloquea_reactivador=1 AND c.revisado_en IS NOT NULL AND x.stock_disponible_ml > 0`).all();
+  const upd = db.prepare("UPDATE ml_publicacion_cambios SET revisado_en=NULL, revisado_por=NULL, bloquea_reactivador=0, pausa_error=COALESCE(pausa_error,'') || ' | reabierto: volvió el stock' WHERE id=?");
+  db.transaction(() => rows.forEach(r => upd.run(r.id)))();
+  return rows.length;
+}
+
 export function getReactivablesRows(db, itemIds = null) {
+  reabrirAvisosSinStock(db);
   let sql = `
     ${COMPUTED_STOCK_CTE}
     SELECT cm.clave, cm.sku, cm.stock_disponible_ml,
@@ -1941,7 +1951,7 @@ export function getReactivablesRows(db, itemIds = null) {
       AND cm.stock_disponible_ml > 0
       AND NOT EXISTS (
         SELECT 1 FROM ml_publicacion_cambios vc
-        WHERE vc.clave = p.clave AND vc.revisado_en IS NULL
+        WHERE vc.clave = p.clave AND (vc.revisado_en IS NULL OR vc.bloquea_reactivador = 1)
       )`;
   const params = [];
   if (Array.isArray(itemIds) && itemIds.length) {
@@ -3147,14 +3157,15 @@ export function syncRouter(db, cfg) {
   // título para que la pantalla no muestre sólo un MLA.
   router.get('/cambios-formato', (_req, res) => {
     const data = db.prepare(`
-      SELECT c.id, c.clave, c.item_id, c.sku, c.campo, c.valor_anterior, c.valor_nuevo,
-             c.pausada, c.pausa_error, c.detectado_en, p.titulo, p.thumbnail, p.permalink
+      SELECT MIN(c.id) id, json_group_array(c.id) ids, COUNT(DISTINCT c.clave) variaciones, MIN(c.clave) clave, c.item_id, MIN(c.sku) sku, c.campo, c.valor_anterior, c.valor_nuevo,
+             MAX(c.pausada) pausada, MAX(c.pausa_error) pausa_error, MAX(c.detectado_en) detectado_en, p.titulo, p.thumbnail, p.permalink
       FROM ml_publicacion_cambios c
       LEFT JOIN ml_publicaciones_cache p ON p.clave = c.clave
       WHERE c.revisado_en IS NULL
-      ORDER BY c.detectado_en DESC, c.id DESC
-    `).all();
-    res.json({ ok: true, data });
+      GROUP BY c.item_id, c.campo, c.valor_nuevo
+      ORDER BY detectado_en DESC, id DESC
+    `).all().map(r => ({ ...r, ids: JSON.parse(r.ids) }));
+    res.json({ ok: true, data, total: data.length });
   });
 
   // Revisar cierra el aviso. Con `reactivar: true` además despausa: es el ÚNICO camino por el
