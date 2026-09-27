@@ -53,13 +53,15 @@ export interface OpcionesAutoridad {
 
 const CASOS_DE_PENDIENTE = ['sku_pendiente', 'sku_inexistente_en_woo'];
 
-export async function reclasificarModelosAfectados(tx: Consultable, empresa: string, modelos: Iterable<string>): Promise<void> {
+export async function reclasificarModelosAfectados(
+  tx: Consultable, empresa: string, modelos: Iterable<string>, categoriaCambio: Iterable<string>,
+): Promise<void> {
   const afectados = [...new Set(modelos)].sort();
   if (!afectados.length) return;
   await tx.query('SAVEPOINT clasificacion_decision');
   try {
     await clasificarModelos(tx, {
-      empresa, dryRun: false, modelos: afectados, categoriaCambio: new Set(afectados),
+      empresa, dryRun: false, modelos: afectados, categoriaCambio: new Set(categoriaCambio),
     });
     await tx.query('RELEASE SAVEPOINT clasificacion_decision');
   } catch (err) {
@@ -75,7 +77,9 @@ export async function reclasificarModelosAfectados(tx: Consultable, empresa: str
   }
 }
 
-export interface ResumenReparacionExtras { atributos: number; imagenes: number; modelos: Set<string> }
+export interface ResumenReparacionExtras {
+  atributos: number; imagenes: number; modelos: Set<string>; categoriaCambio: Set<string>;
+}
 
 /** Alinea los extras de una representación y reclasifica sólo si movió alguna fila de modelo. */
 export async function repararExtrasDeRepresentacion(
@@ -85,20 +89,26 @@ export async function repararExtrasDeRepresentacion(
     `SELECT EXISTS (SELECT 1 FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2)
          OR EXISTS (SELECT 1 FROM catalog.model_images WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2) AS hay`,
     [representacion, modeloDestino])).rows[0]!.hay;
-  if (!hay) return { atributos: 0, imagenes: 0, modelos: new Set() };
+  if (!hay) return { atributos: 0, imagenes: 0, modelos: new Set(), categoriaCambio: new Set() };
   const modelos = new Set((await tx.query<{ model_id: string }>(
     `SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2
      UNION SELECT model_id FROM catalog.model_images WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2`,
     [representacion, modeloDestino])).rows.map((r) => r.model_id).filter(Boolean));
   if (modeloDestino) modelos.add(modeloDestino);
+  const categorias = (await tx.query<{ model_id: string | null }>(
+    `SELECT model_id FROM catalog.model_attributes
+      WHERE representation_id = $1 AND nombre_normalizado = 'categoria_canal' AND vigente_hasta IS NULL
+        AND model_id IS DISTINCT FROM $2`, [representacion, modeloDestino])).rows;
+  const categoriaCambio = new Set(categorias.map((r) => r.model_id).filter((id): id is string => Boolean(id)));
+  if (categorias.length && modeloDestino) categoriaCambio.add(modeloDestino);
   const atributos = (await tx.query(
     'UPDATE catalog.model_attributes SET model_id = $2 WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2',
     [representacion, modeloDestino])).rowCount ?? 0;
   const imagenes = (await tx.query(
     'UPDATE catalog.model_images SET model_id = $2 WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2',
     [representacion, modeloDestino])).rowCount ?? 0;
-  if (atributos || imagenes) await reclasificarModelosAfectados(tx, empresa, modelos);
-  return { atributos, imagenes, modelos };
+  if (atributos || imagenes) await reclasificarModelosAfectados(tx, empresa, modelos, categoriaCambio);
+  return { atributos, imagenes, modelos, categoriaCambio };
 }
 
 export async function reconciliarClave(
@@ -186,6 +196,12 @@ export async function reconciliarClave(
       [empresa, modeloDestino])).rows[0]!.id;
     await abrir(deseado.caso, { variante: nueva }, 'normal', deseado.sku ? { sku: deseado.sku } : {});
   }
+  const categoriasMovidas = (await tx.query<{ model_id: string | null }>(
+    `SELECT model_id FROM catalog.model_attributes
+      WHERE representation_id = $1 AND nombre_normalizado = 'categoria_canal' AND vigente_hasta IS NULL
+        AND model_id IS DISTINCT FROM $2`, [rep.id, modeloDestino])).rows;
+  const categoriaCambio = new Set(categoriasMovidas.map((r) => r.model_id).filter((id): id is string => Boolean(id)));
+  if (categoriasMovidas.length && modeloDestino) categoriaCambio.add(modeloDestino);
   await tx.query(
     'UPDATE catalog.external_representations SET variant_id = $2, omitida_por_decision = $3 WHERE id = $1',
     [rep.id, nueva, deseado.tipo === 'omitida']);
@@ -210,7 +226,7 @@ export async function reconciliarClave(
   const modelosAfectados = new Set<string>();
   if (actual?.model_id && actual.model_id !== modeloDestino) modelosAfectados.add(actual.model_id);
   if (modeloDestino && modeloDestino !== actual?.model_id) modelosAfectados.add(modeloDestino);
-  await reclasificarModelosAfectados(tx, empresa, modelosAfectados);
+  await reclasificarModelosAfectados(tx, empresa, modelosAfectados, categoriaCambio);
 
   await registrarEvento(tx, {
     companyId: empresa, actorType: 'system', actorId: 'plataforma.catalogo', action: 'catalogo.vinculo_cambiado',

@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { repararExtrasDeRepresentacion } from '../../src/catalogo/decisiones.ts';
 import { crearProyector, type OpcionesProyector } from '../../src/catalogo/proyector.ts';
 import { crearVersion, escribirArbol, mapearCategoria, publicarVersion } from '../../src/catalogo/taxonomia.ts';
 import { encolarInbox } from '../../src/colas/colas.ts';
@@ -375,6 +376,35 @@ describe('E2-PRY-10 proyector del catálogo', () => {
       await encolar(woo, 'woo.products', '2003', { id: 2003, type: 'simple', sku: 'FB-2003', categories: [{ id: 'C1', name: 'CUBIERTAS' }], name: 'otro título' });
       await proyector().unaVuelta();
       expect(await claveVigente(m)).toEqual([{ clave: 'camaras', primaria: true }]);
+      expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])).toEqual([]);
+    });
+
+    it('reparar sólo una imagen no abre categoria_persona_contradicha', async () => {
+      await encolar(woo, 'woo.products', '2006', { id: 2006, type: 'simple', sku: 'FB-2006', categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      await proyector().unaVuelta();
+      const m = await modeloDe('2006');
+      const rep = (await q<{ id: string }>('SELECT id FROM catalog.external_representations WHERE recurso = $1', ['2006']))[0]!.id;
+      await admin.query('UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = \'test\' WHERE model_id = $1 AND quitado_en IS NULL', [m]);
+      await admin.query('INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen) VALUES ($1, $2, $3, true, \'persona\')', [empresa, m, camaras]);
+      await admin.query('INSERT INTO catalog.model_images (model_id, representation_id, url, observado_en) VALUES (NULL, $1, \'https://x/2006.jpg\', now())', [rep]);
+
+      await enTransaccion(app, (tx) => repararExtrasDeRepresentacion(tx, empresa, rep, m));
+
+      expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])).toEqual([]);
+    });
+
+    it('reparar sólo un atributo que no es categoría no abre categoria_persona_contradicha', async () => {
+      await encolar(woo, 'woo.products', '2007', { id: 2007, type: 'simple', sku: 'FB-2007', categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      await proyector().unaVuelta();
+      const m = await modeloDe('2007');
+      const rep = (await q<{ id: string }>('SELECT id FROM catalog.external_representations WHERE recurso = $1', ['2007']))[0]!.id;
+      await admin.query('UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = \'test\' WHERE model_id = $1 AND quitado_en IS NULL', [m]);
+      await admin.query('INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen) VALUES ($1, $2, $3, true, \'persona\')', [empresa, m, camaras]);
+      await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+        VALUES (NULL, $1, 'marca', 'HEREDADA', now())`, [rep]);
+
+      await enTransaccion(app, (tx) => repararExtrasDeRepresentacion(tx, empresa, rep, m));
+
       expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])).toEqual([]);
     });
 
