@@ -55,6 +55,12 @@ La evidencia está en el mensaje del commit `6a50e285`.
 
 **Pregunta 3:** ¿aceptás este criterio, o preferís la regla estricta de "nunca editar una migración ya escrita" (en ese caso, 0028 original + 0029 + 0030)?
 
+### Cupo de Codex (03:50 UTC)
+
+A las 03:50 la ventana de 5 horas llegó al 87 %. Frené todo uso de Codex hasta las 06:46 UTC, cuando se renueva.
+
+La última corrección de la 0028 (reclasificar el modelo C cuando se mueve una `categoria_canal` desalineada) es de una línea más su test. La hace la otra sesión a mano, sin Codex, y la reviso con sol después de las 06:46.
+
 ### E3 corte 3: segunda opinión de Codex sol (03:00 UTC)
 
 **Veredicto: todavía no se puede encender el canario.** Codex encontró 10 defectos. La otra sesión los arregla esta noche en `fix/e3c3-segunda-opinion`.
