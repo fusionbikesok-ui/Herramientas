@@ -45,4 +45,23 @@ Reglas que sigo durante la noche:
 
 ## Preguntas abiertas
 
-(se completan durante la noche)
+### E3 corte 3: segunda opinión de Codex sol (03:00 UTC)
+
+**Veredicto: todavía no se puede encender el canario.** Codex encontró 10 defectos. La otra sesión los arregla esta noche en `fix/e3c3-segunda-opinion`.
+
+Los altos:
+- Con variaciones, el paso de verified a intervention no funciona.
+- D6 no cuenta como error de canario cuando corregís el vínculo con "omitir" o "sin candidato".
+- El replay evalúa 30 casos y no los 299.
+- Una corrida abortada puede seguir vinculando.
+- El lease vence durante un Retry-After.
+- Se usa la misma cuenta ML para todos los casos.
+
+**Pregunta 1:** con los flags E3 apagados, producción igual registra observaciones de formato en `catalog.format_observations`. Es una tabla interna: no pausa nada ni toca ML. Supongo que **está bien mantenerlo** como línea base en sombra para cuando se encienda el canario. ¿Lo confirmás, o lo apagamos detrás de un flag?
+
+**Pregunta 2:** la migración 0027, ya aplicada en producción, no tiene `lock_timeout`. No se puede editar porque cambiaría el checksum. Supongo que **alcanza con exigir `lock_timeout` a las migraciones nuevas**, con un test que lo verifique. ¿OK?
+
+**Pendientes tuyos para encender el canario (fuera del código):**
+- validar `ATRIBUTOS_PACK` contra payloads reales;
+- declarar `E3_CANARIO` y `E3_AUTO_SKU` en api y worker, y `E3_INTERVENTION` en worker, dentro de `compose.yml`;
+- correr el replay de 7 días con la muestra de 299.
