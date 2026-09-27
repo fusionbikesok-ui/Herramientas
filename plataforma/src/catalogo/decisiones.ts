@@ -77,6 +77,16 @@ export async function reclasificarModelosAfectados(
   }
 }
 
+async function categoriasDesalineadas(tx: Consultable, representacion: string, modeloDestino: string | null): Promise<Set<string>> {
+  const filas = (await tx.query<{ model_id: string | null }>(
+    `SELECT model_id FROM catalog.model_attributes
+      WHERE representation_id = $1 AND nombre_normalizado = 'categoria_canal' AND vigente_hasta IS NULL
+        AND model_id IS DISTINCT FROM $2`, [representacion, modeloDestino])).rows;
+  const cambio = new Set(filas.map((r) => r.model_id).filter((id): id is string => Boolean(id)));
+  if (filas.length && modeloDestino) cambio.add(modeloDestino);
+  return cambio;
+}
+
 export interface ResumenReparacionExtras {
   atributos: number; imagenes: number; modelos: Set<string>; categoriaCambio: Set<string>;
 }
@@ -95,12 +105,8 @@ export async function repararExtrasDeRepresentacion(
      UNION SELECT model_id FROM catalog.model_images WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2`,
     [representacion, modeloDestino])).rows.map((r) => r.model_id).filter(Boolean));
   if (modeloDestino) modelos.add(modeloDestino);
-  const categorias = (await tx.query<{ model_id: string | null }>(
-    `SELECT model_id FROM catalog.model_attributes
-      WHERE representation_id = $1 AND nombre_normalizado = 'categoria_canal' AND vigente_hasta IS NULL
-        AND model_id IS DISTINCT FROM $2`, [representacion, modeloDestino])).rows;
-  const categoriaCambio = new Set(categorias.map((r) => r.model_id).filter((id): id is string => Boolean(id)));
-  if (categorias.length && modeloDestino) categoriaCambio.add(modeloDestino);
+  const categoriaCambio = await categoriasDesalineadas(tx, representacion, modeloDestino);
+  for (const m of categoriaCambio) modelos.add(m);
   const atributos = (await tx.query(
     'UPDATE catalog.model_attributes SET model_id = $2 WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2',
     [representacion, modeloDestino])).rowCount ?? 0;
@@ -196,12 +202,7 @@ export async function reconciliarClave(
       [empresa, modeloDestino])).rows[0]!.id;
     await abrir(deseado.caso, { variante: nueva }, 'normal', deseado.sku ? { sku: deseado.sku } : {});
   }
-  const categoriasMovidas = (await tx.query<{ model_id: string | null }>(
-    `SELECT model_id FROM catalog.model_attributes
-      WHERE representation_id = $1 AND nombre_normalizado = 'categoria_canal' AND vigente_hasta IS NULL
-        AND model_id IS DISTINCT FROM $2`, [rep.id, modeloDestino])).rows;
-  const categoriaCambio = new Set(categoriasMovidas.map((r) => r.model_id).filter((id): id is string => Boolean(id)));
-  if (categoriasMovidas.length && modeloDestino) categoriaCambio.add(modeloDestino);
+  const categoriaCambio = await categoriasDesalineadas(tx, rep.id, modeloDestino);
   await tx.query(
     'UPDATE catalog.external_representations SET variant_id = $2, omitida_por_decision = $3 WHERE id = $1',
     [rep.id, nueva, deseado.tipo === 'omitida']);
@@ -226,6 +227,7 @@ export async function reconciliarClave(
   const modelosAfectados = new Set<string>();
   if (actual?.model_id && actual.model_id !== modeloDestino) modelosAfectados.add(actual.model_id);
   if (modeloDestino && modeloDestino !== actual?.model_id) modelosAfectados.add(modeloDestino);
+  for (const m of categoriaCambio) modelosAfectados.add(m);
   await reclasificarModelosAfectados(tx, empresa, modelosAfectados, categoriaCambio);
 
   await registrarEvento(tx, {

@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { repararExtrasDeRepresentacion } from '../../src/catalogo/decisiones.ts';
+import { reconciliarClave, repararExtrasDeRepresentacion } from '../../src/catalogo/decisiones.ts';
 import { crearProyector, type OpcionesProyector } from '../../src/catalogo/proyector.ts';
 import { crearVersion, escribirArbol, mapearCategoria, publicarVersion } from '../../src/catalogo/taxonomia.ts';
 import { encolarInbox } from '../../src/colas/colas.ts';
@@ -406,6 +406,32 @@ describe('E2-PRY-10 proyector del catálogo', () => {
       await enTransaccion(app, (tx) => repararExtrasDeRepresentacion(tx, empresa, rep, m));
 
       expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [m])).toEqual([]);
+    });
+
+    it('al vincular una rep de A a B, una categoria_canal desalineada colgada de C también reclasifica a C', async () => {
+      for (const id of ['2010', '2011', '2012']) {
+        await encolar(woo, 'woo.products', id, { id: Number(id), type: 'simple', sku: `FB-${id}`, categories: [{ id: 'C1', name: 'CUBIERTAS' }] });
+      }
+      await proyector().unaVuelta();
+      const [a, c] = [await modeloDe('2010'), await modeloDe('2012')];
+      await admin.query(`UPDATE catalog.model_categories SET quitado_en = now(), motivo_salida = 'test' WHERE model_id = $1 AND quitado_en IS NULL`, [c]);
+      await admin.query(`INSERT INTO catalog.model_categories (company_id, model_id, node_id, primaria, origen) VALUES ($1, $2, $3, true, 'persona')`,
+        [empresa, c, camaras]);
+      const varianteA = (await q<{ variant_id: string }>('SELECT variant_id FROM catalog.external_representations WHERE recurso = $1', ['2010']))[0]!.variant_id;
+      const rep = (await q<{ id: string }>(
+        `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, recurso, tipo, variant_id)
+         VALUES ($1, $2, 'mercadolibre', 'MLA-DESALINEADA', 'vendible', $3) RETURNING id`, [empresa, ml, varianteA]))[0]!.id;
+      await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+        VALUES ($1, $2, 'categoria_canal', 'CUBIERTAS', now())`, [c, rep]);
+      await admin.query(`INSERT INTO catalog.matcher_decisions (company_id, channel_account_id, canal, recurso, sku, accion, origen, actor)
+        VALUES ($1, $2, 'mercadolibre', 'MLA-DESALINEADA', 'FB-2011', 'confirmar', 'copia', 'persona')`, [empresa, ml]);
+      expect(a).toBeTruthy();
+      expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [c])).toEqual([]);
+
+      await enTransaccion(app, (tx) => reconciliarClave(tx, ml, 'MLA-DESALINEADA', '', 'test', { bandeja: false }));
+
+      expect(await q('SELECT tipo FROM catalog.identity_cases WHERE model_id = $1 AND cerrado_en IS NULL', [c]))
+        .toEqual([{ tipo: 'categoria_persona_contradicha' }]);
     });
 
     it('si el canal cambia a lo mismo que ya decidió la persona, el caso se cierra', async () => {
