@@ -18,10 +18,16 @@ if ((comando === 'correr' || comando === 'cerrar' || comando === 'estado') && !U
 try {
   if (!apply && comando !== 'estado') { console.log('DRY-RUN: se requiere --apply para escribir'); process.exitCode = 2; }
   else if (comando === 'congelar') {
-    const r = await congelarCanario(pool, { empresa: valor('--empresa'), dia: valor('--dia') }); console.log(JSON.stringify({ corridaId: r.corridaId, casos: r.casos, excluidosD5: r.excluidosD5 }));
+    const r = await congelarCanario(pool, { empresa: valor('--empresa'), dia: valor('--dia'), cuenta: valor('--cuenta') || undefined }); console.log(JSON.stringify({ corridaId: r.corridaId, casos: r.casos, excluidosD5: r.excluidosD5 }));
   } else if (comando === 'correr') {
     const registro = cargarRegistro(valor('--registro') || process.env.BARRIDOS_REGISTRO_FILE!);
-    const cuenta = registro.find((c) => c.channel === 'mercadolibre'); if (!cuenta || cuenta.channel !== 'mercadolibre') throw new Error('no hay cuenta ML en el registro');
+    const corrida = (await pool.query<{ channel_account_id: string | null }>(
+      'SELECT channel_account_id FROM catalog.e3_canario_corridas WHERE id = $1', [valor('--corrida')],
+    )).rows[0];
+    if (!corrida) throw new Error('canario: corrida inexistente');
+    if (!corrida.channel_account_id) throw new Error('canario: la corrida no tiene channel_account_id; no se puede resolver la cuenta ML');
+    const cuenta = registro.find((c) => c.channel === 'mercadolibre' && c.id === corrida.channel_account_id);
+    if (!cuenta || cuenta.channel !== 'mercadolibre') throw new Error(`canario: la cuenta ${corrida.channel_account_id} de la corrida no está en el registro ML`);
     const keyring = cargarKeyring(process.env.CATALOGO_KEYRING_FILE);
     // Relectura de E3 por el cupo sombra con consumidor 'identidad' (E1 T5 §2.8): en producción ese cupo está cerrado
     // (GATEWAY_ML_SHADOW_RPM_E2E3=0) hasta que José lo abra, así que el canario no puede leer ML antes de tiempo.

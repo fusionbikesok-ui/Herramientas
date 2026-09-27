@@ -68,6 +68,13 @@ export async function aplicarAutoSku(
   try {
     return await enTransaccion(pool, async (tx) => {
     if (o.canario) {
+      const corrida = await tx.query(
+        `SELECT 1 FROM catalog.e3_canario_corridas WHERE id = $1 AND estado = 'abierta' FOR UPDATE`,
+        [o.canario.corridaId],
+      );
+      // El estado de la corrida forma parte del fence: un corredor que quedó esperando ML no puede
+      // aplicar la decisión después de que otro corredor abortó la corrida.
+      if (!corrida.rowCount) return { resultado: 'ya_resuelto' };
       const lease = await tx.query(
         `SELECT 1 FROM catalog.e3_canario_casos
           WHERE corrida_id = $1 AND case_id = $2 AND estado = 'en_proceso'

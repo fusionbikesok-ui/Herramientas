@@ -25,6 +25,7 @@ describe('E3-CAN-01 canario', () => {
   });
   beforeEach(async () => {
     n = 0;
+    await admin.query('UPDATE core.channel_accounts SET archived_at = CASE WHEN id = $2 THEN now() ELSE NULL END WHERE company_id = $1', [empresa, ml2]);
     await admin.query(`TRUNCATE catalog.e3_canario_casos, catalog.e3_canario_corridas, catalog.identity_cases, catalog.identity_decisions, catalog.matcher_decisions,
       catalog.format_observations, catalog.external_representations, catalog.sellable_variants, catalog.product_models CASCADE`);
   });
@@ -90,9 +91,10 @@ describe('E3-CAN-01 canario', () => {
     expect(await estados()).toHaveLength(1);
   });
 
-  it('rechaza congelar una corrida que mezcla channel_account_id', async () => {
+  it('exige seleccionar la cuenta cuando hay más de una cuenta ML', async () => {
+    await admin.query('UPDATE core.channel_accounts SET archived_at = NULL WHERE id = $1', [ml2]);
     await escenario(); await escenario({ cuenta: ml2 });
-    await expect(congelarCanario(app, { empresa, dia: DIA })).rejects.toThrow(/una sola cuenta.*channel_account_id/i);
+    await expect(congelarCanario(app, { empresa, dia: DIA })).rejects.toThrow(/--cuenta.*channel_account_id/i);
     expect(await q('SELECT 1 FROM catalog.e3_canario_corridas')).toHaveLength(0);
   });
 
@@ -187,6 +189,51 @@ describe('E3-CAN-01 canario', () => {
     expect(est[c.recurso]!.estado).toBe('pendiente');
   });
 
+  it('[esc:canario-race-abort-confirm] una confirmación liberada después del abort no aplica nada', async () => {
+    const abortado = await escenario(); const esperando = await escenario();
+    const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+    let confirmarVisto!: () => void;
+    let abortarVisto!: () => void;
+    let recursoConfirmado = '';
+    let liberarConfirmacion!: () => void;
+    const confirmacionVista = new Promise<void>((resolve) => { confirmarVisto = resolve; });
+    const abortoSolicitado = new Promise<void>((resolve) => { abortarVisto = resolve; });
+    const confirmacionLiberada = new Promise<void>((resolve) => { liberarConfirmacion = resolve; });
+    const relectorConfirmador: Relector = {
+      topic: 'ml.items', versionKind: 'temporal', id: /.*/,
+      releer: vi.fn(async (recurso: string) => {
+        recursoConfirmado = recurso;
+        confirmarVisto();
+        await confirmacionLiberada;
+        return item(recurso, recurso === abortado.recurso ? abortado.sku : esperando.sku);
+      }),
+    };
+    const relectorAbortador: Relector = {
+      topic: 'ml.items', versionKind: 'temporal', id: /.*/,
+      releer: vi.fn(async (recurso: string) => {
+        abortarVisto();
+        throw new ErrorCanalTerminal('no autorizado', 401);
+      }),
+    };
+
+    const corredorConfirmador = correrCanario(app, relectorConfirmador, { corridaId, bandeja: true });
+    await confirmacionVista;
+    const corredorAbortador = correrCanario(app, relectorAbortador, { corridaId, bandeja: true });
+    await abortarVisto;
+    for (let i = 0; i < 100; i++) {
+      const estado = (await q<{ estado: string }>('SELECT estado FROM catalog.e3_canario_corridas WHERE id = $1', [corridaId]))[0]?.estado;
+      if (estado === 'abortada') break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect((await q<{ estado: string }>('SELECT estado FROM catalog.e3_canario_corridas WHERE id = $1', [corridaId]))[0]!.estado).toBe('abortada');
+    liberarConfirmacion();
+    await Promise.all([corredorConfirmador, corredorAbortador]);
+
+    expect(await q("SELECT 1 FROM catalog.identity_decisions WHERE recurso = $1 AND efecto = 'aplicar'", [recursoConfirmado])).toHaveLength(0);
+    expect((await q<{ variant_id: string }>('SELECT variant_id FROM catalog.external_representations WHERE recurso = $1', [recursoConfirmado]))[0]!.variant_id).toBe(recursoConfirmado === abortado.recurso ? abortado.pendiente : esperando.pendiente);
+    expect((await q<{ estado: string }>('SELECT estado FROM catalog.e3_canario_casos WHERE recurso = $1', [recursoConfirmado]))[0]!.estado).not.toBe('vinculado');
+  });
+
   it('[esc:relectura-5xx] queda parked y un segundo correr lo reintenta a vinculado', async () => {
     const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
     const caido: Relector = { topic: 'ml.items', versionKind: 'temporal', id: /.*/, releer: vi.fn(async () => { throw new ErrorBarridoReintentable('BULK_503', 0); }) };
@@ -261,6 +308,17 @@ describe('E3-CAN-01 canario', () => {
       expect((await q<{ estado: string }>('SELECT estado FROM catalog.e3_canario_corridas'))[0]!.estado).toBe('abierta');
     });
 
+    it('un caso en_proceso con lease vencido no produce cero_errores', async () => {
+      const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+      await admin.query(`UPDATE catalog.e3_canario_casos
+        SET estado = 'en_proceso', tomado_por = $2, tomado_hasta = clock_timestamp() - interval '1 minute'
+        WHERE corrida_id = $1 AND case_id = $3`, [corridaId, randomUUID(), e.caso]);
+      const r = await cerrarCanario(app, { corridaId });
+      expect(r.veredicto).not.toBe('cero_errores');
+      expect(r.veredicto).toBe('con_errores');
+      expect((await estados())[0]!.estado).toBe('parked');
+    });
+
     it('si falla la confirmación del caso, el vínculo y la decisión se revierten juntos', async () => {
       const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
       await admin.query(`CREATE OR REPLACE FUNCTION public.fallar_confirmacion_canario() RETURNS trigger
@@ -288,5 +346,21 @@ describe('E3-CAN-01 canario', () => {
       expect((await cerrarCanario(app, { corridaId })).veredicto).toBe('cero_errores');
       expect((await q<{ estado: string }>('SELECT estado FROM catalog.e3_canario_corridas'))[0]!.estado).toBe('cerrada');
     });
+  });
+
+  it('congelar con dos cuentas exige --cuenta y con B sólo congela candidatos de B', async () => {
+    await admin.query('UPDATE core.channel_accounts SET archived_at = NULL WHERE id = $1', [ml2]);
+    const a = await escenario({ cuenta: ml });
+    const b = await escenario({ cuenta: ml2 });
+    await expect(congelarCanario(app, { empresa, dia: DIA })).rejects.toThrow(/--cuenta.*channel_account_id/i);
+
+    const corrida = await congelarCanario(app, { empresa, dia: DIA, cuenta: ml2 } as Parameters<typeof congelarCanario>[1]);
+    expect(corrida.casos).toBe(1);
+    expect((await q<{ channel_account_id: string; recurso: string }>('SELECT channel_account_id, recurso FROM catalog.e3_canario_casos WHERE corrida_id = $1', [corrida.corridaId]))[0]).toEqual({ channel_account_id: ml2, recurso: b.recurso });
+    const vistos: string[] = [];
+    const rel: Relector = { topic: 'ml.items', versionKind: 'temporal', id: /.*/, releer: vi.fn(async (recurso: string) => { vistos.push(recurso); return item(recurso, b.sku); }) };
+    await correrCanario(app, rel, { corridaId: corrida.corridaId, bandeja: true });
+    expect(vistos).toEqual([b.recurso]);
+    expect(a.recurso).not.toBe(b.recurso);
   });
 });

@@ -13,10 +13,22 @@ export interface ClasificacionD6 {
   veredicto: 'cero_errores' | 'con_errores' | 'abortado' | 'incompleto';
 }
 
-export async function congelarCanario(pool: pg.Pool, o: { empresa: string; dia: string }): Promise<{ corridaId: string; casos: number; excluidosD5: number }> {
+export async function congelarCanario(pool: pg.Pool, o: { empresa: string; dia: string; cuenta?: string }): Promise<{ corridaId: string; casos: number; excluidosD5: number }> {
   return enTransaccion(pool, async (tx) => {
+    const cuentasMl = (await tx.query<{ id: string }>(
+      `SELECT id FROM core.channel_accounts
+       WHERE company_id = $1 AND channel = 'mercadolibre' AND archived_at IS NULL
+       ORDER BY id`, [o.empresa])).rows;
+    if (!cuentasMl.length) throw new Error('canario: la empresa no tiene una cuenta de MercadoLibre activa');
+    const cuentaSeleccionada = o.cuenta ?? (cuentasMl.length === 1 ? cuentasMl[0]!.id : null);
+    if (!cuentaSeleccionada) {
+      throw new Error(`canario: hay ${cuentasMl.length} cuentas de MercadoLibre; congelar requiere --cuenta <channel_account_id>`);
+    }
+    if (!cuentasMl.some((c) => c.id === cuentaSeleccionada)) {
+      throw new Error('canario: --cuenta no pertenece a una cuenta de MercadoLibre activa de la empresa');
+    }
     const corrida = (await tx.query<{ id: string }>(
-      `INSERT INTO catalog.e3_canario_corridas (company_id, dia) VALUES ($1, $2) RETURNING id`, [o.empresa, o.dia])).rows[0]!;
+      `INSERT INTO catalog.e3_canario_corridas (company_id, channel_account_id, dia) VALUES ($1, $2, $3) RETURNING id`, [o.empresa, cuentaSeleccionada, o.dia])).rows[0]!;
     // Candidatos: sku_pendiente abiertos con auto_sku/sombra vigente (destino y SKU salen de esa decisión), con UNA sola
     // representación ML viva, sin decisión humana/legado vigente sobre la clave y sin D5.
     const r = await tx.query<{ id: string }>(
@@ -27,7 +39,7 @@ export async function congelarCanario(pool: pg.Pool, o: { empresa: string; dia: 
        JOIN catalog.identity_decisions s ON s.channel_account_id = er.channel_account_id AND s.recurso = er.recurso
          AND s.variacion_normalizada = er.variacion_normalizada AND s.origen = 'auto_sku' AND s.efecto = 'sombra' AND s.superada_en IS NULL AND s.variant_id IS NOT NULL
        JOIN catalog.sellable_variants sv ON sv.id = s.variant_id AND sv.sku IS NOT NULL
-       WHERE c.company_id = $2 AND c.tipo = 'sku_pendiente' AND c.cerrado_en IS NULL AND c.estado IN ('actionable','unclassified')
+       WHERE c.company_id = $2 AND er.channel_account_id = $3 AND c.tipo = 'sku_pendiente' AND c.cerrado_en IS NULL AND c.estado IN ('actionable','unclassified')
          AND c.detalle->>'d5' IS DISTINCT FROM 'true'
          AND (SELECT count(*) FROM catalog.external_representations x WHERE x.variant_id = c.variant_id AND x.canal = 'mercadolibre' AND x.archivado_en IS NULL) = 1
          AND (SELECT count(*) FROM catalog.sellable_variants y WHERE y.company_id = $2 AND y.sku = sv.sku) = 1
@@ -35,12 +47,7 @@ export async function congelarCanario(pool: pg.Pool, o: { empresa: string; dia: 
            AND d.variacion_normalizada = er.variacion_normalizada AND d.origen = 'humano' AND d.superada_en IS NULL)
          AND NOT EXISTS (SELECT 1 FROM catalog.matcher_decisions m WHERE m.channel_account_id = er.channel_account_id AND m.recurso = er.recurso
            AND m.variacion_normalizada = er.variacion_normalizada AND m.vigente_hasta IS NULL)
-       RETURNING case_id AS id`, [corrida.id, o.empresa]);
-    const cuentas = await tx.query<{ channel_account_id: string }>(
-      `SELECT DISTINCT channel_account_id FROM catalog.e3_canario_casos WHERE corrida_id = $1`, [corrida.id]);
-    if (cuentas.rowCount && cuentas.rowCount > 1) {
-      throw new Error(`canario: una corrida debe contener una sola cuenta (channel_account_id); se encontraron ${cuentas.rowCount}`);
-    }
+       RETURNING case_id AS id`, [corrida.id, o.empresa, cuentaSeleccionada]);
     const excluidos = await tx.query<{ n: string }>(`SELECT count(*) n FROM catalog.identity_cases c WHERE c.company_id=$1 AND c.tipo='sku_pendiente' AND c.cerrado_en IS NULL AND c.detalle->>'d5' = 'true'`, [o.empresa]);
     return { corridaId: corrida.id, casos: r.rowCount ?? 0, excluidosD5: Number(excluidos.rows[0]?.n ?? 0) };
   });
@@ -177,6 +184,11 @@ export async function cerrarCanario(pool: pg.Pool, o: { corridaId: string }): Pr
     const corrida = (await tx.query<{ estado: string; congelado_en: Date }>(`SELECT estado, congelado_en FROM catalog.e3_canario_corridas WHERE id=$1 FOR UPDATE`, [o.corridaId])).rows[0];
     if (!corrida) throw new Error('canario: corrida inexistente');
     if (corrida.estado === 'cerrada') throw new Error('canario: la corrida ya está cerrada');
+    // El mismo reaper que usa reclamar: un corredor muerto no puede desaparecer del veredicto D6
+    // sólo porque su lease venció antes de intentar cerrar la corrida.
+    await tx.query(`UPDATE catalog.e3_canario_casos
+      SET estado = 'parked', tomado_por = NULL, tomado_hasta = NULL
+      WHERE corrida_id = $1 AND estado = 'en_proceso' AND tomado_hasta < clock_timestamp()`, [o.corridaId]);
     const leaseVivo = (await tx.query(
       `SELECT 1 FROM catalog.e3_canario_casos
         WHERE corrida_id = $1 AND tomado_por IS NOT NULL AND tomado_hasta > clock_timestamp()

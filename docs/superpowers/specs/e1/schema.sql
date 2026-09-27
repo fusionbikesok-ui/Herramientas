@@ -1476,7 +1476,9 @@ CREATE TABLE catalog.identity_decision_results (
 CREATE TABLE catalog.e3_canario_corridas (
   id uuid PRIMARY KEY DEFAULT uuidv7(), company_id uuid NOT NULL REFERENCES core.companies(id), dia date NOT NULL,
   estado text NOT NULL DEFAULT 'abierta' CHECK (estado IN ('abierta','cerrada','abortada')),
-  congelado_en timestamptz NOT NULL DEFAULT now(), cerrado_en timestamptz, clasificacion jsonb, UNIQUE (company_id, dia));
+  congelado_en timestamptz NOT NULL DEFAULT now(), cerrado_en timestamptz, clasificacion jsonb,
+  -- 0031: nullable para conservar corridas históricas creadas antes de congelar una cuenta explícita.
+  channel_account_id uuid REFERENCES core.channel_accounts(id) ON DELETE RESTRICT, UNIQUE (company_id, dia));
 CREATE UNIQUE INDEX e3_canario_una_abierta ON catalog.e3_canario_corridas (company_id) WHERE estado = 'abierta';
 CREATE TABLE catalog.e3_canario_casos (
   corrida_id uuid NOT NULL REFERENCES catalog.e3_canario_corridas(id), case_id uuid NOT NULL REFERENCES catalog.identity_cases(id),
