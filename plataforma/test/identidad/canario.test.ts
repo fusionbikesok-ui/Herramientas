@@ -12,7 +12,7 @@ import type { Relector, ResultadoRelectura } from '../../src/reconciliacion/rele
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 
 describe('E3-CAN-01 canario', () => {
-  let base: BaseDePrueba; let app: pg.Pool; let admin: pg.Pool; let empresa: string; let ml: string; let n = 0;
+  let base: BaseDePrueba; let app: pg.Pool; let admin: pg.Pool; let empresa: string; let ml: string; let ml2: string; let n = 0;
   const q = async <T extends pg.QueryResultRow>(sql: string, p: unknown[] = []) => (await admin.query<T>(sql, p)).rows;
 
   beforeAll(async () => {
@@ -20,6 +20,8 @@ describe('E3-CAN-01 canario', () => {
     empresa = (await admin.query<{ id: string }>("insert into core.companies(legal_name) values ('F') returning id")).rows[0]!.id;
     ml = (await admin.query<{ id: string }>(
       "insert into core.channel_accounts(company_id,channel,external_account) values ($1,'mercadolibre','1') returning id", [empresa])).rows[0]!.id;
+    ml2 = (await admin.query<{ id: string }>(
+      "insert into core.channel_accounts(company_id,channel,external_account) values ($1,'mercadolibre','2') returning id", [empresa])).rows[0]!.id;
   });
   beforeEach(async () => {
     n = 0;
@@ -28,31 +30,32 @@ describe('E3-CAN-01 canario', () => {
   });
   afterAll(async () => { await app.end(); await admin.end(); await base.borrar(); });
 
-  const modelo = async (clave: string) => (await admin.query<{ id: string }>(
+  const modelo = async (clave: string, cuenta = ml) => (await admin.query<{ id: string }>(
     `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
-     VALUES ($1, $2, 'ml_simple', $3, $3) RETURNING id`, [empresa, ml, clave])).rows[0]!.id;
-  const variante = async (sku: string | null) => (await admin.query<{ id: string }>(
-    'INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, $3) RETURNING id', [empresa, await modelo(randomUUID()), sku])).rows[0]!.id;
+     VALUES ($1, $2, 'ml_simple', $3, $3) RETURNING id`, [empresa, cuenta, clave])).rows[0]!.id;
+  const variante = async (sku: string | null, cuenta = ml) => (await admin.query<{ id: string }>(
+    'INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, $3) RETURNING id', [empresa, await modelo(randomUUID(), cuenta), sku])).rows[0]!.id;
 
   /** Caso sku_pendiente con auto_sku/sombra hacia una variante con SKU único. */
-  async function escenario(opts: { d5?: boolean; sombra?: boolean } = {}) {
+  async function escenario(opts: { d5?: boolean; sombra?: boolean; cuenta?: string } = {}) {
     n++;
+    const cuenta = opts.cuenta ?? ml;
     const recurso = `MLA${n}`; const sku = `FB-${1000 + n}`;
-    const destino = await variante(sku); const pendiente = await variante(null);
+    const destino = await variante(sku, cuenta); const pendiente = await variante(null, cuenta);
     await admin.query(`INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id)
-      VALUES ($1, $2, 'mercadolibre', 'vendible', $3, '', $4)`, [empresa, ml, recurso, pendiente]);
+      VALUES ($1, $2, 'mercadolibre', 'vendible', $3, '', $4)`, [empresa, cuenta, recurso, pendiente]);
     const caso = (await admin.query<{ id: string }>(
       `INSERT INTO catalog.identity_cases (company_id, tipo, variant_id, estado, detalle) VALUES ($1, 'sku_pendiente', $2, 'actionable', $3) RETURNING id`,
       [empresa, pendiente, JSON.stringify(opts.d5 ? { d5: 'true' } : {})])).rows[0]!.id;
     if (opts.sombra !== false) {
       await admin.query(`INSERT INTO catalog.identity_decisions (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto, engine_version)
-        VALUES ($1,$2,$3,$4,'', 'vincular', $5, 'auto_sku', 'identidad.motor', 'sombra', 'test')`, [empresa, caso, ml, recurso, destino]);
+        VALUES ($1,$2,$3,$4,'', 'vincular', $5, 'auto_sku', 'identidad.motor', 'sombra', 'test')`, [empresa, caso, cuenta, recurso, destino]);
     }
-    return { recurso, sku, destino, pendiente, caso };
+    return { recurso, sku, destino, pendiente, caso, cuenta };
   }
-  const humana = (e: { caso: string; recurso: string }, variantId: string) => admin.query(
+  const humana = (e: { caso: string; recurso: string; cuenta?: string }, variantId: string) => admin.query(
     `INSERT INTO catalog.identity_decisions (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
-     VALUES ($1,$2,$3,$4,'','vincular',$5,'humano','jose','aplicar')`, [empresa, e.caso, ml, e.recurso, variantId]);
+     VALUES ($1,$2,$3,$4,'','vincular',$5,'humano','jose','aplicar')`, [empresa, e.caso, e.cuenta ?? ml, e.recurso, variantId]);
   const humanaNegativa = async (e: { caso: string; recurso: string }, eleccion: string) => {
     const auto = (await q<{ id: string }>(`SELECT id FROM catalog.identity_decisions WHERE recurso=$1 AND origen='auto_sku' AND efecto='aplicar'`, [e.recurso]))[0]!.id;
     await admin.query(
@@ -85,6 +88,12 @@ describe('E3-CAN-01 canario', () => {
     await congelarCanario(app, { empresa, dia: DIA });
     await expect(congelarCanario(app, { empresa, dia: DIA })).rejects.toThrow();
     expect(await estados()).toHaveLength(1);
+  });
+
+  it('rechaza congelar una corrida que mezcla channel_account_id', async () => {
+    await escenario(); await escenario({ cuenta: ml2 });
+    await expect(congelarCanario(app, { empresa, dia: DIA })).rejects.toThrow(/una sola cuenta.*channel_account_id/i);
+    expect(await q('SELECT 1 FROM catalog.e3_canario_corridas')).toHaveLength(0);
   });
 
   it('un caso abierto después del congelado no entra', async () => {
@@ -221,6 +230,17 @@ describe('E3-CAN-01 canario', () => {
       const r = await cerrarCanario(app, { corridaId });
       expect(r.errores).toEqual([{ tipo: 'corregido_por_jose', recurso: e.recurso }]);
       expect(r.veredicto).toBe('con_errores');
+    });
+
+    it('una humana vincular superada antes del cierre no cuenta como D6 vigente', async () => {
+      const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+      await correrCanario(app, relectorOk({ [e.recurso]: e.sku }), { corridaId, bandeja: true });
+      const auto = (await q<{ id: string }>("SELECT id FROM catalog.identity_decisions WHERE recurso = $1 AND origen = 'auto_sku' AND efecto = 'aplicar'", [e.recurso]))[0]!.id;
+      await admin.query(`INSERT INTO catalog.identity_decisions (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto, supersede_a)
+        VALUES ($1,$2,$3,$4,'','vincular',$5,'humano','jose','aplicar',$6)`, [empresa, e.caso, e.cuenta, e.recurso, e.destino, auto]);
+      await admin.query("UPDATE catalog.identity_decisions SET superada_en = now() WHERE recurso = $1 AND origen = 'humano'", [e.recurso]);
+      const r = await cerrarCanario(app, { corridaId });
+      expect(r).toMatchObject({ errores: [], noErrores: { redundante: 0 }, veredicto: 'cero_errores' });
     });
 
     it('con casos pendientes es incompleto y no cierra; una corrida cerrada no se cierra dos veces', async () => {

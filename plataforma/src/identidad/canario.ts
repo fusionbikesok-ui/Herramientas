@@ -36,6 +36,11 @@ export async function congelarCanario(pool: pg.Pool, o: { empresa: string; dia: 
          AND NOT EXISTS (SELECT 1 FROM catalog.matcher_decisions m WHERE m.channel_account_id = er.channel_account_id AND m.recurso = er.recurso
            AND m.variacion_normalizada = er.variacion_normalizada AND m.vigente_hasta IS NULL)
        RETURNING case_id AS id`, [corrida.id, o.empresa]);
+    const cuentas = await tx.query<{ channel_account_id: string }>(
+      `SELECT DISTINCT channel_account_id FROM catalog.e3_canario_casos WHERE corrida_id = $1`, [corrida.id]);
+    if (cuentas.rowCount && cuentas.rowCount > 1) {
+      throw new Error(`canario: una corrida debe contener una sola cuenta (channel_account_id); se encontraron ${cuentas.rowCount}`);
+    }
     const excluidos = await tx.query<{ n: string }>(`SELECT count(*) n FROM catalog.identity_cases c WHERE c.company_id=$1 AND c.tipo='sku_pendiente' AND c.cerrado_en IS NULL AND c.detalle->>'d5' = 'true'`, [o.empresa]);
     return { corridaId: corrida.id, casos: r.rowCount ?? 0, excluidosD5: Number(excluidos.rows[0]?.n ?? 0) };
   });

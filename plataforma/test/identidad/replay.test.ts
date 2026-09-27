@@ -62,4 +62,15 @@ describe('E3-REP-01 replay', () => {
     const r = await replay(app, { empresa, muestra: [], catalogo: [], desde: new Date(Date.now() - 864e5), hasta });
     expect(r.autoSkuVsHumano).toEqual({ coinciden: 0, difieren: [] });
   });
+
+  it('una decisión superada después de hasta sigue vigente en el replay as-of', async () => {
+    const a = await variante();
+    await clave('MLA-ASOF', a, { eleccion: 'vincular', variante: a });
+    const hasta = new Date(Date.now() - 60_000);
+    const fecha = new Date(hasta.getTime() - 1_000).toISOString();
+    await admin.query('UPDATE catalog.identity_decisions SET creado_en = $2 WHERE recurso = $1', ['MLA-ASOF', fecha]);
+    await admin.query('UPDATE catalog.identity_decisions SET superada_en = $2 WHERE recurso = $1 AND origen = \'humano\'', ['MLA-ASOF', new Date(hasta.getTime() + 1_000)]);
+    const r = await replay(app, { empresa, muestra: [], catalogo: [], desde: new Date(Date.now() - 864e5), hasta });
+    expect(r.autoSkuVsHumano).toEqual({ coinciden: 1, difieren: [] });
+  });
 });

@@ -31,11 +31,12 @@ try { validada = validarMuestra(fs.readFileSync(muestraPath), { sha256, cardinal
 catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(2); }
 if (validada.parcial) console.error('ADVERTENCIA: replay parcial; el veredicto nunca puede ser apto.');
 const fx = validada.artefacto;
-const muestra = fx.casos.map((c: { clave: string; ml: never; sku_verdad?: string }) => ({ clave: c.clave, ml: c.ml, skuVerdad: c.sku_verdad ?? null }));
+const muestra = fx.casos.map((c) => ({ clave: c.clave, ml: c.ml, skuVerdad: c.sku_verdad ?? null }));
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
 try {
   const ahora = new Date();
   const r = await replay(pool, { empresa, muestra, catalogo: fx.catalogo,
     desde: desdeArg ? new Date(desdeArg) : new Date(ahora.getTime() - 30 * 864e5), hasta: hastaArg ? new Date(hastaArg) : ahora });
   console.log(JSON.stringify(validada.parcial ? { ...r, veredicto: 'parcial' } : r, null, 2));
+  if (validada.parcial) process.exitCode = 3;
 } finally { await pool.end(); }

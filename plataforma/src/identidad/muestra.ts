@@ -4,7 +4,7 @@ export interface ArtefactoMuestra {
   version: unknown;
   fuente: unknown;
   catalogo: unknown[];
-  casos: Array<{ clave: string; ml: never; sku_verdad?: string }>;
+  casos: Array<{ clave: string; ml: unknown; sku_verdad?: string }>;
 }
 
 export interface ResultadoMuestra {
@@ -19,6 +19,16 @@ export function validarMuestra(contenido: string | Buffer, o: { sha256: string; 
   let artefacto: ArtefactoMuestra;
   try { artefacto = JSON.parse(bytes.toString('utf8')) as ArtefactoMuestra; } catch { throw new Error('muestra inválida: JSON'); }
   if (!Array.isArray(artefacto.casos) || !Array.isArray(artefacto.catalogo)) throw new Error('muestra inválida: faltan catalogo/casos');
+  for (const [i, caso] of artefacto.casos.entries()) {
+    if (!caso || typeof caso !== 'object' || typeof caso.clave !== 'string' || caso.clave.trim() === '') {
+      throw new Error(`muestra inválida: casos[${i}].clave debe ser un string no vacío`);
+    }
+    const ml = caso.ml;
+    const vacio = ml === undefined || ml === null || (typeof ml === 'string' && ml.trim() === '')
+      || (Array.isArray(ml) && ml.length === 0)
+      || (typeof ml === 'object' && !Array.isArray(ml) && Object.keys(ml).length === 0);
+    if (vacio) throw new Error(`muestra inválida: casos[${i}].ml debe estar presente y no vacío`);
+  }
   const cardinalidad = o.cardinalidad ?? 299;
   if (!o.parcial && artefacto.casos.length !== cardinalidad) throw new Error(`cardinalidad de muestra inválida: esperada ${cardinalidad}, recibida ${artefacto.casos.length}`);
   if (o.parcial && artefacto.casos.length >= cardinalidad) throw new Error(`muestra parcial no es menor que la cardinalidad esperada ${cardinalidad}`);

@@ -95,7 +95,8 @@ describe('E3-INT-01 intervention', () => {
     await escenario(); await aplicarProyeccion(ctx(true), proyeccion('FB-999'));
     expect((await casosIntervention()).length).toBe(1);
   });
-  it('flag apagado observa pero no abre intervention', async () => { await escenario(); await aplicarProyeccion(ctx(false), proyeccion('FB-999')); expect((await q("select count(*)::int n from catalog.identity_cases where estado='intervention'"))[0]?.n ?? 0).toBe(0); // Captura en sombra deliberada, pendiente de decisión de José.
+  // Captura en sombra deliberada, pendiente de decisión de José.
+  it('flag apagado observa pero no abre intervention', async () => { await escenario(); await aplicarProyeccion(ctx(false), proyeccion('FB-999')); expect((await q("select count(*)::int n from catalog.identity_cases where estado='intervention'"))[0]?.n ?? 0).toBe(0);
     expect((await q('select count(*)::int n from catalog.format_observations'))[0]!.n).toBe(1); });
   it('es idempotente para la misma observación', async () => { await escenario(); await aplicarProyeccion(ctx(true), proyeccion('FB-999')); await aplicarProyeccion(ctx(true), proyeccion('FB-999')); expect((await q("select count(*)::int n from catalog.identity_cases where tipo='sku_cambiado'"))[0]!.n).toBe(1); expect((await q("select count(*)::int n from catalog.identity_commands where tipo='pausar_publicacion'"))[0]!.n).toBe(0); });
 });
