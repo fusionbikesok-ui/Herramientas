@@ -13,10 +13,11 @@
   };
   // Mantener esta lista en paridad con ATRIBUTOS_COMPARABLES de plataforma/src/identidad/comparar.ts.
   var ATRIBUTOS_COMPARABLES = { marca: true, modelo: true, color: true, talle: true, tamano_del_cuadro: true,
-    rodado: true, material: true, tipo_de_producto: true, tipo_de_bicicleta: true, genero: true, cantidad_de_velocidades: true };
+    rodado: true, material: true, tipo_de_producto: true, tipo_de_bicicleta: true, genero: true, edad: true, cantidad_de_velocidades: true };
   function nombreCanonico(nombre) {
     var n = String(nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s-]+/g, '_');
-    return n === 'tamano_del_cuadro' ? 'talle' : n;
+    if (n === 'tamano_del_cuadro') return 'talle';
+    return n === 'material_del_cuadro' ? 'material' : n;
   }
 
   var COPY = {

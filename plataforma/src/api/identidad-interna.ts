@@ -39,7 +39,8 @@ const FOTO_MODELO_WOO = `(SELECT i.url FROM catalog.model_images i
     WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
       AND EXISTS (SELECT 1 FROM catalog.external_representations ir
                    WHERE ir.id = i.representation_id AND ir.model_id = v.model_id
-                     AND ir.canal = 'woocommerce' AND ir.archivado_en IS NULL)
+                     AND ir.canal = 'woocommerce' AND ir.tipo = 'contenedor'
+                     AND ir.variant_id IS NULL AND ir.archivado_en IS NULL)
     ORDER BY i.orden NULLS LAST, i.id LIMIT 1)`;
 
 const Decision = z.strictObject({
@@ -201,17 +202,17 @@ const ATRIBUTOS_VARIANTES = `
    WHERE v.id = ANY($1::uuid[]) AND a.vigente_hasta IS NULL
   ORDER BY variant_id, nivel, representation_id, id`;
 
-async function atributosDeVariante(pool: pg.Pool, variantId: string, modelId: string): Promise<Atributos> {
-  const r = await pool.query<FilaAtributoCandidato>(ATRIBUTOS_VARIANTES, [[variantId], [modelId]]);
-  return combinarAtributos(r.rows).get(variantId) ?? new Map();
+async function atributosDeVariantes(pool: pg.Pool, variantIds: string[], modelIds: string[]): Promise<Map<string, Atributos>> {
+  if (!variantIds.length) return new Map();
+  const r = await pool.query<FilaAtributoCandidato>(ATRIBUTOS_VARIANTES, [variantIds, [...new Set(modelIds)]]);
+  return combinarAtributos(r.rows);
 }
 
 /** Explicación de un candidato contra la publicación ML del caso. Es la misma proyección que usa el detalle. */
-async function explicacionCandidato(
-  pool: pg.Pool, atributosMl: Atributos, variantId: string, modelId: string, atributosMotor: unknown[] = [],
+function explicacionCandidato(
+  atributosMl: Atributos, atributosCandidato: Atributos, atributosMotor: unknown[] = [],
 ) {
-  const atrCand = await atributosDeVariante(pool, variantId, modelId);
-  return { atributos: atributosMotor, otros_atributos: otrosAtributos(atributosMl, atrCand) };
+  return { atributos: atributosMotor, otros_atributos: otrosAtributos(atributosMl, atributosCandidato) };
 }
 
 export function registrarIdentidadInterna(
@@ -356,7 +357,7 @@ export function registrarIdentidadInterna(
                 ${FOTO_MODELO_WOO}) AS foto,
                 w.precio, w.moneda, w.stock_canal AS stock
            FROM catalog.identity_candidates k
-           JOIN catalog.sellable_variants v ON v.id = k.variant_id
+          JOIN catalog.sellable_variants v ON v.id = k.variant_id AND v.archivado_en IS NULL
            JOIN catalog.product_models m ON m.id = v.model_id
           LEFT JOIN LATERAL (SELECT id, precio, moneda, stock_canal FROM catalog.external_representations
                                WHERE variant_id = v.id AND canal = 'woocommerce' AND archivado_en IS NULL
@@ -364,15 +365,7 @@ export function registrarIdentidadInterna(
           WHERE k.case_id = $1
             AND k.run_id = (SELECT run_id FROM catalog.identity_candidates WHERE case_id = $1 ORDER BY creado_en DESC, id DESC LIMIT 1)
           ORDER BY k.rank`, [c.id])).rows;
-      const candidatos = [];
-      for (const k of cands) {
-        const atributos = (k.explicacion as { atributos?: unknown[] } | null)?.atributos ?? [];
-        candidatos.push({
-          rank: k.rank, variant_id: k.variant_id, sku: k.sku ?? null, titulo: k.titulo, foto: k.foto ?? null,
-          precio: k.precio ?? null, moneda: k.moneda ?? null, stock: k.stock ?? null,
-          explicacion: await explicacionCandidato(pool, atributosMl, String(k.variant_id), String(k.model_id), atributos),
-        });
-      }
+      const candidatosDatos: Fila[] = cands.map((k) => ({ ...k }));
 
       const historial = c.recurso === null || c.recurso === undefined ? [] : (await pool.query<Fila>(
         `SELECT d.id, d.origen, d.efecto, d.eleccion, d.actor, d.motivo, d.creado_en, d.superada_en, d.supersede_a, d.variant_id, v.sku
@@ -390,7 +383,7 @@ export function registrarIdentidadInterna(
       // coincidencia — si no, José nunca la veía, aunque el sistema ya la hubiera resuelto. Se agrega como
       // rank 0 (primer lugar) cuando no está entre los candidatos del motor, con los mismos datos de Woo
       // que cualquier candidato.
-      if (sombra?.variant_id && !candidatos.some((cnd) => cnd.variant_id === sombra.variant_id)) {
+      if (sombra?.variant_id && !candidatosDatos.some((cnd) => cnd.variant_id === sombra.variant_id)) {
         const v = (await pool.query<Fila>(
           `SELECT v.id AS variant_id, v.sku, v.model_id, m.titulo,
                   COALESCE((SELECT url FROM catalog.model_images i WHERE i.representation_id = w.id AND i.vigente_hasta IS NULL
@@ -403,13 +396,23 @@ export function registrarIdentidadInterna(
                                  ORDER BY observado_en DESC LIMIT 1) w ON true
             WHERE v.id = $1 AND v.archivado_en IS NULL`, [sombra.variant_id])).rows[0];
         if (v) {
-          candidatos.unshift({
-            rank: 0, variant_id: v.variant_id, sku: v.sku ?? null, titulo: v.titulo, foto: v.foto ?? null,
-            precio: v.precio ?? null, moneda: v.moneda ?? null, stock: v.stock ?? null,
-            explicacion: await explicacionCandidato(pool, atributosMl, String(v.variant_id), String(v.model_id)),
-          });
+          candidatosDatos.unshift({ rank: 0, ...v });
         }
       }
+
+      const atributosPorVariante = await atributosDeVariantes(
+        pool,
+        candidatosDatos.map((f) => String(f.variant_id)),
+        candidatosDatos.map((f) => String(f.model_id)),
+      );
+      const candidatos = candidatosDatos.map((k) => {
+        const atributos = (k.explicacion as { atributos?: unknown[] } | null)?.atributos ?? [];
+        return {
+          rank: k.rank, variant_id: k.variant_id, sku: k.sku ?? null, titulo: k.titulo, foto: k.foto ?? null,
+          precio: k.precio ?? null, moneda: k.moneda ?? null, stock: k.stock ?? null,
+          explicacion: explicacionCandidato(atributosMl, atributosPorVariante.get(String(k.variant_id)) ?? new Map(), atributos),
+        };
+      });
 
       return {
         id: c.id, tipo: c.tipo, estado: c.estado, prioridad: c.prioridad, version: c.version, abierto_en: c.abierto_en,

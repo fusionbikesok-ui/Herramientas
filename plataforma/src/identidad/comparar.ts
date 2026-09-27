@@ -10,12 +10,15 @@ export interface AtributoMarcado { nombre: string; marca: 'coincide' | 'difiere'
 
 export const ATRIBUTOS_COMPARABLES = new Set([
   'marca', 'modelo', 'color', 'talle', 'rodado', 'material', 'tipo_de_producto',
-  'tipo_de_bicicleta', 'genero', 'cantidad_de_velocidades',
+  'tipo_de_bicicleta', 'genero', 'edad', 'cantidad_de_velocidades',
 ]);
 
 export function nombreCanonico(nombre: string): string {
   const n = nombre.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim().replace(/[-\s]+/g, '_');
-  return n === 'tamano_del_cuadro' ? 'talle' : n;
+  if (n === 'tamano_del_cuadro') return 'talle';
+  // Woo normaliza «Material del cuadro» y ML suele enviar «Material»: son el mismo atributo de catálogo.
+  if (n === 'material_del_cuadro') return 'material';
+  return n;
 }
 
 const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
