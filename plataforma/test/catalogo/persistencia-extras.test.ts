@@ -5,7 +5,9 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { aplicarEvento, type EventoDecision } from '../../src/catalogo/copias.ts';
 import { aplicarProyeccion, type Canal } from '../../src/catalogo/aplicar.ts';
+import { candidatosDesdeAtributo } from '../../src/catalogo/informe-taxonomia.ts';
 import { esRechazo } from '../../src/catalogo/intenciones.ts';
 import { proyectarItemMl } from '../../src/catalogo/ml.ts';
 import { proyectarProductoWoo } from '../../src/catalogo/woo.ts';
@@ -36,6 +38,11 @@ const wooSimple = (attrs: { name: string; option: string }[], extra: Record<stri
   ({ id: 100, type: 'simple', status: 'publish', name: 'Cubierta', sku: 'FB-100', attributes: attrs, ...extra });
 const mlItem = (attrs: { id: string; name: string; value_name: string }[], extra: Record<string, unknown> = {}) =>
   ({ id: 'MLA1', title: 'Cubierta', status: 'active', attributes: attrs, ...extra });
+
+const evento = (accion: EventoDecision['accion'], sku: string | null): EventoDecision => ({
+  evento_id: randomUUID(), recurso: 'MLA1', variacion: '', accion, sku, actor: 'persona', motivo: null,
+  confirmado_por: 'jose', ocurrido_en: new Date().toISOString(),
+});
 
 async function aplicar(canal: Canal, payload: unknown, opciones: { comparar?: boolean | 'omitir'; fallar?: boolean } = {}) {
   const p = canal === 'woocommerce' ? proyectarProductoWoo(payload) : proyectarItemMl(payload);
@@ -127,6 +134,47 @@ describe('E2-PER-01 persistencia', () => {
       FROM catalog.external_representations`)).rows).toEqual([{
       omitida_por_decision: true, model_id: null, variant_id: null, crudo: true,
     }]);
+  });
+
+  it('al pasar de omitida a vinculada reasocia atributos e imágenes al modelo destino sin reproyectar', async () => {
+    await aplicar('woocommerce', wooSimple([]));
+    await omitirMl();
+    await aplicar('mercadolibre', mlItem([{ id: 'BRAND', name: 'Marca', value_name: 'Maxxis' }], {
+      pictures: [{ id: 'p1', secure_url: 'https://x/omitida.jpg' }],
+    }), { comparar: false });
+    const modelo = (await admin.query<{ model_id: string }>(
+      `SELECT v.model_id FROM catalog.sellable_variants v WHERE v.sku = 'FB-100'`)).rows[0]!.model_id;
+
+    await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento('confirmar', 'FB-100'), { bandeja: false }));
+
+    expect((await admin.query(`SELECT DISTINCT model_id FROM catalog.model_attributes WHERE representation_id =
+      (SELECT id FROM catalog.external_representations WHERE canal = 'mercadolibre' AND recurso = 'MLA1')`)).rows)
+      .toEqual([{ model_id: modelo }]);
+    expect((await admin.query(`SELECT DISTINCT model_id FROM catalog.model_images WHERE representation_id =
+      (SELECT id FROM catalog.external_representations WHERE canal = 'mercadolibre' AND recurso = 'MLA1')`)).rows)
+      .toEqual([{ model_id: modelo }]);
+  });
+
+  it('al pasar de vinculada a omitida deja los extras sin modelo y los saca del informe sin reproyectar', async () => {
+    await aplicar('woocommerce', wooSimple([]));
+    await decidirMl();
+    await aplicar('mercadolibre', mlItem([], {
+      category_id: 'MLA3', pictures: [{ id: 'p1', secure_url: 'https://x/vinculada.jpg' }],
+    }), { comparar: false });
+    const modelo = (await admin.query<{ model_id: string }>(
+      `SELECT v.model_id FROM catalog.sellable_variants v WHERE v.sku = 'FB-100'`)).rows[0]!.model_id;
+    expect((await candidatosDesdeAtributo(app, empresa)).map((x) => x.nombreNormalizado)).toEqual(['mla3']);
+
+    await enTransaccion(app, (tx) => aplicarEvento(tx, empresa, ml, evento('omitir', null), { bandeja: false }));
+
+    expect((await admin.query(`SELECT DISTINCT model_id FROM catalog.model_attributes WHERE representation_id =
+      (SELECT id FROM catalog.external_representations WHERE canal = 'mercadolibre' AND recurso = 'MLA1')`)).rows)
+      .toEqual([{ model_id: null }]);
+    expect((await admin.query(`SELECT DISTINCT model_id FROM catalog.model_images WHERE representation_id =
+      (SELECT id FROM catalog.external_representations WHERE canal = 'mercadolibre' AND recurso = 'MLA1')`)).rows)
+      .toEqual([{ model_id: null }]);
+    expect(await candidatosDesdeAtributo(app, empresa)).toEqual([]);
+    expect(modelo).toBeTruthy();
   });
 });
 

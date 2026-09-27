@@ -172,6 +172,19 @@ describe('E2-BKF-01 el backfill', () => {
       .toEqual([{ model_id: null, representation_id: id, url: 'https://m/omitida.jpg' }]);
   });
 
+  it('en modo omitidas conserva los JSON crudos actuales aunque la caché sea más vieja', async () => {
+    const id = await repMlOmitida();
+    await admin.query(`UPDATE catalog.external_representations
+      SET atributos_crudos = '{"actual":true}'::jsonb, comercial_crudo = '{"precio":777}'::jsonb WHERE id = $1`, [id]);
+    const m = { 'MLA100|': { category_id: 'MLA3', thumbnail: 'https://m/omitida.jpg', precio: 9100,
+      available_quantity: 2, atributos_json: JSON.stringify([{ id: 'COLOR', name: 'Color', value_name: 'Rojo' }]) } };
+
+    await backfillAtributos(app, fuente({}, m), { lote: 10, dryRun: false, omitidasMl: true });
+
+    expect((await admin.query(`SELECT atributos_crudos, comercial_crudo FROM catalog.external_representations WHERE id = $1`, [id])).rows[0])
+      .toEqual({ atributos_crudos: { actual: true }, comercial_crudo: { precio: 777 } });
+  });
+
   it('el modo de omitidas es idempotente y no vuelve a procesar una representación con atributos', async () => {
     const id = await repMlOmitida();
     const m = { 'MLA100|': { category_id: 'MLA3', thumbnail: 'https://m/omitida.jpg', atributos_json: JSON.stringify([]) } };

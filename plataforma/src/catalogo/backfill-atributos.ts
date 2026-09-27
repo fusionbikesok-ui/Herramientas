@@ -134,7 +134,7 @@ export async function backfillAtributos(pool: pg.Pool, fuente: FuenteLegado, o: 
         const c = extras.comercial;
         const marcada = await tx.query(
           `UPDATE catalog.external_representations
-              SET atributos_crudos = $2::jsonb, comercial_crudo = $3::jsonb, capturado_en = ${o.omitidasMl ? 'COALESCE(capturado_en, now())' : 'now()'},
+              SET atributos_crudos = ${cv('atributos_crudos', '$2::jsonb')}, comercial_crudo = ${cv('comercial_crudo', '$3::jsonb')}, capturado_en = ${o.omitidasMl ? 'COALESCE(capturado_en, now())' : 'now()'},
                   precio = ${cv('precio', '$4::numeric')}, moneda = ${cv('moneda', '$5')}, stock_canal = ${cv('stock_canal', '$6::integer')}, gtin = ${cv('gtin', '$7')}
             WHERE id = $1${condicionCaptura}`,
           [f.id, JSON.stringify(extras.crudo!.atributos ?? null), JSON.stringify(extras.crudo!.comercial ?? null),

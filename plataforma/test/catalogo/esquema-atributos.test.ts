@@ -1,5 +1,5 @@
 /*
- * test/catalogo/esquema-atributos.test.ts — E2 T2: esquema de atributos e imágenes, incluida 0028.
+ * test/catalogo/esquema-atributos.test.ts — E2 T2: esquema de atributos e imágenes, incluidas 0028 y 0029.
  */
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
@@ -31,7 +31,7 @@ async function sembrar() {
   return { empresa, modelo, rep };
 }
 
-describe('E2-T2-SCH-01 migraciones 0014 y 0028', () => {
+describe('E2-T2-SCH-01 migraciones 0014, 0028 y 0029', () => {
   it('external_representations gana siete columnas nullable y sin default', async () => {
     const c = await cols('external_representations');
     const esperado: Record<string, string> = { atributos_crudos: 'jsonb', comercial_crudo: 'jsonb', capturado_en: 'timestamp with time zone',

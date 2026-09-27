@@ -17,6 +17,9 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 
 - La reasignación manual de un vínculo ML→Woo exige el SKU observado por el cliente y
   responde conflicto si otra operación lo cambió antes de escribir.
+- En la plataforma, los atributos e imágenes de una representación ML omitida se conservan por
+  `representation_id` con `model_id` nulo; toda decisión que cambie el vínculo reasigna esos extras
+  al modelo destino o los deja nulos y reclasifica los modelos viejo/nuevo dentro de la misma transacción.
 - Un timeout durante el primer PUT de tracking a Woo es un resultado incierto: se persiste y
   la UI no afirma que el tracking o el mail fueron confirmados hasta reconciliar con Woo.
 - `pack_id` es la identidad canónica del paquete ML para preparación; las filas anteriores se

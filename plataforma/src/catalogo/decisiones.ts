@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { registrarEvento } from '../audit/auditoria.ts';
 import type { Consultable } from '../db/pool.ts';
 import { decisionVigente, modoAutoSku, type ModoAutoSku } from '../identidad/autoridad.ts';
+import { clasificarModelos } from './clasificacion.ts';
 
 /**
  * Candado de las decisiones de una cuenta, hasta el fin de la transacción. Lo toman los eventos, las copias, el
@@ -51,6 +52,28 @@ export interface OpcionesAutoridad {
 }
 
 const CASOS_DE_PENDIENTE = ['sku_pendiente', 'sku_inexistente_en_woo'];
+
+async function reclasificarModelosAfectados(tx: Consultable, empresa: string, modelos: Iterable<string>): Promise<void> {
+  const afectados = [...new Set(modelos)].sort();
+  if (!afectados.length) return;
+  await tx.query('SAVEPOINT clasificacion_decision');
+  try {
+    await clasificarModelos(tx, {
+      empresa, dryRun: false, modelos: afectados, categoriaCambio: new Set(afectados),
+    });
+    await tx.query('RELEASE SAVEPOINT clasificacion_decision');
+  } catch (err) {
+    // Fail-open a propósito: el vínculo ya decidido no debe caer por la clasificación, que se rehace en la próxima
+    // corrida; queda el evento para que no sea silencioso.
+    await tx.query('ROLLBACK TO SAVEPOINT clasificacion_decision');
+    await tx.query('RELEASE SAVEPOINT clasificacion_decision');
+    await registrarEvento(tx, {
+      companyId: empresa, actorType: 'system', actorId: 'plataforma.catalogo', action: 'catalogo.clasificacion_fallida',
+      aggregateType: 'company', aggregateId: empresa, correlationId: randomUUID(),
+      reason: err instanceof Error ? err.message.slice(0, 200) : 'error de clasificación', payload: { modelos: afectados },
+    });
+  }
+}
 
 export async function reconciliarClave(
   tx: Consultable, cuenta: string, recurso: string, variacion: string, motivo: string,
@@ -87,8 +110,8 @@ export async function reconciliarClave(
     deseado = destino ? { tipo: 'variante', variante: destino.id } : { tipo: 'pendiente', caso: 'sku_inexistente_en_woo', sku: dec.sku };
   } else deseado = { tipo: 'pendiente', caso: 'sku_pendiente', sku: null };
 
-  const actual = rep.variant_id ? (await tx.query<{ sku: string | null }>(
-    'SELECT sku FROM catalog.sellable_variants WHERE id = $1 FOR UPDATE', [rep.variant_id])).rows[0]! : null;
+  const actual = rep.variant_id ? (await tx.query<{ sku: string | null; model_id: string | null }>(
+    'SELECT sku, model_id FROM catalog.sellable_variants WHERE id = $1 FOR UPDATE', [rep.variant_id])).rows[0]! : null;
 
   const abrir = (tipo: string, objeto: { variante?: string; representacion?: string }, prioridad = 'normal', detalle: object = {}) => tx.query(
     `INSERT INTO catalog.identity_cases (company_id, tipo, prioridad, variant_id, representation_id, detalle)
@@ -117,16 +140,24 @@ export async function reconciliarClave(
   }
 
   let nueva: string | null = null;
-  if (deseado.tipo === 'variante') nueva = deseado.variante;
+  let modeloDestino: string | null = null;
+  if (deseado.tipo === 'variante') {
+    nueva = deseado.variante;
+    modeloDestino = (await tx.query<{ model_id: string | null }>(
+      'SELECT model_id FROM catalog.sellable_variants WHERE id = $1', [nueva])).rows[0]?.model_id ?? null;
+  }
   if (deseado.tipo === 'pendiente') {
+    modeloDestino = await modeloPropioMl(tx, empresa, cuenta, recurso);
     nueva = (await tx.query<{ id: string }>(
       'INSERT INTO catalog.sellable_variants (company_id, model_id) VALUES ($1, $2) RETURNING id',
-      [empresa, await modeloPropioMl(tx, empresa, cuenta, recurso)])).rows[0]!.id;
+      [empresa, modeloDestino])).rows[0]!.id;
     await abrir(deseado.caso, { variante: nueva }, 'normal', deseado.sku ? { sku: deseado.sku } : {});
   }
   await tx.query(
     'UPDATE catalog.external_representations SET variant_id = $2, omitida_por_decision = $3 WHERE id = $1',
     [rep.id, nueva, deseado.tipo === 'omitida']);
+  await tx.query('UPDATE catalog.model_attributes SET model_id = $2 WHERE representation_id = $1', [rep.id, modeloDestino]);
+  await tx.query('UPDATE catalog.model_images SET model_id = $2 WHERE representation_id = $1', [rep.id, modeloDestino]);
   if (deseado.tipo === 'omitida') await abrir('omitida_revisar', { representacion: rep.id }, 'baja');
   else await cerrarOmitida();
 
@@ -142,6 +173,11 @@ export async function reconciliarClave(
       await cerrarDeVariante(rep.variant_id, CASOS_DE_PENDIENTE, destino);
     }
   }
+
+  const modelosAfectados = new Set<string>();
+  if (actual?.model_id && actual.model_id !== modeloDestino) modelosAfectados.add(actual.model_id);
+  if (modeloDestino && modeloDestino !== actual?.model_id) modelosAfectados.add(modeloDestino);
+  await reclasificarModelosAfectados(tx, empresa, modelosAfectados);
 
   await registrarEvento(tx, {
     companyId: empresa, actorType: 'system', actorId: 'plataforma.catalogo', action: 'catalogo.vinculo_cambiado',

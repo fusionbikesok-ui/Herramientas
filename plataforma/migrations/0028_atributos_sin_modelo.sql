@@ -25,11 +25,7 @@ ALTER TABLE catalog.model_images
 ALTER TABLE catalog.model_attributes
   ADD CONSTRAINT model_attributes_model_or_rep_check
   CHECK (model_id IS NOT NULL OR representation_id IS NOT NULL) NOT VALID;
-ALTER TABLE catalog.model_attributes
-  VALIDATE CONSTRAINT model_attributes_model_or_rep_check;
 
 ALTER TABLE catalog.model_images
   ADD CONSTRAINT model_images_model_or_rep_check
   CHECK (model_id IS NOT NULL OR representation_id IS NOT NULL) NOT VALID;
-ALTER TABLE catalog.model_images
-  VALIDATE CONSTRAINT model_images_model_or_rep_check;
