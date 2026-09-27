@@ -11,14 +11,16 @@
  * hablaba de identidad, donde un caché atrasado corrompe decisiones; acá son atributos descriptivos y un color
  * desactualizado se corrige en el próximo cambio del producto. Ver §7 del diseño de T2.
  *
- * Idempotente y reanudable sin estado extra: procesa `capturado_en IS NULL`. No abre casos de divergencia.
+ * Idempotente y reanudable sin estado extra: procesa `capturado_en IS NULL`, o las omitidas ML sin atributos/imágenes
+ * con `--omitidas-ml`. Se puede cortar y reanudar; los lotes confirmados quedan hechos y los demás se retoman.
  * El SQLite se abre de sólo lectura y no pasa por `openDb` (que crea el directorio y migra: un script que sólo
  * mira no debe poder escribir la base del legado). `DB_PATH` sale de `dotenv/config`; sin él llega undefined.
  *
  * Conexión a PostgreSQL: igual que revivir-senales.mjs — PG_HOST/PG_PORT/PG_DATABASE/PG_USER/PG_PASSWORD(_FILE)
  * de process.env ya poblado. Nunca abre plataforma.env.
  *
- * Uso: node scripts/catalogo-atributos-backfill.mjs [--lote N] [--dry-run|--ejecutar]
+ * Uso: node scripts/catalogo-atributos-backfill.mjs --omitidas-ml [--ejecutar]
+ *      node scripts/catalogo-atributos-backfill.mjs [--lote N] [--dry-run|--ejecutar]
  * Por defecto es dry-run: informa qué haría sin escribir nada. Para escribir hay que pasar --ejecutar.
  */
 import 'dotenv/config';
@@ -28,12 +30,13 @@ import { backfillAtributos } from '../plataforma/src/catalogo/backfill-atributos
 import { crearPool } from '../plataforma/src/db/pool.ts';
 
 function leerArgs(argv) {
-  const o = { lote: 200, dryRun: true };
+  const o = { lote: 200, dryRun: true, omitidasMl: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--lote') o.lote = Number(argv[++i]);
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--ejecutar') o.dryRun = false;
+    else if (a === '--omitidas-ml') o.omitidasMl = true;
     else { console.error(`argumento desconocido: ${a}`); process.exit(2); }
   }
   if (!Number.isInteger(o.lote) || o.lote < 1 || o.lote > 1000) { console.error('--lote debe ser un entero entre 1 y 1000'); process.exit(2); }
@@ -64,7 +67,7 @@ try {
     ml: (c) => ml.get(c),
     mlDeItem: (item) => mlItem.get(item),
   }, opciones);
-  console.log(JSON.stringify({ dryRun: opciones.dryRun, lote: opciones.lote, ...resumen }, null, 2));
+  console.log(JSON.stringify({ dryRun: opciones.dryRun, lote: opciones.lote, omitidasMl: opciones.omitidasMl, ...resumen }, null, 2));
 } catch (error) {
   console.error(JSON.stringify({ error: error.message }));
   codigoSalida = 1;

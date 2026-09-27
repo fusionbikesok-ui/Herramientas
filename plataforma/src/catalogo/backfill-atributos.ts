@@ -91,7 +91,7 @@ export function extrasDesdeCache(rep: Rep, fuente: FuenteLegado): Extras | null 
   return extras.crudo ? extras : null;
 }
 
-export interface OpcionesBackfill { lote: number; dryRun: boolean }
+export interface OpcionesBackfill { lote: number; dryRun: boolean; omitidasMl?: boolean }
 
 export interface ResumenBackfill {
   procesadas: number; conDatos: number; sinDatos: number; atributos: number; imagenes: number;
@@ -106,11 +106,18 @@ export async function backfillAtributos(pool: pg.Pool, fuente: FuenteLegado, o: 
   for (;;) {
     // Keyset por id (no sólo `capturado_en IS NULL`): en dry-run nada se marca y sin cursor el bucle no terminaría;
     // en ejecución, además, una fila bloqueada por el proyector (SKIP LOCKED) se retoma en la corrida siguiente.
+    const seleccion = o.omitidasMl
+      ? `canal = 'mercadolibre' AND omitida_por_decision
+         AND NOT EXISTS (SELECT 1 FROM catalog.model_attributes a WHERE a.representation_id = r.id)
+         AND NOT EXISTS (SELECT 1 FROM catalog.model_images i WHERE i.representation_id = r.id)`
+      : 'capturado_en IS NULL';
+    const cv = (col: string, nuevo: string): string => (o.omitidasMl ? `COALESCE(${col}, ${nuevo})` : nuevo);
+    const condicionCaptura = o.omitidasMl ? '' : ' AND capturado_en IS NULL';
     const hecho = await enTransaccion(pool, async (tx) => {
       const filas = (await tx.query<RepFila>(
         `SELECT id, company_id, channel_account_id, canal, recurso, variacion_normalizada AS variacion, tipo
-           FROM catalog.external_representations
-          WHERE capturado_en IS NULL AND id > $1 ORDER BY id LIMIT $2 ${o.dryRun ? '' : 'FOR UPDATE SKIP LOCKED'}`,
+           FROM catalog.external_representations r
+          WHERE ${seleccion} AND r.id > $1 ORDER BY r.id LIMIT $2 ${o.dryRun ? '' : 'FOR UPDATE SKIP LOCKED'}`,
         [ultimo, o.lote])).rows;
       for (const f of filas) {
         ultimo = f.id; r.procesadas++;
@@ -119,16 +126,17 @@ export async function backfillAtributos(pool: pg.Pool, fuente: FuenteLegado, o: 
           r.conDatos++; r.atributos += extras.atributos?.length ?? 0; r.imagenes += extras.imagenes?.length ?? 0;
         }
         if (o.dryRun) continue;
+        if (!extras && o.omitidasMl) continue;
         if (!extras) {
-          await tx.query('UPDATE catalog.external_representations SET capturado_en = now() WHERE id = $1 AND capturado_en IS NULL', [f.id]);
+          await tx.query(`UPDATE catalog.external_representations SET capturado_en = now() WHERE id = $1${condicionCaptura}`, [f.id]);
           continue;
         }
         const c = extras.comercial;
         const marcada = await tx.query(
           `UPDATE catalog.external_representations
-              SET atributos_crudos = $2::jsonb, comercial_crudo = $3::jsonb, capturado_en = now(),
-                  precio = $4::numeric, moneda = $5, stock_canal = $6::integer, gtin = $7
-            WHERE id = $1 AND capturado_en IS NULL`,
+              SET atributos_crudos = $2::jsonb, comercial_crudo = $3::jsonb, capturado_en = ${o.omitidasMl ? 'COALESCE(capturado_en, now())' : 'now()'},
+                  precio = ${cv('precio', '$4::numeric')}, moneda = ${cv('moneda', '$5')}, stock_canal = ${cv('stock_canal', '$6::integer')}, gtin = ${cv('gtin', '$7')}
+            WHERE id = $1${condicionCaptura}`,
           [f.id, JSON.stringify(extras.crudo!.atributos ?? null), JSON.stringify(extras.crudo!.comercial ?? null),
             numeroAcotado(c?.precio, 1e10), c?.moneda ?? null,
             numeroAcotado(c?.stock, 2 ** 31) === null ? null : Math.trunc(c!.stock!), c?.gtin ?? null]);
