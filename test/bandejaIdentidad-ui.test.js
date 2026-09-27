@@ -8,13 +8,18 @@ const mod = await import('../public/bandeja-identidad/logica.js');
 const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.BandejaLogica ?? globalThis.window?.BandejaLogica);
 const ev = (o = {}) => ({ key: 'j', target: { tagName: 'DIV', closest: () => null }, ...o });
 
-function cargarBandejaConDomInyectado() {
+function cargarBandejaConDomInyectado(fetchImpl = () => Promise.resolve({ status: 200, json: async () => ({}) })) {
   function nodo(tagName = 'DIV') {
     return {
       tagName, children: [], textContent: '', className: '', style: {},
-      setAttribute() {},
-      appendChild(hijo) { this.children.push(hijo); return hijo; },
+      attrs: {},
+      setAttribute(k, v) { this.attrs[k] = v; },
+      appendChild(hijo) { hijo.parentNode = this; this.children.push(hijo); return hijo; },
       addEventListener(tipo, fn) { this.listeners = this.listeners || {}; this.listeners[tipo] = fn; },
+      click() { if (this.listeners?.click) this.listeners.click({ target: this }); },
+      focus() {},
+      hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); },
+      classList: { add() {}, remove() {}, toggle() {} },
       querySelector(selector) {
         if (selector === '.btn') return this.children.find((hijo) => hijo.tagName === 'BUTTON') || null;
         if (selector.startsWith('[data-clave="')) {
@@ -29,7 +34,7 @@ function cargarBandejaConDomInyectado() {
   const avisos = nodo();
   const elementos = new Map([['avisos', avisos]]);
   const document = {
-    getElementById(id) { if (!elementos.has(id)) elementos.set(id, nodo()); return elementos.get(id); },
+    getElementById(id) { if (id === 'chip-no-decidibles') return null; if (!elementos.has(id)) elementos.set(id, nodo()); return elementos.get(id); },
     createElement(tag) { const h = nodo(tag.toUpperCase()); const set = h.setAttribute; h.setAttribute = (k, v) => { h.attrs = h.attrs || {}; h.attrs[k] = v; set.call(h, k, v); }; return h; },
     querySelector() { return null; },
     querySelectorAll() { return []; },
@@ -37,7 +42,7 @@ function cargarBandejaConDomInyectado() {
   };
   const window = { __bandejaIdentidadTest: true, BandejaLogica: L, addEventListener() {}, removeEventListener() {}, localStorage: { getItem() { return null; }, setItem() {} }, navigator: { onLine: true } };
   window.window = window;
-  const sandbox = { window, document, crypto: { randomUUID: () => 'generated-key' }, fetch() { return Promise.resolve({}); }, navigator: window.navigator, URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval, console };
+  const sandbox = { window, document, crypto: { randomUUID: () => 'generated-key' }, fetch: fetchImpl, navigator: window.navigator, URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval, console };
   vm.createContext(sandbox);
   vm.runInContext(readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8'), sandbox);
   return { app: sandbox.window.__bandejaIdentidadTest, avisos };
@@ -49,6 +54,8 @@ describe('bandeja: logica pura', () => {
     const guardia = L.crearGuardiaDecisiones(() => claves.shift());
     const primera = guardia.iniciar({ caseId: 'caso-1', cuerpo: { eleccion: 'omitir' } }).entrada;
 
+    guardia.terminar(primera, { status: 503 });
+    expect(guardia.reconciliar(primera)).toBe(primera);
     expect(guardia.cancelar(primera, { status: 503 })).toBe(false);
     expect(guardia.estaBloqueado('caso-1')).toBe(true);
     expect(guardia.cancelar(primera, { status: 200 })).toBe(true);
@@ -61,6 +68,8 @@ describe('bandeja: logica pura', () => {
       return () => claves.shift();
     })());
     const primera = guardia.iniciar({ caseId: 'caso-1' });
+    guardia.terminar(primera.entrada, { status: 503 });
+    guardia.reconciliar(primera.entrada);
     expect(guardia.cancelar(primera.entrada, { status: 200 })).toBe(true);
     const segunda = guardia.iniciar({ caseId: 'caso-1' });
     expect(segunda.nueva).toBe(true);
@@ -263,6 +272,28 @@ describe('bandeja: atajos sobre radios', () => {
 });
 
 describe('bandeja: decisión bloqueada comunica el estado en el DOM', () => {
+  const respuesta = (status, data = {}) => ({ status, json: async () => data });
+
+  it('tras agotar los cinco intentos conserva la decisión y muestra Reintentar y Descartar', async () => {
+    vi.useFakeTimers();
+    const llamadas = [];
+    const { app, avisos } = cargarBandejaConDomInyectado(async (request) => {
+      llamadas.push(request);
+      return respuesta(503);
+    });
+    app.state.cola = [{ id: 'caso-agotado' }];
+    app.state.idx = 0;
+    app.state.detalle = { id: 'caso-agotado', version: 4, candidatos: [] };
+
+    app.decidir('omitir');
+    await vi.runAllTimersAsync();
+
+    const aviso = avisos.children.find((n) => n.children.some((hijo) => hijo.textContent.includes('Tu elección se conserva.')));
+    expect(llamadas).toHaveLength(5);
+    expect(aviso.children.filter((n) => n.tagName === 'BUTTON').map((n) => n.textContent)).toEqual(['Reintentar', 'Descartar', 'Cerrar']);
+    vi.useRealTimers();
+  });
+
   it('una decisión fallida muestra aviso claro con Reintentar y Descartar', () => {
     const { app, avisos } = cargarBandejaConDomInyectado();
     app.state.cola = [{ id: 'caso-1' }];
@@ -290,6 +321,87 @@ describe('bandeja: decisión bloqueada comunica el estado en el DOM', () => {
     const textos = avisos.children[0].children.map((hijo) => hijo.textContent).join(' ');
     expect(textos).toContain('Esperando confirmación…');
     expect(textos).not.toContain('Descartar');
+  });
+
+  it('Descartar aplica el detalle abierto y recién entonces libera la guardia', async () => {
+    let resolver;
+    const detalleNuevo = { id: 'caso-abierto', version: 8, candidatos: [{ variant_id: 'v2' }] };
+    const { app, avisos } = cargarBandejaConDomInyectado(() => new Promise((resolve) => { resolver = resolve; }));
+    app.state.cola = [{ id: 'caso-abierto', version: 4 }];
+    app.state.idx = 0;
+    app.state.detalle = { id: 'caso-abierto', version: 4, candidatos: [] };
+    const entrada = app.state.guardiaDecisiones.iniciar({ caseId: 'caso-abierto', casoId: 'caso-abierto', cuerpo: {} }).entrada;
+    app.state.guardiaDecisiones.terminar(entrada, { status: 503 });
+    app.decidir('omitir');
+
+    avisos.children[0].children.find((n) => n.textContent === 'Descartar').click();
+    expect(entrada.estado).toBe('reconciliando');
+    expect(app.state.guardiaDecisiones.estaBloqueado('caso-abierto')).toBe(true);
+    resolver(respuesta(200, detalleNuevo));
+    await vi.waitFor(() => expect(app.state.detalle).toEqual(detalleNuevo));
+
+    expect(app.state.detalle).toEqual(detalleNuevo);
+    expect(app.state.cola[0].version).toBe(8);
+    expect(app.state.guardiaDecisiones.estaBloqueado('caso-abierto')).toBe(false);
+  });
+
+  it('Descartar retira un caso cerrado de la cola antes de liberar la guardia', async () => {
+    let llamada = 0;
+    const { app, avisos } = cargarBandejaConDomInyectado(async () => {
+      llamada += 1;
+      return llamada === 1
+        ? respuesta(200, { id: 'caso-cerrado', version: 9, cerrado_en: '2026-09-26T00:00:00Z' })
+        : respuesta(200, { id: 'siguiente', version: 1, candidatos: [] });
+    });
+    app.state.cola = [{ id: 'caso-cerrado', version: 4 }, { id: 'siguiente', version: 1 }];
+    app.state.idx = 0;
+    app.state.detalle = { id: 'caso-cerrado', version: 4, candidatos: [] };
+    const entrada = app.state.guardiaDecisiones.iniciar({ caseId: 'caso-cerrado', casoId: 'caso-cerrado', cuerpo: {} }).entrada;
+    app.state.guardiaDecisiones.terminar(entrada, { status: 503 });
+    app.decidir('omitir');
+
+    avisos.children[0].children.find((n) => n.textContent === 'Descartar').click();
+    await vi.waitFor(() => expect(app.state.guardiaDecisiones.estaBloqueado('caso-cerrado')).toBe(false));
+
+    expect(app.state.cola.map((c) => c.id)).toEqual(['siguiente']);
+    expect(app.state.guardiaDecisiones.estaBloqueado('caso-cerrado')).toBe(false);
+  });
+
+  it('si falla el GET de reconciliación mantiene el bloqueo y vuelve a ofrecer ambas acciones', async () => {
+    const { app, avisos } = cargarBandejaConDomInyectado(async () => respuesta(503));
+    app.state.cola = [{ id: 'caso-sin-respuesta' }];
+    app.state.idx = 0;
+    app.state.detalle = { id: 'caso-sin-respuesta', version: 4, candidatos: [] };
+    const entrada = app.state.guardiaDecisiones.iniciar({ caseId: 'caso-sin-respuesta', casoId: 'caso-sin-respuesta', cuerpo: {} }).entrada;
+    app.state.guardiaDecisiones.terminar(entrada, { status: 503 });
+    app.decidir('omitir');
+
+    avisos.children[0].children.find((n) => n.textContent === 'Descartar').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(entrada.estado).toBe('fallido');
+    expect(app.state.guardiaDecisiones.estaBloqueado('caso-sin-respuesta')).toBe(true);
+    expect(avisos.children.some((n) => n.children.some((hijo) => hijo.textContent.includes('No se pudo reconciliar')))).toBe(true);
+  });
+
+  it('mientras se reconcilia no permite Reintentar ni iniciar otra decisión', async () => {
+    let resolver;
+    const { app, avisos } = cargarBandejaConDomInyectado(() => new Promise((resolve) => { resolver = resolve; }));
+    app.state.cola = [{ id: 'caso-concurrente' }];
+    app.state.idx = 0;
+    app.state.detalle = { id: 'caso-concurrente', version: 4, candidatos: [] };
+    const entrada = app.state.guardiaDecisiones.iniciar({ caseId: 'caso-concurrente', casoId: 'caso-concurrente', cuerpo: {} }).entrada;
+    app.state.guardiaDecisiones.terminar(entrada, { status: 503 });
+    app.decidir('omitir');
+    const aviso = avisos.children[0];
+    const reintentarViejo = aviso.children.find((n) => n.textContent === 'Reintentar');
+    aviso.children.find((n) => n.textContent === 'Descartar').click();
+    reintentarViejo.click();
+
+    expect(entrada.estado).toBe('reconciliando');
+    expect(app.state.pendientes.size).toBe(0);
+    resolver(respuesta(200, { id: 'caso-concurrente', version: 5, candidatos: [] }));
+    await Promise.resolve();
   });
 });
 
@@ -461,11 +573,61 @@ describe('bandeja: regresiones de concurrencia y decisiones contextuales', () =>
     expect(js).not.toMatch(/case 'rechazar':[\s\S]*?decidir\('omitir'\)/);
   });
 
-  it('descarta la respuesta vieja de una carga de cola', () => {
-    const cargar = js.match(/function cargarCola\(\) \{[\s\S]*?\n {2}\}/)[0];
-    expect(cargar).toMatch(/var cargaToken = \+\+S\.navToken/);
-    expect(cargar).toMatch(/grupoCarga/);
-    expect(cargar).toMatch(/cargaToken !== S\.navToken/);
+  it('avanzar ignora una página que llega después de cambiar el token', async () => {
+    let resolver;
+    const { app } = cargarBandejaConDomInyectado(() => new Promise((resolve) => { resolver = resolve; }));
+    app.state.cola = [{ id: 'actual' }];
+    app.state.idx = 0;
+    app.state.siguiente = 'cursor-viejo';
+    app.state.navToken = 4;
+    const colaOriginal = app.state.cola;
+    app.avanzar();
+    app.state.navToken = 5;
+    resolver({ status: 200, json: async () => ({ casos: [{ id: 'tardio' }], siguiente: 'cursor-nuevo' }) });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(app.state.cola).toBe(colaOriginal);
+    expect(app.state.siguiente).toBe('cursor-viejo');
+    expect(app.state.idx).toBe(0);
+  });
+
+  it('traerMas ignora una página que llega después de cambiar el grupo', async () => {
+    let resolver;
+    const { app } = cargarBandejaConDomInyectado(() => new Promise((resolve) => { resolver = resolve; }));
+    app.state.cola = [{ id: 'actual' }];
+    app.state.idx = 0;
+    app.state.siguiente = 'cursor-viejo';
+    app.state.grupo = 1;
+    const colaOriginal = app.state.cola;
+    app.traerMas();
+    app.state.grupo = 2;
+    resolver({ status: 200, json: async () => ({ casos: [{ id: 'tardio' }], siguiente: 'cursor-nuevo' }) });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(app.state.cola).toBe(colaOriginal);
+    expect(app.state.siguiente).toBe('cursor-viejo');
+    expect(app.state.idx).toBe(0);
+  });
+
+  it('cargarCola ignora la respuesta inicial si llega después de cambiar el token', async () => {
+    let resolver;
+    const { app } = cargarBandejaConDomInyectado(() => new Promise((resolve) => { resolver = resolve; }));
+    app.state.cola = [{ id: 'conservado' }];
+    app.state.siguiente = 'cursor-conservado';
+    app.state.idx = 0;
+    app.state.navToken = 8;
+    const colaOriginal = app.state.cola;
+    app.cargarCola();
+    app.state.navToken = 9;
+    resolver({ status: 200, json: async () => ({ casos: [{ id: 'tardio' }], siguiente: 'cursor-nuevo', contadores: {} }) });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(app.state.cola).toBe(colaOriginal);
+    expect(app.state.siguiente).toBe('cursor-conservado');
+    expect(app.state.idx).toBe(0);
   });
 });
 

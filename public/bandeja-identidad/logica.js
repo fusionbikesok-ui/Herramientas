@@ -74,12 +74,18 @@
       entrada.estado = 'fallido';
     }
     function reintentar(entrada) {
-      if (porCaso.get(entrada.caseId) !== entrada) return null;
+      if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'fallido') return null;
       entrada.estado = 'pendiente';
       return entrada;
     }
+    function reconciliar(entrada) {
+      if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'fallido') return null;
+      entrada.estado = 'reconciliando';
+      return entrada;
+    }
     function cancelar(entrada, reconciliacion) {
-      if (porCaso.get(entrada.caseId) !== entrada || !reconciliacion || reconciliacion.status !== 200) return false;
+      if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'reconciliando'
+        || !reconciliacion || reconciliacion.status !== 200) return false;
       porCaso.delete(entrada.caseId);
       return true;
     }
@@ -87,6 +93,7 @@
       iniciar: iniciar,
       terminar: terminar,
       reintentar: reintentar,
+      reconciliar: reconciliar,
       cancelar: cancelar,
       estaBloqueado: function (caseId) { return porCaso.has(caseId); }
     };

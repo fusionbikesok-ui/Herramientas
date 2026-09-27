@@ -350,31 +350,54 @@
   }
 
   function reintentarEntrada(entry) {
+    if (!S.guardiaDecisiones.reintentar(entry)) return;
     quitarAviso('fallo-' + entry.key);
     quitarAviso('vuelo-' + entry.key);
-    if (!S.guardiaDecisiones.reintentar(entry)) return;
     entry.promise = enviar(entry).then(function (r) { alTerminar(entry, r); return entry; });
     banda();
+  }
+
+  function avisoEntradaFallida(entry, texto) {
+    return aviso('fallo-' + entry.key, texto, [
+      { texto: 'Reintentar', alClick: function () { reintentarEntrada(entry); } },
+      { texto: 'Descartar', alClick: function () { descartarEntrada(entry); } }
+    ]);
   }
 
   function descartarEntrada(entry) {
     // El POST pudo haber llegado al servidor aunque el cliente haya agotado sus reintentos:
     // releer el caso es la reconciliación antes de liberar la guardia.
+    if (!S.guardiaDecisiones.reconciliar(entry)) return;
+    quitarAviso('fallo-' + entry.key);
+    quitarAviso('vuelo-' + entry.key);
+    aviso('reconciliando-' + entry.key, 'Reconciliando el caso…');
     S.cache.delete(entry.casoId);
-    detalleDe(entry.casoId).then(function () {
+    detalleDe(entry.casoId).then(function (detalle) {
+      var i = S.cola.findIndex(function (c) { return c.id === entry.casoId; });
+      var cerrado = !!detalle.cerrado_en;
+      if (cerrado) {
+        if (i >= 0) S.cola.splice(i, 1);
+        if (S.detalle && S.detalle.id === entry.casoId) S.detalle = null;
+      } else {
+        if (i >= 0) S.cola[i].version = detalle.version;
+        if (S.detalle && S.detalle.id === entry.casoId) { S.detalle = detalle; render(); }
+      }
       if (!S.guardiaDecisiones.cancelar(entry, { status: 200 })) return;
       S.pendientes.forEach(function (pendiente, clave) {
         if (pendiente.casoId === entry.casoId) S.pendientes.delete(clave);
       });
+      quitarAviso('reconciliando-' + entry.key);
       quitarAviso('fallo-' + entry.key);
       quitarAviso('vuelo-' + entry.key);
       anunciar('Decisión descartada. El caso fue reconciliado.');
       banda();
+      if (cerrado) {
+        if (S.cola.length) avanzar(); else vacio();
+      }
     }, function () {
-      aviso('fallo-' + entry.key, 'No se pudo reconciliar el caso. La decisión sigue bloqueada.', [
-        { texto: 'Reintentar', alClick: function () { reintentarEntrada(entry); } },
-        { texto: 'Descartar', alClick: function () { descartarEntrada(entry); } }
-      ]);
+      entry.estado = 'fallido';
+      quitarAviso('reconciliando-' + entry.key);
+      avisoEntradaFallida(entry, 'No se pudo reconciliar el caso. La decisión sigue bloqueada.');
     });
   }
 
@@ -465,13 +488,7 @@
   // Estado terminal tras agotar los reintentos: la decisión sigue pendiente (con su misma clave) y el operador decide.
   function fallido(entry) {
     entry.estado = 'fallido'; entry.reintentos = 0; banda();
-    var b = aviso('fallo-' + entry.key, 'No se pudo guardar la decisión (' + textoDecision(entry).replace(/\.$/, '') + '). Tu elección se conserva.', [{
-      texto: 'Reintentar', alClick: function () {
-        quitarAviso('fallo-' + entry.key); S.guardiaDecisiones.reintentar(entry);
-        entry.promise = enviar(entry).then(function (r) { alTerminar(entry, r); return entry; });
-        banda();
-      }
-    }]);
+    var b = avisoEntradaFallida(entry, 'No se pudo guardar la decisión (' + textoDecision(entry).replace(/\.$/, '') + '). Tu elección se conserva.');
     var btn = b.querySelector('.btn'); if (btn) btn.focus();
   }
 
@@ -1270,7 +1287,7 @@
   }
 
   if (window.__bandejaIdentidadTest) {
-    window.__bandejaIdentidadTest = { state: S, decidir: decidir };
+    window.__bandejaIdentidadTest = { state: S, decidir: decidir, avanzar: avanzar, traerMas: traerMas, cargarCola: cargarCola };
   }
 
   document.addEventListener('DOMContentLoaded', inicializar);
