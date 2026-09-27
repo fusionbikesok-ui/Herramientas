@@ -41,6 +41,8 @@ Reglas que sigo durante la noche:
 4. **El rollback de la API usa las imágenes `antes-bandeja` y `antes-atributos`**, porque la imagen original de la API ya no existía en Docker.
 5. **Los representantes que estaban vinculados y después se omitieron conservan hoy los atributos del modelo viejo en producción.** Lo deduzco del código; falta contarlos con una consulta de solo lectura. El nuevo modo `--reparar-extras` del backfill los corrige.
 
+6. **Cupo de Codex sol (vos preguntaste a las ~02:40):** para no agotarlo, sol se usa solo en entregas de riesgo alto: esquema y migraciones, scripts que escriben en producción, lógica de vínculos y E3. En diffs chicos va con effort medium. Lo de riesgo bajo (snapshot, deuda de UI, tests, docs) pasa solo por el revisor y lleva una única revisión sol en lote al final. Si el cupo se agota, lo no revisado queda como "pendiente de revisión" y no se ofrece para deploy. No reemplazo sol por Claude.
+
 ## Preguntas abiertas
 
 (se completan durante la noche)
