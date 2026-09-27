@@ -14,6 +14,39 @@ Reglas que sigo durante la noche:
   - No trae migración.
   - Los comandos están en el chat (bloques 1 a 4, más el rollback).
 
+## Entrega lista (07:10 UTC): migración 0028/0029 + atributos por variante, en un solo deploy
+
+La rama `fix/ml-atributos-sin-modelo` **`350cd95a`** incluye `6f310673`, el arreglo de las diferencias de la bandeja. Reemplaza al deploy de `6f310673` que te pasé anoche: **corré solo este.**
+
+Estado de las verificaciones:
+- Codex sol la aprobó y la considera desplegable.
+- Revisor sin bloqueantes y auditor en verde.
+- **Pendiente:** la suite completa en verde (la está corriendo la otra sesión) y el comando exacto del backfill.
+
+Pasos, cada uno con `!` y mostrándome la salida:
+1. **Backups y etiqueta:**
+   ```
+   cd /opt/fusionbikes/herramientas && node -e "require('better-sqlite3')('./data/fusion.sqlite').backup('/root/backups-worker/fusion-antes-0028-'+Date.now()+'.sqlite').then(()=>console.log('sqlite ok'))" && docker exec fusion-pg-pg-1 pg_dump -U postgres -Fc plataforma > /root/backups-worker/pg-antes-0028-$(date +%s).dump && ls -la /root/backups-worker/pg-antes-0028-* && docker tag fusion-plataforma:local fusion-plataforma:antes-0028
+   ```
+2. **Merge y reinicio del legado.** El merge aparta tu cambio ajeno en `server.js` y lo vuelve a poner:
+   ```
+   cd /opt/fusionbikes/herramientas && git fetch origin fix/ml-atributos-sin-modelo && git stash push -m ajeno-server -- server.js && git merge --ff-only 350cd95a && git stash pop && pm2 restart herramientas && sleep 8 && pm2 status herramientas
+   ```
+3. **Construir la imagen y migrar 0028 + 0029.** Los contenedores viejos siguen andando, porque la 0028 es compatible hacia atrás:
+   ```
+   cd /opt/fusionbikes/herramientas && docker compose -p fusion-plataforma -f plataforma/deploy/compose.yml --env-file /opt/fusionbikes/plataforma-prod/plataforma.env build api && docker compose -p fusion-plataforma -f plataforma/deploy/compose.yml --env-file /opt/fusionbikes/plataforma-prod/plataforma.env run --rm migrate
+   ```
+4. **Recrear api, worker y scheduler, y verificar la salud:**
+   ```
+   cd /opt/fusionbikes/herramientas && docker compose -p fusion-plataforma -f plataforma/deploy/compose.yml --env-file /opt/fusionbikes/plataforma-prod/plataforma.env up -d --no-deps api worker scheduler && sleep 20 && docker ps --filter name=fusion-plataforma --format '{{.Names}} {{.Image}} {{.Status}}' && curl -s -w ' %{http_code}\n' 127.0.0.1:3201/api/v2/health
+   ```
+5. **Backfill:** primero en dry-run, y con `--ejecutar` solo si el conteo tiene sentido. El comando exacto lo agrego cuando la otra sesión lo pruebe.
+
+**Rollback:**
+- Imagen: `docker tag fusion-plataforma:antes-0028 fusion-plataforma:local`, después `up -d --no-deps api worker scheduler`.
+- Legado: `git reset --keep 27dc22f4 && pm2 restart herramientas`.
+- La 0028 no se revierte: sin `NOT NULL` el código viejo funciona igual.
+
 ## En curso
 
 - **`fix/ml-atributos-sin-modelo`**: migraciones 0028/0029 más el backfill. Va por la ronda 3 de arreglos: el checksum de la 0028 y la reparación de estados heredados.
