@@ -11,6 +11,7 @@
     falta: { clase: 'mk--miss', simbolo: '—', texto: 'falta' },
     equivalente: { clase: 'mk--eq', simbolo: '≈', texto: 'equivalente' }
   };
+  // Mantener esta lista en paridad con ATRIBUTOS_COMPARABLES de plataforma/src/identidad/comparar.ts.
   var ATRIBUTOS_COMPARABLES = { marca: true, modelo: true, color: true, talle: true, tamano_del_cuadro: true,
     rodado: true, material: true, tipo_de_producto: true, tipo_de_bicicleta: true, genero: true, cantidad_de_velocidades: true };
   function nombreCanonico(nombre) {
@@ -387,7 +388,7 @@
     if (valor !== undefined && valor !== null && String(valor).trim() !== '') return String(valor);
     return '—';
   }
-  function diferenciasVisibles(explicacion) {
+  function diferenciasVisibles(explicacion, publicacion) {
     var e = explicacion && explicacion.explicacion ? explicacion.explicacion : (explicacion || {});
     var vistos = {};
     var lista = (e.atributos || []).map(function (a) { return { dato: a, otro: false }; })
@@ -401,8 +402,11 @@
       return true;
     }).map(function (envoltura) { var a = envoltura.dato; return Object.assign({}, a, { nombre: nombreCanonico(a.nombre) }); });
     var otros = e.otros_atributos || [];
-    var sinAtributosMl = otros.length > 0 && otros.every(function (a) { return !String(a && a.valorMl || '').trim(); })
-      && (e.atributos || []).every(function (a) { return !String(a && a.valorMl || '').trim(); });
+    var tieneFlagMl = publicacion && typeof publicacion.atributos_ml_cargados === 'boolean';
+    var sinAtributosMl = tieneFlagMl
+      ? !publicacion.atributos_ml_cargados
+      : otros.length > 0 && otros.every(function (a) { return !String(a && a.valorMl || '').trim(); })
+        && (e.atributos || []).every(function (a) { return !String(a && a.valorMl || '').trim(); });
     if (sinAtributosMl) return { diferencias: [], iguales: 0, nombresIguales: [], sinAtributosMl: true };
     var grupos = { difiere: [], falta: [], equivalente: [], coincide: [] };
     lista.forEach(function (a) {

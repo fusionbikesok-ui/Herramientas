@@ -945,7 +945,7 @@
     var resultadoElegido = S.resultadoElegido ? S.busqueda.filter(function (o) { return o.variant_id === S.sel; })[0] : null;
     var seleccionado = resultadoElegido || opciones.filter(function (o) { return o.variant_id === S.sel; })[0] || opciones[0];
     if (seleccionado && S.sel == null) S.sel = seleccionado.variant_id;
-    var resumenDiferencias = L.diferenciasVisibles(seleccionado && seleccionado.explicacion);
+    var resumenDiferencias = L.diferenciasVisibles(seleccionado && seleccionado.explicacion, d.publicacion);
     var diferencias = resumenDiferencias.diferencias;
     var head = el('header', 'caso-header', null, { tabindex: '-1' });
     var izquierda = el('div', 'caso-header-izquierda');

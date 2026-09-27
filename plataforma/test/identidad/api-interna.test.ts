@@ -5,7 +5,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { crearApi } from '../../src/api/app.ts';
-import { PREFIJO_IDENTIDAD } from '../../src/api/identidad-interna.ts';
+import { combinarAtributos, PREFIJO_IDENTIDAD } from '../../src/api/identidad-interna.ts';
 import type { Canal } from '../../src/api/senales.ts';
 import { crearLogger } from '../../src/comun/logger.ts';
 import { crearPool } from '../../src/db/pool.ts';
@@ -333,10 +333,15 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
       [c.id, run, cand.variante, JSON.stringify({ atributos: [{ nombre: 'color', marca: 'coincide', valorMl: 'negro', valorCandidato: 'negro' }] })]);
     await admin.query(
       `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
-       SELECT $1, r.id, 'marca', 'Bell', now() FROM catalog.external_representations r WHERE r.recurso = 'MLA7'`, [c.modelo]);
+       SELECT $1, r.id, x.nombre, x.valor, now()
+         FROM catalog.external_representations r
+         CROSS JOIN (VALUES ('marca', 'Bell'), ('peso', '12 kg')) x(nombre, valor)
+        WHERE r.recurso = 'MLA7'`, [c.modelo]);
     const d = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
     expect(d.status).toBe(200);
-    expect(d.body).toMatchObject({ id: c.id, version: 1, tipo: 'sku_pendiente', publicacion: { recurso: 'MLA7', titulo: 'Bici MLA7' } });
+    expect(d.body).toMatchObject({ id: c.id, version: 1, tipo: 'sku_pendiente', publicacion: {
+      recurso: 'MLA7', titulo: 'Bici MLA7', atributos_ml_cargados: true,
+    } });
     expect(d.body.candidatos).toHaveLength(1);
     expect(d.body.candidatos[0]).toMatchObject({ rank: 1, sku: 'FB-77', titulo: 'Casco Bell Negro',
       explicacion: { atributos: [{ nombre: 'color', marca: 'coincide' }], otros_atributos: [{ nombre: 'marca', marca: 'difiere', valorMl: 'Bell', valorCandidato: '' }] } });
@@ -444,6 +449,72 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     ]);
   });
 
+  it('nunca usa una foto ML como respaldo de foto Woo del candidato, la sombra o la búsqueda manual', async () => {
+    const c = await caso('MLA_FOTO_ML_NO_WOO');
+    const destino = await variante('Destino sin foto Woo', 'FB-8201');
+    const repMl = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations
+         (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id, variant_id)
+       VALUES ($1, $2, 'mercadolibre', 'contenedor', 'MLA-FOTO-DESTINO', '', $3, NULL) RETURNING id`,
+      [empresa, ml, destino.modelo],
+    )).rows[0]!.id;
+    await admin.query(
+      `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en)
+       VALUES ($1, $2, 'https://img/ml-no-debe-filtrarse.jpg', 0, now())`, [destino.modelo, repMl]);
+
+    const run = randomUUID();
+    await admin.query(
+      `INSERT INTO catalog.identity_candidates (case_id, run_id, variant_id, rank, puntaje, engine_version)
+       VALUES ($1, $2, $3, 1, 0.9, 'v1')`, [c.id, run, destino.variante]);
+    const detalle = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(detalle.body.candidatos[0]).toMatchObject({ sku: 'FB-8201', foto: null });
+
+    await admin.query(
+      `INSERT INTO catalog.identity_decisions
+         (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
+       VALUES ($1, $2, $3, 'MLA_FOTO_ML_NO_WOO', '', 'vincular', $4, 'auto_sku', 'motor', 'sombra')`,
+      [empresa, c.id, ml, destino.variante],
+    );
+    await admin.query('DELETE FROM catalog.identity_candidates WHERE case_id = $1', [c.id]);
+    const sombra = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(sombra.body.candidatos[0]).toMatchObject({ sku: 'FB-8201', foto: null });
+
+    const buscada = await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-8201`);
+    expect(buscada.body.variantes[0]).toMatchObject({ sku: 'FB-8201', foto: null });
+  });
+
+  it('la variante sobreescribe el atributo del modelo y completa los atributos que le faltan', async () => {
+    const c = await caso('MLA_ATRIBUTOS_PRECEDENCIA');
+    const woo = await variante('Bici con atributos heredados', 'FB-8202');
+    const rep = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations
+         (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id, variant_id)
+       VALUES ($1, $2, 'woocommerce', 'vendible', 'W-ATR-1', '', $3, $4) RETURNING id`,
+      [empresa, ml, woo.modelo, woo.variante],
+    )).rows[0]!.id;
+    const contenedor = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations
+         (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id)
+       VALUES ($1, $2, 'woocommerce', 'contenedor', 'W-ATR-1-CONT', '', $3) RETURNING id`, [empresa, ml, woo.modelo],
+    )).rows[0]!.id;
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       VALUES ($1, $2, 'color', 'Rojo', now()), ($1, $2, 'rodado', '29', now()), ($1, $3, 'color', 'Azul', now())`,
+      [woo.modelo, contenedor, rep],
+    );
+    const run = randomUUID();
+    await admin.query(
+      `INSERT INTO catalog.identity_candidates (case_id, run_id, variant_id, rank, puntaje, engine_version)
+       VALUES ($1, $2, $3, 1, 0.9, 'v1')`, [c.id, run, woo.variante]);
+
+    const detalle = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(combinarAtributos([
+      { variant_id: woo.variante, nombre: 'color', valor: 'Azul', representation_id: rep, nivel: 'variante', id: '3' },
+      { variant_id: woo.variante, nombre: 'color', valor: 'Rojo', representation_id: contenedor, nivel: 'modelo', id: '1' },
+      { variant_id: woo.variante, nombre: 'rodado', valor: '29', representation_id: contenedor, nivel: 'modelo', id: '2' },
+    ]).get(woo.variante)).toEqual(new Map([['color', 'Azul'], ['rodado', '29']]));
+  });
+
   it('el detalle devuelve la primera foto vigente de la representación ML, o null si no existe', async () => {
     const conFoto = await caso('MLA_FOTO');
     const sinFoto = await caso('MLA_SIN_FOTO');
@@ -463,6 +534,7 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     );
 
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${conFoto.id}`)).body.publicacion.foto).toBe('https://img/primera.jpg');
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${conFoto.id}`)).body.publicacion.atributos_ml_cargados).toBe(false);
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${sinFoto.id}`)).body.publicacion.foto).toBeNull();
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${vencida.id}`)).body.publicacion.foto).toBeNull();
   });

@@ -35,6 +35,12 @@ const RETENCION_NONCE = '10 minutes';
 const LIMITE_CUERPO = 64 * 1024;
 const LIMITE_POR_DEFECTO = 50;
 const LIMITE_MAXIMO = 200;
+const FOTO_MODELO_WOO = `(SELECT i.url FROM catalog.model_images i
+    WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
+      AND EXISTS (SELECT 1 FROM catalog.external_representations ir
+                   WHERE ir.id = i.representation_id AND ir.model_id = v.model_id
+                     AND ir.canal = 'woocommerce' AND ir.archivado_en IS NULL)
+    ORDER BY i.orden NULLS LAST, i.id LIMIT 1)`;
 
 const Decision = z.strictObject({
   expected_version: z.number().int().min(1),
@@ -139,7 +145,7 @@ interface FilaAtributoCandidato { variant_id: string; nombre: string; valor: str
  * Dentro de una misma representación se conservan los valores repetidos (` / `); el modelo sólo aporta
  * nombres que la representación vendible de la variante no afirmó.
  */
-function combinarAtributos(rows: FilaAtributoCandidato[]): Map<string, Atributos> {
+export function combinarAtributos(rows: FilaAtributoCandidato[]): Map<string, Atributos> {
   const porVariante = new Map<string, { variante: Map<string, string>; modelo: Map<string, string> }>();
   const porRepresentacion = new Map<string, Map<string, string>>();
   for (const f of rows) {
@@ -347,8 +353,7 @@ export function registrarIdentidadInterna(
         `SELECT k.rank, k.explicacion, v.id AS variant_id, v.sku, v.model_id, m.titulo,
                 COALESCE((SELECT url FROM catalog.model_images i WHERE i.representation_id = w.id AND i.vigente_hasta IS NULL
                   ORDER BY i.orden NULLS LAST, i.id LIMIT 1),
-                (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
-                  ORDER BY i.orden NULLS LAST, i.id LIMIT 1)) AS foto,
+                ${FOTO_MODELO_WOO}) AS foto,
                 w.precio, w.moneda, w.stock_canal AS stock
            FROM catalog.identity_candidates k
            JOIN catalog.sellable_variants v ON v.id = k.variant_id
@@ -390,8 +395,7 @@ export function registrarIdentidadInterna(
           `SELECT v.id AS variant_id, v.sku, v.model_id, m.titulo,
                   COALESCE((SELECT url FROM catalog.model_images i WHERE i.representation_id = w.id AND i.vigente_hasta IS NULL
                     ORDER BY i.orden NULLS LAST, i.id LIMIT 1),
-                  (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
-                    ORDER BY i.orden NULLS LAST, i.id LIMIT 1)) AS foto,
+                  ${FOTO_MODELO_WOO}) AS foto,
                   w.precio, w.moneda, w.stock_canal AS stock
              FROM catalog.sellable_variants v JOIN catalog.product_models m ON m.id = v.model_id
             LEFT JOIN LATERAL (SELECT id, precio, moneda, stock_canal FROM catalog.external_representations
@@ -414,6 +418,7 @@ export function registrarIdentidadInterna(
           recurso: c.recurso, variacion: c.variacion_normalizada, titulo: c.titulo ?? null, sku_observado: c.sku_observado ?? null,
           estado: c.estado_remoto ?? null, stock: c.stock_canal ?? null, precio: c.precio ?? null, moneda: c.moneda ?? null,
           link_ml: linkMl(String(c.recurso)), foto: c.foto ?? null, atributos: Object.fromEntries(atributosMl),
+          atributos_ml_cargados: atributosMl.size > 0,
           ...(posibleDuplicado ? { posible_duplicado: { recurso: posibleDuplicado.recurso, sku: posibleDuplicado.sku_observado } } : {}),
         } : null,
         candidatos,
@@ -522,8 +527,7 @@ export function registrarIdentidadInterna(
         `SELECT v.id AS variant_id, v.sku, v.model_id, m.titulo,
                 COALESCE((SELECT url FROM catalog.model_images i WHERE i.representation_id = w.id AND i.vigente_hasta IS NULL
                   ORDER BY i.orden NULLS LAST, i.id LIMIT 1),
-                (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
-                  ORDER BY i.orden NULLS LAST, i.id LIMIT 1)) AS foto,
+                ${FOTO_MODELO_WOO}) AS foto,
                 w.precio, w.moneda, w.stock_canal AS stock
            FROM catalog.sellable_variants v
            JOIN catalog.product_models m ON m.id = v.model_id

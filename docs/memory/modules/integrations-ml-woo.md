@@ -83,6 +83,10 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   `caso_id` opcional; cuando pertenece a la misma empresa agrega `explicacion` contra la publicación ML
   resuelta del caso, usando la misma proyección de atributos del detalle. Sin `caso_id` conserva el contrato
   anterior; UUID inválido responde 400 y un caso ajeno 404.
+- **Bandeja de identidad — aislamiento de fotos (2026-09-27):** los respaldos de foto de candidatos,
+  sombras y búsqueda manual sólo consideran imágenes vigentes cuya representación del mismo modelo sea Woo
+  y no esté archivada; una imagen ML nunca cruza al lado Woo. El detalle expone `publicacion.atributos_ml_cargados`,
+  verdadero si la representación ML tiene al menos un atributo vigente, incluso si no es comparable.
 - **Verificado por sonda autenticada de sólo lectura (2026-09-13):** `GET /orders/search` acepta
   `order.date_last_updated.from` y lo aplica (sin filtro 2.446, desde ayer 3, desde +30 días 0).
   `GET /shipments/{id}` responde 200 **sin** `x-format-new` y trae `last_updated`, aunque la
