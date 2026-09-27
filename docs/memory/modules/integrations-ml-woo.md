@@ -102,3 +102,10 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   FB-4746 y FB-10376 (jul–5 sep) era un `user_product` compartido entre productos Woo distintos
   (causa documentada en `UM1.1-cierre-sku-ml.md`). `conflictosDeBolsaCompartida` da 0 hoy; la
   reactivación de FB-32234 del 12-09 fue legítima (venta y reposición).
+- **Bandeja de identidad — atributos y foto (2026-09-27):** la comparación canoniza
+  `tamano_del_cuadro` como `talle` y normaliza valores ignorando mayúsculas, acentos, espacios y
+  separadores. Los atributos del candidato se proyectan sólo desde representaciones Woo vigentes
+  de su variante; el nivel modelo sólo completa nombres ausentes y también debe ser Woo, vigente y
+  sin variación. `otros_atributos` usa la lista cerrada de identidad comparable, por lo que IDs,
+  impuestos, guía de talles y campos `*_del_seller` no generan diferencias. El proxy legado puede
+  completar una foto ML faltante desde `ml_publicaciones_cache.thumbnail` de sólo lectura y fail-open.

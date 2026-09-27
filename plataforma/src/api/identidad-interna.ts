@@ -24,7 +24,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import type { Logger } from 'pino';
 import { z } from 'zod';
-import { otrosAtributos, type Atributos } from '../identidad/comparar.ts';
+import { ATRIBUTOS_COMPARABLES, nombreCanonico, otrosAtributos, type Atributos } from '../identidad/comparar.ts';
 import { decidirCaso, type ResultadoDecision } from '../identidad/decidir.ts';
 import { apartarCaso, desapartarCaso } from '../identidad/apartar.ts';
 import { verificarInterna } from '../seguridad/interna.ts';
@@ -143,21 +143,25 @@ function combinarAtributos(rows: FilaAtributoCandidato[]): Map<string, Atributos
   const porVariante = new Map<string, { variante: Map<string, string>; modelo: Map<string, string> }>();
   const porRepresentacion = new Map<string, Map<string, string>>();
   for (const f of rows) {
+    const nombre = nombreCanonico(f.nombre);
+    if (!ATRIBUTOS_COMPARABLES.has(nombre)) continue;
     const clave = `${f.variant_id}:${f.representation_id}`;
     let rep = porRepresentacion.get(clave);
     if (!rep) { rep = new Map(); porRepresentacion.set(clave, rep); }
-    rep.set(f.nombre, rep.has(f.nombre) ? `${rep.get(f.nombre)} / ${f.valor}` : f.valor);
+    rep.set(nombre, rep.has(nombre) ? `${rep.get(nombre)} / ${f.valor}` : f.valor);
     let grupos = porVariante.get(f.variant_id);
     if (!grupos) { grupos = { variante: new Map(), modelo: new Map() }; porVariante.set(f.variant_id, grupos); }
     const destino = f.nivel === 'variante' ? grupos.variante : grupos.modelo;
-    if (!destino.has(f.nombre)) destino.set(f.nombre, f.valor);
+    if (!destino.has(nombre)) destino.set(nombre, f.valor);
   }
   // Relee el valor agregado por representación para no concatenar filas que vengan de representaciones distintas.
   for (const f of rows) {
+    const nombre = nombreCanonico(f.nombre);
+    if (!ATRIBUTOS_COMPARABLES.has(nombre)) continue;
     const grupos = porVariante.get(f.variant_id)!;
-    const valor = porRepresentacion.get(`${f.variant_id}:${f.representation_id}`)!.get(f.nombre)!;
+    const valor = porRepresentacion.get(`${f.variant_id}:${f.representation_id}`)!.get(nombre)!;
     const destino = f.nivel === 'variante' ? grupos.variante : grupos.modelo;
-    destino.set(f.nombre, valor);
+    destino.set(nombre, valor);
   }
   const resultado = new Map<string, Atributos>();
   for (const [variantId, grupos] of porVariante) {
@@ -326,6 +330,18 @@ export function registrarIdentidadInterna(
         ? await atributosDe(pool, 'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE representation_id = $1 AND vigente_hasta IS NULL', String(c.rep_id))
         : new Map<string, string>();
 
+      const posibleDuplicado = c.rep_id && c.sku_observado
+        ? (await pool.query<{ recurso: string; sku_observado: string }>(
+          `SELECT recurso, sku_observado
+             FROM catalog.external_representations
+            WHERE company_id = $1 AND channel_account_id = $2 AND canal = 'mercadolibre'
+              AND tipo = 'vendible' AND archivado_en IS NULL AND id <> $3
+              AND variant_id IS NOT NULL AND sku_observado IS NOT NULL AND sku_observado = $4
+            ORDER BY observado_en DESC NULLS LAST, id DESC LIMIT 1`,
+          [auth.empresa, c.channel_account_id, c.rep_id, c.sku_observado],
+        )).rows[0] ?? null
+        : null;
+
       // El último top-3 (la corrida más reciente), SIN puntaje.
       const cands = (await pool.query<Fila>(
         `SELECT k.rank, k.explicacion, v.id AS variant_id, v.sku, v.model_id, m.titulo,
@@ -398,6 +414,7 @@ export function registrarIdentidadInterna(
           recurso: c.recurso, variacion: c.variacion_normalizada, titulo: c.titulo ?? null, sku_observado: c.sku_observado ?? null,
           estado: c.estado_remoto ?? null, stock: c.stock_canal ?? null, precio: c.precio ?? null, moneda: c.moneda ?? null,
           link_ml: linkMl(String(c.recurso)), foto: c.foto ?? null, atributos: Object.fromEntries(atributosMl),
+          ...(posibleDuplicado ? { posible_duplicado: { recurso: posibleDuplicado.recurso, sku: posibleDuplicado.sku_observado } } : {}),
         } : null,
         candidatos,
         auto_sku_en_sombra: sombra ? { decision_id: sombra.id, sku: sombra.sku ?? null, creado_en: sombra.creado_en } : null,

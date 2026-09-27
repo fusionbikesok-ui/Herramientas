@@ -8,12 +8,34 @@
 export type Atributos = Map<string, string>;
 export interface AtributoMarcado { nombre: string; marca: 'coincide' | 'difiere' | 'falta'; valorMl: string; valorCandidato: string }
 
-const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+export const ATRIBUTOS_COMPARABLES = new Set([
+  'marca', 'modelo', 'color', 'talle', 'rodado', 'material', 'tipo_de_producto',
+  'tipo_de_bicicleta', 'genero', 'cantidad_de_velocidades',
+]);
+
+export function nombreCanonico(nombre: string): string {
+  const n = nombre.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim().replace(/[-\s]+/g, '_');
+  return n === 'tamano_del_cuadro' ? 'talle' : n;
+}
+
+const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ');
+
+function canonicos(atributos: Atributos): Atributos {
+  const resultado: Atributos = new Map();
+  for (const [nombre, valor] of atributos) {
+    const canonico = nombreCanonico(nombre);
+    if (!ATRIBUTOS_COMPARABLES.has(canonico)) continue;
+    resultado.set(canonico, resultado.has(canonico) ? `${resultado.get(canonico)} / ${valor}` : valor);
+  }
+  return resultado;
+}
 
 export function otrosAtributos(ml: Atributos, cand: Atributos): AtributoMarcado[] {
-  const nombres = [...new Set([...ml.keys(), ...cand.keys()])].filter((n) => n !== 'color' && n !== 'talle').sort();
+  const mlCanonicos = canonicos(ml);
+  const candCanonicos = canonicos(cand);
+  const nombres = [...new Set([...mlCanonicos.keys(), ...candCanonicos.keys()])].filter((n) => n !== 'color' && n !== 'talle').sort();
   return nombres.map((nombre) => {
-    const valorMl = ml.get(nombre) ?? '', valorCandidato = cand.get(nombre) ?? '';
+    const valorMl = mlCanonicos.get(nombre) ?? '', valorCandidato = candCanonicos.get(nombre) ?? '';
     const marca = !valorMl ? 'falta' : norm(valorMl) === norm(valorCandidato) ? 'coincide' : 'difiere';
     return { nombre, marca, valorMl, valorCandidato };
   });

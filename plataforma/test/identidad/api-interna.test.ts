@@ -88,6 +88,45 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect((await get(`${PREFIJO_IDENTIDAD}/casos`, { firmar: false })).status).toBe(401);
   });
 
+  it('detalle agrega la representación ML vigente más reciente como posible duplicado por SKU observado', async () => {
+    const c = await caso('MLA-DUP-61235');
+    await admin.query('UPDATE catalog.external_representations SET sku_observado = $1 WHERE recurso = $2', ['FB-61235', 'MLA-DUP-61235']);
+    const otra = await variante('Otra representación ML', null);
+    await admin.query(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, sku_observado, estado_remoto)
+       VALUES ($1, $2, 'mercadolibre', 'vendible', 'MLA-DUP-61236', '', $3, 'FB-61235', 'active')`, [empresa, ml, otra.variante],
+    );
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(r.status).toBe(200);
+    expect(r.body.publicacion.posible_duplicado).toEqual({ recurso: 'MLA-DUP-61236', sku: 'FB-61235' });
+  });
+
+  it('detalle del candidato sólo muestra atributos comparables de la variante Woo vigente', async () => {
+    const c = await caso('MLA-FB-61235');
+    await admin.query('UPDATE catalog.external_representations SET sku_observado = $1 WHERE recurso = $2', ['FB-61235', 'MLA-FB-61235']);
+    const woo = await variante('Bici Woo', 'FB-61235');
+    const wooRep = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, estado_remoto)
+       VALUES ($1, $2, 'woocommerce', 'vendible', 'WOO-FB-61235', '', $3, $4, 'publish') RETURNING id`,
+      [empresa, ml, woo.variante, woo.modelo],
+    )).rows[0]!.id;
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       VALUES ($1, $2, 'color', 'Negro', now()), ($1, $2, 'talle', '45', now()), ($1, $2, 'syi_pymes_id', 'basura', now()), ($1, $2, 'categoria_canal', 'basura', now())`,
+      [woo.modelo, wooRep],
+    );
+    const run = randomUUID();
+    await admin.query(`INSERT INTO catalog.identity_candidates (case_id, run_id, variant_id, rank, puntaje, explicacion, fuentes, engine_version)
+      VALUES ($1, $2, $3, 1, 1, $4::jsonb, ARRAY['motor'], 'test')`, [c.id, run, woo.variante, JSON.stringify({ atributos: [
+        { nombre: 'color', marca: 'coincide', valorMl: 'Negro', valorCandidato: 'Negro' },
+        { nombre: 'talle', marca: 'coincide', valorMl: '45', valorCandidato: '45' },
+      ] })]);
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    const otros = r.body.candidatos[0].explicacion.otros_atributos;
+    expect(otros).toEqual([]);
+    expect(r.body.candidatos[0].explicacion.atributos.map((x: any) => x.nombre)).toEqual(['color', 'talle']);
+  });
+
   it('un nonce repetido se rechaza (401)', async () => {
     const nonce = randomBytes(16).toString('base64url');
     expect((await get(`${PREFIJO_IDENTIDAD}/casos`, { nonce })).status).toBe(200);
@@ -352,22 +391,18 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(detalle.body.candidatos[0]).toMatchObject({ sku: 'FB-44357', foto: null });
     expect(detalle.body.candidatos[0].explicacion.otros_atributos).toEqual([
       { nombre: 'material', marca: 'coincide', valorMl: 'aluminio', valorCandidato: 'aluminio' },
-      { nombre: 'tamano_del_cuadro', marca: 'coincide', valorMl: 'M', valorCandidato: 'M' },
     ]);
 
     const buscadas = await get(`${PREFIJO_IDENTIDAD}/variantes?q=Venzo%20Eolo%20R29&caso_id=${c.id}`);
     expect(buscadas.body.variantes.map((v: any) => [v.sku, v.explicacion.otros_atributos])).toEqual([
       ['FB-44357', [
         { nombre: 'material', marca: 'coincide', valorMl: 'aluminio', valorCandidato: 'aluminio' },
-        { nombre: 'tamano_del_cuadro', marca: 'coincide', valorMl: 'M', valorCandidato: 'M' },
       ]],
       ['FB-44358', [
         { nombre: 'material', marca: 'coincide', valorMl: 'aluminio', valorCandidato: 'aluminio' },
-        { nombre: 'tamano_del_cuadro', marca: 'difiere', valorMl: 'M', valorCandidato: 'S' },
       ]],
       ['FB-44359', [
         { nombre: 'material', marca: 'coincide', valorMl: 'aluminio', valorCandidato: 'aluminio' },
-        { nombre: 'tamano_del_cuadro', marca: 'difiere', valorMl: 'M', valorCandidato: 'L' },
       ]],
     ]);
   });

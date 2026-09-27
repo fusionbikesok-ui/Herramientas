@@ -6,6 +6,15 @@ import vm from 'node:vm';
 // logica.js es un script clásico (UMD): en vitest se exporta como CommonJS-interop o cuelga de globalThis, como en el navegador.
 const mod = await import('../public/bandeja-identidad/logica.js');
 const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.BandejaLogica ?? globalThis.window?.BandejaLogica);
+
+it('sin atributos comparables de ML devuelve una sola señal y no cuenta filas faltantes', () => {
+  const r = L.diferenciasVisibles({ otros_atributos: [
+    { nombre: 'color', marca: 'falta', valorMl: '', valorCandidato: 'Negro' },
+    { nombre: 'syi_pymes_id', marca: 'falta', valorMl: '', valorCandidato: 'basura' },
+  ] });
+  expect(r.sinAtributosMl).toBe(true);
+  expect(r.diferencias).toEqual([]);
+});
 const ev = (o = {}) => ({ key: 'j', target: { tagName: 'DIV', closest: () => null }, ...o });
 
 function cargarBandejaConDomInyectado(fetchImpl = () => Promise.resolve({ status: 200, json: async () => ({}) })) {
@@ -117,7 +126,7 @@ describe('bandeja: logica pura', () => {
   });
 
   it('cuenta N dif. de un resultado usando diferenciasVisibles', () => {
-    expect(L.diferenciasDeResultado({ explicacion: { atributos: [{ nombre: 'color', marca: 'difiere' }, { nombre: 'marca', marca: 'coincide' }], otros_atributos: [{ nombre: 'talle', marca: 'falta' }] } })).toBe(2);
+    expect(L.diferenciasDeResultado({ explicacion: { atributos: [{ nombre: 'color', marca: 'difiere', valorMl: 'Negro', valorCandidato: 'Rojo' }, { nombre: 'marca', marca: 'coincide', valorMl: 'Trek', valorCandidato: 'Trek' }], otros_atributos: [{ nombre: 'talle', marca: 'falta', valorMl: 'M', valorCandidato: '' }] } })).toBe(2);
   });
 
   it('navega resultados arriba/abajo de forma circular', () => {
