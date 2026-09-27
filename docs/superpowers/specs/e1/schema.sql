@@ -851,13 +851,14 @@ CREATE INDEX format_observations_ultima ON catalog.format_observations (channel_
 -- misma fila. `nombre_normalizado` es léxico (minúsculas, sin acentos, `_`); no hay sinónimos.
 CREATE TABLE catalog.model_attributes (
   id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  model_id           uuid NOT NULL REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
+  model_id           uuid REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
   representation_id  uuid NOT NULL REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
   nombre_normalizado text NOT NULL CHECK (length(nombre_normalizado) > 0),
   valor              text NOT NULL,
   observado_en       timestamptz NOT NULL,
   vigente_hasta      timestamptz,             -- NULL = vigente
-  CONSTRAINT model_attributes_un_valor UNIQUE (representation_id, nombre_normalizado, valor)
+  CONSTRAINT model_attributes_un_valor UNIQUE (representation_id, nombre_normalizado, valor),
+  CONSTRAINT model_attributes_model_or_rep_check CHECK (model_id IS NOT NULL OR representation_id IS NOT NULL)
 );
 CREATE INDEX model_attributes_modelo ON catalog.model_attributes (model_id);
 CREATE INDEX model_attributes_nombre_valor ON catalog.model_attributes (nombre_normalizado, valor);
@@ -866,13 +867,14 @@ CREATE INDEX model_attributes_nombre_valor ON catalog.model_attributes (nombre_n
 -- uno conserva su procedencia. Misma regla de vigencia que los atributos.
 CREATE TABLE catalog.model_images (
   id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  model_id          uuid NOT NULL REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
+  model_id          uuid REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
   representation_id uuid NOT NULL REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
   url               text NOT NULL CHECK (length(url) > 0),
   orden             integer,
   observado_en      timestamptz NOT NULL,
   vigente_hasta     timestamptz,
-  CONSTRAINT model_images_una_url UNIQUE (representation_id, url)
+  CONSTRAINT model_images_una_url UNIQUE (representation_id, url),
+  CONSTRAINT model_images_model_or_rep_check CHECK (model_id IS NOT NULL OR representation_id IS NOT NULL)
 );
 CREATE INDEX model_images_modelo ON catalog.model_images (model_id);
 

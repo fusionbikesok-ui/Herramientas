@@ -83,6 +83,12 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   `caso_id` opcional; cuando pertenece a la misma empresa agrega `explicacion` contra la publicación ML
   resuelta del caso, usando la misma proyección de atributos del detalle. Sin `caso_id` conserva el contrato
   anterior; UUID inválido responde 400 y un caso ajeno 404.
+- **Extras de publicaciones ML omitidas (2026-09-27):** la migración de plataforma `0028_atributos_sin_modelo.sql`
+  permite `model_id NULL` en `catalog.model_attributes` y `catalog.model_images`, conservando
+  `representation_id` como procedencia obligatoria. `persistirExtras` guarda atributos e imágenes de una
+  representación omitida por decisión, pero no la agrega al resumen ni dispara clasificación por modelo;
+  los informes y clasificadores agrupan por modelo y la excluyen naturalmente, mientras la bandeja lee por
+  representación y sí muestra sus extras.
 - **Verificado por sonda autenticada de sólo lectura (2026-09-13):** `GET /orders/search` acepta
   `order.date_last_updated.from` y lo aplica (sin filtro 2.446, desde ayer 3, desde +30 días 0).
   `GET /shipments/{id}` responde 200 **sin** `x-format-new` y trae `last_updated`, aunque la

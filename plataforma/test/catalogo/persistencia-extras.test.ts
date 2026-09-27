@@ -54,6 +54,10 @@ async function decidirMl() {
   await admin.query(`INSERT INTO catalog.matcher_decisions (company_id, channel_account_id, canal, recurso, sku, accion, origen, actor)
     VALUES ($1, $2, 'mercadolibre', 'MLA1', 'FB-100', 'confirmar', 'copia', 'persona')`, [empresa, ml]);
 }
+async function omitirMl() {
+  await admin.query(`INSERT INTO catalog.matcher_decisions (company_id, channel_account_id, canal, recurso, sku, accion, origen, actor)
+    VALUES ($1, $2, 'mercadolibre', 'MLA1', NULL, 'omitir', 'copia', 'persona')`, [empresa, ml]);
+}
 const attrs = async (canal?: string) => (await admin.query<{ nombre_normalizado: string; valor: string; vigente_hasta: Date | null; id: string; canal: string }>(
   `SELECT a.id::text, a.nombre_normalizado, a.valor, a.vigente_hasta, r.canal FROM catalog.model_attributes a
      JOIN catalog.external_representations r ON r.id = a.representation_id
@@ -103,6 +107,26 @@ describe('E2-PER-01 persistencia', () => {
     expect((await attrs()).map((a) => a.vigente_hasta)).toEqual([null]);
     const r = (await admin.query('SELECT precio, gtin, atributos_crudos FROM catalog.external_representations')).rows[0];
     expect(r.precio).toBe('900.00'); expect(r.gtin).toBe('779'); expect(r.atributos_crudos).not.toBeNull();
+  });
+
+  it('una publicación ML omitida sin modelo ni variante conserva sus atributos e imágenes por representación', async () => {
+    await omitirMl();
+    const r = await aplicar('mercadolibre', mlItem([{ id: 'BRAND', name: 'Marca', value_name: 'Maxxis' }], {
+      pictures: [{ id: 'p1', secure_url: 'https://x/omitida.jpg' }],
+    }), { comparar: false });
+
+    expect(r.modelos).toEqual([]);
+    expect((await admin.query(`SELECT model_id, representation_id, nombre_normalizado, valor
+      FROM catalog.model_attributes`)).rows).toMatchObject([{
+      model_id: null, nombre_normalizado: 'marca', valor: 'Maxxis',
+    }]);
+    expect((await admin.query(`SELECT model_id, representation_id, url, orden FROM catalog.model_images`)).rows).toMatchObject([{
+      model_id: null, url: 'https://x/omitida.jpg', orden: 0,
+    }]);
+    expect((await admin.query(`SELECT omitida_por_decision, model_id, variant_id, atributos_crudos IS NOT NULL AS crudo
+      FROM catalog.external_representations`)).rows).toEqual([{
+      omitida_por_decision: true, model_id: null, variant_id: null, crudo: true,
+    }]);
   });
 });
 

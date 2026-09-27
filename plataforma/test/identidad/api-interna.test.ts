@@ -330,6 +330,24 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${vencida.id}`)).body.publicacion.foto).toBeNull();
   });
 
+  it('el detalle de una publicación ML omitida muestra foto y atributos aunque model_id sea NULL', async () => {
+    const rep = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations
+         (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, omitida_por_decision, estado_remoto)
+       VALUES ($1, $2, 'mercadolibre', 'vendible', 'MLA_SIN_MODELO', '', true, 'active') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    const casoId = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.identity_cases (company_id, tipo, representation_id)
+       VALUES ($1, 'omitida_revisar', $2) RETURNING id`, [empresa, rep])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES (NULL, $1, 'marca', 'Maxxis', now())`, [rep]);
+    await admin.query(`INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en)
+      VALUES (NULL, $1, 'https://img/omitida.jpg', 0, now())`, [rep]);
+
+    const d = await get(`${PREFIJO_IDENTIDAD}/casos/${casoId}`);
+    expect(d.status).toBe(200);
+    expect(d.body.publicacion).toMatchObject({ recurso: 'MLA_SIN_MODELO', foto: 'https://img/omitida.jpg', atributos: { marca: 'Maxxis' } });
+  });
+
   /*
    * Bug reportado por opt-16 (2026-09-24, revisión de las decisiones de José): sin título ML (representación
    * ya colgada de una variante woo_*, sin ml_simple/ml_clasico propio ni titulo_observado), el motor no

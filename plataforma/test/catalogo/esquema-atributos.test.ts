@@ -1,5 +1,5 @@
 /*
- * test/catalogo/esquema-atributos.test.ts — E2 T2 tarea 1: la migración 0014 sobre una base limpia.
+ * test/catalogo/esquema-atributos.test.ts — E2 T2: esquema de atributos e imágenes, incluida 0028.
  */
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
@@ -31,7 +31,7 @@ async function sembrar() {
   return { empresa, modelo, rep };
 }
 
-describe('E2-T2-SCH-01 migración 0014', () => {
+describe('E2-T2-SCH-01 migraciones 0014 y 0028', () => {
   it('external_representations gana siete columnas nullable y sin default', async () => {
     const c = await cols('external_representations');
     const esperado: Record<string, string> = { atributos_crudos: 'jsonb', comercial_crudo: 'jsonb', capturado_en: 'timestamp with time zone',
@@ -52,14 +52,50 @@ describe('E2-T2-SCH-01 migración 0014', () => {
     expect(r).toEqual({ precio: null, gtin: null, atributos_crudos: null });
   });
 
-  it('model_attributes y model_images existen con sus columnas y NOT NULL', async () => {
+  it('model_attributes y model_images dejan model_id nullable, pero mantienen representation_id NOT NULL', async () => {
     const a = await cols('model_attributes');
-    for (const n of ['nombre_normalizado', 'valor', 'observado_en', 'model_id', 'representation_id']) expect(a.get(n)?.is_nullable, n).toBe('NO');
+    for (const n of ['nombre_normalizado', 'valor', 'observado_en', 'representation_id']) expect(a.get(n)?.is_nullable, n).toBe('NO');
+    expect(a.get('model_id')?.is_nullable).toBe('YES');
     expect(a.get('vigente_hasta')?.is_nullable).toBe('YES');
     const i = await cols('model_images');
-    for (const n of ['url', 'observado_en', 'model_id', 'representation_id']) expect(i.get(n)?.is_nullable, n).toBe('NO');
+    for (const n of ['url', 'observado_en', 'representation_id']) expect(i.get(n)?.is_nullable, n).toBe('NO');
+    expect(i.get('model_id')?.is_nullable).toBe('YES');
     expect(i.get('orden')?.is_nullable).toBe('YES');
     expect(i.get('vigente_hasta')?.is_nullable).toBe('YES');
+  });
+
+  it('permite filas sin modelo cuando tienen representación y declara el CHECK de colgadura', async () => {
+    const empresa = (await db.query<{ id: string }>(`INSERT INTO core.companies (legal_name) VALUES ($1) RETURNING id`, [`E ${randomUUID()}`])).rows[0]!.id;
+    const cuenta = (await db.query<{ id: string }>(`INSERT INTO core.channel_accounts (company_id, channel, external_account)
+      VALUES ($1, 'mercadolibre', $2) RETURNING id`, [empresa, randomUUID().slice(0, 12)])).rows[0]!.id;
+    const rep = (await db.query<{ id: string }>(`INSERT INTO catalog.external_representations
+      (company_id, channel_account_id, canal, recurso, tipo, omitida_por_decision)
+      VALUES ($1, $2, 'mercadolibre', $3, 'vendible', true) RETURNING id`, [empresa, cuenta, randomUUID()])).rows[0]!.id;
+
+    await app.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES (NULL, $1, 'marca', 'Maxxis', now())`, [rep]);
+    await app.query(`INSERT INTO catalog.model_images (model_id, representation_id, url, observado_en)
+      VALUES (NULL, $1, 'https://x/sin-modelo.jpg', now())`, [rep]);
+    expect((await db.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS NULL`, [rep])).rows[0]!.n).toBe(1);
+    expect((await db.query(`SELECT count(*)::int AS n FROM catalog.model_images WHERE representation_id = $1 AND model_id IS NULL`, [rep])).rows[0]!.n).toBe(1);
+
+    const checks = await db.query<{ convalidated: boolean; def: string }>(
+      `SELECT convalidated, pg_get_constraintdef(oid) AS def FROM pg_constraint
+       WHERE conrelid IN ('catalog.model_attributes'::regclass, 'catalog.model_images'::regclass)
+         AND conname IN ('model_attributes_model_or_rep_check', 'model_images_model_or_rep_check') ORDER BY conname`);
+    expect(checks.rows).toEqual([
+      { convalidated: true, def: 'CHECK (((model_id IS NOT NULL) OR (representation_id IS NOT NULL)))' },
+      { convalidated: true, def: 'CHECK (((model_id IS NOT NULL) OR (representation_id IS NOT NULL)))' },
+    ]);
+  });
+
+  it('la representación sigue siendo NOT NULL: el CHECK es una defensa redundante y explícita', async () => {
+    const s = await sembrar();
+    await expect(app.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES (NULL, NULL, 'a', 'b', now())`)).rejects.toMatchObject({ code: '23502' });
+    await expect(app.query(`INSERT INTO catalog.model_images (model_id, representation_id, url, observado_en)
+      VALUES (NULL, NULL, 'https://x/nada.jpg', now())`)).rejects.toMatchObject({ code: '23502' });
+    expect(s.rep).toBeTruthy();
   });
 
   it('el UNIQUE de atributos es (representación, nombre, valor): mismo valor duplicado se rechaza, otra representación no', async () => {
@@ -92,6 +128,9 @@ describe('E2-T2-SCH-01 migración 0014', () => {
   it('el índice (nombre_normalizado, valor) existe', async () => {
     const r = await db.query<{ indexdef: string }>(`SELECT indexdef FROM pg_indexes WHERE schemaname='catalog' AND tablename='model_attributes'`);
     expect(r.rows.some((x) => /\(nombre_normalizado, valor\)/.test(x.indexdef))).toBe(true);
+    expect(r.rows.some((x) => /model_attributes_modelo/.test(x.indexdef) && /\(model_id\)/.test(x.indexdef))).toBe(true);
+    const i = await db.query<{ indexdef: string }>(`SELECT indexdef FROM pg_indexes WHERE schemaname='catalog' AND tablename='model_images'`);
+    expect(i.rows.some((x) => /model_images_modelo/.test(x.indexdef) && /\(model_id\)/.test(x.indexdef))).toBe(true);
   });
 
   it('plataforma_app hereda SELECT/INSERT/UPDATE y no tiene DELETE (default privileges de 0013)', async () => {

@@ -260,12 +260,14 @@ export function registrarIdentidadInterna(
       if (!c) return error(req, reply, 404, 'caso_inexistente', 'No existe el caso.');
 
       const atributosMl = c.rep_id
+        // La bandeja lee los extras de la representación: esto incluye una publicación omitida sin modelo.
         ? await atributosDe(pool, 'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE representation_id = $1 AND vigente_hasta IS NULL', String(c.rep_id))
         : new Map<string, string>();
 
       // El último top-3 (la corrida más reciente), SIN puntaje.
       const cands = (await pool.query<Fila>(
         `SELECT k.rank, k.explicacion, v.id AS variant_id, v.sku, v.model_id, m.titulo,
+                -- Las fotos de candidatos sí se buscan por modelo; las de la publicación ML se buscan por representación arriba.
                 (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
                   ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto,
                 w.precio, w.moneda, w.stock_canal AS stock

@@ -134,6 +134,8 @@ export async function backfillAtributos(pool: pg.Pool, fuente: FuenteLegado, o: 
             numeroAcotado(c?.stock, 2 ** 31) === null ? null : Math.trunc(c!.stock!), c?.gtin ?? null]);
         if (!marcada.rowCount) continue;
         const resumen: ResumenAplicacion = { representaciones: 0, viejas: 0, casosAbiertos: [], modelos: [], categoriaCambio: new Set(), empresa: f.company_id };
+        // Reusa la misma escritura que el proyector: si una representación ML omitida no tiene modelo,
+        // persistirExtras conserva sus extras por representation_id y no la agrega a la clasificación.
         await persistirExtras(tx, { tx, cuenta: f.channel_account_id, canal: f.canal as 'woocommerce' | 'mercadolibre',
           versionRemota: '', compararAtributos: false }, f.id, extras, resumen, f.company_id);
       }

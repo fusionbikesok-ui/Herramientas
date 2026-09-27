@@ -187,6 +187,7 @@ export async function clasificarModelos(tx: Consultable, o: OpcionesClasificar):
   const filas = (await tx.query<FilaCategoria>(
     `SELECT DISTINCT p.id AS modelo, r.canal, r.channel_account_id AS cuenta, a.valor
        FROM catalog.product_models p
+       -- La clasificación 6a/6b es por modelo: una fila sin model_id no es un modelo clasificable.
        JOIN catalog.model_attributes a ON a.model_id = p.id AND a.nombre_normalizado = 'categoria_canal' AND a.vigente_hasta IS NULL
        JOIN catalog.external_representations r ON r.id = a.representation_id AND r.archivado_en IS NULL
       WHERE p.company_id = $1 AND p.archivado_en IS NULL AND ($2::uuid[] IS NULL OR p.id = ANY($2))`,

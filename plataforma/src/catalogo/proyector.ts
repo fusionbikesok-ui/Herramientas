@@ -105,6 +105,7 @@ export function crearProyector(o: OpcionesProyector): Proyector {
     // (un mapeo colgado, un nombre de Woo duplicado) deshaga la proyección ya aplicada — eso sí es dato real.
     // El SAVEPOINT aísla sólo la clasificación: si falla, se vuelve a antes de ella y la proyección queda firme.
     // La recuperación es volver a correr catalogo-clasificar-foto.mjs sobre estos modelos.
+    // persistirExtras no agrega representaciones omitidas sin modelo a este resumen: no hay clasificación 6b que ejecutar.
     if (resumen.modelos.length) {
       await tx.query('SAVEPOINT clasificacion');
       try {

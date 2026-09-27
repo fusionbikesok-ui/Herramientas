@@ -73,6 +73,7 @@ async function itemMlDe(tx: Consultable, rep: RepresentacionCaso, cont: Contador
   if (t.difiere) cont.contenedorDifiereVariante++;
   const atributos = (await tx.query<{ nombre_normalizado: string; valor: string }>(
     `SELECT nombre_normalizado, valor FROM catalog.model_attributes
+      -- Esta lectura es por representation_id a propósito: el caso ML puede no tener modelo.
       WHERE representation_id = $1 AND nombre_normalizado IN ('color', 'talle') AND vigente_hasta IS NULL`,
     [rep.id])).rows;
   const color = atributos.filter((a) => a.nombre_normalizado === 'color').map((a) => a.valor).join(' ');
