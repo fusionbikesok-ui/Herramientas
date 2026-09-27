@@ -83,6 +83,11 @@
       entrada.estado = 'reconciliando';
       return entrada;
     }
+    function volverAFallido(entrada) {
+      if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'reconciliando') return false;
+      entrada.estado = 'fallido';
+      return true;
+    }
     function cancelar(entrada, reconciliacion) {
       if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'reconciliando'
         || !reconciliacion || reconciliacion.status !== 200) return false;
@@ -94,7 +99,11 @@
       terminar: terminar,
       reintentar: reintentar,
       reconciliar: reconciliar,
+      volverAFallido: volverAFallido,
       cancelar: cancelar,
+      estaReconciliando: function (entrada) {
+        return porCaso.get(entrada.caseId) === entrada && entrada.estado === 'reconciliando';
+      },
       estaBloqueado: function (caseId) { return porCaso.has(caseId); }
     };
   }

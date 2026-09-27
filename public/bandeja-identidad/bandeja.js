@@ -373,10 +373,24 @@
     aviso('reconciliando-' + entry.key, 'Reconciliando el caso…');
     S.cache.delete(entry.casoId);
     detalleDe(entry.casoId).then(function (detalle) {
+      if (!S.guardiaDecisiones.estaReconciliando(entry)) {
+        quitarAviso('reconciliando-' + entry.key);
+        return;
+      }
       var i = S.cola.findIndex(function (c) { return c.id === entry.casoId; });
       var cerrado = !!detalle.cerrado_en;
       if (cerrado) {
-        if (i >= 0) S.cola.splice(i, 1);
+        if (i >= 0) {
+          var indiceActual = S.idx;
+          S.cola.splice(i, 1);
+          if (i === indiceActual) {
+            S.detalle = null;
+            if (S.cola.length) abrirCaso(Math.min(i, S.cola.length - 1), { foco: true });
+            else { S.idx = -1; if (S.siguiente) avanzar(); }
+          } else if (i < indiceActual) {
+            S.idx -= 1;
+          }
+        }
         if (S.detalle && S.detalle.id === entry.casoId) S.detalle = null;
       } else {
         if (i >= 0) S.cola[i].version = detalle.version;
@@ -392,11 +406,12 @@
       anunciar('Decisión descartada. El caso fue reconciliado.');
       banda();
       if (cerrado) {
-        if (S.cola.length) avanzar(); else vacio();
+        if (i === S.idx) return;
+        if (!S.cola.length && !S.siguiente) vacio();
       }
     }, function () {
-      entry.estado = 'fallido';
       quitarAviso('reconciliando-' + entry.key);
+      if (!S.guardiaDecisiones.volverAFallido(entry)) return;
       avisoEntradaFallida(entry, 'No se pudo reconciliar el caso. La decisión sigue bloqueada.');
     });
   }

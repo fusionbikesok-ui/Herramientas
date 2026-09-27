@@ -62,6 +62,19 @@ describe('bandeja: logica pura', () => {
     expect(guardia.estaBloqueado('caso-1')).toBe(false);
   });
 
+  it('volverAFallido sólo devuelve una entrada reconciliando al estado fallido', () => {
+    const guardia = L.crearGuardiaDecisiones(() => 'clave-1');
+    const entrada = guardia.iniciar({ caseId: 'caso-1' }).entrada;
+
+    expect(guardia.volverAFallido(entrada)).toBe(false);
+    guardia.terminar(entrada, { status: 503 });
+    guardia.reconciliar(entrada);
+
+    expect(guardia.volverAFallido(entrada)).toBe(true);
+    expect(entrada.estado).toBe('fallido');
+    expect(guardia.volverAFallido(entrada)).toBe(false);
+  });
+
   it('después de cancelar una decisión, la siguiente entrada usa una clave nueva', () => {
     const guardia = L.crearGuardiaDecisiones((() => {
       const claves = ['clave-1', 'clave-2'];
@@ -384,6 +397,28 @@ describe('bandeja: decisión bloqueada comunica el estado en el DOM', () => {
     expect(avisos.children.some((n) => n.children.some((hijo) => hijo.textContent.includes('No se pudo reconciliar')))).toBe(true);
   });
 
+  it('si la guardia deja de ser vigente no muta una reconciliación abierta ni deja el aviso', async () => {
+    let resolver;
+    const { app, avisos } = cargarBandejaConDomInyectado(() => new Promise((resolve) => { resolver = resolve; }));
+    const caso = { id: 'caso-invalidado', version: 4 };
+    const detalleAnterior = { id: caso.id, version: 4, candidatos: [] };
+    app.state.cola = [caso];
+    app.state.idx = 0;
+    app.state.detalle = detalleAnterior;
+    const entrada = app.state.guardiaDecisiones.iniciar({ caseId: caso.id, casoId: caso.id, cuerpo: {} }).entrada;
+    app.state.guardiaDecisiones.terminar(entrada, { status: 503 });
+    app.decidir('omitir');
+    avisos.children[0].children.find((n) => n.textContent === 'Descartar').click();
+    app.state.guardiaDecisiones.cancelar(entrada, { status: 200 });
+
+    resolver(respuesta(200, { id: caso.id, version: 9, candidatos: [] }));
+    await vi.waitFor(() => expect(avisos.children.some((n) => n.attrs['data-clave'] === 'reconciliando-' + entrada.key)).toBe(false));
+
+    expect(app.state.cola).toEqual([caso]);
+    expect(app.state.detalle).toBe(detalleAnterior);
+    expect(avisos.children.some((n) => n.attrs['data-clave'] === 'reconciliando-' + entrada.key)).toBe(false);
+  });
+
   it('mientras se reconcilia no permite Reintentar ni iniciar otra decisión', async () => {
     let resolver;
     const { app, avisos } = cargarBandejaConDomInyectado(() => new Promise((resolve) => { resolver = resolve; }));
@@ -402,6 +437,71 @@ describe('bandeja: decisión bloqueada comunica el estado en el DOM', () => {
     expect(app.state.pendientes.size).toBe(0);
     resolver(respuesta(200, { id: 'caso-concurrente', version: 5, candidatos: [] }));
     await Promise.resolve();
+  });
+});
+
+describe('bandeja: descartar un caso cerrado conserva la posición del operador', () => {
+  const cerrado = (id) => ({ id, version: 9, cerrado_en: '2026-09-26T00:00:00Z' });
+  const preparar = (fetchImpl, ids, idx, entryIdx = idx) => {
+    const { app, avisos } = cargarBandejaConDomInyectado(fetchImpl);
+    app.state.cola = ids.map((id) => ({ id, version: 1 }));
+    app.state.idx = entryIdx;
+    app.state.detalle = { id: ids[entryIdx], version: 1, candidatos: [] };
+    const entrada = app.state.guardiaDecisiones.iniciar({ caseId: ids[entryIdx], casoId: ids[entryIdx], cuerpo: {} }).entrada;
+    app.state.guardiaDecisiones.terminar(entrada, { status: 503 });
+    app.decidir('omitir');
+    avisos.children[0].children.find((n) => n.textContent === 'Descartar').click();
+    app.state.idx = idx;
+    app.state.detalle = { id: ids[idx], version: 1, candidatos: [] };
+    return { app, entrada };
+  };
+
+  it('si el caso cerrado es el actual abre el que ocupa su posición', async () => {
+    let llamadas = 0;
+    const { app } = preparar(async () => {
+      llamadas += 1;
+      return llamadas === 1
+        ? { status: 200, json: async () => cerrado('caso-b') }
+        : { status: 200, json: async () => ({ id: 'caso-c', version: 1, candidatos: [] }) };
+    }, ['caso-a', 'caso-b', 'caso-c'], 1);
+
+    await vi.waitFor(() => expect(app.state.detalle?.id).toBe('caso-c'));
+    expect(app.state.cola.map((c) => c.id)).toEqual(['caso-a', 'caso-c']);
+    expect(app.state.idx).toBe(1);
+  });
+
+  it('si el caso cerrado estaba antes del actual corrige el índice sin navegar', async () => {
+    const { app } = preparar(async () => ({ status: 200, json: async () => cerrado('caso-a') }), ['caso-a', 'caso-b', 'caso-c'], 2, 0);
+
+    await vi.waitFor(() => expect(app.state.guardiaDecisiones.estaBloqueado('caso-a')).toBe(false));
+    expect(app.state.cola.map((c) => c.id)).toEqual(['caso-b', 'caso-c']);
+    expect(app.state.idx).toBe(1);
+    expect(app.state.detalle.id).toBe('caso-c');
+  });
+
+  it('si el caso cerrado estaba después del actual no cambia la navegación', async () => {
+    const { app } = preparar(async () => ({ status: 200, json: async () => cerrado('caso-c') }), ['caso-a', 'caso-b', 'caso-c'], 0, 2);
+
+    await vi.waitFor(() => expect(app.state.guardiaDecisiones.estaBloqueado('caso-c')).toBe(false));
+    expect(app.state.cola.map((c) => c.id)).toEqual(['caso-a', 'caso-b']);
+    expect(app.state.idx).toBe(0);
+    expect(app.state.detalle.id).toBe('caso-a');
+  });
+
+  it('si la cola local queda vacía carga la página siguiente antes de mostrar vacío', async () => {
+    let llamadas = 0;
+    const { app } = preparar(async () => {
+      llamadas += 1;
+      if (llamadas === 1) return { status: 200, json: async () => cerrado('caso-a') };
+      if (llamadas === 2) return { status: 200, json: async () => ({ casos: [{ id: 'caso-b', version: 1 }], siguiente: null }) };
+      return { status: 200, json: async () => ({ id: 'caso-b', version: 1, candidatos: [] }) };
+    }, ['caso-a'], 0);
+    app.state.siguiente = 'cursor-2';
+
+    await vi.waitFor(() => expect(llamadas).toBeGreaterThanOrEqual(2));
+    await vi.waitFor(() => expect(app.state.detalle?.id).toBe('caso-b'));
+    expect(app.state.cola.map((c) => c.id)).toEqual(['caso-b']);
+    expect(app.state.idx).toBe(0);
   });
 });
 
