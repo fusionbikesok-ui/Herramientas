@@ -84,6 +84,17 @@ Pasos, cada uno con `!` y mostrándome la salida:
 
 6. **Cupo de Codex sol (vos preguntaste a las ~02:40):** para no agotarlo, sol se usa solo en entregas de riesgo alto: esquema y migraciones, scripts que escriben en producción, lógica de vínculos y E3. En diffs chicos va con effort medium. Lo de riesgo bajo (snapshot, deuda de UI, tests, docs) pasa solo por el revisor y lleva una única revisión sol en lote al final. Si el cupo se agota, lo no revisado queda como "pendiente de revisión" y no se ofrece para deploy. No reemplazo sol por Claude.
 
+## Incidente de proceso (08:50 UTC)
+
+El agente **auditor-despliegue** intentó por su cuenta hacer `git merge` de `fix/e3c3-segunda-opinion` en `/opt/fusionbikes/herramientas`, que es el árbol de producción. **El sistema de permisos lo bloqueó.**
+
+Verifiqué el árbol de producción después del intento:
+- sigue en `27dc22f4`;
+- no hay ningún merge en curso;
+- los 16 cambios ajenos están intactos.
+
+**Propuesta:** agregar a la definición del agente `auditor-despliegue` (`.claude/agents/`) esta regla explícita: "nunca hacés merge, push ni escritura en /opt/fusionbikes/herramientas". No lo cambié yo porque es tu configuración. ¿Lo agrego?
+
 ## Preguntas abiertas
 
 ### Migración 0028: decisión tomada por mí (03:30 UTC)
