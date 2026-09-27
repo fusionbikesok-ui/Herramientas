@@ -307,6 +307,108 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${randomUUID()}`)).status).toBe(404);
   });
 
+  it('usa los atributos de la variante candidata, mezcla los del modelo solo si faltan y no arrastra talles hermanos', async () => {
+    const c = await caso('MLA_EOLO_TALLES');
+    const modelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'woo_padre', 'W-EOLO-R29', 'Venzo Eolo R29') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    const talles = ['M', 'S', 'L'];
+    const variantes: { id: string; sku: string; rep: string }[] = [];
+    for (const [i, talle] of talles.entries()) {
+      const v = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, $3) RETURNING id`,
+        [empresa, modelo, `FB-${44357 + i}`])).rows[0]!.id;
+      const rep = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.external_representations
+           (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id, variant_id, estado_remoto)
+         VALUES ($1, $2, 'woocommerce', 'vendible', 'W-EOLO-R29', $3, $4, $5, 'publish') RETURNING id`,
+        [empresa, ml, talle, modelo, v])).rows[0]!.id;
+      await admin.query(
+        `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       VALUES ($1, $2, 'tamano_del_cuadro', $3, now())`, [modelo, rep, talle]);
+      variantes.push({ id: v, sku: `FB-${44357 + i}`, rep });
+    }
+    // Atributo de la representación Woo del padre: se hereda porque ninguna variante lo declara.
+    const repModelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations
+         (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id, estado_remoto)
+       VALUES ($1, $2, 'woocommerce', 'contenedor', 'W-EOLO-R29', '', $3, 'publish') RETURNING id`, [empresa, ml, modelo])).rows[0]!.id;
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       VALUES ($1, $2, 'material', 'aluminio', now())`, [modelo, repModelo]);
+    // La publicación ML declara el mismo material y el talle M de su propia variante.
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, x.nombre, x.valor, now() FROM catalog.external_representations r
+       CROSS JOIN (VALUES ('material', 'aluminio'), ('tamano_del_cuadro', 'M')) x(nombre, valor)
+       WHERE r.recurso = 'MLA_EOLO_TALLES'`, [c.modelo]);
+    const run = randomUUID();
+    await admin.query(
+      `INSERT INTO catalog.identity_candidates (case_id, run_id, variant_id, rank, puntaje, explicacion, engine_version)
+       SELECT $1, $2, x.variant_id, row_number() OVER ()::int, 0.9, '{}'::jsonb, 'v1'
+       FROM unnest($3::uuid[]) AS x(variant_id)`, [c.id, run, variantes.map((v) => v.id)]);
+
+    const detalle = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(detalle.body.candidatos[0]).toMatchObject({ sku: 'FB-44357', foto: null });
+    expect(detalle.body.candidatos[0].explicacion.otros_atributos).toEqual([
+      { nombre: 'material', marca: 'coincide', valorMl: 'aluminio', valorCandidato: 'aluminio' },
+      { nombre: 'tamano_del_cuadro', marca: 'coincide', valorMl: 'M', valorCandidato: 'M' },
+    ]);
+
+    const buscadas = await get(`${PREFIJO_IDENTIDAD}/variantes?q=Venzo%20Eolo%20R29&caso_id=${c.id}`);
+    expect(buscadas.body.variantes.map((v: any) => [v.sku, v.explicacion.otros_atributos])).toEqual([
+      ['FB-44357', [
+        { nombre: 'material', marca: 'coincide', valorMl: 'aluminio', valorCandidato: 'aluminio' },
+        { nombre: 'tamano_del_cuadro', marca: 'coincide', valorMl: 'M', valorCandidato: 'M' },
+      ]],
+      ['FB-44358', [
+        { nombre: 'material', marca: 'coincide', valorMl: 'aluminio', valorCandidato: 'aluminio' },
+        { nombre: 'tamano_del_cuadro', marca: 'difiere', valorMl: 'M', valorCandidato: 'S' },
+      ]],
+      ['FB-44359', [
+        { nombre: 'material', marca: 'coincide', valorMl: 'aluminio', valorCandidato: 'aluminio' },
+        { nombre: 'tamano_del_cuadro', marca: 'difiere', valorMl: 'M', valorCandidato: 'L' },
+      ]],
+    ]);
+  });
+
+  it('prefiere la foto vigente de la representación Woo de la variante y cae al modelo si falta', async () => {
+    const c = await caso('MLA_FOTOS_VARIANTES');
+    const modelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'woo_padre', 'W-FOTOS', 'Fotos') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    const crear = async (sku: string) => {
+      const v = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, $3) RETURNING id`, [empresa, modelo, sku])).rows[0]!.id;
+      const rep = (await admin.query<{ id: string }>(
+        `INSERT INTO catalog.external_representations
+           (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id, variant_id)
+         VALUES ($1, $2, 'woocommerce', 'vendible', 'W-FOTOS', $3, $4, $5) RETURNING id`, [empresa, ml, sku, modelo, v])).rows[0]!.id;
+      return { v, rep };
+    };
+    const conFoto = await crear('FB-44360');
+    const sinFoto = await crear('FB-44361');
+    const repModelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations
+         (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id)
+       VALUES ($1, $2, 'woocommerce', 'contenedor', 'W-FOTOS', '', $3) RETURNING id`, [empresa, ml, modelo])).rows[0]!.id;
+    await admin.query(
+      `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en)
+       VALUES ($1, $2, 'https://img/modelo.jpg', 0, now()), ($1, $3, 'https://img/variante.jpg', 0, now())`,
+      [modelo, repModelo, conFoto.rep]);
+    // La foto de sinFoto queda ausente en su representación de variante y usa la del contenedor.
+    await admin.query(
+      `UPDATE catalog.model_images SET vigente_hasta = now() WHERE representation_id = $1`, [sinFoto.rep]);
+    const run = randomUUID();
+    await admin.query(
+      `INSERT INTO catalog.identity_candidates (case_id, run_id, variant_id, rank, puntaje, engine_version)
+       VALUES ($1, $2, $3, 1, 0.9, 'v1'), ($1, $2, $4, 2, 0.8, 'v1')`, [c.id, run, conFoto.v, sinFoto.v]);
+    const detalle = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(detalle.body.candidatos.map((v: any) => [v.sku, v.foto])).toEqual([
+      ['FB-44360', 'https://img/variante.jpg'], ['FB-44361', 'https://img/modelo.jpg'],
+    ]);
+  });
+
   it('el detalle devuelve la primera foto vigente de la representación ML, o null si no existe', async () => {
     const conFoto = await caso('MLA_FOTO');
     const sinFoto = await caso('MLA_SIN_FOTO');
@@ -510,7 +612,7 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect(resultado.body.variantes).toHaveLength(3);
     // Una consulta carga los atributos de la publicación ML y una segunda agrupa los tres modelos Woo.
     expect(consultasDeAtributos).toHaveLength(2);
-    expect(consultasDeAtributos.some(([sql]) => String(sql).includes('model_id = ANY($1::uuid[])'))).toBe(true);
+    expect(consultasDeAtributos.some(([sql]) => String(sql).includes('variant_id = ANY($1::uuid[])'))).toBe(true);
   });
 
   it('buscar otra variante rechaza con 404 un caso de otra empresa', async () => {
