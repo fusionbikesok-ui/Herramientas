@@ -77,6 +77,8 @@ Los altos:
 
 **Pregunta 2:** la migración 0027, ya aplicada en producción, no tiene `lock_timeout`. No se puede editar porque cambiaría el checksum. Supongo que **alcanza con exigir `lock_timeout` a las migraciones nuevas**, con un test que lo verifique. ¿OK?
 
+**Pregunta 4:** el replay contractual necesita la muestra canónica de **299 casos congelados**. En el repo hay solo `muestra-30.json`. ¿Dónde está el artefacto de 299, o lo generamos? Mientras tanto, el CLI falla cerrado: nunca da "apto" sin la muestra completa y con hash verificado.
+
 **Pendientes tuyos para encender el canario (fuera del código):**
 - validar `ATRIBUTOS_PACK` contra payloads reales;
 - declarar `E3_CANARIO` y `E3_AUTO_SKU` en api y worker, y `E3_INTERVENTION` en worker, dentro de `compose.yml`;
