@@ -1,0 +1,3 @@
+Harness de auditoría (2026-09-26): sirve public/ y simula /api/bandeja-identidad con 5 casos SINTÉTICOS.
+No usa la base anonimizada ni la plataforma. Uso: node server.mjs & ; node medir.mjs <carpeta-salida> ; node teclas.mjs
+(rutas absolutas del worktree y de node_modules de herramientas: ajustar si se mueve)

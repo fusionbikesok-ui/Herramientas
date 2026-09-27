@@ -11,10 +11,22 @@ import Fastify from '../plataforma/node_modules/fastify/fastify.js';
 import { bandejaIdentidadRouter } from '../routes/bandejaIdentidad.js';
 import { resolvePermiso, permiteAcceso } from '../lib/permisos.js';
 import { crearOrigenes, verificarInterna } from '../plataforma/src/seguridad/interna.ts';
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import { otrosAtributos } from '../plataforma/src/identidad/comparar.ts';
 
 // Importar lógica pura
 const mod = await import('../public/bandeja-identidad/logica.js');
 const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.BandejaLogica ?? globalThis.window?.BandejaLogica);
+
+describe('E3 T7 — zoom puro del visor comparativo', () => {
+  it('cada nivel conserva una escala real y el valor inválido vuelve a 1x', () => {
+    expect(L.tamanoZoom(1)).toEqual({ nivel: 1, porcentaje: 100 });
+    expect(L.tamanoZoom(2)).toEqual({ nivel: 2, porcentaje: 200 });
+    expect(L.tamanoZoom(3)).toEqual({ nivel: 3, porcentaje: 300 });
+    expect(L.tamanoZoom(0)).toEqual({ nivel: 1, porcentaje: 100 });
+  });
+});
 
 const clave = crypto.randomBytes(32);
 const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
@@ -36,21 +48,67 @@ function plataformaFalsa(estado = 200, cuerpoRespuesta = { ok: true }) {
   return { fetch, recibidos };
 }
 
-function app({ user, fetch, url = 'http://plataforma.interna:3100', kr = keyring }) {
+function app({ user, fetch, db, url = 'http://plataforma.interna:3100', kr = keyring }) {
   const a = express();
   a.use(express.json());
   a.use((req, _res, next) => { if (user) req.user = user; next(); });
-  a.use('/api/bandeja-identidad', bandejaIdentidadRouter({ url, keyring: kr, fetch }));
+  a.use('/api/bandeja-identidad', bandejaIdentidadRouter({ url, keyring: kr, db, fetch }));
   return a;
 }
+
+it('A: tamano_del_cuadro es talle y compara valores con separadores y mayúsculas normalizados', () => {
+  expect(otrosAtributos(
+    new Map([['color', 'Negro/Teal'], ['tamano_del_cuadro', 'M']]),
+    new Map([['color', 'Negro/teal'], ['talle', 'M']]),
+  )).toEqual([]);
+});
+
+it('B: el proxy completa la foto ML desde ml_publicaciones_cache cuando el detalle no la trae', async () => {
+  const rutaDb = './test/tmp-bandeja-identidad-foto.sqlite';
+  try { fs.unlinkSync(rutaDb); } catch { /* no existe */ }
+  const db = new Database(rutaDb);
+  db.exec('CREATE TABLE ml_publicaciones_cache (item_id TEXT, variation_id TEXT, thumbnail TEXT, permalink TEXT, color TEXT, talle TEXT)');
+  db.prepare('INSERT INTO ml_publicaciones_cache (item_id, thumbnail) VALUES (?, ?)').run('MLA-FOTO-44357', 'https://img.test/thumb.jpg');
+  const falso = plataformaFalsa(200, { publicacion: { recurso: 'MLA-FOTO-44357', foto: null } });
+  const respuesta = await request(app({ user: operador, fetch: falso.fetch, db })).get('/api/bandeja-identidad/casos/01a0d35c-0974-7c07-9e44-19e759f67daa');
+  expect(respuesta.status).toBe(200);
+  expect(respuesta.body.publicacion.foto).toBe('https://img.test/thumb.jpg');
+  db.close();
+  for (const f of [rutaDb, `${rutaDb}-wal`, `${rutaDb}-shm`]) try { fs.unlinkSync(f); } catch { /* no existe */ }
+});
 const operador = { id: 2, username: 'maria', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'write' }] };
 const auditor = { id: 3, username: 'auditor', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'read' }] };
 
 describe('E3 T3 — lógica pura de teclas y acciones', () => {
-  it('1/2/3 seleccionan si existe el candidato y Enter vincula', () => {
+  it('1/2/3 seleccionan si existe el candidato y Enter vincula al visible', () => {
     expect(L.accionDeTecla('2', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'seleccionar', n: 2 });
-    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular' });
+    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, candidatoVisible: true, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular' });
+    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, candidatoVisible: false, tipoCaso: 'sku_pendiente' })).toBeNull();
     expect(L.accionDeTecla('3', { confirmable: false, nCandidatos: 2, tipoCaso: 'sku_pendiente' })).toBeNull();
+  });
+
+  it('x es rechazar en todos los casos y ninguna tecla manda eleccion omitir', () => {
+    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 0, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'rechazar' });
+    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 3, tipoCaso: 'conflicto' })).toEqual({ tipo: 'rechazar' });
+    expect(L.accionDeTecla('x', { confirmable: true, nCandidatos: 0, tipoCaso: 'omitida_revisar' })).toEqual({ tipo: 'rechazar' });
+    const teclas = ['1','2','3','x','s','n','o','?','/','z','a','Enter','d','f'];
+    for (const conf of [false, true]) for (const k of teclas) {
+      const acc = L.accionDeTecla(k, { confirmable: conf, nCandidatos: 3, candidatoVisible: true, tipoCaso: 'sku_pendiente' });
+      const decisiones = [];
+      if (acc) L.ejecutarAccion(acc, { cola: [{ id: 'c' }], idx: 0, sel: 'v1', detalle: { version: 1 } },
+        { decidir: (c) => decisiones.push(c), omitir: () => {}, mostrar: () => {}, apartar: () => {}, deshacer: () => {}, buscar: () => {}, ayuda: () => {}, confirmar: () => {} });
+      expect(decisiones.some((d) => d.eleccion === 'omitir')).toBe(false);
+    }
+  });
+
+  it('Enter confirmable sigue actuando aunque no haya candidato visible', () => {
+    expect(L.accionDeTecla('Enter', { confirmable: true, nCandidatos: 0, candidatoVisible: false, tipoCaso: 'omitida_revisar' })).toEqual({ tipo: 'confirmar' });
+  });
+
+  it('textoCuentaRegresiva muestra la duración real restante', () => {
+    expect(L.textoCuentaRegresiva(10)).toBe('Deshacer: z (10 s)');
+    expect(L.textoCuentaRegresiva(1)).toBe('Deshacer: z (1 s)');
+    expect(L.textoCuentaRegresiva(0)).toBe('Deshacer: z (0 s)');
   });
 
   it('? aparta, a es ayuda, O omite por ahora, N no existe', () => {
@@ -232,6 +290,15 @@ describe('E3 T6 proxy de la bandeja de identidad', () => {
     expect(p.recibidos.map((x) => x.firmaValida)).toEqual([true, true]);
     expect(decodeURIComponent(p.recibidos[0].ruta.split('q=')[1].replace(/\+/g, ' '))).toBe('casco ñandú 50% a_b');
     expect(p.recibidos[1].ruta).not.toContain('extra');
+  });
+
+  it('búsqueda manual conserva caso_id en la query firmada', async () => {
+    const p = plataformaFalsa();
+    await request(app({ user: operador, fetch: p.fetch })).get('/api/bandeja-identidad/variantes')
+      .query({ q: 'casco', caso_id: ID });
+    expect(new URL(p.recibidos[0].ruta, 'http://x').searchParams.get('q')).toBe('casco');
+    expect(new URL(p.recibidos[0].ruta, 'http://x').searchParams.get('caso_id')).toBe(ID);
+    expect(p.recibidos[0].firmaValida).toBe(true);
   });
 
   it('el filtro por grupo de los chips llega a la plataforma (y firmado)', async () => {

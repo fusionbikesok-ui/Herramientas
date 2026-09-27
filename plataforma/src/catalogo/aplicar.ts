@@ -431,10 +431,9 @@ export async function persistirExtras(
   const modeloFila = (await tx.query<{ model_id: string | null }>(
     `SELECT COALESCE(r.model_id, v.model_id) AS model_id FROM catalog.external_representations r
        LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [repId])).rows[0]?.model_id;
-  // Una publicación omitida por decisión no tiene modelo ni variante: no hay a quién colgarle nada.
-  if (!modeloFila) return;
-  const modelo = modeloFila;
-  resumen.modelos.push(modelo);
+  // Una publicación omitida por decisión no tiene modelo ni variante, pero sus extras siguen colgando de
+  // la representación. Sólo el resumen de modelos y la clasificación 6b requieren un modelo real.
+  if (modeloFila) resumen.modelos.push(modeloFila);
   if (!obs.crudo) return;
 
   const attrs = obs.atributos ?? [];
@@ -450,7 +449,7 @@ export async function persistirExtras(
      ON CONFLICT (representation_id, nombre_normalizado, valor) DO UPDATE
        SET observado_en = EXCLUDED.observado_en, vigente_hasta = NULL, model_id = EXCLUDED.model_id
      RETURNING nombre_normalizado, valor`,
-    [modelo, repId, nombres, valores])).rows
+    [modeloFila, repId, nombres, valores])).rows
     .filter((a) => !previaVigente.has(`${a.nombre_normalizado}\u0000${a.valor}`));
   const cerrados = (await tx.query<{ nombre_normalizado: string }>(
     `UPDATE catalog.model_attributes m SET vigente_hasta = now()
@@ -462,7 +461,8 @@ export async function persistirExtras(
   // cuenta como cambio; que la fila se haya tocado sin cambiar de vigencia (mismo valor, sólo observado_en) no.
   const tocoCategoria = nuevos.some((n) => n.nombre_normalizado === 'categoria_canal')
     || cerrados.some((n) => n.nombre_normalizado === 'categoria_canal');
-  if (tocoCategoria) resumen.categoriaCambio.add(modelo);
+  // Una representación sin modelo no puede disparar clasificación por modelo (6b).
+  if (tocoCategoria && modeloFila) resumen.categoriaCambio.add(modeloFila);
 
   const imgs = obs.imagenes ?? [];
   const urls = imgs.map((i) => i.url); const ordenes = imgs.map((i) => i.orden);
@@ -471,12 +471,12 @@ export async function persistirExtras(
      SELECT $1, $2, u, o, now() FROM unnest($3::text[], $4::int[]) AS x(u, o)
      ON CONFLICT (representation_id, url) DO UPDATE
        SET orden = EXCLUDED.orden, observado_en = EXCLUDED.observado_en, vigente_hasta = NULL, model_id = EXCLUDED.model_id`,
-    [modelo, repId, urls, ordenes]);
+    [modeloFila, repId, urls, ordenes]);
   await tx.query(
     `UPDATE catalog.model_images m SET vigente_hasta = now()
       WHERE m.representation_id = $1 AND m.vigente_hasta IS NULL AND NOT (m.url = ANY($2::text[]))`, [repId, urls]);
 
-  if (ctx.compararAtributos ?? false) await compararAtributos(tx, ctx, repId, modelo, attrs, resumen, empresa);
+  if ((ctx.compararAtributos ?? false) && modeloFila) await compararAtributos(tx, ctx, repId, modeloFila, attrs, resumen, empresa);
 }
 
 /** La categoría es propia de cada canal (nombre en Woo, id en ML): compararla daría divergencia siempre. */

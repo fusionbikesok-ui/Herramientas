@@ -8,12 +8,16 @@
   <link rel="stylesheet" href="bandeja.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-padding-block: 6rem; }
+    html { height: 100%; scroll-padding-block: 6rem; }
     body {
       background: var(--bg);
       color: var(--text);
       font-family: -apple-system, 'Segoe UI', sans-serif;
+      height: 100dvh;
       min-height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
       line-height: 1.5;
     }
     a { color: inherit; }
@@ -29,8 +33,7 @@
 
     /* Topbar sticky */
     .topbar {
-      position: sticky;
-      top: 0;
+      position: relative;
       z-index: 40;
       background: rgba(12, 15, 22, 0.92);
       backdrop-filter: blur(14px);
@@ -41,6 +44,7 @@
       justify-content: space-between;
       gap: 8px;
       height: 54px;
+      flex: 0 0 54px;
     }
     .topbar-title {
       font-size: 0.9rem;
@@ -63,21 +67,24 @@
 
     /* Chips de prioridad */
     .chips-header {
-      position: sticky;
-      top: 54px;
+      position: relative;
       z-index: 35;
       background: var(--bg);
       border-bottom: 1px solid var(--border);
-      padding: var(--sp-2);
+      padding: 5px var(--sp-2);
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      align-items: center;
       gap: var(--sp-1);
+      min-height: 42px;
+      overflow: hidden;
     }
     .chip-pri {
       display: inline-flex;
       align-items: center;
       gap: 0.4em;
       min-height: var(--tap-min);
+      height: auto;
       padding: 0 var(--sp-2);
       border-radius: var(--radius-pill);
       min-width: 0;
@@ -112,7 +119,8 @@
     /* Contenedor principal */
     .bandeja-wrap {
       display: flex;
-      min-height: calc(100vh - 54px);
+      min-height: 0;
+      flex: 1;
       flex-direction: column;
     }
 
@@ -334,7 +342,7 @@
     /* Aviso de deshacer (10s) */
     .aviso-deshacer {
       position: fixed;
-      bottom: 0;
+      bottom: 4.5rem;
       left: 0;
       right: 0;
       background: var(--surface2);
@@ -346,7 +354,7 @@
       align-items: center;
       gap: var(--sp-2);
       font-size: var(--fs-md);
-      z-index: 50;
+      z-index: 60;
     }
     .aviso-deshacer--oculto {
       display: none;
@@ -444,6 +452,9 @@
       inline-size: var(--tap-min);
       block-size: var(--tap-min);
     }
+    @media (max-width: 40rem) {
+      .aviso-deshacer { bottom: 5.5rem; }
+    }
   </style>
 </head>
 <body>
@@ -490,6 +501,9 @@
     <div id="root" class="caso"></div>
   </div>
 
+  <div id="avisos" class="avisos" aria-live="polite"></div>
+  <div id="anuncio" class="sr-only" role="status" aria-live="polite"></div>
+
   <!-- Aviso de deshacer -->
   <div class="aviso-deshacer aviso-deshacer--oculto" id="aviso-deshacer" role="status">
     <span id="aviso-deshacer-texto">Vinculado a FB-123. Caso 12 de 340.</span>
@@ -500,11 +514,13 @@
   </div>
 
   <!-- Diálogo: Visor de foto -->
-  <dialog id="visor-foto-dialog" class="visor-foto-dialog">
-    <button type="button" id="btn-cerrar-visor" class="btn" style="align-self: flex-end;">Cerrar (Esc)</button>
-    <h2 id="visor-titulo" style="font-size: var(--fs-md); margin-top: var(--sp-2);"></h2>
-    <img id="visor-imagen" src="" alt="" class="visor-foto-imagen">
-    <p id="visor-sku" class="sku" style="color: var(--muted); font-size: var(--fs-sm);"></p>
+  <dialog id="visor-foto-dialog" class="visor-foto-dialog" aria-modal="true" aria-labelledby="visor-titulo">
+    <div class="visor-cabecera">
+      <h2 id="visor-titulo">Comparar fotos</h2>
+      <button type="button" id="btn-cerrar-visor" class="btn">Cerrar (Esc)</button>
+    </div>
+    <p class="visor-ayuda">Clic o +/− cambia el zoom · 0 restablece · ←/→ o 1/2/3 cambia el candidato</p>
+    <div id="visor-pares" class="visor-pares"></div>
   </dialog>
 
   <!-- Diálogo: Ayuda -->
@@ -525,12 +541,16 @@
       </thead>
       <tbody>
         <tr>
-          <td><kbd>j</kbd> / <kbd>↓</kbd></td>
+          <td><kbd>j</kbd></td>
           <td>Siguiente caso</td>
         </tr>
         <tr>
-          <td><kbd>k</kbd> / <kbd>↑</kbd></td>
+          <td><kbd>k</kbd></td>
           <td>Anterior caso</td>
+        </tr>
+        <tr>
+          <td><kbd>←</kbd> / <kbd>→</kbd></td>
+          <td>Cambiar candidato en el visor</td>
         </tr>
         <tr>
           <td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td>
@@ -542,7 +562,7 @@
         </tr>
         <tr>
           <td><kbd>X</kbd></td>
-          <td>Rechazar (sólo en confirmable)</td>
+          <td>No es ninguno (nunca omite de forma permanente)</td>
         </tr>
         <tr>
           <td><kbd>/</kbd></td>
@@ -561,10 +581,6 @@
           <td>No existe en el catálogo</td>
         </tr>
         <tr>
-          <td><kbd>D</kbd></td>
-          <td>Sólo diferencias</td>
-        </tr>
-        <tr>
           <td><kbd>F</kbd></td>
           <td>Ampliar foto</td>
         </tr>
@@ -573,16 +589,8 @@
           <td>Deshacer</td>
         </tr>
         <tr>
-          <td><kbd>H</kbd></td>
-          <td>Historial</td>
-        </tr>
-        <tr>
           <td><kbd>A</kbd></td>
           <td>Ayuda</td>
-        </tr>
-        <tr>
-          <td><kbd>Esc</kbd></td>
-          <td>Cerrar diálogos</td>
         </tr>
       </tbody>
     </table>
