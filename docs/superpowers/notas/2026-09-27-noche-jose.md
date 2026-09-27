@@ -21,7 +21,10 @@ La rama `fix/ml-atributos-sin-modelo` **`350cd95a`** incluye `6f310673`, el arre
 Estado de las verificaciones:
 - Codex sol la aprobó y la considera desplegable.
 - Revisor sin bloqueantes y auditor en verde.
-- **Pendiente:** la suite completa en verde (la está corriendo la otra sesión) y el comando exacto del backfill.
+- Suite completa en verde (07:40 UTC):
+  - Plataforma: 1046/1046 tests, con Postgres real.
+  - Legado: 3255 pasan y 7 fallan. Los 7 son los fallos que ya existían (5 del snapshot y 2 de preparación); no hay ninguno nuevo.
+- **LISTA PARA DESPLEGAR.** Solo falta tu OK.
 
 Pasos, cada uno con `!` y mostrándome la salida:
 1. **Backups y etiqueta:**
