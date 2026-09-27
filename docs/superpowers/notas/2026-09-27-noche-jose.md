@@ -40,7 +40,12 @@ Pasos, cada uno con `!` y mostrándome la salida:
    ```
    cd /opt/fusionbikes/herramientas && docker compose -p fusion-plataforma -f plataforma/deploy/compose.yml --env-file /opt/fusionbikes/plataforma-prod/plataforma.env up -d --no-deps api worker scheduler && sleep 20 && docker ps --filter name=fusion-plataforma --format '{{.Names}} {{.Image}} {{.Status}}' && curl -s -w ' %{http_code}\n' 127.0.0.1:3201/api/v2/health
    ```
-5. **Backfill:** primero en dry-run, y con `--ejecutar` solo si el conteo tiene sentido. El comando exacto lo agrego cuando la otra sesión lo pruebe.
+5. **Backfill.** La otra sesión lo probó de punta a punta contra un Postgres de prueba. Primero va el dry-run, que no escribe nada. Pasame los conteos y, si tienen sentido, repetís el mismo comando con `--ejecutar`:
+   ```
+   cd /opt/fusionbikes/herramientas && PG_HOST=127.0.0.1 PG_PORT=5432 PG_DATABASE=plataforma PG_USER=plataforma_app PG_PASSWORD_FILE=/opt/fusionbikes/plataforma-prod/secretos/app-pass node scripts/catalogo-atributos-backfill.mjs --omitidas-ml
+   cd /opt/fusionbikes/herramientas && PG_HOST=127.0.0.1 PG_PORT=5432 PG_DATABASE=plataforma PG_USER=plataforma_app PG_PASSWORD_FILE=/opt/fusionbikes/plataforma-prod/secretos/app-pass node scripts/catalogo-atributos-backfill.mjs --reparar-extras
+   ```
+   Lo esperable: en `--omitidas-ml`, alrededor de 2.223 procesadas, con datos solo las que tienen caché en el legado. En `--reparar-extras`, las filas vinculadas y después omitidas que quedaron con el modelo viejo.
 
 **Rollback:**
 - Imagen: `docker tag fusion-plataforma:antes-0028 fusion-plataforma:local`, después `up -d --no-deps api worker scheduler`.
