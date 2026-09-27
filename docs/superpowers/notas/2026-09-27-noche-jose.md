@@ -135,6 +135,17 @@ Los altos:
 - Con los flags apagados no hay riesgo en producción: el canario es un CLI manual.
 - La migración 0030 es aditiva y compatible con la imagen actual.
 
+**09:10 UTC:** Codex sol confirma que los 3 defectos altos quedaron arreglados en el código (`08a7cf5f`). Faltan 2 tests y una actualización de la memoria del proyecto, que se cierran sin otra revisión sol aparte.
+
+**Qué falta, fuera del código, para encender el canario** (según Codex):
+- 7 días de calibración más el replay;
+- la muestra de 299;
+- validar `ATRIBUTOS_PACK`;
+- aplicar las migraciones 0030 y 0031;
+- abrir el cupo sombra;
+- declarar los flags en compose;
+- tu autorización explícita.
+
 **Pregunta 4:** el replay contractual necesita la muestra canónica de **299 casos congelados**. En el repo hay solo `muestra-30.json`. ¿Dónde está el artefacto de 299, o lo generamos? Mientras tanto, el CLI falla cerrado: nunca da "apto" sin la muestra completa y con hash verificado.
 
 **Pendientes tuyos para encender el canario (fuera del código):**
