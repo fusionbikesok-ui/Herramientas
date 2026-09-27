@@ -22,6 +22,7 @@ import { numeroAcotado, persistirExtras, type ResumenAplicacion } from './aplica
 import type { RepresentacionObservada } from './intenciones.ts';
 import { extraerExtrasMl } from './ml.ts';
 import { extraerExtrasWoo } from './woo.ts';
+import { bloquearDecisiones, repararExtrasDeRepresentacion } from './decisiones.ts';
 
 export type FilaCache = Record<string, unknown>;
 
@@ -97,6 +98,9 @@ export interface ResumenBackfill {
   procesadas: number; conDatos: number; sinDatos: number; atributos: number; imagenes: number;
 }
 
+export interface OpcionesRepararExtras { lote: number; dryRun: boolean }
+export interface ResumenRepararExtras { atributos: number; imagenes: number; representaciones: number; modelos: number }
+
 interface RepFila extends Rep { id: string; channel_account_id: string; company_id: string }
 
 /** Recorre las representaciones sin capturar, por id y de a un lote. En dry-run sólo lee: no escribe ni marca. */
@@ -151,4 +155,56 @@ export async function backfillAtributos(pool: pg.Pool, fuente: FuenteLegado, o: 
     });
     if (hecho < o.lote) return r;
   }
+}
+
+/** Alinea los extras con la colgadura vigente de cada representación, sin depender de los cachés legacy. */
+export async function repararExtras(pool: pg.Pool, o: OpcionesRepararExtras): Promise<ResumenRepararExtras> {
+  const r: ResumenRepararExtras = { atributos: 0, imagenes: 0, representaciones: 0, modelos: 0 };
+  const modelos = new Set<string>();
+  const modeloReal = 'CASE WHEN r.omitida_por_decision THEN NULL ELSE COALESCE(v.model_id, r.model_id) END';
+  let ultimo = '00000000-0000-0000-0000-000000000000';
+  for (;;) {
+    // Se elige el lote sin candados y cada representación se repara en SU transacción con el candado de la cuenta
+    // (el mismo orden que reconciliarClave): así no hay deadlock con las decisiones ni con el proyector.
+    const ids = (await pool.query<{ id: string; channel_account_id: string }>(
+      `SELECT r.id, r.channel_account_id
+         FROM catalog.external_representations r
+         LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id
+        WHERE r.id > $1
+          AND (EXISTS (SELECT 1 FROM catalog.model_attributes a WHERE a.representation_id = r.id AND a.model_id IS DISTINCT FROM ${modeloReal})
+            OR EXISTS (SELECT 1 FROM catalog.model_images i WHERE i.representation_id = r.id AND i.model_id IS DISTINCT FROM ${modeloReal}))
+        ORDER BY r.id LIMIT $2`, [ultimo, o.lote])).rows;
+    if (!ids.length) break;
+    for (const f of ids) {
+      ultimo = f.id;
+      await enTransaccion(pool, async (tx) => {
+        if (!o.dryRun) await bloquearDecisiones(tx, f.channel_account_id);
+        const rep = (await tx.query<{ company_id: string; modelo: string | null }>(
+          `SELECT r.company_id, ${modeloReal} AS modelo
+             FROM catalog.external_representations r
+             LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id
+            WHERE r.id = $1 ${o.dryRun ? '' : 'FOR UPDATE OF r'}`, [f.id])).rows[0];
+        if (!rep) return;
+        if (o.dryRun) {
+          const cuenta = async (tabla: string) => Number((await tx.query<{ n: string }>(
+            `SELECT count(*)::text AS n FROM catalog.${tabla} WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2`, [f.id, rep.modelo])).rows[0]!.n);
+          const atributos = await cuenta('model_attributes'); const imagenes = await cuenta('model_images');
+          if (!atributos && !imagenes) return;
+          const viejos = (await tx.query<{ model_id: string }>(
+            `SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2
+             UNION SELECT model_id FROM catalog.model_images WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2`, [f.id, rep.modelo])).rows;
+          r.atributos += atributos; r.imagenes += imagenes; r.representaciones++;
+          for (const v of viejos) if (v.model_id) modelos.add(v.model_id);
+          if (rep.modelo) modelos.add(rep.modelo);
+        } else {
+          const reparada = await repararExtrasDeRepresentacion(tx, rep.company_id, f.id, rep.modelo);
+          r.atributos += reparada.atributos; r.imagenes += reparada.imagenes;
+          if (reparada.atributos || reparada.imagenes) r.representaciones++;
+          for (const modelo of reparada.modelos) modelos.add(modelo);
+        }
+      });
+    }
+  }
+  r.modelos = modelos.size;
+  return r;
 }

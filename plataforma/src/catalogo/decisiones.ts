@@ -53,7 +53,7 @@ export interface OpcionesAutoridad {
 
 const CASOS_DE_PENDIENTE = ['sku_pendiente', 'sku_inexistente_en_woo'];
 
-async function reclasificarModelosAfectados(tx: Consultable, empresa: string, modelos: Iterable<string>): Promise<void> {
+export async function reclasificarModelosAfectados(tx: Consultable, empresa: string, modelos: Iterable<string>): Promise<void> {
   const afectados = [...new Set(modelos)].sort();
   if (!afectados.length) return;
   await tx.query('SAVEPOINT clasificacion_decision');
@@ -75,6 +75,32 @@ async function reclasificarModelosAfectados(tx: Consultable, empresa: string, mo
   }
 }
 
+export interface ResumenReparacionExtras { atributos: number; imagenes: number; modelos: Set<string> }
+
+/** Alinea los extras de una representación y reclasifica sólo si movió alguna fila de modelo. */
+export async function repararExtrasDeRepresentacion(
+  tx: Consultable, empresa: string, representacion: string, modeloDestino: string | null,
+): Promise<ResumenReparacionExtras> {
+  const hay = (await tx.query<{ hay: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2)
+         OR EXISTS (SELECT 1 FROM catalog.model_images WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2) AS hay`,
+    [representacion, modeloDestino])).rows[0]!.hay;
+  if (!hay) return { atributos: 0, imagenes: 0, modelos: new Set() };
+  const modelos = new Set((await tx.query<{ model_id: string }>(
+    `SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2
+     UNION SELECT model_id FROM catalog.model_images WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2`,
+    [representacion, modeloDestino])).rows.map((r) => r.model_id).filter(Boolean));
+  if (modeloDestino) modelos.add(modeloDestino);
+  const atributos = (await tx.query(
+    'UPDATE catalog.model_attributes SET model_id = $2 WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2',
+    [representacion, modeloDestino])).rowCount ?? 0;
+  const imagenes = (await tx.query(
+    'UPDATE catalog.model_images SET model_id = $2 WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2',
+    [representacion, modeloDestino])).rowCount ?? 0;
+  if (atributos || imagenes) await reclasificarModelosAfectados(tx, empresa, modelos);
+  return { atributos, imagenes, modelos };
+}
+
 export async function reconciliarClave(
   tx: Consultable, cuenta: string, recurso: string, variacion: string, motivo: string,
   o: OpcionesAutoridad,
@@ -84,8 +110,8 @@ export async function reconciliarClave(
   // si un llamador futuro se olvida de tomarlo antes, el orden documentado en el módulo (candado de cuenta
   // antes que filas) queda garantizado igual, en vez de depender de que cada caller lo recuerde.
   await bloquearDecisiones(tx, cuenta);
-  const rep = (await tx.query<{ id: string; company_id: string; variant_id: string | null; omitida_por_decision: boolean }>(
-    `SELECT id, company_id, variant_id, omitida_por_decision FROM catalog.external_representations
+  const rep = (await tx.query<{ id: string; company_id: string; model_id: string | null; variant_id: string | null; omitida_por_decision: boolean }>(
+    `SELECT id, company_id, model_id, variant_id, omitida_por_decision FROM catalog.external_representations
       WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND tipo = 'vendible' FOR UPDATE`,
     [cuenta, recurso, variacion])).rows[0];
   // Todavía no se vio la publicación: cuando el proyector la vea, la vincula con la decisión vigente.
@@ -129,13 +155,20 @@ export async function reconciliarClave(
         AND COALESCE((detalle->>'d5')::boolean, false) IS NOT TRUE`, [rep.id, `la decisión cambió: ${motivo}`]);
 
   // ¿Ya está donde tiene que estar?
-  if (deseado.tipo === 'variante' && rep.variant_id === deseado.variante) return 'sin_cambios';
-  if (deseado.tipo === 'omitida' && rep.omitida_por_decision) return 'sin_cambios';
+  if (deseado.tipo === 'variante' && rep.variant_id === deseado.variante) {
+    await repararExtrasDeRepresentacion(tx, empresa, rep.id, actual?.model_id ?? rep.model_id);
+    return 'sin_cambios';
+  }
+  if (deseado.tipo === 'omitida' && rep.omitida_por_decision) {
+    await repararExtrasDeRepresentacion(tx, empresa, rep.id, null);
+    return 'sin_cambios';
+  }
   if (deseado.tipo === 'pendiente' && rep.variant_id && actual?.sku === null) {
     // Sigue pendiente; sólo puede haber cambiado el motivo (sin decisión ↔ SKU que no existe).
     const otro = deseado.caso === 'sku_pendiente' ? 'sku_inexistente_en_woo' : 'sku_pendiente';
     await cerrarDeVariante(rep.variant_id, [otro], `la decisión cambió: ${motivo}`);
     await abrir(deseado.caso, { variante: rep.variant_id }, 'normal', deseado.sku ? { sku: deseado.sku } : {});
+    await repararExtrasDeRepresentacion(tx, empresa, rep.id, actual?.model_id ?? rep.model_id);
     return 'sin_cambios';
   }
 

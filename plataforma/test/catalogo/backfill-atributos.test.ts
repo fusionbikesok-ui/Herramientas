@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { backfillAtributos, type FilaCache, type FuenteLegado } from '../../src/catalogo/backfill-atributos.ts';
+import { backfillAtributos, repararExtras, type FilaCache, type FuenteLegado } from '../../src/catalogo/backfill-atributos.ts';
 import { extraerExtrasMl } from '../../src/catalogo/ml.ts';
 import { extraerExtrasWoo } from '../../src/catalogo/woo.ts';
 import { crearPool } from '../../src/db/pool.ts';
@@ -227,6 +227,41 @@ describe('E2-BKF-01 el backfill', () => {
     const r = await backfillAtributos(app, fuente(), { lote: 10, dryRun: false, omitidasMl: true });
     expect(r).toMatchObject({ procesadas: 1, conDatos: 0, sinDatos: 1, atributos: 0, imagenes: 0 });
   });
+
+  it('repara extras heredados en dry-run y ejecución, cuenta modelos y es idempotente', async () => {
+    const vinculada = await rep('woocommerce', '110');
+    const omitida = await repMlOmitida('MLA110');
+    const modeloViejo = (await admin.query<{ id: string }>(`INSERT INTO catalog.product_models
+      (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1,$2,'ml_simple',$3,'viejo') RETURNING id`,
+    [empresa, ml, randomUUID()])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES ($1,$2,'marca','vieja',now()), ($3,$2,'color','rojo',now())`, [modeloViejo, omitida, modeloViejo]);
+    await admin.query(`INSERT INTO catalog.model_images (model_id, representation_id, url, observado_en)
+      VALUES ($1,$2,'https://x/vieja.jpg',now())`, [modeloViejo, omitida]);
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES (NULL,$1,'marca','nula',now())`, [vinculada]);
+    await admin.query(`INSERT INTO catalog.model_images (model_id, representation_id, url, observado_en)
+      VALUES (NULL,$1,'https://x/nula.jpg',now())`, [vinculada]);
+    const alineada = await rep('woocommerce', '111');
+    const modeloAlineado = (await admin.query<{ model_id: string }>(`SELECT v.model_id FROM catalog.external_representations r
+      JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [alineada])).rows[0]!.model_id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES ($1,$2,'marca','igual',now())`, [modeloAlineado, alineada]);
+
+    const seco = await repararExtras(app, { lote: 2, dryRun: true });
+    expect(seco).toEqual({ atributos: 3, imagenes: 2, representaciones: 2, modelos: 2 });
+    expect((await admin.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id = $2`, [omitida, modeloViejo])).rows[0].n).toBe(2);
+    expect((await admin.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS NULL`, [vinculada])).rows[0].n).toBe(1);
+
+    const real = await repararExtras(app, { lote: 2, dryRun: false });
+    expect(real).toEqual(seco);
+    expect((await admin.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS NULL`, [omitida])).rows[0].n).toBe(2);
+    const modeloVinculada = (await admin.query(`SELECT v.model_id FROM catalog.external_representations r JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [vinculada])).rows[0].model_id;
+    expect((await admin.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id = $2`, [vinculada, modeloVinculada])).rows[0].n).toBe(1);
+    expect(await repararExtras(app, { lote: 2, dryRun: false })).toEqual({ atributos: 0, imagenes: 0, representaciones: 0, modelos: 0 });
+    expect((await admin.query(`SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1`, [alineada])).rows)
+      .toEqual([{ model_id: modeloAlineado }]);
+  });
 });
 
 describe('E2-BKF-02 el script', () => {
@@ -276,5 +311,22 @@ describe('E2-BKF-02 el script', () => {
     expect(real.status, real.stderr).toBe(0);
     expect(JSON.parse(real.stdout)).toMatchObject({ dryRun: false, omitidasMl: true, procesadas: 1, conDatos: 1, atributos: 2, imagenes: 1 });
     expect(await contar('model_attributes')).toBe(2);
+  });
+
+  it('--reparar-extras es dry-run por defecto, escribe con --ejecutar y rechaza combinaciones inválidas', async () => {
+    const repId = await repMlOmitida('MLA111');
+    const viejo = (await admin.query<{ id: string }>(`INSERT INTO catalog.product_models
+      (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1,$2,'ml_simple',$3,'viejo') RETURNING id`,
+    [empresa, ml, randomUUID()])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES ($1,$2,'marca','vieja',now())`, [viejo, repId]);
+    const seco = correr(['--reparar-extras']);
+    expect(seco.status, seco.stderr).toBe(0);
+    expect(JSON.parse(seco.stdout)).toMatchObject({ dryRun: true, atributos: 1, imagenes: 0, representaciones: 1 });
+    const real = correr(['--reparar-extras', '--ejecutar']);
+    expect(real.status, real.stderr).toBe(0);
+    expect(JSON.parse(real.stdout)).toMatchObject({ dryRun: false, atributos: 1, imagenes: 0, representaciones: 1 });
+    expect((await admin.query('SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1', [repId])).rows[0].model_id).toBeNull();
+    expect(correr(['--reparar-extras', '--omitidas-ml']).status).toBe(2);
   });
 });

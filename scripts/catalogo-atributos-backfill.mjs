@@ -21,31 +21,47 @@
  *
  * Uso: node scripts/catalogo-atributos-backfill.mjs --omitidas-ml [--ejecutar]
  *      node scripts/catalogo-atributos-backfill.mjs [--lote N] [--dry-run|--ejecutar]
+ *      node scripts/catalogo-atributos-backfill.mjs --reparar-extras [--ejecutar]
+ *
+ * Consulta SQL de sólo lectura para producción:
+ * WITH objetivo AS (SELECT r.id, CASE WHEN r.omitida_por_decision THEN NULL ELSE COALESCE(v.model_id, r.model_id) END AS modelo
+ *   FROM catalog.external_representations r LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id)
+ * SELECT count(*) FROM catalog.model_attributes a JOIN objetivo o ON o.id=a.representation_id WHERE a.model_id IS DISTINCT FROM o.modelo;
+ * WITH objetivo AS (SELECT r.id, CASE WHEN r.omitida_por_decision THEN NULL ELSE COALESCE(v.model_id, r.model_id) END AS modelo
+ *   FROM catalog.external_representations r LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id)
+ * SELECT count(*) FROM catalog.model_images i JOIN objetivo o ON o.id=i.representation_id WHERE i.model_id IS DISTINCT FROM o.modelo;
+ * WITH objetivo AS (SELECT r.id, CASE WHEN r.omitida_por_decision THEN NULL ELSE COALESCE(v.model_id, r.model_id) END AS modelo
+ *   FROM catalog.external_representations r LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id)
+ * SELECT count(DISTINCT modelo) FROM (SELECT a.model_id AS modelo FROM catalog.model_attributes a JOIN objetivo o ON o.id=a.representation_id WHERE a.model_id IS DISTINCT FROM o.modelo AND a.model_id IS NOT NULL
+ * UNION SELECT i.model_id FROM catalog.model_images i JOIN objetivo o ON o.id=i.representation_id WHERE i.model_id IS DISTINCT FROM o.modelo AND i.model_id IS NOT NULL
+ * UNION SELECT o.modelo FROM objetivo o WHERE o.modelo IS NOT NULL AND (EXISTS (SELECT 1 FROM catalog.model_attributes a WHERE a.representation_id=o.id AND a.model_id IS DISTINCT FROM o.modelo) OR EXISTS (SELECT 1 FROM catalog.model_images i WHERE i.representation_id=o.id AND i.model_id IS DISTINCT FROM o.modelo))) afectados;
  * Por defecto es dry-run: informa qué haría sin escribir nada. Para escribir hay que pasar --ejecutar.
  */
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
-import { backfillAtributos } from '../plataforma/src/catalogo/backfill-atributos.ts';
+import { backfillAtributos, repararExtras } from '../plataforma/src/catalogo/backfill-atributos.ts';
 import { crearPool } from '../plataforma/src/db/pool.ts';
 
 function leerArgs(argv) {
-  const o = { lote: 200, dryRun: true, omitidasMl: false };
+  const o = { lote: 200, dryRun: true, omitidasMl: false, repararExtras: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--lote') o.lote = Number(argv[++i]);
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--ejecutar') o.dryRun = false;
     else if (a === '--omitidas-ml') o.omitidasMl = true;
+    else if (a === '--reparar-extras') o.repararExtras = true;
     else { console.error(`argumento desconocido: ${a}`); process.exit(2); }
   }
   if (!Number.isInteger(o.lote) || o.lote < 1 || o.lote > 1000) { console.error('--lote debe ser un entero entre 1 y 1000'); process.exit(2); }
+  if (o.repararExtras && o.omitidasMl) { console.error('--reparar-extras no se combina con --omitidas-ml'); process.exit(2); }
   return o;
 }
 
 const opciones = leerArgs(process.argv.slice(2));
 
-if (!process.env.DB_PATH) { console.error('falta DB_PATH (la base SQLite del legado)'); process.exit(2); }
+if (!opciones.repararExtras && !process.env.DB_PATH) { console.error('falta DB_PATH (la base SQLite del legado)'); process.exit(2); }
 if (!process.env.PG_PASSWORD && !process.env.PG_PASSWORD_FILE) {
   console.error('falta PG_PASSWORD o PG_PASSWORD_FILE en el entorno');
   process.exit(2);
@@ -58,6 +74,10 @@ let codigoSalida = 0;
 let sqlite;
 const pool = crearPool(url, { max: 1 });
 try {
+  if (opciones.repararExtras) {
+    const resumen = await repararExtras(pool, { lote: opciones.lote, dryRun: opciones.dryRun });
+    console.log(JSON.stringify({ dryRun: opciones.dryRun, lote: opciones.lote, repararExtras: true, ...resumen }, null, 2));
+  } else {
   sqlite = new Database(process.env.DB_PATH, { readonly: true, fileMustExist: true });
   const woo = sqlite.prepare('SELECT * FROM catalogo_cache WHERE id_woo = ?');
   const ml = sqlite.prepare('SELECT * FROM ml_publicaciones_cache WHERE clave = ?');
@@ -68,6 +88,7 @@ try {
     mlDeItem: (item) => mlItem.get(item),
   }, opciones);
   console.log(JSON.stringify({ dryRun: opciones.dryRun, lote: opciones.lote, omitidasMl: opciones.omitidasMl, ...resumen }, null, 2));
+  }
 } catch (error) {
   console.error(JSON.stringify({ error: error.message }));
   codigoSalida = 1;
