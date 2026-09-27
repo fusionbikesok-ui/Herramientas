@@ -45,6 +45,16 @@ Reglas que sigo durante la noche:
 
 ## Preguntas abiertas
 
+### Migración 0028: decisión tomada por mí (03:30 UTC)
+
+Codex sol pide no editar una migración que pueda estar aplicada. La edité igual, porque verifiqué en modo solo lectura que **ninguna base la tiene aplicada**:
+- producción está en la 0027;
+- los contenedores `plataforma-test-*` llegan como máximo a la 0024.
+
+La evidencia está en el mensaje del commit `6a50e285`.
+
+**Pregunta 3:** ¿aceptás este criterio, o preferís la regla estricta de "nunca editar una migración ya escrita" (en ese caso, 0028 original + 0029 + 0030)?
+
 ### E3 corte 3: segunda opinión de Codex sol (03:00 UTC)
 
 **Veredicto: todavía no se puede encender el canario.** Codex encontró 10 defectos. La otra sesión los arregla esta noche en `fix/e3c3-segunda-opinion`.
