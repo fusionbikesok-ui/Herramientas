@@ -58,3 +58,10 @@
 
 Ante cambios durables de navegación, sistema visual, accesibilidad, breakpoints o estrategia
 de pruebas UI.
+
+**Bandeja de identidad (2026-09-26, tarea 3 de auditoría):** `logica.js` normaliza la lista real de
+`explicacion.atributos` + `otros_atributos` en `diferenciasVisibles()`, deduplica por nombre, prioriza
+`difiere → falta → equivalente` y conserva los valores `*Original` cuando existen. El seed de
+`scripts/qa/bandeja-real/levantar.mjs` emite la forma real (`marca`, valores normalizados y originales) y
+siembra atributos persistidos para `otros_atributos`. La estación usa scroll interno de diferencias y no
+scroll de página; queda pendiente validación visual responsive autorizada.
