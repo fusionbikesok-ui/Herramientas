@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import { enTransaccion, type Consultable } from '../db/pool.ts';
 import { aplicarAutoSku } from './aplicar-auto-sku.ts';
@@ -40,31 +41,127 @@ export async function congelarCanario(pool: pg.Pool, o: { empresa: string; dia: 
   });
 }
 
-async function reclamar(pool: pg.Pool, corridaId: string, worker: string, yaVistos: string[]): Promise<any | null> {
+type CasoCanario = {
+  corrida_id: string;
+  case_id: string;
+  channel_account_id: string;
+  recurso: string;
+  variacion_normalizada: string;
+  sku_congelado: string;
+  variant_id_congelada: string;
+  fencing_token: string;
+};
+
+async function reclamar(pool: pg.Pool, corridaId: string, worker: string, yaVistos: string[]): Promise<CasoCanario | null> {
   return enTransaccion(pool, async (tx) => {
-    const fila = (await tx.query(`SELECT * FROM catalog.e3_canario_casos WHERE corrida_id=$1 AND estado IN ('pendiente','parked')
-      AND (tomado_hasta IS NULL OR tomado_hasta < now()) AND case_id <> ALL($2::uuid[]) ORDER BY case_id FOR UPDATE SKIP LOCKED LIMIT 1`, [corridaId, yaVistos])).rows[0];
+    // El estado de la corrida y el caso se leen bajo candado en la misma transacción que otorga el lease.
+    const corrida = (await tx.query(
+      `SELECT 1 FROM catalog.e3_canario_corridas WHERE id = $1 AND estado = 'abierta' FOR UPDATE`, [corridaId],
+    )).rowCount;
+    if (!corrida) return null;
+    // Recuperación del lease: vuelve a dejar reclamable el trabajo cuyo corredor murió o tardó demasiado.
+    await tx.query(`UPDATE catalog.e3_canario_casos SET estado = 'parked', tomado_por = NULL, tomado_hasta = NULL
+      WHERE corrida_id = $1 AND estado = 'en_proceso' AND tomado_hasta < clock_timestamp()`, [corridaId]);
+    const fila = (await tx.query<CasoCanario>(`SELECT * FROM catalog.e3_canario_casos WHERE corrida_id=$1 AND estado IN ('pendiente','parked')
+      AND (tomado_hasta IS NULL OR tomado_hasta < clock_timestamp()) AND case_id <> ALL($2::uuid[]) ORDER BY case_id FOR UPDATE SKIP LOCKED LIMIT 1`, [corridaId, yaVistos])).rows[0];
     if (!fila) return null;
-    return (await tx.query(`UPDATE catalog.e3_canario_casos SET tomado_por=$2, tomado_hasta=now()+interval '2 minutes', intentos=intentos+1 WHERE corrida_id=$1 AND case_id=$3 RETURNING *`, [corridaId, worker, fila.case_id])).rows[0] ?? null;
+    return (await tx.query<CasoCanario>(`UPDATE catalog.e3_canario_casos
+      SET estado = 'en_proceso', tomado_por = $2, tomado_hasta = clock_timestamp() + interval '2 minutes',
+          fencing_token = fencing_token + 1, intentos = intentos + 1
+      WHERE corrida_id = $1 AND case_id = $3 AND estado IN ('pendiente','parked')
+      RETURNING *`, [corridaId, worker, fila.case_id])).rows[0] ?? null;
+  });
+}
+
+async function actualizarResultado(
+  pool: pg.Pool,
+  lease: { corridaId: string; caseId: string; owner: string; fencingToken: string },
+  estado: string,
+  detalle: object,
+): Promise<boolean> {
+  return enTransaccion(pool, async (tx) => {
+    const r = await tx.query(
+      `UPDATE catalog.e3_canario_casos
+          SET estado = $3, detalle = $4, tomado_por = NULL, tomado_hasta = NULL
+        WHERE corrida_id = $1 AND case_id = $2 AND estado = 'en_proceso'
+          AND tomado_por = $5 AND fencing_token = $6 AND tomado_hasta > clock_timestamp()
+        RETURNING case_id`,
+      [lease.corridaId, lease.caseId, estado, JSON.stringify(detalle), lease.owner, lease.fencingToken],
+    );
+    return Boolean(r.rowCount);
   });
 }
 
 export async function correrCanario(pool: pg.Pool, relector: Relector, o: EntradaCanario): Promise<ResumenCanario> {
   const resumen: ResumenCanario = { procesados: 0, vinculados: 0, bandeja: 0, parked: 0, abortado: false };
-  const worker = `canario-${process.pid}`;
-  const abierta = (await pool.query(`SELECT 1 FROM catalog.e3_canario_corridas WHERE id=$1 AND estado='abierta'`, [o.corridaId])).rowCount;
-  if (!abierta) return { ...resumen, abortado: true };
+  const worker = randomUUID();
   const vistos: string[] = []; // un caso parked se reintenta en la PRÓXIMA corrida, no en un bucle de ésta
   while (!resumen.abortado) {
     const caso = await reclamar(pool, o.corridaId, worker, vistos);
     if (caso) vistos.push(caso.case_id);
     if (!caso) break;
     resumen.procesados++;
+    let fencingToken = caso.fencing_token;
+    const lease = { corridaId: o.corridaId, caseId: caso.case_id, owner: worker, get fencingToken() { return fencingToken; } };
     const previo = await pool.query<{ hash: string }>(`SELECT hash_estructura hash FROM catalog.format_observations WHERE channel_account_id=$1 AND recurso=$2 ORDER BY observado_en DESC LIMIT 1`, [caso.channel_account_id, caso.recurso]);
-    const lectura = await releerParaAutoSku(relector, { recurso: caso.recurso, variacion: caso.variacion_normalizada, skuCongelado: caso.sku_congelado, hashFormatoPrevio: previo.rows[0]?.hash ?? null }, o.esperar ? { esperar: o.esperar } : {});
-    if (lectura.tipo === 'abortar') { await enTransaccion(pool, async (tx) => { await tx.query(`UPDATE catalog.e3_canario_corridas SET estado='abortada' WHERE id=$1`, [o.corridaId]); await tx.query(`UPDATE catalog.e3_canario_casos SET estado='pendiente', tomado_por=NULL, tomado_hasta=NULL WHERE corrida_id=$1 AND case_id=$2`, [o.corridaId, caso.case_id]); }); resumen.abortado = true; break; }
-    const aplicado = await aplicarAutoSku(pool, { casoId: caso.case_id, cuenta: caso.channel_account_id, recurso: caso.recurso, variacion: caso.variacion_normalizada, skuCongelado: caso.sku_congelado, variantIdCongelada: caso.variant_id_congelada }, lectura as ResultadoRelecturaAutoSku, { bandeja: o.bandeja });
-    await pool.query(`UPDATE catalog.e3_canario_casos SET estado=$3, detalle=$4, tomado_por=NULL, tomado_hasta=NULL WHERE corrida_id=$1 AND case_id=$2 AND tomado_por=$5`, [o.corridaId, caso.case_id, aplicado.resultado === 'abortar' ? 'pendiente' : aplicado.resultado, JSON.stringify(aplicado.detalle ?? {}), worker]);
+    const lectura = await releerParaAutoSku(
+      relector,
+      { recurso: caso.recurso, variacion: caso.variacion_normalizada, skuCongelado: caso.sku_congelado, hashFormatoPrevio: previo.rows[0]?.hash ?? null },
+      {
+        ...(o.esperar ? { esperar: o.esperar } : {}),
+        renovarLease: async (esperaMs) => {
+          const r = await enTransaccion(pool, async (tx) => tx.query<{ fencing_token: string }>(
+            `UPDATE catalog.e3_canario_casos
+                SET tomado_hasta = clock_timestamp() + GREATEST(interval '2 minutes',
+                    ($3::double precision / 1000) * interval '1 second' + interval '30 seconds'),
+                    fencing_token = fencing_token + 1
+              WHERE corrida_id = $1 AND case_id = $2 AND estado = 'en_proceso'
+                AND tomado_por = $4 AND fencing_token = $5 AND tomado_hasta > clock_timestamp()
+              RETURNING fencing_token`,
+            [o.corridaId, caso.case_id, esperaMs, worker, fencingToken],
+          ));
+          if (r.rows[0]) fencingToken = r.rows[0].fencing_token;
+        },
+      },
+    );
+    if (lectura.tipo === 'abortar') {
+      await enTransaccion(pool, async (tx) => {
+        await tx.query(`UPDATE catalog.e3_canario_corridas SET estado='abortada' WHERE id=$1 AND estado='abierta'`, [o.corridaId]);
+        await tx.query(`UPDATE catalog.e3_canario_casos SET estado='pendiente', tomado_por=NULL, tomado_hasta=NULL
+          WHERE corrida_id=$1 AND case_id=$2 AND estado='en_proceso' AND tomado_por=$3 AND fencing_token=$4`, [o.corridaId, caso.case_id, worker, fencingToken]);
+      });
+      resumen.abortado = true; break;
+    }
+    if (lectura.tipo === 'parked') {
+      await actualizarResultado(pool, lease, 'parked', { motivo: lectura.motivo });
+      resumen.parked++;
+      continue;
+    }
+    const aplicado = await aplicarAutoSku(
+      pool,
+      { casoId: caso.case_id, cuenta: caso.channel_account_id, recurso: caso.recurso, variacion: caso.variacion_normalizada, skuCongelado: caso.sku_congelado, variantIdCongelada: caso.variant_id_congelada },
+      lectura as ResultadoRelecturaAutoSku,
+      {
+        bandeja: o.bandeja,
+        canario: {
+          corridaId: o.corridaId,
+          owner: worker,
+          get fencingToken() { return fencingToken; },
+          confirmar: async (tx, resultado) => {
+            const r = await tx.query(
+              `UPDATE catalog.e3_canario_casos
+                  SET estado = $3, detalle = $4, tomado_por = NULL, tomado_hasta = NULL
+                WHERE corrida_id = $1 AND case_id = $2 AND estado = 'en_proceso'
+                  AND tomado_por = $5 AND fencing_token = $6 AND tomado_hasta > clock_timestamp()
+                RETURNING case_id`,
+              [o.corridaId, caso.case_id, resultado.resultado, JSON.stringify(resultado.detalle ?? {}), worker, fencingToken],
+            );
+            if (!r.rowCount) throw new Error('canario: lease perdido al confirmar resultado');
+          },
+        },
+      },
+    );
+    if (aplicado.resultado === 'parked') await actualizarResultado(pool, lease, 'parked', aplicado.detalle ?? {});
     if (aplicado.resultado === 'vinculado') resumen.vinculados++; else if (aplicado.resultado === 'parked') resumen.parked++; else resumen.bandeja++;
   }
   return resumen;
@@ -75,6 +172,12 @@ export async function cerrarCanario(pool: pg.Pool, o: { corridaId: string }): Pr
     const corrida = (await tx.query<{ estado: string; congelado_en: Date }>(`SELECT estado, congelado_en FROM catalog.e3_canario_corridas WHERE id=$1 FOR UPDATE`, [o.corridaId])).rows[0];
     if (!corrida) throw new Error('canario: corrida inexistente');
     if (corrida.estado === 'cerrada') throw new Error('canario: la corrida ya está cerrada');
+    const leaseVivo = (await tx.query(
+      `SELECT 1 FROM catalog.e3_canario_casos
+        WHERE corrida_id = $1 AND tomado_por IS NOT NULL AND tomado_hasta > clock_timestamp()
+        LIMIT 1`, [o.corridaId],
+    )).rowCount;
+    if (leaseVivo) throw new Error('canario: no se puede cerrar con un lease vivo');
     const filas = (await tx.query<{ recurso: string; estado: string; detalle: { motivo?: string } | null; humana: string | null; humanaEleccion: string | null; variant_id_congelada: string }>(
       `SELECT k.recurso, k.estado, k.detalle, k.variant_id_congelada,
               (SELECT d.variant_id FROM catalog.identity_decisions d

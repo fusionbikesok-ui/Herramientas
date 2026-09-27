@@ -52,19 +52,43 @@ export async function aplicarAutoSku(
   pool: pg.Pool,
   e: Entrada,
   relectura: ResultadoRelecturaAutoSku,
-  o: { bandeja: boolean },
+  o: {
+    bandeja: boolean;
+    canario?: {
+      corridaId: string;
+      owner: string;
+      fencingToken: string;
+      confirmar(tx: Consultable, resultado: Resultado): Promise<void>;
+    };
+  },
 ): Promise<Resultado> {
   if (relectura.tipo === 'parked') return { resultado: 'parked', detalle: { motivo: relectura.motivo } };
   if (relectura.tipo === 'abortar') return { resultado: 'abortar', detalle: { status: relectura.status } };
 
   try {
     return await enTransaccion(pool, async (tx) => {
+    if (o.canario) {
+      const lease = await tx.query(
+        `SELECT 1 FROM catalog.e3_canario_casos
+          WHERE corrida_id = $1 AND case_id = $2 AND estado = 'en_proceso'
+            AND tomado_por = $3 AND fencing_token = $4 AND tomado_hasta > clock_timestamp()
+          FOR UPDATE`,
+        [o.canario.corridaId, e.casoId, o.canario.owner, o.canario.fencingToken],
+      );
+      // Un corredor viejo puede terminar después de que otro haya tomado el caso. En ese caso no
+      // puede escribir ni el resultado de identidad ni el estado del caso de canario.
+      if (!lease.rowCount) return { resultado: 'ya_resuelto' };
+    }
+    const finalizar = async (resultado: Resultado): Promise<Resultado> => {
+      if (o.canario) await o.canario.confirmar(tx, resultado);
+      return resultado;
+    };
     await bloquearDecisiones(tx, e.cuenta);
     const caso = (await tx.query<Caso>(
       'SELECT id, company_id, estado, cerrado_en, version FROM catalog.identity_cases WHERE id = $1 FOR UPDATE',
       [e.casoId],
     )).rows[0];
-    if (!caso || caso.cerrado_en || caso.estado === 'verified') return { resultado: 'ya_resuelto' };
+    if (!caso || caso.cerrado_en || caso.estado === 'verified') return finalizar({ resultado: 'ya_resuelto' });
 
     const humana = (await tx.query(
       `SELECT 1 FROM catalog.identity_decisions
@@ -82,25 +106,25 @@ export async function aplicarAutoSku(
       `SELECT 1 FROM catalog.matcher_decisions
        WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND vigente_hasta IS NULL LIMIT 1`,
       [e.cuenta, e.recurso, e.variacion])).rowCount;
-    if (humana || aplicada || legado) return { resultado: 'ya_resuelto' };
+    if (humana || aplicada || legado) return finalizar({ resultado: 'ya_resuelto' });
 
     if (relectura.tipo === 'no_disponible') {
       const detalle = { motivo: relectura.motivo };
       await evidencia(tx, e, null, detalle);
       await tx.query('UPDATE catalog.identity_cases SET estado = \'actionable\', version = version + 1 WHERE id = $1', [e.casoId]);
-      return { resultado: 'bandeja', detalle };
+      return finalizar({ resultado: 'bandeja', detalle });
     }
     if (relectura.tipo === 'cambio') {
       const detalle = { que: relectura.que, ...relectura.detalle };
       await evidencia(tx, e, null, detalle);
       await tx.query('UPDATE catalog.identity_cases SET estado = \'intervention\', version = version + 1 WHERE id = $1', [e.casoId]);
-      return { resultado: 'intervention', detalle };
+      return finalizar({ resultado: 'intervention', detalle });
     }
 
     const skuNormalizado = normalizarSku(e.skuCongelado);
     const sku = skuNormalizado === null ? 'ninguna' : await skuUnico(tx, caso.company_id, skuNormalizado);
     if (sku === 'ninguna' || sku === 'varias' || sku.variantId !== e.variantIdCongelada) {
-      return cerrarComo(tx, e, 'actionable', { motivo: 'sku_no_unico_o_cambiado' });
+      return finalizar(await cerrarComo(tx, e, 'actionable', { motivo: 'sku_no_unico_o_cambiado' }));
     }
 
     const formato = await registrarFormato(tx, { cuenta: e.cuenta, recurso: e.recurso, estructura: relectura.estructura, versionRemota: null, origen: 'relectura' });
@@ -108,7 +132,7 @@ export async function aplicarAutoSku(
       const detalle = { que: formato.que };
       await evidencia(tx, e, relectura.hashPayload, detalle);
       await tx.query('UPDATE catalog.identity_cases SET estado = \'intervention\', version = version + 1 WHERE id = $1', [e.casoId]);
-      return { resultado: 'intervention', detalle };
+      return finalizar({ resultado: 'intervention', detalle });
     }
 
     const decision = (await tx.query<{ id: string }>(
@@ -128,7 +152,7 @@ export async function aplicarAutoSku(
       aggregateType: 'identity_case', aggregateId: e.casoId, correlationId: randomUUID(), reason: 'e3 canario: sku exacto',
       payload: { antes: { estado: caso.estado, version: caso.version }, despues: { estado: 'verified', version: caso.version + 1 }, decisionId: decision.id },
     });
-    return { resultado: 'vinculado' };
+    return finalizar({ resultado: 'vinculado' });
     });
   } catch (err) {
     if (err instanceof ReconciliarDistinto) return { resultado: 'parked', detalle: { motivo: 'reconciliar_distinto', vinculo: err.message } };

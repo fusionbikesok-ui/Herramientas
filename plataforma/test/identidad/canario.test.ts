@@ -113,6 +113,57 @@ describe('E3-CAN-01 canario', () => {
     expect(await estados()).toEqual([expect.objectContaining({ recurso: a.recurso, estado: 'vinculado' }), expect.objectContaining({ recurso: b.recurso, estado: 'pendiente' })]);
   });
 
+  it('dos corredores que recuperan el mismo caso tienen dueños y fencing distintos, y sólo uno confirma', async () => {
+    const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+    let liberarA!: () => void; let liberarB!: () => void;
+    let tomoA!: () => void; let tomoB!: () => void;
+    const puertaA = new Promise<void>((resolve) => { liberarA = resolve; });
+    const puertaB = new Promise<void>((resolve) => { liberarB = resolve; });
+    const vistoA = new Promise<void>((resolve) => { tomoA = resolve; });
+    const vistoB = new Promise<void>((resolve) => { tomoB = resolve; });
+    const corredor = (puerta: Promise<void>, tomo: () => void): Relector => ({
+      topic: 'ml.items', versionKind: 'temporal', id: /.*/, releer: vi.fn(async (r: string) => {
+        tomo(); await puerta; return item(r, e.sku);
+      }),
+    });
+
+    const primero = correrCanario(app, corredor(puertaA, tomoA), { corridaId, bandeja: true });
+    await vistoA;
+    const antes = (await q<{ tomado_por: string; fencing_token: number }>(
+      'SELECT tomado_por, fencing_token::int FROM catalog.e3_canario_casos WHERE corrida_id = $1', [corridaId]))[0]!;
+    await admin.query('UPDATE catalog.e3_canario_casos SET tomado_hasta = clock_timestamp() - interval \'1 second\' WHERE corrida_id = $1', [corridaId]);
+
+    const segundo = correrCanario(app, corredor(puertaB, tomoB), { corridaId, bandeja: true });
+    await vistoB;
+    const despues = (await q<{ tomado_por: string; fencing_token: number }>(
+      'SELECT tomado_por, fencing_token::int FROM catalog.e3_canario_casos WHERE corrida_id = $1', [corridaId]))[0]!;
+    expect(despues.tomado_por).not.toBe(antes.tomado_por);
+    expect(despues.fencing_token).toBeGreaterThan(antes.fencing_token);
+
+    liberarB(); await segundo;
+    liberarA(); await primero;
+    expect(await q("SELECT 1 FROM catalog.identity_decisions WHERE origen='auto_sku' AND efecto='aplicar' AND superada_en IS NULL")).toHaveLength(1);
+    expect((await estados())[0]).toMatchObject({ estado: 'vinculado', tomado_hasta: null });
+  });
+
+  it('renueva el lease antes de dormir por un Retry-After de 300 segundos', async () => {
+    const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+    let segundosRestantes: number | null = null;
+    const caido: Relector = { topic: 'ml.items', versionKind: 'temporal', id: /.*/, releer: vi.fn(async () => {
+      throw new ErrorBarridoReintentable('BULK_429', 300);
+    }) };
+    const r = await correrCanario(app, caido, {
+      corridaId, bandeja: true,
+      esperar: async () => {
+        const fila = (await q<{ segundos: number }>(
+          'SELECT extract(epoch FROM (tomado_hasta - clock_timestamp()))::float AS segundos FROM catalog.e3_canario_casos WHERE corrida_id = $1', [corridaId]))[0]!;
+        segundosRestantes ??= fila.segundos;
+      },
+    });
+    expect(r).toMatchObject({ parked: 1 });
+    expect(segundosRestantes).toBeGreaterThan(240);
+  });
+
   it('[esc:canario-401] a mitad: corrida abortada, lo vinculado queda, el caso en curso vuelve a pendiente', async () => {
     const a = await escenario(); const b = await escenario(); const c = await escenario();
     const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
@@ -179,6 +230,36 @@ describe('E3-CAN-01 canario', () => {
       await admin.query("UPDATE catalog.e3_canario_casos SET estado='vinculado'");
       expect((await cerrarCanario(app, { corridaId })).veredicto).toBe('cero_errores');
       await expect(cerrarCanario(app, { corridaId })).rejects.toThrow('ya está cerrada');
+    });
+
+    it('rechaza cerrar mientras existe un lease vivo', async () => {
+      await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+      await admin.query(`UPDATE catalog.e3_canario_casos
+        SET tomado_por = $2, tomado_hasta = clock_timestamp() + interval '5 minutes'
+        WHERE corrida_id = $1`, [corridaId, randomUUID()]);
+      await expect(cerrarCanario(app, { corridaId })).rejects.toThrow(/lease vivo/i);
+      expect((await q<{ estado: string }>('SELECT estado FROM catalog.e3_canario_corridas'))[0]!.estado).toBe('abierta');
+    });
+
+    it('si falla la confirmación del caso, el vínculo y la decisión se revierten juntos', async () => {
+      const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+      await admin.query(`CREATE OR REPLACE FUNCTION public.fallar_confirmacion_canario() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN
+          IF NEW.estado = 'vinculado' THEN RAISE EXCEPTION 'fallo entre vinculo y confirmacion'; END IF;
+          RETURN NEW;
+        END $$`);
+      await admin.query(`CREATE TRIGGER fallar_confirmacion_canario
+        BEFORE UPDATE ON catalog.e3_canario_casos FOR EACH ROW EXECUTE FUNCTION public.fallar_confirmacion_canario()`);
+      try {
+        await expect(correrCanario(app, relectorOk({ [e.recurso]: e.sku }), { corridaId, bandeja: true }))
+          .rejects.toThrow('fallo entre vinculo y confirmacion');
+      } finally {
+        await admin.query('DROP TRIGGER IF EXISTS fallar_confirmacion_canario ON catalog.e3_canario_casos');
+        await admin.query('DROP FUNCTION IF EXISTS public.fallar_confirmacion_canario()');
+      }
+      expect(await q("SELECT 1 FROM catalog.identity_decisions WHERE recurso = $1 AND efecto = 'aplicar'", [e.recurso])).toHaveLength(0);
+      expect((await q<{ variant_id: string }>(
+        'SELECT variant_id FROM catalog.external_representations WHERE recurso = $1', [e.recurso]))[0]!.variant_id).toBe(e.pendiente);
     });
 
     it('sin errores el veredicto es cero_errores y la corrida queda cerrada', async () => {

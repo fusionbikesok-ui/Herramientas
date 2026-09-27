@@ -92,6 +92,20 @@ describe('E3-RAS-01 tabla de política de releerParaAutoSku', () => {
     expect(esperas[0]).toBe(5000); // primera espera respeta retryAfter=5s
   });
 
+  it('renueva el lease antes de esperar un Retry-After mayor al lease inicial', async () => {
+    const renovarLease = vi.fn(async (_esperaMs: number) => {});
+    const relector = relectorQueLanza(new ErrorBarridoReintentable('BULK_429', 300));
+    const r = await releerParaAutoSku(relector, e, {
+      esperar: async () => {},
+      azar: () => 0.5,
+      renovarLease,
+    } as Parameters<typeof releerParaAutoSku>[2]);
+
+    expect(r.tipo).toBe('parked');
+    expect(renovarLease).toHaveBeenCalledWith(300_000);
+    expect(renovarLease).toHaveBeenCalledTimes(2);
+  });
+
   it('respuesta sin id/status o SKU no legible → parked (incompleta)', async () => {
     const r1 = await releerParaAutoSku(relectorQueDevuelve(recursoDe(null)), e);
     expect(r1).toEqual({ tipo: 'parked', motivo: 'incompleta' });

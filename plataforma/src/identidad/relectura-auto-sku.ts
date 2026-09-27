@@ -36,6 +36,7 @@ const JITTER = 0.2;
 interface Dependencias {
   esperar?(ms: number): Promise<void>;
   azar?(): number;
+  renovarLease?(esperaMs: number): Promise<void>;
 }
 
 /**
@@ -63,6 +64,7 @@ async function esperarConBackoff(dep: Dependencias, intento: number, retryAfterS
   const ms = retryAfterS !== undefined
     ? retryAfterS * 1000
     : Math.round(BASE_MS * 2 ** intento * (1 - JITTER + 2 * JITTER * azar()));
+  await dep.renovarLease?.(ms);
   await esperar(ms);
 }
 
