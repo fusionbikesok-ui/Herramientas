@@ -11,6 +11,9 @@ import Fastify from '../plataforma/node_modules/fastify/fastify.js';
 import { bandejaIdentidadRouter } from '../routes/bandejaIdentidad.js';
 import { resolvePermiso, permiteAcceso } from '../lib/permisos.js';
 import { crearOrigenes, verificarInterna } from '../plataforma/src/seguridad/interna.ts';
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import { otrosAtributos } from '../plataforma/src/identidad/comparar.ts';
 
 // Importar lógica pura
 const mod = await import('../public/bandeja-identidad/logica.js');
@@ -45,13 +48,34 @@ function plataformaFalsa(estado = 200, cuerpoRespuesta = { ok: true }) {
   return { fetch, recibidos };
 }
 
-function app({ user, fetch, url = 'http://plataforma.interna:3100', kr = keyring }) {
+function app({ user, fetch, db, url = 'http://plataforma.interna:3100', kr = keyring }) {
   const a = express();
   a.use(express.json());
   a.use((req, _res, next) => { if (user) req.user = user; next(); });
-  a.use('/api/bandeja-identidad', bandejaIdentidadRouter({ url, keyring: kr, fetch }));
+  a.use('/api/bandeja-identidad', bandejaIdentidadRouter({ url, keyring: kr, db, fetch }));
   return a;
 }
+
+it('A: tamano_del_cuadro es talle y compara valores con separadores y mayúsculas normalizados', () => {
+  expect(otrosAtributos(
+    new Map([['color', 'Negro/Teal'], ['tamano_del_cuadro', 'M']]),
+    new Map([['color', 'Negro/teal'], ['talle', 'M']]),
+  )).toEqual([]);
+});
+
+it('B: el proxy completa la foto ML desde ml_publicaciones_cache cuando el detalle no la trae', async () => {
+  const rutaDb = './test/tmp-bandeja-identidad-foto.sqlite';
+  try { fs.unlinkSync(rutaDb); } catch { /* no existe */ }
+  const db = new Database(rutaDb);
+  db.exec('CREATE TABLE ml_publicaciones_cache (item_id TEXT, variation_id TEXT, thumbnail TEXT, permalink TEXT, color TEXT, talle TEXT)');
+  db.prepare('INSERT INTO ml_publicaciones_cache (item_id, thumbnail) VALUES (?, ?)').run('MLA-FOTO-44357', 'https://img.test/thumb.jpg');
+  const falso = plataformaFalsa(200, { publicacion: { recurso: 'MLA-FOTO-44357', foto: null } });
+  const respuesta = await request(app({ user: operador, fetch: falso.fetch, db })).get('/api/bandeja-identidad/casos/01a0d35c-0974-7c07-9e44-19e759f67daa');
+  expect(respuesta.status).toBe(200);
+  expect(respuesta.body.publicacion.foto).toBe('https://img.test/thumb.jpg');
+  db.close();
+  for (const f of [rutaDb, `${rutaDb}-wal`, `${rutaDb}-shm`]) try { fs.unlinkSync(f); } catch { /* no existe */ }
+});
 const operador = { id: 2, username: 'maria', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'write' }] };
 const auditor = { id: 3, username: 'auditor', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'read' }] };
 

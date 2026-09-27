@@ -945,7 +945,7 @@
     var resultadoElegido = S.resultadoElegido ? S.busqueda.filter(function (o) { return o.variant_id === S.sel; })[0] : null;
     var seleccionado = resultadoElegido || opciones.filter(function (o) { return o.variant_id === S.sel; })[0] || opciones[0];
     if (seleccionado && S.sel == null) S.sel = seleccionado.variant_id;
-    var resumenDiferencias = L.diferenciasVisibles(seleccionado && seleccionado.explicacion);
+    var resumenDiferencias = L.diferenciasVisibles(seleccionado && seleccionado.explicacion, d.publicacion);
     var diferencias = resumenDiferencias.diferencias;
     var head = el('header', 'caso-header', null, { tabindex: '-1' });
     var izquierda = el('div', 'caso-header-izquierda');
@@ -958,6 +958,10 @@
     var derecha = el('div', 'caso-header-derecha');
     derecha.appendChild(el('span', 'caso-prioridad', 'Prioridad: ' + (cs.grupo !== undefined ? L.GRUPO_NOMBRE[cs.grupo] : 'Resto')));
     if (d.publicacion && d.publicacion.link_ml) derecha.appendChild(el('a', 'caso-link-ml', 'Abrir en ML', { href: d.publicacion.link_ml, target: '_blank', rel: 'noopener noreferrer' }));
+    if (d.publicacion && d.publicacion.posible_duplicado) {
+      var dup = d.publicacion.posible_duplicado;
+      derecha.appendChild(el('span', 'posible-duplicado', 'Posible duplicado de ' + dup.recurso + ' (vinculada a ' + dup.sku + ')', { title: 'Posible duplicado de ' + dup.recurso + ' (vinculada a ' + dup.sku + ')' }));
+    }
     head.appendChild(derecha);
     root.appendChild(head);
     if (!d.publicacion) { root.appendChild(el('div', 'api-estado api-estado--error', L.copyError('caso_sin_publicacion'))); return; }
@@ -975,7 +979,8 @@
     else { var vacio = el('section', 'ficha ficha--busqueda'); vacio.appendChild(el('h2', null, 'CANDIDATO')); vacio.appendChild(el('button', 'btn', 'Buscar (/)', { type: 'button', id: 'btn-buscar', 'aria-keyshortcuts': '/' })); compare.appendChild(vacio); }
     root.appendChild(compare);
     var diff = el('section', 'diferencias', null, { 'aria-label': 'Diferencias entre publicación y candidato' }); diff.appendChild(el('h2', null, 'DIFERENCIAS'));
-    diferencias.forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca, null, { role: 'group', 'aria-label': x.nombre + ': ' + x.texto }); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
+    if (resumenDiferencias.sinAtributosMl) diff.appendChild(el('p', 'aviso-sin-atributos-ml', 'ML no tiene atributos cargados para esta publicación'));
+    else diferencias.forEach(function (x) { var row = el('div', 'diferencia diferencia--' + x.marca, null, { role: 'group', 'aria-label': x.nombre + ': ' + x.texto }); row.appendChild(el('span', 'mk', x.simbolo, { 'aria-label': x.texto })); row.appendChild(el('span', 'marca-texto', x.texto)); row.appendChild(el('strong', null, x.nombre)); row.appendChild(el('span', null, 'ML dice: ' + x.valorMl)); row.appendChild(el('span', null, 'Woo tiene: ' + x.valorCandidato)); diff.appendChild(row); });
     var iguales = resumenDiferencias.iguales;
     if (iguales) { var ib = el('button', 'btn-iguales', '✓ ' + iguales + ' atributos coinciden', { type: 'button', 'aria-expanded': 'false' }); diff.appendChild(ib); }
     root.appendChild(diff);

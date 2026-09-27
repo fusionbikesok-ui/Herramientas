@@ -24,10 +24,10 @@ const PREFIJO = '/internal/v1/identidad';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CONSULTAS = { casos: ['tipo', 'estado', 'grupo', 'cursor', 'limit'], variantes: ['q', 'caso_id'] };
 
-export function bandejaIdentidadRouter({ url, keyring, fetch: hacerFetch = globalThis.fetch, timeoutMs = 5000 } = {}) {
+export function bandejaIdentidadRouter({ url, keyring, db, fetch: hacerFetch = globalThis.fetch, timeoutMs = 5000 } = {}) {
   const router = Router();
 
-  async function reenviar(res, metodo, ruta, cuerpo, cabecerasExtra = {}) {
+  async function reenviar(res, metodo, ruta, cuerpo, cabecerasExtra = {}, transformar = (x) => x) {
     if (!url || !keyring) return res.status(503).json({ ok: false, code: 'bandeja_no_configurada', message: 'La plataforma no está configurada.' });
     const destino = new URL(ruta, url);
     const rutaFirmada = destino.pathname + destino.search; // exactamente lo que va por el cable
@@ -51,7 +51,19 @@ export function bandejaIdentidadRouter({ url, keyring, fetch: hacerFetch = globa
     }
     let json = null;
     try { json = await r.json(); } catch { /* cuerpo vacío o no JSON */ }
-    return res.status(r.status).json(json ?? { code: `plataforma_${r.status}` });
+    return res.status(r.status).json(transformar(json ?? { code: `plataforma_${r.status}` }));
+  }
+
+  function completarFotoDesdeCache(json) {
+    try {
+      const publicacion = json && json.publicacion;
+      if (!db || !publicacion || publicacion.foto || !publicacion.recurso) return json;
+      const fila = db.prepare(
+        'SELECT thumbnail FROM ml_publicaciones_cache WHERE item_id = ? AND thumbnail IS NOT NULL AND trim(thumbnail) <> ? LIMIT 1',
+      ).get(String(publicacion.recurso), '');
+      if (fila?.thumbnail) publicacion.foto = fila.thumbnail;
+    } catch { /* legado fail-open: una base vieja puede no tener la tabla */ }
+    return json;
   }
 
   const consulta = (req, nombres) => {
@@ -64,7 +76,7 @@ export function bandejaIdentidadRouter({ url, keyring, fetch: hacerFetch = globa
   router.get('/casos', (req, res) => reenviar(res, 'GET', `${PREFIJO}/casos${consulta(req, CONSULTAS.casos)}`));
   router.get('/casos/:id', (req, res) => {
     if (!UUID.test(req.params.id)) return res.status(404).json({ ok: false, code: 'caso_inexistente' });
-    return reenviar(res, 'GET', `${PREFIJO}/casos/${req.params.id}`);
+    return reenviar(res, 'GET', `${PREFIJO}/casos/${req.params.id}`, undefined, {}, completarFotoDesdeCache);
   });
   router.get('/variantes', (req, res) => reenviar(res, 'GET', `${PREFIJO}/variantes${consulta(req, CONSULTAS.variantes)}`));
 

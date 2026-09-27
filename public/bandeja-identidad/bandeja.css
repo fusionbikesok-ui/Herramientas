@@ -331,6 +331,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .caso-header-izquierda { overflow: hidden; }
 .caso-header-izquierda > * + *::before { content: '·'; color: var(--muted); margin-inline: var(--sp-1); }
 .caso-header-derecha { margin-inline-start: auto; flex: 0 0 auto; }
+.posible-duplicado { max-inline-size: 28rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
+.aviso-sin-atributos-ml { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .caso-id, .caso-titulo, .caso-prioridad, .caso-link-ml { flex: 0 0 auto; white-space: nowrap; }
 .caso-titulo { font-size: var(--fs-md); margin: 0; }
 .caso-tipo-ayuda { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

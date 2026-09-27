@@ -6,6 +6,25 @@ import vm from 'node:vm';
 // logica.js es un script clásico (UMD): en vitest se exporta como CommonJS-interop o cuelga de globalThis, como en el navegador.
 const mod = await import('../public/bandeja-identidad/logica.js');
 const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.BandejaLogica ?? globalThis.window?.BandejaLogica);
+
+it('sin atributos comparables de ML devuelve una sola señal y no cuenta filas faltantes', () => {
+  const r = L.diferenciasVisibles({ otros_atributos: [
+    { nombre: 'color', marca: 'falta', valorMl: '', valorCandidato: 'Negro' },
+    { nombre: 'syi_pymes_id', marca: 'falta', valorMl: '', valorCandidato: 'basura' },
+  ] });
+  expect(r.sinAtributosMl).toBe(true);
+  expect(r.diferencias).toEqual([]);
+});
+
+it('usa el flag del servidor: un atributo ML no comparable no dispara el aviso de atributos vacíos', () => {
+  const r = L.diferenciasVisibles({ otros_atributos: [] }, { atributos_ml_cargados: true });
+  expect(r.sinAtributosMl).toBe(false);
+});
+
+it('usa el flag del servidor para avisar cuando ML no tiene ningún atributo vigente', () => {
+  const r = L.diferenciasVisibles({ otros_atributos: [] }, { atributos_ml_cargados: false });
+  expect(r.sinAtributosMl).toBe(true);
+});
 const ev = (o = {}) => ({ key: 'j', target: { tagName: 'DIV', closest: () => null }, ...o });
 
 function cargarBandejaConDomInyectado(fetchImpl = () => Promise.resolve({ status: 200, json: async () => ({}) })) {
@@ -117,7 +136,7 @@ describe('bandeja: logica pura', () => {
   });
 
   it('cuenta N dif. de un resultado usando diferenciasVisibles', () => {
-    expect(L.diferenciasDeResultado({ explicacion: { atributos: [{ nombre: 'color', marca: 'difiere' }, { nombre: 'marca', marca: 'coincide' }], otros_atributos: [{ nombre: 'talle', marca: 'falta' }] } })).toBe(2);
+    expect(L.diferenciasDeResultado({ explicacion: { atributos: [{ nombre: 'color', marca: 'difiere', valorMl: 'Negro', valorCandidato: 'Rojo' }, { nombre: 'marca', marca: 'coincide', valorMl: 'Trek', valorCandidato: 'Trek' }], otros_atributos: [{ nombre: 'talle', marca: 'falta', valorMl: 'M', valorCandidato: '' }] } })).toBe(2);
   });
 
   it('navega resultados arriba/abajo de forma circular', () => {

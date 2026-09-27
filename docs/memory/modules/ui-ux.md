@@ -65,3 +65,5 @@ de pruebas UI.
 `scripts/qa/bandeja-real/levantar.mjs` emite la forma real (`marca`, valores normalizados y originales) y
 siembra atributos persistidos para `otros_atributos`. La estación usa scroll interno de diferencias y no
 scroll de página; queda pendiente validación visual responsive autorizada.
+- **Bandeja — atributos ML (2026-09-27):** la matriz y los conteos del front descartan atributos fuera de la lista comparable cerrada; cuando ML no declara ningún valor comparable, muestran una sola línea «ML no tiene atributos cargados para esta publicación». El detalle puede mostrar en una línea compacta «Posible duplicado de MLA… (vinculada a FB-…)».
+- **Bandeja — aviso de atributos ML (2026-09-27):** el aviso de publicación sin atributos usa `publicacion.atributos_ml_cargados` del servidor antes de filtrar los atributos comparables; así un atributo vigente como Peso evita el aviso aunque no forme parte de la matriz.

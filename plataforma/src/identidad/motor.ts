@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { decisionVigente } from './autoridad.ts';
 import { candidatosDe, construirWCIndex, ctDesdeApi, type IndiceWoo, type ItemMl, type ItemWoo } from './candidatos.ts';
+import { nombreCanonico } from './comparar.ts';
 import { tituloMlDe } from './modelo-ml.ts';
 import { normalizarSku, skuUnico } from './sku.ts';
 import type { Consultable } from '../db/pool.ts';
@@ -74,10 +75,13 @@ async function itemMlDe(tx: Consultable, rep: RepresentacionCaso, cont: Contador
   const atributos = (await tx.query<{ nombre_normalizado: string; valor: string }>(
     `SELECT nombre_normalizado, valor FROM catalog.model_attributes
       -- Esta lectura es por representation_id a propósito: el caso ML puede no tener modelo.
-      WHERE representation_id = $1 AND nombre_normalizado IN ('color', 'talle') AND vigente_hasta IS NULL`,
+      WHERE representation_id = $1 AND nombre_normalizado IN ('color', 'talle', 'tamano_del_cuadro') AND vigente_hasta IS NULL`,
     [rep.id])).rows;
-  const color = atributos.filter((a) => a.nombre_normalizado === 'color').map((a) => a.valor).join(' ');
-  const talle = atributos.filter((a) => a.nombre_normalizado === 'talle').map((a) => a.valor).join(' ');
+  const porNombre = (nombre: string) => atributos
+    .filter((a) => nombreCanonico(a.nombre_normalizado) === nombre)
+    .map((a) => a.valor).join(' ');
+  const color = porNombre('color');
+  const talle = porNombre('talle');
   const ct = ctDesdeApi(color, talle);
   return { ml_title: t.titulo, ml_es_variante: ct.colores.size > 0 || ct.talles.size > 0, ml_variations: '', _ct: ct };
 }
