@@ -53,6 +53,12 @@ describe('E3-CAN-01 canario', () => {
   const humana = (e: { caso: string; recurso: string }, variantId: string) => admin.query(
     `INSERT INTO catalog.identity_decisions (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
      VALUES ($1,$2,$3,$4,'','vincular',$5,'humano','jose','aplicar')`, [empresa, e.caso, ml, e.recurso, variantId]);
+  const humanaNegativa = async (e: { caso: string; recurso: string }, eleccion: string) => {
+    const auto = (await q<{ id: string }>(`SELECT id FROM catalog.identity_decisions WHERE recurso=$1 AND origen='auto_sku' AND efecto='aplicar'`, [e.recurso]))[0]!.id;
+    await admin.query(
+      `INSERT INTO catalog.identity_decisions (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, origen, actor, efecto, supersede_a)
+       VALUES ($1,$2,$3,$4,'',$5,'humano','jose','aplicar',$6)`, [empresa, e.caso, ml, e.recurso, eleccion, auto]);
+  };
 
   const item = (recurso: string, sku: string): ResultadoRelectura => ({
     tipo: 'recursos', recursos: [{ id: recurso, version: 'v1', lifecycle: 'open', projection: null,
@@ -154,6 +160,15 @@ describe('E3-CAN-01 canario', () => {
       const r = await cerrarCanario(app, { corridaId });
       expect(r.errores).toEqual([{ tipo: 'corregido_por_jose', recurso: a.recurso }]);
       expect(r.noErrores.redundante).toBe(1);
+      expect(r.veredicto).toBe('con_errores');
+    });
+
+    it.each(['omitir', 'mantener_omision', 'sin_candidato'])('humana %s cuenta como corregido_por_jose', async (eleccion) => {
+      const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+      await correrCanario(app, relectorOk({ [e.recurso]: e.sku }), { corridaId, bandeja: true });
+      await humanaNegativa(e, eleccion);
+      const r = await cerrarCanario(app, { corridaId });
+      expect(r.errores).toEqual([{ tipo: 'corregido_por_jose', recurso: e.recurso }]);
       expect(r.veredicto).toBe('con_errores');
     });
 

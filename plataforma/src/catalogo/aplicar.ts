@@ -159,19 +159,21 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
     const tituloObservado = tituloObservadoDe(ctx.canal, vinculo.modelo, p.modelo.titulo);
     const repId = await upsertRepresentacion(tx, empresa, ctx, obs, vinculo, p.archivar, tituloObservado);
     resumen.representaciones++;
-    if (ctx.intervencion && ctx.canal === 'mercadolibre' && vinculo.variante && obs.variacion === '') {
+    if (ctx.intervencion && ctx.canal === 'mercadolibre' && vinculo.variante && obs.tipo === 'vendible') {
       const decision = await decisionVigente(tx, ctx.cuenta, obs.recurso, obs.variacion, { bandeja: true, autoSku: 'aplicado' });
       if (decision?.fuente === 'humano' || decision?.fuente === 'auto_sku') {
       if (decision.eleccion === 'vincular' && decision.variantId === vinculo.variante) {
         const observado = normalizarSku(textoSku(obs.sku));
         const actual = (await tx.query<{ sku: string | null }>('SELECT sku FROM catalog.sellable_variants WHERE id = $1', [vinculo.variante])).rows[0]?.sku;
         const cambioSku = observado !== null && normalizarSku(actual) !== observado;
-        const tipo = cambioSku ? 'sku_cambiado' : formatoObservado?.resultado === 'cambio' ? 'formato_cambiado' : null;
+        const tipo = cambioSku ? 'sku_cambiado' : formatoObservado?.resultado === 'cambio' && formatoObservado.que === 'formato' ? 'formato_cambiado' : null;
         if (tipo) {
           const caso = (await tx.query<{ id: string }>(`INSERT INTO catalog.identity_cases (company_id, tipo, representation_id, variant_id, estado, detalle) VALUES ($1,$2,$3,$4,'intervention',$5) ON CONFLICT DO NOTHING RETURNING id`, [empresa, tipo, repId, vinculo.variante, JSON.stringify({ observado, sku: actual })])).rows[0];
           const caseId = caso?.id ?? (await tx.query<{ id: string }>('SELECT id FROM catalog.identity_cases WHERE representation_id=$1 AND tipo=$2 AND cerrado_en IS NULL', [repId, tipo])).rows[0]?.id;
           if (caseId) {
-            await tx.query(`INSERT INTO catalog.identity_commands(case_id,tipo,motivo) VALUES ($1,'pausar_publicacion',$2) ON CONFLICT DO NOTHING`, [caseId, tipo === 'sku_cambiado' ? 'SKU observado cambió' : 'formato observado cambió']);
+            if (tipo === 'formato_cambiado') {
+              await tx.query(`INSERT INTO catalog.identity_commands(case_id,tipo,motivo) VALUES ($1,'pausar_publicacion',$2) ON CONFLICT DO NOTHING`, [caseId, 'formato observado cambió']);
+            }
             await registrarEvento(tx, { companyId: empresa, actorType: 'system', actorId: 'catalogo', action: 'identidad.intervention', aggregateType: 'identity_case', aggregateId: caseId, correlationId: randomUUID(), reason: tipo });
           }
         }

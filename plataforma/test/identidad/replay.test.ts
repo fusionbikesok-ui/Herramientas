@@ -53,4 +53,13 @@ describe('E3-REP-01 replay', () => {
     const r = await correr();
     expect(r.autoSkuVsHumano).toEqual({ coinciden: 0, difieren: [] }); expect(r.veredicto).toBe('apto');
   });
+  it('una decisión creada después de hasta no cambia el resultado del corte', async () => {
+    const a = await variante(); const b = await variante();
+    await clave('MLA-CORTE', a, { eleccion: 'vincular', variante: b });
+    const hasta = new Date(Date.now() - 60_000);
+    const fecha = new Date(hasta.getTime() - 1_000).toISOString();
+    await admin.query('UPDATE catalog.identity_decisions SET creado_en = $2 WHERE recurso = $1 AND origen = \'humano\'', ['MLA-CORTE', fecha]);
+    const r = await replay(app, { empresa, muestra: [], catalogo: [], desde: new Date(Date.now() - 864e5), hasta });
+    expect(r.autoSkuVsHumano).toEqual({ coinciden: 0, difieren: [] });
+  });
 });

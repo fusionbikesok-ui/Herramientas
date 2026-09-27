@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -22,6 +22,15 @@ async function valor<T>(url: string, sql: string): Promise<T> {
 }
 
 describe('migraciones', () => {
+  it('toda migración posterior a 0027 configura lock_timeout', () => {
+    // 0001–0027 son excepciones explícitas: ya fueron aplicadas antes de esta regla y 0027 no se edita.
+    const excepciones = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
+    for (const nombre of readdirSync(DIR_MIGRACIONES).filter((f) => /^\d+_.*\.sql$/.test(f))) {
+      const numero = Number(nombre.slice(0, 4));
+      if (excepciones.has(numero)) continue;
+      expect(readFileSync(join(DIR_MIGRACIONES, nombre), 'utf8'), nombre).toMatch(/SET\s+lock_timeout\s*=/i);
+    }
+  });
   it('E1-SCH-02 migrar dos bases vacías da el mismo esquema', async () => {
     const a = await nueva(); const b = await nueva();
     expect(await migrar(a.urlMigrador, DIR_MIGRACIONES)).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql', '0009_informes_entregas.sql', '0010_webauthn_desafios.sql', '0011_intentos_recuperacion.sql', '0012_entregas_oculto.sql', '0013_catalogo.sql', '0014_catalogo_atributos.sql', '0015_catalogo_taxonomia.sql', '0016_taxonomia_mapeo_muchos_a_uno.sql', '0017_categorias_sin_equivalencia.sql', '0018_model_facets.sql', '0019_casos_de_modelo.sql', '0020_identidad.sql', '0021_titulo_observado.sql', '0022_casos_apartados.sql', '0023_e3_canario.sql', '0024_cupo_sombra_diferido.sql', '0025_e3_auto_sku_aplicar.sql', '0026_e3_canario_corridas.sql', '0027_e3_intervention.sql']);

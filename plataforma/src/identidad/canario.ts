@@ -75,18 +75,26 @@ export async function cerrarCanario(pool: pg.Pool, o: { corridaId: string }): Pr
     const corrida = (await tx.query<{ estado: string; congelado_en: Date }>(`SELECT estado, congelado_en FROM catalog.e3_canario_corridas WHERE id=$1 FOR UPDATE`, [o.corridaId])).rows[0];
     if (!corrida) throw new Error('canario: corrida inexistente');
     if (corrida.estado === 'cerrada') throw new Error('canario: la corrida ya está cerrada');
-    const filas = (await tx.query<{ recurso: string; estado: string; detalle: { motivo?: string } | null; humana: string | null; variant_id_congelada: string }>(
+    const filas = (await tx.query<{ recurso: string; estado: string; detalle: { motivo?: string } | null; humana: string | null; humanaEleccion: string | null; variant_id_congelada: string }>(
       `SELECT k.recurso, k.estado, k.detalle, k.variant_id_congelada,
               (SELECT d.variant_id FROM catalog.identity_decisions d
                 WHERE d.channel_account_id = k.channel_account_id AND d.recurso = k.recurso AND d.variacion_normalizada = k.variacion_normalizada
-                  AND d.origen = 'humano' AND d.efecto = 'aplicar' AND d.eleccion = 'vincular' AND d.creado_en >= $2
-                ORDER BY d.creado_en DESC LIMIT 1) AS humana
+                  AND d.origen = 'humano' AND d.efecto = 'aplicar'
+                  AND d.eleccion IN ('vincular', 'omitir', 'mantener_omision', 'sin_candidato')
+                  AND d.creado_en >= $2 AND d.superada_en IS NULL
+                ORDER BY d.creado_en DESC LIMIT 1) AS humana,
+              (SELECT d.eleccion FROM catalog.identity_decisions d
+                WHERE d.channel_account_id = k.channel_account_id AND d.recurso = k.recurso AND d.variacion_normalizada = k.variacion_normalizada
+                  AND d.origen = 'humano' AND d.efecto = 'aplicar'
+                  AND d.eleccion IN ('vincular', 'omitir', 'mantener_omision', 'sin_candidato')
+                  AND d.creado_en >= $2 AND d.superada_en IS NULL
+                ORDER BY d.creado_en DESC LIMIT 1) AS "humanaEleccion"
          FROM catalog.e3_canario_casos k WHERE k.corrida_id = $1`, [o.corridaId, corrida.congelado_en])).rows;
     const errores: ClasificacionD6['errores'] = [];
     const noErrores = { redundante: 0, intervention: 0, dejo_de_ser_unico: 0, no_disponible: 0 };
     for (const f of filas) {
-      if (f.humana && f.humana !== f.variant_id_congelada) errores.push({ tipo: 'corregido_por_jose', recurso: f.recurso });
-      else if (f.humana) noErrores.redundante++;
+      if (f.humanaEleccion && (f.humanaEleccion !== 'vincular' || f.humana !== f.variant_id_congelada)) errores.push({ tipo: 'corregido_por_jose', recurso: f.recurso });
+      else if (f.humanaEleccion) noErrores.redundante++;
       else if (f.estado === 'parked') errores.push({ tipo: 'parked_sin_resolver', recurso: f.recurso });
       else if (f.estado === 'intervention') noErrores.intervention++;
       else if (f.estado === 'bandeja') { if (f.detalle?.motivo === 'sku_no_unico_o_cambiado') noErrores.dejo_de_ser_unico++; else noErrores.no_disponible++; }

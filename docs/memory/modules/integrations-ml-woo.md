@@ -24,6 +24,8 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 
 ## Cuándo actualizar
 
+Las migraciones de `plataforma` numeradas después de 0027 deben comenzar con `SET lock_timeout`; 0001–0027 son excepciones históricas porque ya fueron aplicadas antes de esta regla. `0027_e3_intervention.sql` carece de esa directiva y no se edita.
+
 ML distingue `elegible`, `no_elegible` e `inconcluso`: faltan `shipping.id` o
 `logistic_type` son inconclusos/fail-open; solo logística externa explícita permite
 invalidar/podar. El cron poda ausencias únicamente con listado confiable.

@@ -23,12 +23,14 @@ export async function replay(pool: pg.Pool, o: OpcionesCalibracion): Promise<Res
        FROM (SELECT DISTINCT ON (channel_account_id, recurso, variacion_normalizada) *
                FROM catalog.identity_decisions
               WHERE company_id = $1 AND origen = 'auto_sku' AND eleccion = 'vincular' AND variant_id IS NOT NULL
+                AND creado_en < $3 AND (superada_en IS NULL OR superada_en > $3)
               ORDER BY channel_account_id, recurso, variacion_normalizada, creado_en DESC) a
        JOIN catalog.identity_decisions h
          ON h.channel_account_id = a.channel_account_id AND h.recurso = a.recurso AND h.variacion_normalizada = a.variacion_normalizada
-        AND h.origen = 'humano' AND h.efecto = 'aplicar' AND h.superada_en IS NULL
+        AND h.origen = 'humano' AND h.efecto = 'aplicar'
         AND h.eleccion IN ('vincular', 'sin_candidato', 'omitir', 'mantener_omision')
         AND h.creado_en >= $2 AND h.creado_en < $3
+        AND (h.superada_en IS NULL OR h.superada_en > $3)
       ORDER BY a.recurso`, [o.empresa, o.desde, o.hasta])).rows;
   const difieren: ResultadoReplay['autoSkuVsHumano']['difieren'] = [];
   let coinciden = 0;
