@@ -118,6 +118,12 @@ Los altos:
 
 **Pregunta 2:** la migración 0027, ya aplicada en producción, no tiene `lock_timeout`. No se puede editar porque cambiaría el checksum. Supongo que **alcanza con exigir `lock_timeout` a las migraciones nuevas**, con un test que lo verifique. ¿OK?
 
+**Estado a las 08:20 UTC:**
+- La rama `fix/e3c3-segunda-opinion` (`a90cbd18`) tiene arreglados 7 de los 10 hallazgos.
+- Codex sol encontró 3 defectos altos más, que bloquean encender el canario: un aborto concurrente, un cierre con un lease vencido y la selección de cuenta ML. Se arreglan en la corrida C.
+- Con los flags apagados no hay riesgo en producción: el canario es un CLI manual.
+- La migración 0030 es aditiva y compatible con la imagen actual.
+
 **Pregunta 4:** el replay contractual necesita la muestra canónica de **299 casos congelados**. En el repo hay solo `muestra-30.json`. ¿Dónde está el artefacto de 299, o lo generamos? Mientras tanto, el CLI falla cerrado: nunca da "apto" sin la muestra completa y con hash verificado.
 
 **Pendientes tuyos para encender el canario (fuera del código):**
