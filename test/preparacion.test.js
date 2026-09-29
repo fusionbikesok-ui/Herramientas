@@ -891,9 +891,22 @@ describe('preparacion flujo', () => {
     expect(tareas.body.data).toHaveLength(1);
     expect(tareas.body.data[0]).toMatchObject({ sku: 'CUB-1', unidades: item.cantidad_esperada - 1, estado: 'pendiente', creada_por: 'tester' });
     expect(tareas.body.requiere_revision_salida).toBe(true);
+    // Retry simple mientras sigue verificado no es una nueva confirmación ni duplica tarea.
+    await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_etiquetas_manuales WHERE item_id=?').get(item.id).n).toBe(1);
+    db.prepare("UPDATE preparaciones SET estado='completada',completado_en=? WHERE id=?").run(new Date().toISOString(), id);
+    db.prepare('DELETE FROM preparacion_claims WHERE preparacion_id=?').run(id);
     const hecha = await request(app).post(`/api/preparacion/${id}/etiquetas-manuales/${tareas.body.data[0].id}/hecha`).send({});
+    expect(hecha.status).toBe(200);
     expect(hecha.body.data).toMatchObject({ estado: 'hecha', hecha_por: 'tester' });
     expect(hecha.body.data.hecha_en).toBeTruthy();
+    // Si se vuelve a abrir la línea y otra vez se confirma manualmente, es una nueva tarea.
+    db.prepare("UPDATE preparaciones SET estado='en_preparacion',completado_en=NULL WHERE id=?").run(id);
+    db.prepare("UPDATE preparacion_items SET estado_item='pendiente',confirmado_manual=0,cantidad_escaneada=0 WHERE id=?").run(item.id);
+    await tomarPorApi(app, id);
+    const nueva = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
+    expect(nueva.status).toBe(200);
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_etiquetas_manuales WHERE item_id=?').get(item.id).n).toBe(2);
   });
 
   it('confirmar-manual sin motivo → 400, no toca el ítem (MUTATION: si se saca el chequeo de motivo, este test se pone en rojo)', async () => {
@@ -3864,5 +3877,15 @@ describe('Preparación vacía', () => {
     expect(r.status).toBe(400);
     expect(r.body.code).toBe('PREPARACION_SIN_ITEMS');
     expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
+  });
+});
+
+describe('UI de confirmación manual diferida', () => {
+  it('conserva el preparationId al enviar y recarga detalle/tareas tras éxito', () => {
+    const html = fs.readFileSync(new URL('../public/preparacion/index.html', import.meta.url), 'utf8');
+    expect(html).toMatch(/var pend=\{preparacionId:PREP\.id,itemId:itemId/);
+    expect(html).toMatch(/enviarConfirmacionManual\(itemId,motivo,detalleTexto,pend\.pese,pend\.preparacionId\)/);
+    expect(html).toMatch(/if\(r\.body\.ok&&PREP&&PREP\.id===preparacionId\)\{\s*try\{await refrescarDetalle\(\)/);
+    expect(html).toMatch(/api\('\/'\+PREP\.id\+'\/etiquetas-manuales'\)/);
   });
 });

@@ -149,7 +149,9 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
 
 - `confirmar-manual` conserva el motivo/autoría existente y crea una tarea durable con producto y
   unidades que no se escanearon antes de completar el ítem. La tarea se puede consultar y marcar
-  hecha con usuario/fecha; no bloquea el despacho y una tarea pendiente queda para revisión.
+  hecha con usuario/fecha; no bloquea el despacho y una tarea pendiente queda para revisión. Los
+  retries sobre la línea verificada no duplican, pero cada nueva confirmación después de reabrirla
+  crea su propio registro.
 - No existe backfill automático para confirmaciones históricas. Preparaciones sin líneas no se
   pueden iniciar desde pedidos del canal ni completar manualmente.
 - El callback diferido de 4,5 segundos fija el ID de preparación al programarse y no usa un PREP

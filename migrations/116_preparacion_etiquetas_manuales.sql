@@ -9,8 +9,7 @@ CREATE TABLE IF NOT EXISTS preparacion_etiquetas_manuales (
   creada_por TEXT,
   creada_en TEXT NOT NULL,
   hecha_por TEXT,
-  hecha_en TEXT,
-  UNIQUE(item_id)
+  hecha_en TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_prep_etiquetas_manuales_estado
   ON preparacion_etiquetas_manuales(estado, preparacion_id);

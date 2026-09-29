@@ -1904,7 +1904,8 @@ async function refrescarDetalle(){
 
 async function marcarEtiquetaManualHecha(prepId,taskId){
   if(!PREP||PREP.id!==prepId)return;
-  try{var r=await api('/'+prepId+'/etiquetas-manuales/'+taskId+'/hecha',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!r.body.ok)throw new Error(r.body.error||'falló');await refrescarDetalle();}
+  try{var r=await api('/'+prepId+'/etiquetas-manuales/'+taskId+'/hecha',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(!r.body.ok)throw new Error(r.body.error||'falló');await refrescarDetalle();}
   catch(e){flash('bad','No se pudo marcar la etiqueta como hecha. Revisá la conexión y reintentá.');}
 }
 
@@ -2105,7 +2106,10 @@ async function enviarConfirmacionManual(itemId,motivo,detalleTexto,pese,preparac
     flash('warn','No se confirmó. Revisá la unidad y volvé a escanearla.');
     return;
   }
-  if(r.body.ok&&PREP&&PREP.id===preparacionId&&mergeItemLocal(r.body.item)){renderDetalle();refrescarSoloActividad();}
+  if(r.body.ok&&PREP&&PREP.id===preparacionId){
+    try{await refrescarDetalle();}
+    catch(e){flash('bad','La confirmación se guardó, pero no pudimos actualizar las tareas. Volvé a cargar el pedido.');}
+  }
   else if(!r.body.ok&&PREP&&PREP.id===preparacionId){flash('bad',r.body.error||'No se pudo confirmar sin código');refrescarDetalle();}
 }
 

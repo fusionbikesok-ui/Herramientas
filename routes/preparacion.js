@@ -2859,7 +2859,7 @@ export function preparacionRouter(db, cfg) {
     db.transaction(() => {
       const sinEscanear = Math.max(0, Number(item.cantidad_esperada) - Number(item.cantidad_escaneada));
       if (!yaVerificado && sinEscanear > 0) {
-        db.prepare(`INSERT OR IGNORE INTO preparacion_etiquetas_manuales
+        db.prepare(`INSERT INTO preparacion_etiquetas_manuales
           (preparacion_id,item_id,sku,nombre,unidades,estado,creada_por,creada_en)
           VALUES (?,?,?,?,?,'pendiente',?,?)`)
           .run(prep.id, item.id, item.sku || '', item.nombre || '', sinEscanear, req.user?.username || null, now());
