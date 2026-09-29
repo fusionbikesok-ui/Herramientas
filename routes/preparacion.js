@@ -73,7 +73,8 @@ function encolarSalidaWoo(db, lote, usuario) {
 // 'despachada_sin_verificar' y 'pendiente_deposito' quedan AFUERA a propósito: siguen
 // siendo trabajables (la primera, para que después /completar la pueda subir a
 // 'completada' si se verifica todo; la segunda, para que el depósito termine su parte).
-const ESTADOS_BLOQUEADOS_PARA_TRABAJAR = new Set(['completada', 'cerrada_sin_evidencia']);
+// Las canceladas se resuelven por el circuito de devoluciones o el historial.
+const ESTADOS_BLOQUEADOS_PARA_TRABAJAR = new Set(['completada', 'cerrada_sin_evidencia', 'cancelada_sin_retiro_registrado', 'cancelada_pendiente_devolucion']);
 
 function encolarEtiquetaInterna(db, prep, usuario) {
   const grupo = prep.pack_id || prep.clave;
@@ -94,6 +95,7 @@ function bloqueoPorEstado(prep) {
   if (prep.estado === 'cerrada_sin_evidencia') {
     return 'esta preparación está cerrada — pedile a un compañero que la reabra antes de seguir';
   }
+  if (prep.estado === 'cancelada_sin_retiro_registrado') return 'el pedido fue cancelado y no hay unidades levantadas registradas';
   return 'ya completada';
 }
 
@@ -599,11 +601,11 @@ function preparacionEstaVerificada(db, prep) {
 export function marcarPreparacionEnviada(db, clave, { usuario = null, detalle = {} } = {}) {
   db.prepare('UPDATE preparaciones SET woo_paso2_pendiente=0 WHERE clave=?').run(clave);
   const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(clave);
-  if (!prep || prep.estado === 'cerrada_sin_evidencia') return null;
+  if (!prep || !['en_preparacion', 'pendiente_deposito'].includes(prep.estado)) return null;
 
   const estadoFinal = preparacionEstaVerificada(db, prep) ? 'completada' : 'despachada_sin_verificar';
   const cambio = db.prepare(
-    "UPDATE preparaciones SET estado=?, completado_en=? WHERE id=? AND estado<>'cerrada_sin_evidencia'"
+    "UPDATE preparaciones SET estado=?, completado_en=? WHERE id=? AND estado IN ('en_preparacion','pendiente_deposito')"
   ).run(estadoFinal, now(), prep.id);
   if (!cambio.changes) return null; // se cerró sin evidencia justo entre el SELECT y el UPDATE
 
@@ -944,6 +946,171 @@ export function asegurarDevolucionPendiente(db, prep, canal) {
   })();
 }
 
+const reconciliacionesActivas = new WeakSet();
+
+function respuestaEstadoReconciliacion(canal, respuesta, cfg) {
+  const orden = respuesta?.order || respuesta?.orden || respuesta?.data || respuesta || null;
+  const estadoOrden = String(orden?.status || '').toLowerCase();
+  if (['cancelled', 'canceled'].includes(estadoOrden)) return { accion: 'cancelada', estado: estadoOrden };
+  if (canal === 'web') {
+    const estadosDespacho = ['completed', 'retiradoenfusion', 'shipped', 'delivered', String(cfg?.enviadoAndreaniStatus || 'enviadoandreani').toLowerCase()];
+    const estadosPendientes = ['pending', 'processing', 'on-hold', 'failed', 'refunded', String(cfg?.andreaniStatus || 'lpaandreani').toLowerCase()];
+    if (estadosDespacho.includes(estadoOrden)) {
+      return { accion: 'despachada', estado: estadoOrden };
+    }
+    if (estadosPendientes.includes(estadoOrden)) {
+      return { accion: 'sin_cambio', estado: estadoOrden };
+    }
+    return { accion: 'ambiguo', estado: estadoOrden || null };
+  }
+  const envio = respuesta?.shipment || respuesta?.envio || (orden?.shipping?.status ? orden.shipping : null);
+  if (envioMlYaSalio(envio)) {
+    return { accion: 'despachada', estado: envio?.status || estadoOrden };
+  }
+  if (['paid', 'confirmed', 'payment_in_process', 'partially_paid', 'pending', 'handling', 'ready_to_ship'].includes(estadoOrden)) {
+    return { accion: 'sin_cambio', estado: envio?.status ? `${estadoOrden}/${envio.status}` : estadoOrden };
+  }
+  return { accion: 'ambiguo', estado: estadoOrden || null };
+}
+
+function registrarIntentoReconciliacion(db, prep, estadoRemoto, error = null) {
+  db.prepare(`INSERT INTO preparacion_reconciliaciones (preparacion_id,intentado_en,estado_remoto,error)
+    VALUES (?,?,?,?) ON CONFLICT(preparacion_id) DO UPDATE SET
+      intentado_en=excluded.intentado_en, estado_remoto=excluded.estado_remoto, error=excluded.error`)
+    .run(prep.id, now(), estadoRemoto, error);
+}
+
+function aplicarCancelacionReconciliada(db, prep, estadoRemoto) {
+  return db.transaction(() => {
+    const actual = db.prepare("SELECT id,estado FROM preparaciones WHERE id=? AND estado='en_preparacion'").get(prep.id);
+    if (!actual) return false;
+    const items = itemsLevantados(db, prep.id);
+    const ts = now();
+    if (items.length) {
+      let dev = db.prepare('SELECT * FROM preparacion_devoluciones WHERE preparacion_id=?').get(prep.id);
+      if (!dev) {
+        dev = db.prepare(`INSERT INTO preparacion_devoluciones (preparacion_id,estado,motivo,creado_en)
+          VALUES (?,'pendiente',?,?) RETURNING *`).get(prep.id, `canal:${estadoRemoto || 'cancelled'}`, ts);
+      }
+      const insertarItem = db.prepare(`INSERT OR IGNORE INTO preparacion_devolucion_items
+        (devolucion_id,item_id,sku,cantidad) VALUES (?,?,?,?)`);
+      for (const item of items) {
+        insertarItem.run(dev.id, item.id, item.sku || null,
+          Math.max(1, Number(item.cantidad_escaneada) || Number(item.cantidad_esperada) || 1));
+      }
+      const cambio = db.prepare("UPDATE preparaciones SET estado='cancelada_pendiente_devolucion' WHERE id=? AND estado='en_preparacion'").run(prep.id);
+      if (!cambio.changes) return false;
+      registrarEvento(db, { preparacionId: prep.id, tipo: 'devolucion_pendiente', usuario: null,
+        detalle: { items: items.length, origen: 'reconciliacion_estado_canal' }, failClosed: true });
+      return true;
+    }
+    const cambio = db.prepare("UPDATE preparaciones SET estado='cancelada_sin_retiro_registrado', completado_en=? WHERE id=? AND estado='en_preparacion'").run(ts, prep.id);
+    if (!cambio.changes) return false;
+    registrarEvento(db, { preparacionId: prep.id, tipo: 'cancelada_sin_retiro_registrado', usuario: null,
+      detalle: { estado_remoto: estadoRemoto, origen: 'reconciliacion_estado_canal' }, failClosed: true });
+    return true;
+  })();
+}
+
+function aplicarDespachoReconciliado(db, prep, estadoRemoto) {
+  return db.transaction(() => {
+    const actual = db.prepare("SELECT id,estado FROM preparaciones WHERE id=? AND estado='en_preparacion'").get(prep.id);
+    if (!actual) return false;
+    const estadoFinal = preparacionEstaVerificada(db, actual) ? 'completada' : 'despachada_sin_verificar';
+    const cambio = db.prepare("UPDATE preparaciones SET estado=?, completado_en=? WHERE id=? AND estado='en_preparacion'")
+      .run(estadoFinal, now(), prep.id);
+    if (!cambio.changes) return false;
+    const tipo = estadoFinal === 'despachada_sin_verificar'
+      ? 'despachado_sin_verificar'
+      : 'despacho_confirmado_por_reconciliacion';
+    registrarEvento(db, { preparacionId: prep.id, tipo, usuario: null,
+      detalle: { estado_remoto: estadoRemoto, origen: 'reconciliacion_estado_canal' }, failClosed: true });
+    return true;
+  })();
+}
+
+/** Consulta pedidos abiertos directamente en su canal y reconcilia solo salidas/cancelaciones explícitas. */
+export async function reconciliarPreparacionesAbiertas(db, cfg, {
+  limite = 50,
+  offset = 0,
+  simular = false,
+  consultarWoo = async ({ prep, cfg: config }) => wooFetch(config.woo, `/orders/${encodeURIComponent(prep.wc_order_id)}`),
+  consultarMl = async ({ prep, cfg: config, db: database }) => {
+    const ordenResp = await mlFetch(database, config.ml, 'get', `/orders/${encodeURIComponent(prep.ml_order_id)}`);
+    const orden = ordenResp?.data;
+    if (!orden) throw new Error('respuesta de orden ML sin datos');
+    let shipment = null;
+    if (orden.shipping?.id && !['cancelled', 'canceled'].includes(String(orden.status || '').toLowerCase())) {
+      const shipmentResp = await mlFetch(database, config.ml, 'get', `/shipments/${encodeURIComponent(orden.shipping.id)}`, null, { headers: { 'x-format-new': 'true' } });
+      shipment = shipmentResp?.data || null;
+      if (!shipment) throw new Error('respuesta de envío ML sin datos');
+    }
+    return { order: orden, shipment };
+  },
+} = {}) {
+  if (reconciliacionesActivas.has(db)) return { solapada: true, consultadas: 0, cerradas: 0, canceladas: 0, sinCambio: 0, errores: 0 };
+  reconciliacionesActivas.add(db);
+  const resultado = { solapada: false, simulacion: Boolean(simular), consultadas: 0, cerradas: 0, canceladas: 0, sinCambio: 0, errores: 0, previsualizacion: [] };
+  try {
+    const n = Math.max(1, Math.min(100, Number(limite) || 50));
+    const desde = Math.max(0, Math.min(1000000, Number(offset) || 0));
+    const candidatas = db.prepare(`SELECT p.* FROM preparaciones p
+      LEFT JOIN preparacion_reconciliaciones r ON r.preparacion_id=p.id
+      WHERE p.estado='en_preparacion'
+      ORDER BY CASE WHEN r.intentado_en IS NULL THEN 0 ELSE 1 END, r.intentado_en, p.creado_en, p.id
+      LIMIT ? OFFSET ?`).all(n, desde);
+    for (const prep of candidatas) {
+      resultado.consultadas++;
+      let respuesta;
+      try {
+        if (prep.canal === 'web' && prep.wc_order_id) {
+          respuesta = await consultarWoo({ prep, cfg, db });
+        } else if (prep.canal === 'ml' && prep.ml_order_id) {
+          respuesta = await consultarMl({ prep, cfg, db });
+        } else {
+          throw new Error('identificador o canal de pedido ausente');
+        }
+        const resuelto = respuestaEstadoReconciliacion(prep.canal, respuesta, cfg);
+        if (resuelto.accion === 'ambiguo') {
+          const error = `estado remoto ambiguo: ${resuelto.estado ?? 'sin estado'}`;
+          if (!simular) registrarIntentoReconciliacion(db, prep, resuelto.estado, error);
+          resultado.errores++;
+          if (simular) resultado.previsualizacion.push({ id: prep.id, clave: prep.clave, canal: prep.canal, estado_remoto: resuelto.estado, accion: 'mantener_abierta', error });
+          continue;
+        }
+        if (!simular) registrarIntentoReconciliacion(db, prep, resuelto.estado, null);
+        if (resuelto.accion === 'sin_cambio') {
+          resultado.sinCambio++;
+          if (simular) resultado.previsualizacion.push({ id: prep.id, clave: prep.clave, canal: prep.canal, estado_remoto: resuelto.estado, accion: 'mantener_abierta' });
+          continue;
+        }
+        if (simular) {
+          const siguiente = resuelto.accion === 'despachada'
+            ? (preparacionEstaVerificada(db, prep) ? 'completada' : 'despachada_sin_verificar')
+            : (itemsLevantados(db, prep.id).length ? 'cancelada_pendiente_devolucion' : 'cancelada_sin_retiro_registrado');
+          resultado.previsualizacion.push({ id: prep.id, clave: prep.clave, canal: prep.canal, estado_remoto: resuelto.estado, estado_actual: prep.estado, estado_previsto: siguiente });
+          continue;
+        }
+        const cambio = resuelto.accion === 'despachada'
+          ? aplicarDespachoReconciliado(db, prep, resuelto.estado)
+          : aplicarCancelacionReconciliada(db, prep, resuelto.estado);
+        if (cambio) {
+          if (resuelto.accion === 'despachada') resultado.cerradas++;
+          else resultado.canceladas++;
+        }
+      } catch (error) {
+        if (!simular) registrarIntentoReconciliacion(db, prep, null, error?.message || String(error));
+        resultado.errores++;
+        if (simular) resultado.previsualizacion.push({ id: prep.id, clave: prep.clave, canal: prep.canal, accion: 'mantener_abierta', error: error?.message || String(error) });
+        console.error(`reconciliarPreparacionesAbiertas: preparación ${prep.id}:`, error?.message || error);
+      }
+    }
+    return resultado;
+  } finally {
+    reconciliacionesActivas.delete(db);
+  }
+}
+
 // Busca en preparacion_eventos quién subió una foto, mirando el evento 'foto_subida'
 // que quedó registrado con ese foto_id en su detalle_json. Fail-open a propósito (igual
 // que registrarEvento): si json_extract fallara (JSON1 no disponible, detalle_json
@@ -1094,7 +1261,7 @@ export function preparacionRouter(db, cfg) {
       // ya mandado) aunque no estaba verificado — no es "pendiente de trabajo" (ya se
       // despachó, no tiene sentido que el sector lo vuelva a ver acá), se consulta desde
       // GET /despachadas-sin-verificar.
-      const RESUELTAS = ['completada', 'pendiente_deposito', 'cerrada_sin_evidencia', 'despachada_sin_verificar'];
+      const RESUELTAS = ['completada', 'pendiente_deposito', 'cerrada_sin_evidencia', 'despachada_sin_verificar', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado'];
       const data = rows
         .map(row => {
           const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(row.clave);
@@ -1440,7 +1607,7 @@ export function preparacionRouter(db, cfg) {
       db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
         VALUES (?,?,?,?,?,?)`).run(prep.id, null, 'despacho_confirmado', req.user.username,
           JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: null, formato: '50x25mm', etiqueta_momento: 'evidencia_completa' }), ts);
-      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')")
+      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado')")
         .run(prep.id);
       return { repetido: false, etiquetaId: null };
     })();
@@ -1468,7 +1635,7 @@ export function preparacionRouter(db, cfg) {
       const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=?, confirmacion_idempotencia=? WHERE id=? AND estado!='confirmado' AND (confirmacion_idempotencia IS NULL OR confirmacion_idempotencia=?)").run(req.user.username, ts, ts, idempotencia, control.id, idempotencia);
       if (!cambio.changes) return { repetido: true };
       registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_confirmado_manual', usuario: req.user.username, detalle: { grupo_clave: grupo, motivo, nota: nota || null, codigo_verificado: false }, failClosed: true });
-      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')").run(prep.id);
+      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado')").run(prep.id);
       return { repetido: false };
     })();
     return res.json({ ok: true, ...resultado, control: db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo) });
@@ -1489,7 +1656,7 @@ export function preparacionRouter(db, cfg) {
       const grupo = prep.pack_id || prep.clave;
       db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en, confirmado_por, confirmado_en, confirmacion_idempotencia) VALUES (?, 'confirmado', ?, ?, ?, ?, ?) ON CONFLICT(grupo_clave) DO UPDATE SET estado='confirmado', confirmado_por=excluded.confirmado_por, confirmado_en=excluded.confirmado_en, actualizado_en=excluded.actualizado_en, confirmacion_idempotencia=COALESCE(despacho_controles.confirmacion_idempotencia, excluded.confirmacion_idempotencia)").run(grupo, ts, ts, req.user.username, ts, `regularizacion:${fecha}:${grupo}`);
       registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_regularizado_sin_evidencia', usuario: req.user.username, detalle: { grupo_clave: grupo, fecha, motivo, evidencia: 'no_disponible', herramienta_inhabilitada: true }, failClosed: true });
-      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia')").run(prep.id);
+      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado')").run(prep.id);
       return n + 1;
     }, 0))();
     res.json({ ok: true, fecha, regularizadas: cantidad });
@@ -2243,7 +2410,7 @@ export function preparacionRouter(db, cfg) {
         (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
         (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id AND borrado_en IS NULL) AS total_fotos
       FROM preparaciones p
-      WHERE p.estado IN ('completada','pendiente_deposito')
+      WHERE p.estado IN ('completada','pendiente_deposito','cancelada_sin_retiro_registrado')
       ORDER BY COALESCE(p.completado_en, p.creado_en) DESC LIMIT 200
     `).all();
 
@@ -2296,10 +2463,8 @@ export function preparacionRouter(db, cfg) {
   // revisor). Tampoco se mezcla con GET /historial (que solo trae 'completada'/
   // 'pendiente_deposito'): mezclarlo ahí sería volver a "indistinguible de una verificada".
   //
-  // Filtrado por canal='web', igual que el conteo de GET /seguimientos (línea ~742): hoy no
-  // hay ninguna fila 'ml' en este estado (el flujo ML no lo produce), pero si algún día lo
-  // hiciera, contador y lista tienen que coincidir — antes discrepaban en silencio (hallazgo
-  // del revisor).
+  // Incluye ambos canales: un despacho confirmado por reconciliación ML debe quedar
+  // consultable con el mismo estado que un envío web.
   //
   // Este estado NO es terminal (POST /:id/completar lo puede subir a 'completada' si se
   // verifica después) y a propósito no tiene ventana temporal — la lista completa es el
@@ -2308,14 +2473,14 @@ export function preparacionRouter(db, cfg) {
   // aplica el mismo patrón acá (hallazgo del revisor).
   router.get('/despachadas-sin-verificar', (req, res) => {
     const total = db.prepare(
-      "SELECT COUNT(*) n FROM preparaciones WHERE canal='web' AND estado='despachada_sin_verificar'"
+      "SELECT COUNT(*) n FROM preparaciones WHERE estado='despachada_sin_verificar'"
     ).get().n;
     const data = db.prepare(`
       SELECT p.*,
         (SELECT COUNT(*) FROM preparacion_items WHERE preparacion_id=p.id) AS total_items,
         (SELECT COUNT(*) FROM preparacion_fotos WHERE preparacion_id=p.id AND borrado_en IS NULL) AS total_fotos
       FROM preparaciones p
-      WHERE p.canal='web' AND p.estado='despachada_sin_verificar'
+      WHERE p.estado='despachada_sin_verificar'
       ORDER BY p.creado_en DESC LIMIT 200
     `).all();
     res.json({ ok: true, data, total, truncado: total > data.length });

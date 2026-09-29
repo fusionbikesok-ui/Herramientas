@@ -1351,14 +1351,14 @@ describe('preparacion flujo', () => {
       expect(r.body.truncado).toBe(true);
     });
 
-    it('GET /despachadas-sin-verificar solo cuenta/lista canal web, igual que el chip de GET /seguimientos', async () => {
+    it('GET /despachadas-sin-verificar lista ambos canales', async () => {
       nuevaDespachadaSinVerificarConId(602);
       const now = new Date().toISOString();
       db.prepare(`INSERT INTO preparaciones (canal, clave, ml_order_id, etiqueta_lista, estado, creado_en)
         VALUES ('ml','ml:ORD-1',NULL,1,'despachada_sin_verificar',?)`).run(now);
       const r = await request(app).get('/api/preparacion/despachadas-sin-verificar');
-      expect(r.body.total).toBe(1);
-      expect(r.body.data).toHaveLength(1);
+      expect(r.body.total).toBe(2);
+      expect(r.body.data.map(p => p.canal)).toEqual(expect.arrayContaining(['web', 'ml']));
     });
 
     it('GET /historial NO mezcla despachadas sin verificar con las completadas (MUTATION: si se agregara ese estado al IN de /historial, este test se pone en rojo)', async () => {
@@ -2204,6 +2204,120 @@ describe('preparacion flujo', () => {
       });
       expect(await requisitosDelPrimerItem(id)).toEqual(requisitosFoto('kit_transmision', null));
     });
+  });
+});
+
+describe('reconciliación de preparaciones abiertas con estado remoto', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+
+  const envios = async () => ({ data: { status: 'completed' } });
+  const pendiente = async () => ({ data: { status: 'processing' } });
+
+  it('cierra como despachada sin verificar o completada y conserva evidencia, sin duplicar eventos', async () => {
+    const { reconciliarPreparacionesAbiertas } = await import('../routes/preparacion.js');
+    expect(typeof reconciliarPreparacionesAbiertas).toBe('function');
+    const incompleta = crearPreparacion(db, { canal: 'web', wcOrderId: 9801, numeroPedido: '9801', comprador: 'A', items: [{ sku: 'FB-A', nombre: 'A', cantidad: 1 }] });
+    const verificada = crearPreparacion(db, { canal: 'web', wcOrderId: 9802, numeroPedido: '9802', comprador: 'B', items: [] });
+    db.prepare("UPDATE preparaciones SET preparado_por='ana' WHERE id=?").run(incompleta);
+    db.prepare("UPDATE preparacion_items SET cantidad_escaneada=1, estado_item='verificado' WHERE preparacion_id=?").run(incompleta);
+    const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=?').get(incompleta);
+    db.prepare("INSERT INTO preparacion_fotos (preparacion_id,item_id,tipo,url,creado_en) VALUES (?,?,'articulo','/uploads/evidencia.jpg',?)")
+      .run(incompleta, item.id, new Date().toISOString());
+    db.prepare("INSERT INTO preparacion_fotos (preparacion_id,tipo,url,creado_en) VALUES (?, 'paquete_abierto','/uploads/abierto.jpg',?), (?, 'paquete_cerrado','/uploads/cerrado.jpg',?)")
+      .run(verificada, new Date().toISOString(), verificada, new Date().toISOString());
+    const r = await reconciliarPreparacionesAbiertas(db, { woo: {} }, { consultarWoo: async ({ wcOrderId }) => ({ data: { status: 'completed', id: wcOrderId } }) });
+    expect(r.cerradas).toBe(2);
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(incompleta).estado).toBe('despachada_sin_verificar');
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(verificada).estado).toBe('completada');
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_fotos WHERE preparacion_id=?').get(incompleta).n).toBe(1);
+    expect(db.prepare('SELECT preparado_por FROM preparaciones WHERE id=?').get(incompleta).preparado_por).toBe('ana');
+    expect(db.prepare("SELECT COUNT(*) n FROM preparacion_eventos WHERE preparacion_id=? AND tipo='despachado_sin_verificar'").get(incompleta).n).toBe(1);
+    await reconciliarPreparacionesAbiertas(db, { woo: {} }, { consultarWoo: async () => envios() });
+    expect(db.prepare("SELECT COUNT(*) n FROM preparacion_eventos WHERE tipo='despachado_sin_verificar'").get().n).toBe(1);
+  });
+
+  it('cierra canceladas sin retiro y abre devolución para unidades levantadas', async () => {
+    const { reconciliarPreparacionesAbiertas } = await import('../routes/preparacion.js');
+    const sinRetiro = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-CAN-1', numeroPedido: '1', comprador: 'A', items: [{ sku: 'FB-1', nombre: 'A', cantidad: 1 }] });
+    const conRetiro = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-CAN-2', numeroPedido: '2', comprador: 'B', items: [{ sku: 'FB-2', nombre: 'B', cantidad: 1 }] });
+    db.prepare('UPDATE preparacion_items SET cantidad_escaneada=1 WHERE preparacion_id=?').run(conRetiro);
+    const r = await reconciliarPreparacionesAbiertas(db, { ml: {} }, {
+      consultarMl: async ({ mlOrderId }) => ({ data: { status: 'cancelled', id: mlOrderId } }),
+    });
+    expect(r.canceladas).toBe(2);
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(sinRetiro).estado).toBe('cancelada_sin_retiro_registrado');
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(conRetiro).estado).toBe('cancelada_pendiente_devolucion');
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_devoluciones WHERE preparacion_id=?').get(sinRetiro).n).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_devoluciones WHERE preparacion_id=?').get(conRetiro).n).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_devolucion_items di JOIN preparacion_devoluciones d ON d.id=di.devolucion_id WHERE d.preparacion_id=?').get(conRetiro).n).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM preparacion_eventos WHERE tipo='cancelada_sin_retiro_registrado'").get().n).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM preparacion_eventos WHERE preparacion_id=? AND tipo='devolucion_pendiente'").get(conRetiro).n).toBe(1);
+    const historial = await request(buildTestApp(db)).get('/api/preparacion/historial');
+    expect(historial.body.data.map(p => p.id)).toContain(sinRetiro);
+  });
+
+  it('deja abierto ante estados pendientes, ambiguos o errores y registra el fallo', async () => {
+    const { reconciliarPreparacionesAbiertas } = await import('../routes/preparacion.js');
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 9810, numeroPedido: '9810', comprador: 'A', items: [] });
+    const r = await reconciliarPreparacionesAbiertas(db, { woo: {} }, {
+      consultarWoo: async () => ({ data: { status: 'processing' } }),
+    });
+    expect(r.sinCambio).toBe(1);
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
+    await reconciliarPreparacionesAbiertas(db, { woo: {} }, { consultarWoo: async () => { throw new Error('Woo no disponible'); } });
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
+    expect(db.prepare('SELECT error FROM preparacion_reconciliaciones WHERE preparacion_id=?').get(id).error).toMatch(/Woo no disponible/);
+  });
+
+  it('en ML exige confirmación explícita del envío para declarar la salida', async () => {
+    const { reconciliarPreparacionesAbiertas } = await import('../routes/preparacion.js');
+    const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-ML-SHIP', numeroPedido: 'ML-SHIP', comprador: 'A', items: [] });
+    const fecha = new Date().toISOString();
+    db.prepare("INSERT INTO preparacion_fotos (preparacion_id,tipo,url,creado_en) VALUES (?, 'paquete_abierto','/uploads/abierto.jpg',?), (?, 'paquete_cerrado','/uploads/cerrado.jpg',?)")
+      .run(id, fecha, id, fecha);
+    const ambiguo = await reconciliarPreparacionesAbiertas(db, { ml: {} }, {
+      consultarMl: async () => ({ data: { status: 'shipped', shipping: { id: 91 } } }),
+    });
+    expect(ambiguo.errores).toBe(1);
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-ML-SHIP', status: 'paid', shipping: { id: 91 } } })
+      .mockResolvedValueOnce({ status: 200, data: { status: 'shipped' } });
+    const enviado = await reconciliarPreparacionesAbiertas(db, { ml: {} });
+    expect(enviado.cerradas).toBe(1);
+    expect(mlFetch.mock.calls.map(c => c[3])).toEqual(['/orders/ORD-ML-SHIP', '/shipments/91']);
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('completada');
+  });
+
+  it('la simulación devuelve IDs y estados previstos sin escribir cambios ni intentos', async () => {
+    const { reconciliarPreparacionesAbiertas } = await import('../routes/preparacion.js');
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 9812, numeroPedido: '9812', comprador: 'A', items: [] });
+    const fecha = new Date().toISOString();
+    db.prepare("INSERT INTO preparacion_fotos (preparacion_id,tipo,url,creado_en) VALUES (?, 'paquete_abierto','/uploads/abierto.jpg',?), (?, 'paquete_cerrado','/uploads/cerrado.jpg',?)")
+      .run(id, fecha, id, fecha);
+    const r = await reconciliarPreparacionesAbiertas(db, { woo: {} }, {
+      simular: true,
+      consultarWoo: async () => ({ data: { status: 'completed' } }),
+    });
+    expect(r.previsualizacion).toContainEqual(expect.objectContaining({ id, estado_actual: 'en_preparacion', estado_previsto: 'completada' }));
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
+    expect(db.prepare('SELECT * FROM preparacion_reconciliaciones WHERE preparacion_id=?').get(id)).toBeUndefined();
+  });
+
+  it('no pisa un cierre concurrente y evita corridas solapadas', async () => {
+    const { reconciliarPreparacionesAbiertas } = await import('../routes/preparacion.js');
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 9811, numeroPedido: '9811', comprador: 'A', items: [] });
+    let liberar;
+    const pendienteFetch = new Promise(resolve => { liberar = resolve; });
+    const enCurso = reconciliarPreparacionesAbiertas(db, { woo: {} }, { consultarWoo: async () => { await pendienteFetch; return { data: { status: 'completed' } }; } });
+    const solapada = await reconciliarPreparacionesAbiertas(db, { woo: {} }, { consultarWoo: async () => ({ data: { status: 'completed' } }) });
+    expect(solapada.solapada).toBe(true);
+    db.prepare("UPDATE preparaciones SET estado='cancelada_pendiente_devolucion' WHERE id=?").run(id);
+    liberar();
+    await enCurso;
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('cancelada_pendiente_devolucion');
+    expect(db.prepare('SELECT COUNT(*) n FROM preparacion_eventos WHERE preparacion_id=?').get(id).n).toBe(0);
   });
 });
 
@@ -3449,18 +3563,20 @@ describe('Preparaciones abiertas y estado del canal', () => {
     const app = buildTestApp(db);
     const enCola = sembrarAbierta('web:900', 'web', '900');
     sembrarAbierta('web:901', 'web', '901');
+    const mlAbierta = sembrarAbierta('ml:ML-901', 'ml', 'ML-901');
     db.prepare(`INSERT INTO pedidos_cache (clave,canal,wc_order_id,numero_pedido,comprador,fecha,estado_envio,espejo_ml,items_json,actualizado_en)
       VALUES ('web:900','web',900,'900','Cliente','2026-09-01T10:00:00Z','pendiente',0,'[]','2026-09-01T10:00:00Z')`).run();
 
     const r = await request(app).get('/api/preparacion/abiertas');
 
     expect(r.status).toBe(200);
-    expect(r.body.data).toHaveLength(2);
+    expect(r.body.data).toHaveLength(3);
     const porId = Object.fromEntries(r.body.data.map((x) => [x.id, x]));
     expect(porId[enCola].en_cola).toBe(true);
     // La que no está en la cola es justamente la que no tenía ninguna puerta: sin esta vista
     // no aparece en ningún lado y el trabajo queda encerrado.
     expect(r.body.data.find((x) => x.numero_pedido === '901').en_cola).toBe(false);
+    expect(r.body.data.find((x) => x.id === mlAbierta).canal).toBe('ml');
   });
 
   it('el detalle avisa cuando el canal ya despachó el pedido', async () => {

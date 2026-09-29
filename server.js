@@ -36,7 +36,7 @@ import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { preciosRouter } from './routes/precios.js';
 import { configurarAuditoriaPrecios, dispararAuditoriaPrecios } from './lib/auditoriaPrecios.js';
-import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking } from './routes/preparacion.js';
+import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking, reconciliarPreparacionesAbiertas } from './routes/preparacion.js';
 import { gestionPedidosRouter } from './routes/gestionPedidos.js';
 import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
@@ -1042,6 +1042,23 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
         }).catch(err => console.error('Error en reintentarColgadosTracking:', err.message));
       });
+
+      // Se habilita solo después del backup verificado y la previsualización operativa.
+      // Lote acotado; la función bloquea solapes y prioriza las no consultadas o con intento
+      // más antiguo para reintentar errores sin retener la cola.
+      if (process.env.PREPARACION_RECONCILIACION_ACTIVA === 'true') {
+        cron.schedule('8-59/10 * * * *', () => {
+          reconciliarPreparacionesAbiertas(app._db, {
+            woo: wooCfg,
+            ml: mlCfg,
+            enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
+          }).then(r => {
+            if (r.cerradas || r.canceladas || r.errores) console.log('[preparacion-reconciliacion]', JSON.stringify(r));
+          }).catch(err => console.error('Error en reconciliación de preparaciones abiertas:', err.message));
+        });
+      } else {
+        console.log('PREPARACION_RECONCILIACION_ACTIVA no es true — cron de reconciliación apagado.');
+      }
 
       // Renovación proactiva del token ML: da una oportunidad regular de renovar antes de
       // que el token llegue a vencer, sin sumar otro llamador más a la tormenta que causó

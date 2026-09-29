@@ -129,6 +129,7 @@ describe('db schema', () => {
       'preparacion_devolucion_items',
       'preparacion_devoluciones',
       'preparacion_fotos_holds',
+      'preparacion_reconciliaciones',
       'producto_fusion_atributos',
       'productos_fusion',
       'recepcion_aliases_proveedor',

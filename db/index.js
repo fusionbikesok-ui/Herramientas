@@ -168,6 +168,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_productos_cache_114')").run();
     })();
   }
+  const preparacionReconciliacionMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_reconciliacion_115'").get();
+  if (!preparacionReconciliacionMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '115_preparacion_reconciliacion.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_reconciliacion_115')").run();
+    })();
+  }
   const recepcionUrgenteMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='recepcion_aliases_proveedor_109'").get();
   if (!recepcionUrgenteMigration) {
     db.transaction(() => {

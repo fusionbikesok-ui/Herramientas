@@ -757,8 +757,8 @@ la preparación (`marcarPreparacionEnviada`, misma función para el endpoint y e
   salió, no es trabajo pendiente) y **no se mezcla** con `GET /historial` (solo trae
   `completada`/`pendiente_deposito`) — se consulta desde `GET /despachadas-sin-verificar`.
 
-#### GET /api/preparacion/despachadas-sin-verificar (nuevo; `total`/`truncado` agregados)
-Lista las preparaciones en `despachada_sin_verificar`, canal `web`, más recientes primero.
+#### GET /api/preparacion/despachadas-sin-verificar (`total`/`truncado` agregados)
+Lista las preparaciones en `despachada_sin_verificar` de ambos canales, más recientes primero.
 Mismo criterio y consulta que `GET /cerradas-sin-evidencia` — un estado que existe para
 poder consultarlo ante un reclamo, así que tiene que tener dónde listarse igual que el
 otro. **No filtra por ventana temporal, a propósito** (ver `despachados_sin_verificar` en
@@ -770,6 +770,31 @@ del revisor).
 - Request: sin body.
 - Response 200: `{ "ok": true, "data": [ { ...preparación, total_items, total_fotos } ], "total": 3, "truncado": false }`.
   `data` viene con `LIMIT 200`; `truncado:true` si `total > data.length`.
+
+#### GET /api/preparacion/historial — canceladas sin retiro registrado
+Incluye `cancelada_sin_retiro_registrado`: WooCommerce o MercadoLibre confirmó una cancelación
+consultada directamente y la preparación no tenía unidades escaneadas ni embaladas. El estado
+no afirma que el producto nunca se movió físicamente; solo indica que no hay retiro registrado.
+Las preparaciones canceladas con unidades levantadas siguen en `cancelada_pendiente_devolucion`
+y conservan su tarea de devolución.
+
+#### Reconciliación automática de preparaciones abiertas
+Cada diez minutos se consulta hasta 50 preparaciones históricas `en_preparacion` directamente en
+WooCommerce (`GET /orders/{id}`) o en MercadoLibre (`GET /orders/{id}` y, si hay envío,
+`GET /shipments/{id}`). Solo `completed`/estado final de despacho de Woo, o un envío ML con
+`shipped`/`delivered` (incluidos los subestados confiables de salida) cierran como `completada`
+si la evidencia está verificada o `despachada_sin_verificar` en otro caso. Una cancelación
+explícita cierra sin retiro registrado o abre la devolución cuando hay unidades levantadas.
+Timeout, error HTTP, respuesta sin estado o estado desconocido se registra en
+`preparacion_reconciliaciones.error`, mantiene la preparación abierta y vuelve a intentarse.
+La corrida no se solapa consigo misma; cada transición usa un `UPDATE` condicionado a que la
+preparación siga abierta y registra un único evento de sistema. Fotos, ítems y autoría se
+conservan. La migración 115 crea el registro del último intento.
+
+Antes de habilitar el cron en producción, respaldar y verificar el respaldo de la base; después
+ejecutar `node scripts/preview-preparacion-reconciliacion.mjs` y revisar todos los IDs/estados
+previstos. El script consulta en páginas de hasta 50 y no cambia estados ni registra intentos
+en preparaciones. El cron permanece apagado salvo `PREPARACION_RECONCILIACION_ACTIVA=true`.
 
 ### Estado nuevo: `cerrada_sin_evidencia`
 Preparaciones viejas que nunca se completaron ni verificaron de verdad, cerradas por el

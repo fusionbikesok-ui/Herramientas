@@ -2711,6 +2711,7 @@ async function cargarSeguimientos(){
 function badgeEstadoPrep(estado){
   if(estado==='en_preparacion')return '<span class="badge b-warn">en preparación</span>';
   if(estado==='despachada_sin_verificar')return '<span class="badge b-mut">despachada sin verificar</span>';
+  if(estado==='cancelada_sin_retiro_registrado')return '<span class="badge b-mut">cancelada sin retiro registrado</span>';
   if(estado==='cerrada_sin_evidencia')return '<span class="badge b-warn">cerrada sin evidencia</span>';
   // Está escaneada y verificada: lo opuesto de "sin preparación" (hallazgo del revisor,
   // caía en el default y mentía). Ver ESTADOS_BLOQUEADOS_PARA_TRABAJAR en preparacion.js:
@@ -3234,6 +3235,7 @@ async function cargarHistorial(){
     var rows=r.body.data||[];
     var dep=rows.filter(function(p){return p.estado==='pendiente_deposito';});
     var comp=rows.filter(function(p){return p.estado==='completada';});
+    var canceladasSinRetiro=rows.filter(function(p){return p.estado==='cancelada_sin_retiro_registrado';});
     var sinPreparar=rows.filter(function(p){return p.estado==='enviado_sin_preparar';});
     var html='';
     if(sinPreparar.length){
@@ -3244,6 +3246,10 @@ async function cargarHistorial(){
       html+='<h1 style="font-size:1.1rem">Pendientes de <em>depósito</em></h1><div class="ped-grid" style="margin-bottom:20px">'
         +dep.map(cardHistorial).join('')+'</div>';
     }
+    if(canceladasSinRetiro.length){
+      html+='<h1 style="font-size:1.1rem">Canceladas sin retiro registrado</h1><div class="ped-grid" style="margin-bottom:20px">'
+        +canceladasSinRetiro.map(cardHistorial).join('')+'</div>';
+    }
     html+='<h1 style="font-size:1.1rem">Completadas</h1>';
     html+=comp.length?'<div class="ped-grid">'+comp.map(cardHistorial).join('')+'</div>':'<div class="loading">Todavía no hay preparaciones completadas.</div>';
     c.innerHTML=html;
@@ -3252,7 +3258,7 @@ async function cargarHistorial(){
 
 function cardHistorial(p){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
-  var st=p.estado==='completada'?'<span class="badge b-ok">completada</span>':'<span class="badge b-dep">pendiente depósito</span>';
+  var st=p.estado==='completada'?'<span class="badge b-ok">completada</span>':(p.estado==='cancelada_sin_retiro_registrado'?badgeEstadoPrep(p.estado):'<span class="badge b-dep">pendiente depósito</span>');
   var corregirBtn=p.canal==='web'
     ?'<button class="btn mini sec" style="margin-left:auto" onclick="abrirCorreccionTracking('+p.wc_order_id+',event)">Corregir tracking</button>'
     :'';

@@ -114,6 +114,21 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
 - En preparación, volver a la cola conserva el claim del operador. La tarjeta queda como `Continuar` y el reingreso usa `/tomar` de forma idempotente para renovar el claim; otro operador sigue bloqueado hasta liberación o vencimiento.
 - Las etiquetas Web/Andreani se generan fuera del VPS: durante el embalaje el preparador escanea código interno y tracking, confirma la asociación y el sistema bloquea duplicados/conflictos. Despacho solo reconcilia el código interno al retirar; la notificación a Woo ocurre después de confirmar salida. MercadoLibre no carga tracking en este sistema.
 
+## Reconciliación de preparaciones abiertas (2026-09-29)
+
+- El worker `reconciliarPreparacionesAbiertas` consulta directamente WooCommerce o MercadoLibre
+  y su shipment. Solo un estado explícito de salida o cancelación permite una transición; los
+  errores y estados desconocidos se registran en `preparacion_reconciliaciones` para reintento.
+- Los envíos pasan a `completada` si la evidencia existente está completa y, si no, a
+  `despachada_sin_verificar`. Las cancelaciones con unidades escaneadas/embaladas conservan el
+  flujo `cancelada_pendiente_devolucion`; sin retiro registrado pasan a
+  `cancelada_sin_retiro_registrado` y se muestran en el historial.
+- Cada corrida consulta como máximo 50 pedidos y no se solapa por conexión. La simulación
+  `scripts/preview-preparacion-reconciliacion.mjs` informa IDs/estados sin mutar preparaciones.
+  El cron requiere `PREPARACION_RECONCILIACION_ACTIVA=true` para habilitarse después de un
+  respaldo verificado y de revisar la vista previa. La reconciliación y el cambio de base de
+  producción no se han ejecutado; requieren el paso operativo separado.
+
 - Movimientos y auditoría se conservan indefinidamente.
 - Fotos operativas se conservan 180 días; reclamos, incidentes, garantías o auditorías activas suspenden la purga.
 - Las alertas se muestran en App, panel y sonido, distinguen reconocimiento de resolución y
