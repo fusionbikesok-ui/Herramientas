@@ -175,6 +175,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_reconciliacion_115')").run();
     })();
   }
+  const preparacionEtiquetasManualesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_etiquetas_manuales_116'").get();
+  if (!preparacionEtiquetasManualesMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '116_preparacion_etiquetas_manuales.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_etiquetas_manuales_116')").run();
+    })();
+  }
   const recepcionUrgenteMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='recepcion_aliases_proveedor_109'").get();
   if (!recepcionUrgenteMigration) {
     db.transaction(() => {

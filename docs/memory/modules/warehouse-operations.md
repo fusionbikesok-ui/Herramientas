@@ -144,3 +144,14 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
   tras tres lecturas de otro código.
 - En iPhone la cámara usa ZXing (Safari no tiene BarcodeDetector). El banco sintético mostró que la
   configuración del lector casi no cambia la tasa de lectura; decide la nitidez/tamaño del código.
+
+## Etiquetado posterior a confirmación manual (2026-09-29)
+
+- `confirmar-manual` conserva el motivo/autoría existente y crea una tarea durable con producto y
+  unidades que no se escanearon antes de completar el ítem. La tarea se puede consultar y marcar
+  hecha con usuario/fecha; no bloquea el despacho y una tarea pendiente queda para revisión.
+- No existe backfill automático para confirmaciones históricas. Preparaciones sin líneas no se
+  pueden iniciar desde pedidos del canal ni completar manualmente.
+- El callback diferido de 4,5 segundos fija el ID de preparación al programarse y no usa un PREP
+  mutable después de navegación; los errores de envío muestran reintento/estado en vez de excepción
+  sin manejar.

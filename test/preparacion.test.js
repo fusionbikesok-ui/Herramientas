@@ -881,6 +881,21 @@ describe('preparacion flujo', () => {
     expect(row.confirmado_manual).toBe(1);
   });
 
+  it('confirmar-manual crea tarea durable con producto/unidades previos y permite marcarla hecha', async () => {
+    const id = await nuevaPrep();
+    const item = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, 'CUB-1');
+    db.prepare('UPDATE preparacion_items SET cantidad_escaneada=1 WHERE id=?').run(item.id);
+    const r = await request(app).post(`/api/preparacion/${id}/item/${item.id}/confirmar-manual`).send({ motivo: 'sin_etiqueta' });
+    expect(r.status).toBe(200);
+    const tareas = await request(app).get(`/api/preparacion/${id}/etiquetas-manuales`);
+    expect(tareas.body.data).toHaveLength(1);
+    expect(tareas.body.data[0]).toMatchObject({ sku: 'CUB-1', unidades: item.cantidad_esperada - 1, estado: 'pendiente', creada_por: 'tester' });
+    expect(tareas.body.requiere_revision_salida).toBe(true);
+    const hecha = await request(app).post(`/api/preparacion/${id}/etiquetas-manuales/${tareas.body.data[0].id}/hecha`).send({});
+    expect(hecha.body.data).toMatchObject({ estado: 'hecha', hecha_por: 'tester' });
+    expect(hecha.body.data.hecha_en).toBeTruthy();
+  });
+
   it('confirmar-manual sin motivo → 400, no toca el ítem (MUTATION: si se saca el chequeo de motivo, este test se pone en rojo)', async () => {
     const id = await nuevaPrep();
     const item = db.prepare('SELECT id FROM preparacion_items WHERE preparacion_id=? AND sku=?').get(id, '');
@@ -2381,6 +2396,14 @@ describe('POST /iniciar — confirmación de envío vs. facturación', () => {
     expect(db.prepare("SELECT * FROM preparaciones WHERE clave='web:950'").get()).toBeUndefined();
   });
 
+  it('POST /iniciar Woo no crea preparación si el pedido no tiene productos', async () => {
+    wooFetch.mockResolvedValueOnce({ data: orderBase({ line_items: [] }) });
+    const r = await request(buildTestApp(db)).post('/api/preparacion/iniciar').send({ canal: 'web', id: 950 });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('PREPARACION_SIN_ITEMS');
+    expect(db.prepare("SELECT id FROM preparaciones WHERE clave='web:950'").get()).toBeUndefined();
+  });
+
   it('con direccion_elegida crea la preparación y guarda la decisión', async () => {
     wooFetch.mockResolvedValueOnce({ data: orderBase({
       billing: { first_name: 'Otro', last_name: 'Nombre', address_1: 'Otra calle 999', city: 'Rosario', state: 'S', phone: '3419999999', email: 'ana@mail.com' },
@@ -3775,6 +3798,14 @@ describe('Preparación — escanear por código de barras además de por SKU', (
     expect(r.body.item.cantidad_escaneada).toBe(1);
   });
 
+  it('GTIN EAN-13 válido de Binavi Air encuentra FB-56672 en preparación', async () => {
+    const app = buildTestApp(db);
+    const id = prepConProducto(db, { sku: 'FB-56672', gtin: '6970817353054' });
+    const r = await escanear(app, id, '6970817353054');
+    expect(r.body.resultado).toBe('match');
+    expect(r.body.item.sku).toBe('FB-56672');
+  });
+
   it('un EAN asociado a mano también verifica', async () => {
     const app = buildTestApp(db);
     const id = prepConProducto(db, { ean: '7798765432107' });
@@ -3818,5 +3849,20 @@ describe('Preparación — escanear por código de barras además de por SKU', (
     await escanear(app, id, '7798765432107');
     const r = await request(app).post(`/api/preparacion/${id}/escanear`).send({ codigo: '7798765432107' });
     expect(r.body.resultado).toBe('sobrante');
+  });
+});
+
+describe('Preparación vacía', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  it('rechaza completar una preparación vacía aunque tenga claim', async () => {
+    const id = crearPreparacion(db, { canal: 'web', wcOrderId: 990, numeroPedido: '990', comprador: 'X', items: [] });
+    const app = buildTestApp(db);
+    await tomarPorApi(app, id);
+    const r = await request(app).post(`/api/preparacion/${id}/completar`).send({});
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('PREPARACION_SIN_ITEMS');
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(id).estado).toBe('en_preparacion');
   });
 });

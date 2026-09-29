@@ -1600,7 +1600,8 @@ export function preparacionRouter(db, cfg) {
     const previo = db.prepare('SELECT * FROM despacho_controles WHERE confirmacion_idempotencia=?').get(idempotencia);
     if (previo && previo.id !== control.id) return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
     if (control.confirmacion_idempotencia && control.confirmacion_idempotencia !== idempotencia) return res.status(409).json({ ok: false, error: 'el despacho ya fue confirmado con otra idempotencia', code: 'IDEMPOTENCY_CONFLICT' });
-    if (control.estado === 'confirmado') return res.json({ ok: true, repetido: true, control });
+    const rotuladoPendiente = db.prepare("SELECT COUNT(*) n FROM preparacion_etiquetas_manuales WHERE preparacion_id=? AND estado='pendiente'").get(prep.id).n;
+    if (control.estado === 'confirmado') return res.json({ ok: true, repetido: true, control, requiere_revision_rotulado: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente });
     const ts = now();
     const confirmar = db.transaction(() => {
       const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=?, confirmacion_idempotencia=? WHERE id=? AND estado='escaneado' AND (confirmacion_idempotencia IS NULL OR confirmacion_idempotencia=?)")
@@ -1608,13 +1609,13 @@ export function preparacionRouter(db, cfg) {
       if (!cambio.changes) return { repetido: true, etiquetaId: db.prepare('SELECT etiqueta_cola_id FROM despacho_controles WHERE id=?').get(control.id).etiqueta_cola_id };
       db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
         VALUES (?,?,?,?,?,?)`).run(prep.id, null, 'despacho_confirmado', req.user.username,
-          JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: null, formato: '50x25mm', etiqueta_momento: 'evidencia_completa' }), ts);
+          JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: null, formato: '50x25mm', etiqueta_momento: 'evidencia_completa', rotulado_pendiente: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente }), ts);
       db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado')")
         .run(prep.id);
-      return { repetido: false, etiquetaId: null };
+      return { repetido: false, etiquetaId: null, rotuladoPendiente };
     })();
-    if (confirmar.repetido) return res.json({ ok: true, repetido: true, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id) });
-    res.json({ ok: true, repetido: false, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id), etiqueta_cola_id: confirmar.etiquetaId });
+    if (confirmar.repetido) return res.json({ ok: true, repetido: true, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id), requiere_revision_rotulado: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente });
+    res.json({ ok: true, repetido: false, control: db.prepare('SELECT * FROM despacho_controles WHERE id=?').get(control.id), etiqueta_cola_id: confirmar.etiquetaId, requiere_revision_rotulado: confirmar.rotuladoPendiente > 0, tareas_rotulado_pendientes: confirmar.rotuladoPendiente });
   });
 
   router.post('/despacho/:id/confirmar-manual', (req, res) => {
@@ -1630,17 +1631,18 @@ export function preparacionRouter(db, cfg) {
     const existente = db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo);
     const previo = db.prepare('SELECT * FROM despacho_controles WHERE confirmacion_idempotencia=?').get(idempotencia);
     if (previo && previo.id !== existente?.id) return res.status(409).json({ ok: false, error: 'la idempotencia ya fue usada para otro despacho', code: 'IDEMPOTENCY_CONFLICT' });
-    if (existente?.estado === 'confirmado') return res.json({ ok: true, repetido: true, control: existente });
+    const rotuladoPendiente = db.prepare("SELECT COUNT(*) n FROM preparacion_etiquetas_manuales WHERE preparacion_id=? AND estado='pendiente'").get(prep.id).n;
+    if (existente?.estado === 'confirmado') return res.json({ ok: true, repetido: true, control: existente, requiere_revision_rotulado: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente });
     const ts = now();
     const resultado = db.transaction(() => {
       const control = existente || db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en) VALUES (?, 'pendiente', ?, ?) RETURNING *").get(grupo, ts, ts);
       const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=?, confirmacion_idempotencia=? WHERE id=? AND estado!='confirmado' AND (confirmacion_idempotencia IS NULL OR confirmacion_idempotencia=?)").run(req.user.username, ts, ts, idempotencia, control.id, idempotencia);
       if (!cambio.changes) return { repetido: true };
-      registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_confirmado_manual', usuario: req.user.username, detalle: { grupo_clave: grupo, motivo, nota: nota || null, codigo_verificado: false }, failClosed: true });
+      registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_confirmado_manual', usuario: req.user.username, detalle: { grupo_clave: grupo, motivo, nota: nota || null, codigo_verificado: false, rotulado_pendiente: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente }, failClosed: true });
       db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado')").run(prep.id);
       return { repetido: false };
     })();
-    return res.json({ ok: true, ...resultado, control: db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo) });
+    return res.json({ ok: true, ...resultado, control: db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo), requiere_revision_rotulado: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente });
   });
 
   router.post('/despacho/regularizar-jornada-sin-evidencia', (req, res) => {
@@ -2177,6 +2179,9 @@ export function preparacionRouter(db, cfg) {
         }
 
         const p = armarPendienteWeb(db, resp.data);
+        if (!p.items.length) {
+          return res.status(409).json({ ok: false, code: 'PREPARACION_SIN_ITEMS', error: 'El pedido no tiene productos preparados para iniciar.' });
+        }
         // crearPreparacion + el UPDATE de la dirección elegida van en la misma transacción:
         // si el proceso muere entre los dos statements, la preparación no puede quedar
         // creada sin la decisión ya tomada (revertiría a la regla automática de
@@ -2236,6 +2241,9 @@ export function preparacionRouter(db, cfg) {
           return res.status(409).json({ ok: false, error: 'No hay evidencia suficiente de que el envío ML esté habilitado para preparación.', estado_elegibilidad: elegibilidad.estado, motivo_elegibilidad: elegibilidad.motivo });
         }
         const items = itemsDesdeOrdenMl(db, orden);
+        if (!items.length) {
+          return res.status(409).json({ ok: false, code: 'PREPARACION_SIN_ITEMS', error: 'La orden no tiene productos preparados para iniciar.' });
+        }
         const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(String(orden.id));
         const resultado = db.transaction(() => {
           const prepId = crearPreparacion(db, {
@@ -2848,20 +2856,47 @@ export function preparacionRouter(db, cfg) {
     // re-confirmación): no pasó nada nuevo que auditar, igual que "sobrante" en /escanear.
     const yaVerificado = item.estado_item === 'verificado';
 
-    db.prepare("UPDATE preparacion_items SET confirmado_manual=1, estado_item='verificado', cantidad_escaneada=cantidad_esperada WHERE id=?")
-      .run(item.id);
-    if (!yaVerificado) {
-      registrarEvento(db, {
-        preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
-        detalle: {
-          sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada,
-          cantidad_esperada: item.cantidad_esperada, origen: 'manual',
-          motivo, detalle_texto: detalleTexto || null,
-          ...(noCoincidePrevio.length ? { no_coincide_previo: noCoincidePrevio } : {}),
-        },
-      });
-    }
+    db.transaction(() => {
+      const sinEscanear = Math.max(0, Number(item.cantidad_esperada) - Number(item.cantidad_escaneada));
+      if (!yaVerificado && sinEscanear > 0) {
+        db.prepare(`INSERT OR IGNORE INTO preparacion_etiquetas_manuales
+          (preparacion_id,item_id,sku,nombre,unidades,estado,creada_por,creada_en)
+          VALUES (?,?,?,?,?,'pendiente',?,?)`)
+          .run(prep.id, item.id, item.sku || '', item.nombre || '', sinEscanear, req.user?.username || null, now());
+      }
+      db.prepare("UPDATE preparacion_items SET confirmado_manual=1, estado_item='verificado', cantidad_escaneada=cantidad_esperada WHERE id=?")
+        .run(item.id);
+      if (!yaVerificado) {
+        registrarEvento(db, {
+          preparacionId: prep.id, itemId: item.id, tipo: 'escaneo', usuario: req.user?.username,
+          detalle: {
+            sku: item.sku, nombre: item.nombre, cantidad_nueva: item.cantidad_esperada,
+            cantidad_esperada: item.cantidad_esperada, unidades_sin_escanear: sinEscanear, origen: 'manual',
+            motivo, detalle_texto: detalleTexto || null,
+            ...(noCoincidePrevio.length ? { no_coincide_previo: noCoincidePrevio } : {}),
+          },
+        });
+      }
+    })();
     res.json({ ok: true, item: db.prepare('SELECT * FROM preparacion_items WHERE id=?').get(item.id) });
+  });
+
+  // Etiquetado pendiente por confirmación manual. Se mantiene aparte de la cola de
+  // impresión y no bloquea el despacho: etiqueta física faltante queda explícita para revisión.
+  router.get('/:id/etiquetas-manuales', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const data = db.prepare('SELECT * FROM preparacion_etiquetas_manuales WHERE preparacion_id=? ORDER BY id').all(prep.id);
+    res.json({ ok: true, data, requiere_revision_salida: data.some(x => x.estado !== 'hecha') });
+  });
+  router.post('/:id/etiquetas-manuales/:taskId/hecha', (req, res) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    const hecha = db.prepare(`UPDATE preparacion_etiquetas_manuales SET estado='hecha',hecha_por=?,hecha_en=?
+      WHERE id=? AND preparacion_id=? AND estado='pendiente'`).run(req.user?.username || null, now(), Number(req.params.taskId), prep.id);
+    const data = db.prepare('SELECT * FROM preparacion_etiquetas_manuales WHERE id=? AND preparacion_id=?').get(Number(req.params.taskId), prep.id);
+    if (!data) return res.status(404).json({ ok: false, error: 'tarea no encontrada' });
+    res.json({ ok: true, repetido: !hecha.changes, data });
   });
 
   // ── Estado de embalaje (solo bicis) ──
@@ -3122,6 +3157,10 @@ export function preparacionRouter(db, cfg) {
     if (prep.estado === 'cerrada_sin_evidencia') {
       console.error(`POST /completar rechazado: preparación ${prep.id} está cerrada_sin_evidencia — reabrir con POST /:id/reabrir antes de completar`);
       return res.status(400).json({ ok: false, error: 'esta preparación está cerrada y no se puede completar así — pedile a un compañero que la reabra' });
+    }
+
+    if (!db.prepare('SELECT 1 FROM preparacion_items WHERE preparacion_id=? LIMIT 1').get(prep.id)) {
+      return res.status(400).json({ ok: false, code: 'PREPARACION_SIN_ITEMS', error: 'No se puede completar una preparación sin productos.' });
     }
 
     // Misma función que decide 'completada' vs 'despachada_sin_verificar' al cargar el

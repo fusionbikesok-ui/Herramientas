@@ -674,6 +674,18 @@ Cualquier usuario puede usarla (no se restringe a admin); motivo, usuario y hora
 - Response 404: preparación o ítem inexistente (sin cambios).
 - Re-confirmar un ítem ya `verificado` sigue siendo no-op para el evento (no duplica), pero
   igual exige `motivo` válido en el request — no hay atajo para saltear la validación.
+- Una confirmación manual crea, en la misma transacción y antes de completar `cantidad_escaneada`,
+  una tarea durable `preparacion_etiquetas_manuales` con SKU, producto y unidades que faltaban
+  escanear. No se generan tareas históricas/backfill. Son tareas de rotulado posteriores; no
+  bloquean el despacho y una tarea pendiente indica que la salida requiere revisión.
+- `GET /api/preparacion/:id/etiquetas-manuales` devuelve las tareas con su estado y
+  `requiere_revision_salida`. `POST /api/preparacion/:id/etiquetas-manuales/:taskId/hecha`
+  las marca idempotentemente y conserva `hecha_por`/`hecha_en`.
+- La confirmación de despacho (con escaneo o manual) mantiene su comportamiento y devuelve
+  `requiere_revision_rotulado` y `tareas_rotulado_pendientes`; el evento de salida conserva
+  esos valores. Una etiqueta pendiente nunca bloquea la salida.
+- `POST /api/preparacion/iniciar` no crea una preparación sin líneas. `POST
+  /api/preparacion/:id/completar` rechaza preparaciones vacías con `PREPARACION_SIN_ITEMS`.
 
 ### GET /api/preparacion/:id (campo agregado: `requisitos_foto` con nota de cantidad)
 Cuando un ítem tiene `cantidad_esperada > 1`, el slot de foto "de artículo" (o "de piezas"
