@@ -1562,7 +1562,7 @@ function renderDetalle(){
     html+='<section><h2 style="font-size:16px">Etiquetas pendientes de reposición</h2>'
       +(pendientesEtiqueta.length?'<p class="sub">'+pendientesEtiqueta.length+' pendiente(s). El despacho puede continuar; la salida sin etiqueta queda para revisión.</p>':'<p class="sub">Todas las etiquetas manuales están hechas.</p>')
       +tareas.map(function(t){return '<div class="item"><b>'+esc(t.nombre||t.sku||'Producto')+'</b> · '+Number(t.unidades)+' unidad(es) · '+esc(t.sku||'')
-        +(t.estado==='hecha'?'<span class="badge b-ok">Hecha · '+esc(t.hecha_por||'')+' · '+esc(t.hecha_en||'')+'</span>':'<button class="btn sec mini" onclick="marcarEtiquetaManualHecha('+p.id+','+t.id+')">Marcar etiqueta hecha</button>')+'</div>';}).join('')+'</section>';
+        +(t.estado==='hecha'?'<span class="badge b-ok">Hecha · '+esc(t.hecha_por||'')+' · '+esc(t.hecha_en||'')+'</span>':'<button class="btn sec" onclick="marcarEtiquetaManualHecha('+p.id+','+t.id+')">Marcar etiqueta hecha</button>')+'</div>';}).join('')+'</section>';
   }
   html+=renderFotosPaquete(p);
 
