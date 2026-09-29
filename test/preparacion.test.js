@@ -26,7 +26,7 @@ vi.mock('../routes/woo.js', async () => {
 describe('guards U0.B: casos funcionales de claims y ML inconcluso', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
-  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ } });
 
   it('/iniciar devuelve 401 si no hay usuario y claimPreparacion no tiene claim', async () => {
     const app = express();
@@ -81,7 +81,7 @@ describe('guards U0.B: casos funcionales de claims y ML inconcluso', () => {
 describe('control de despacho U0.B', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); });
-  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ } });
   it('devuelve jornada, resumen, confirmados, sin_fecha y filtros de la hoja', async () => {
     const id = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ORD-HOJA', packId: 'PACK-HOJA', numeroPedido: '700', comprador: 'X', items: [] });
     db.prepare(`INSERT INTO pedidos_cache
@@ -314,7 +314,7 @@ function asignarJornadaDespacho(db, clave, packId = null, fecha = '2026-09-01') 
 describe('POST /:id/heartbeat', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); });
-  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ } });
 
   it('registra la presencia y no devuelve a nadie si sos el único viendo la preparación', async () => {
     const prepId = crearPreparacion(db, { canal: 'web', wcOrderId: 900, numeroPedido: '900', comprador: 'Juan', items: [] });
@@ -398,7 +398,7 @@ describe('POST /:id/heartbeat', () => {
 describe('claim exclusivo de preparación', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); });
-  afterEach(() => { db.close(); for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} } });
+  afterEach(() => { db.close(); for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) { /* El archivo puede no haberse creado. */ } } });
 
   it('solo permite tomarla al primer usuario mientras el claim está vigente', async () => {
     const id = crearPreparacion(db, { canal: 'web', wcOrderId: 920, numeroPedido: '920', comprador: 'X', items: [] });
@@ -459,7 +459,7 @@ describe('claim exclusivo de preparación', () => {
 describe('registrarEvento', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); });
-  afterEach(() => { db.close(); for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} } });
+  afterEach(() => { db.close(); for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) { /* El archivo puede no haberse creado. */ } } });
 
   it('inserta un evento con detalle_json serializado', () => {
     const id = crearPreparacion(db, { canal: 'web', wcOrderId: 900, numeroPedido: '900', comprador: 'Ana', items: [] });
@@ -776,14 +776,14 @@ describe('preparacion flujo', () => {
   ];
 
   beforeEach(() => {
-    for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} }
+    for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) { /* El archivo puede no haberse creado. */ } }
     db = openDb(TEST_DB);
     app = buildTestApp(db);
   });
 
   afterEach(() => {
     db.close();
-    for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) {} }
+    for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) { try { fs.unlinkSync(f); } catch (_) { /* El archivo puede no haberse creado. */ } }
   });
 
   async function nuevaPrep() {
@@ -2238,7 +2238,7 @@ describe('preparacion flujo', () => {
 describe('reconciliación de preparaciones abiertas con estado remoto', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
-  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ } });
 
   const envios = async () => ({ data: { status: 'completed' } });
   const pendiente = async () => ({ data: { status: 'processing' } });
@@ -2359,7 +2359,7 @@ describe('POST /iniciar — confirmación de envío vs. facturación', () => {
     id: 950, number: '950', status: 'lpaandreani', meta_data: [],
     shipping: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567' },
     billing: { first_name: 'Ana', last_name: 'Gomez', address_1: 'Belgrano 123', city: 'Córdoba', state: 'X', phone: '3511234567', email: 'ana@mail.com' },
-    line_items: [],
+    line_items: [{ id: 1, product_id: 501, variation_id: 0, sku: 'BIKE-1', name: 'Bici', quantity: 1 }],
     ...overrides,
   });
 
@@ -3322,7 +3322,7 @@ describe('pedidosElegiblesOrdenados', () => {
       actualizado_en  TEXT NOT NULL
     )`).run();
   });
-  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ } });
 
   it('pedidosElegiblesOrdenados prioriza ml/espejo_ml sobre web y antigüedad dentro de cada grupo', () => {
     const ts = new Date().toISOString();
@@ -3779,7 +3779,7 @@ describe('Devoluciones — pedido cancelado con producto ya levantado', () => {
 describe('Preparación — escanear por código de barras además de por SKU', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
-  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ } });
 
   function prepConProducto(db, { sku = 'FB-1', gtin = null, ean = null } = {}) {
     const id = crearPreparacion(db, {
@@ -3868,7 +3868,7 @@ describe('Preparación — escanear por código de barras además de por SKU', (
 describe('Preparación vacía', () => {
   let db;
   beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
-  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
+  afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ } });
   it('rechaza completar una preparación vacía aunque tenga claim', async () => {
     const id = crearPreparacion(db, { canal: 'web', wcOrderId: 990, numeroPedido: '990', comprador: 'X', items: [] });
     const app = buildTestApp(db);

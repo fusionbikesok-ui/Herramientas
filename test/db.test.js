@@ -128,6 +128,7 @@ describe('db schema', () => {
       'preferencias_notificacion',
       'preparacion_devolucion_items',
       'preparacion_devoluciones',
+      'preparacion_etiquetas_manuales',
       'preparacion_fotos_holds',
       'preparacion_reconciliaciones',
       'producto_fusion_atributos',

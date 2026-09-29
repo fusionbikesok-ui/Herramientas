@@ -167,7 +167,7 @@ function ensureTables(db) {
   for (const ddl of [
     'ALTER TABLE preparacion_fotos ADD COLUMN fingerprint TEXT',
     'ALTER TABLE preparacion_fotos ADD COLUMN procesando_reclamada_en TEXT',
-  ]) { try { db.prepare(ddl).run(); } catch (_) {} }
+  ]) { try { db.prepare(ddl).run(); } catch (_) { /* Columna ya existe en bases con esquema previo. */ } }
   db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_preparacion_fotos_upload ON preparacion_fotos(preparacion_id, upload_id) WHERE upload_id IS NOT NULL').run();
   db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_fotos_holds (
     preparacion_id INTEGER PRIMARY KEY,
@@ -201,7 +201,7 @@ function ensureTables(db) {
     'ALTER TABLE preparacion_perfiles_sku ADD COLUMN version INTEGER NOT NULL DEFAULT 1',
     'ALTER TABLE preparacion_items ADD COLUMN perfil_version INTEGER NOT NULL DEFAULT 1',
     'ALTER TABLE preparacion_items ADD COLUMN requisitos_json_snapshot TEXT',
-  ]) { try { db.prepare(ddl).run(); } catch (_) {} }
+  ]) { try { db.prepare(ddl).run(); } catch (_) { /* Columna ya existe en bases con esquema previo. */ } }
 
   // Seed de perfiles por defecto (el usuario los edita desde la UI)
   const seed = db.prepare(
@@ -307,14 +307,14 @@ function ensureTables(db) {
     tipo_etiqueta TEXT NOT NULL DEFAULT 'interna',
     idempotencia TEXT
   )`).run();
-  try { db.prepare('ALTER TABLE despacho_controles ADD COLUMN confirmacion_idempotencia TEXT').run(); } catch (_) {}
+  try { db.prepare('ALTER TABLE despacho_controles ADD COLUMN confirmacion_idempotencia TEXT').run(); } catch (_) { /* Columna ya existe en bases con esquema previo. */ }
   db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_despacho_confirmacion_idempotencia ON despacho_controles(confirmacion_idempotencia) WHERE confirmacion_idempotencia IS NOT NULL').run();
   for (const ddl of [
     'ALTER TABLE etiquetas_cola ADD COLUMN formato_ancho_mm INTEGER NOT NULL DEFAULT 50',
     'ALTER TABLE etiquetas_cola ADD COLUMN formato_alto_mm INTEGER NOT NULL DEFAULT 25',
     "ALTER TABLE etiquetas_cola ADD COLUMN tipo_etiqueta TEXT NOT NULL DEFAULT 'interna'",
     'ALTER TABLE etiquetas_cola ADD COLUMN idempotencia TEXT',
-  ]) { try { db.prepare(ddl).run(); } catch (_) {} }
+  ]) { try { db.prepare(ddl).run(); } catch (_) { /* Columna ya existe en bases con esquema previo. */ } }
   db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS uq_etiquetas_idempotencia ON etiquetas_cola(idempotencia) WHERE idempotencia IS NOT NULL').run();
 
   // Claim exclusivo de la preparación. Tabla separada para no cambiar el contrato ni
@@ -496,7 +496,7 @@ function requisitosBaseParaItem(db, item) {
         const slots = snapshot[item.estado_embalaje || 'default'] || snapshot.default;
         if (Array.isArray(slots) && slots.length) return slots;
       }
-    } catch (_) {}
+    } catch (_) { /* Usa los requisitos actuales si el snapshot legado no se puede leer. */ }
   }
   const skuNorm = String(item.sku || '').trim().toUpperCase();
   if (skuNorm) {
@@ -3056,13 +3056,13 @@ export function preparacionRouter(db, cfg) {
       if (uploadKey && /constraint/i.test(e.message)) {
         const existente = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND upload_id=? AND borrado_en IS NULL').get(prep.id, uploadKey);
         if (existente) {
-          try { fs.unlinkSync(rutaAbsoluta(saved.url)); } catch (_) {}
+          try { fs.unlinkSync(rutaAbsoluta(saved.url)); } catch (_) { /* La fila ya existente conserva el archivo canónico. */ }
           return res.json({ ok: true, foto: existente, idempotente: true });
         }
       }
       // La transacción puede fallar después de escribir el archivo (por ejemplo,
       // si falla la auditoría). No dejar un original sin fila rastreable.
-      try { fs.unlinkSync(rutaAbsoluta(saved.url)); } catch (_) {}
+      try { fs.unlinkSync(rutaAbsoluta(saved.url)); } catch (_) { /* La operación original ya falló; el cron limpia huérfanos. */ }
       throw e;
     }
 

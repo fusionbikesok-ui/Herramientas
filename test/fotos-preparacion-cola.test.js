@@ -37,8 +37,8 @@ beforeEach(() => {
 
 afterEach(() => {
   db.close();
-  try { fs.unlinkSync(TEST_DB); } catch {}
-  try { fs.rmSync('./uploads/preparacion/900', { recursive: true, force: true }); } catch {}
+  try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ }
+  try { fs.rmSync('./uploads/preparacion/900', { recursive: true, force: true }); } catch { /* Limpieza best effort. */ }
 });
 
 describe('procesarColaFotos', () => {
