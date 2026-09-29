@@ -754,14 +754,16 @@ function registrarPerfilEvento(db, { alcance, clave, tipo, usuario, detalle }) {
     .run(alcance, clave, tipo, usuario ?? null, JSON.stringify(detalle ?? {}), now());
 }
 
-// Purga del disco y de la tabla las fotos con soft-delete de más de 180 días,
-// excepto preparaciones con un hold activo por reclamo/incidente/garantía/auditoría.
+// Purga del disco y de la tabla las fotos de preparaciones de más de 30 días y las
+// fotos descartadas hace más de 30 días, excepto preparaciones con un hold activo por
+// reclamo/incidente/garantía/auditoría.
 // Devuelve la cantidad purgada (para logging del cron).
 export function purgarFotosBorradas(db) {
-  const limite = new Date(Date.now() - 180 * 24 * 3600 * 1000).toISOString();
+  const limite = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
   const vencidas = db.prepare(`SELECT f.id, f.url, f.url_liviana FROM preparacion_fotos f
-    WHERE f.borrado_en IS NOT NULL AND f.borrado_en < ?
-      AND NOT EXISTS (SELECT 1 FROM preparacion_fotos_holds h WHERE h.preparacion_id=f.preparacion_id)`).all(limite);
+    JOIN preparaciones p ON p.id=f.preparacion_id
+    WHERE (p.creado_en < ? OR (f.borrado_en IS NOT NULL AND f.borrado_en < ?))
+      AND NOT EXISTS (SELECT 1 FROM preparacion_fotos_holds h WHERE h.preparacion_id=f.preparacion_id)`).all(limite, limite);
   let purgadas = 0;
   for (const f of vencidas) {
     // Contención (defensa en profundidad): si la ruta resuelta cae fuera de uploads/,
