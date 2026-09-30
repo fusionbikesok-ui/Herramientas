@@ -72,6 +72,12 @@ export function rutaAOperacion(ruta: string, headers: Readonly<Record<string, st
     exacto(q, {}, []);
     return { op: 'ml.shipment', params: { id: m[1]! } };
   }
+  if (p === '/messages/unread') { sinCabeceras(); exacto(q, { role: 'seller', tag: 'post_sale' }, []); return { op: 'ml.messages.unread', params: {} }; }
+  if ((m = p.match(/^\/messages\/([A-Za-z0-9_-]{1,128})$/))) {
+    if (cabeceras.length !== 1 || cabeceras[0] !== 'x-format-new=true') prohibida('mensaje');
+    exacto(q, { tag: 'post_sale' }, []);
+    return { op: 'ml.message', params: { id: m[1]! } };
+  }
   sinCabeceras();
   if (p === '/orders/search') {
     const v = exacto(q, { sort: 'date_asc', limit: '50' }, ['seller', 'order.date_last_updated.from', 'order.date_last_updated.to', 'offset']);
@@ -101,7 +107,6 @@ export function rutaAOperacion(ruta: string, headers: Readonly<Record<string, st
     if (!TOPICOS_MISSED_FEEDS.has(v.topic!)) prohibida('topic');
     return { op: 'ml.missed_feeds', params: { topic: v.topic, offset: entero(v.offset!) } };
   }
-  if (p === '/messages/unread') { exacto(q, { role: 'seller', tag: 'post_sale' }, []); return { op: 'ml.messages.unread', params: {} }; }
   if ((m = p.match(/^\/messages\/packs\/(\d{1,20})\/sellers\/(\d{1,20})$/))) {
     exacto(q, { tag: 'post_sale', mark_as_read: 'false' }, []);
     vendedor(m[2]!);

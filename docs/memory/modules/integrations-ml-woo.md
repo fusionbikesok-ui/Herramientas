@@ -15,6 +15,7 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 
 ## Contratos vigentes de Entrega 1
 
+- Desde el ajuste E1 del 2026-09-30, las notificaciones `ml.messages` se releen por ID con `GET /messages/{id}?tag=post_sale`; `/messages/unread` queda como barrido redundante cada seis horas. Los GET individuales de `ml.shipments` se hacen en serie, con 300 ms entre ellos y `x-format-new: true`. El gateway mantiene rutas y parámetros cerrados. Ver `docs/superpowers/evidence/e1/2026-09-30-E1-429-api-fix-deploy.md`; la calibración de cupos y la campaña PM-186 siguen sujetas a la medición Tarea 0.
 - La reasignación manual de un vínculo ML→Woo exige el SKU observado por el cliente y
   responde conflicto si otra operación lo cambió antes de escribir.
 - Un timeout durante el primer PUT de tracking a Woo es un resultado incierto: se persiste y
