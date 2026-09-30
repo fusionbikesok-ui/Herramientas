@@ -144,17 +144,21 @@ export async function fallarCorrida(
   pool: pg.Pool, corrida: CorridaReclamada, errorCode: string,
   retryAfter?: number, azar: () => number = Math.random, reintentable = true,
 ): Promise<'retryable' | 'failed'> {
-  const estado = reintentable && corrida.attempts < corrida.maxAttempts ? 'retryable' : 'failed';
   const demora = demoraReintentoSegundos(corrida.attempts, azar, retryAfter);
-  const r = await pool.query(
-    `UPDATE integrations.sweep_runs SET status=$4,
-       finished_at=CASE WHEN $4='failed' THEN now() ELSE NULL END,
-       available_at=CASE WHEN $4='retryable' THEN now()+make_interval(secs=>$5) ELSE available_at END,
-       error_detail=$6,lease_token=NULL,lease_until=NULL,worker_id=NULL
-     WHERE ${LEASE_VIGENTE}`,
-    [corrida.id, corrida.token, corrida.workerId, estado, demora, errorCode.slice(0, 200)],
+  // El presupuesto se decide con `attempts` de la base, no con el de la reclamación: una página confirmada lo
+  // devolvió a 1 (D2b) y el objeto en memoria quedó viejo.
+  const r = await pool.query<{ status: 'retryable' | 'failed' }>(
+    `UPDATE integrations.sweep_runs SET
+       status=CASE WHEN $4::boolean AND attempts<max_attempts THEN 'retryable' ELSE 'failed' END,
+       finished_at=CASE WHEN $4::boolean AND attempts<max_attempts THEN NULL ELSE now() END,
+       available_at=CASE WHEN $4::boolean AND attempts<max_attempts THEN now()+make_interval(secs=>$5) ELSE available_at END,
+       error_detail=$6,lease_token=NULL,lease_until=NULL,worker_id=NULL,
+       cursor_after=CASE WHEN $4::boolean AND attempts<max_attempts THEN cursor_after ELSE NULL END
+     WHERE ${LEASE_VIGENTE} RETURNING status`,
+    [corrida.id, corrida.token, corrida.workerId, reintentable, demora, errorCode.slice(0, 200)],
   );
   if (r.rowCount !== 1) throw new ErrorLeaseVencido(`lease vencido o ajeno para sweep#${corrida.id}`);
+  const estado = r.rows[0]!.status;
   return estado;
 }
 
@@ -212,6 +216,7 @@ export async function liberarCorridasVencidas(pool: pg.Pool): Promise<{ pendient
     `UPDATE integrations.sweep_runs SET
        status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'pending' END,
        finished_at=CASE WHEN attempts>=max_attempts THEN now() ELSE NULL END,
+       cursor_after=CASE WHEN attempts>=max_attempts THEN NULL ELSE cursor_after END,
        lease_token=NULL,lease_until=NULL,worker_id=NULL
      WHERE status='claimed' AND lease_until<=now() RETURNING status`,
   );

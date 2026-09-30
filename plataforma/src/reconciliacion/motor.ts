@@ -8,6 +8,11 @@ import { LEASE_VIGENTE, renovarLeaseCorrida, type CorridaReclamada } from './cor
 import type { AdaptadorBarrido, AlcanceBajas, RecursoRemoto, TipoVersion } from './tipos.ts';
 
 export class ErrorPaginaInvalida extends Error { override name = 'ErrorPaginaInvalida'; }
+/** Corrida más vieja que el tope: no es reintentable, un barrido que no termina en 6 h es un defecto, no cupo. */
+export class ErrorEdadMaxima extends Error { override name = 'ErrorEdadMaxima'; }
+
+/** Tope de edad total de una corrida, medido desde `started_at` (E1 barridos reanudables, D2b). */
+export const EDAD_MAXIMA_CORRIDA_MS = 6 * 60 * 60_000;
 
 const PREFIJO_BAJA = 'deleted:';
 const RENOVAR_LEASE_MS = 25_000;
@@ -215,12 +220,16 @@ export function crearProcesadorMotor(opciones: {
     const candidatoTo = (opciones.reloj ?? (() => new Date()))();
     const updatedAt = typeof corrida.cursorBefore?.updated_at === 'string' ? Date.parse(corrida.cursorBefore.updated_at) : Number.NaN;
     const candidatoFrom = Number.isFinite(updatedAt) ? new Date(updatedAt - overlap * 1000) : null;
-    const ventana = await db.query<{ window_from: Date | null; window_to: Date }>(
+    const ventana = await db.query<{
+      window_from: Date | null; window_to: Date; cursor_after: Record<string, unknown> | null;
+      enumerated: number | null; missing_enqueued: number | null; duplicates: number | null; edad_ms: string;
+    }>(
       `UPDATE integrations.sweep_runs SET
          window_from=CASE WHEN window_to IS NULL THEN $4 ELSE window_from END,
          window_to=coalesce(window_to,$5)
        WHERE id=$1 AND status='claimed' AND lease_token=$2 AND worker_id=$3 AND lease_until>now()
-       RETURNING window_from,window_to`,
+       RETURNING window_from,window_to,cursor_after,enumerated,missing_enqueued,duplicates,
+         (extract(epoch FROM (now()-started_at))*1000)::bigint AS edad_ms`,
       [corrida.id, corrida.token, corrida.workerId, candidatoFrom, candidatoTo],
     );
     const fila = ventana.rows[0];
@@ -230,7 +239,17 @@ export function crearProcesadorMotor(opciones: {
     let posicion: Record<string, unknown> | null = null;
     let cursorAfter: Record<string, unknown> | null = null;
     let paginas = 0; let enumerados = 0; let encolados = 0; let duplicados = 0;
+    // Un intento anterior dejó su avance: sólo `{ enCurso: 1, … }` es una posición; cualquier otro objeto es un
+    // cursor final viejo y no se reanuda de él.
+    const previo = fila.cursor_after;
+    if (previo?.enCurso === 1 && previo.posicion !== null && typeof previo.posicion === 'object'
+      && !Array.isArray(previo.posicion) && typeof previo.paginas === 'number') {
+      posicion = previo.posicion as Record<string, unknown>;
+      paginas = previo.paginas;
+      enumerados = fila.enumerated ?? 0; encolados = fila.missing_enqueued ?? 0; duplicados = fila.duplicates ?? 0;
+    }
     let ultimaRenovacion = monotono();
+    const edadInicialMs = Number(fila.edad_ms); const inicioMonotono = ultimaRenovacion;
     // Latido: una página (scan + bulks con reintentos) puede tardar más que el lease de 60 s, así que se renueva
     // también en segundo plano. Si una renovación falla, la corrida aborta en el próximo chequeo.
     let errorLatido: unknown = null;
@@ -246,6 +265,9 @@ export function crearProcesadorMotor(opciones: {
     try {
     do {
       if (errorLatido) throw errorLatido;
+      if (edadInicialMs + (monotono() - inicioMonotono) > EDAD_MAXIMA_CORRIDA_MS) {
+        throw new ErrorEdadMaxima(`EDAD_MAXIMA: corrida sweep#${corrida.id} supera ${EDAD_MAXIMA_CORRIDA_MS / 3_600_000} h`);
+      }
       paginas++;
       if (paginas > (opciones.maxPaginas ?? 100_000)) throw new Error('límite de páginas excedido');
       if (monotono() - ultimaRenovacion >= RENOVAR_LEASE_MS) {
@@ -289,9 +311,14 @@ export function crearProcesadorMotor(opciones: {
           }
           if (presentes.length) { await marcarPresencia(tx, corrida, presentes); enumerados += presentes.length; }
         }
+        // Avance durable: la posición viaja en la misma transacción que la página, así un intento posterior
+        // continúa desde aquí. Una página confirmada es progreso real: reinicia el reloj de diferimiento por
+        // cupo (D2) y devuelve los intentos a 1 (D2b); el tope de edad acota el total.
+        const enCurso = pagina.nextPosition === null ? null : { enCurso: 1, paginas, posicion: pagina.nextPosition };
         await tx.query(
-          `UPDATE integrations.sweep_runs SET enumerated=$2,missing_enqueued=$3,duplicates=$4 WHERE id=$1`,
-          [corrida.id, enumerados, encolados, duplicados],
+          `UPDATE integrations.sweep_runs SET enumerated=$2,missing_enqueued=$3,duplicates=$4,cursor_after=$5,
+             deferred_since=NULL,attempts=LEAST(attempts,1) WHERE id=$1`,
+          [corrida.id, enumerados, encolados, duplicados, enCurso],
         );
       });
       posicion = pagina.nextPosition;
