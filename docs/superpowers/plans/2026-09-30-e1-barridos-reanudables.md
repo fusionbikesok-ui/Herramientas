@@ -25,7 +25,7 @@ Columnas nuevas `position jsonb` (objeto, nullable) y `pages_done integer`. El m
 
 ### D2 — Reloj de diferimiento
 `deferred_since` (corridas.ts, `diferirCorridaPorCupo`, tope 30 min) se pone en `NULL` en la misma transacción que confirma una página con progreso. Una corrida muere sólo si pasa 30 min **sin avanzar una página**. La corrida "avanza" también cuando la página no trae recursos pero sí cambia la posición (p. ej. fin de la fase de enumeración).
-**[propuesta D2b]** Por la misma razón, la página confirmada lleva `attempts = LEAST(attempts, 1)`: `max_attempts=8` pasa a contar intentos consecutivos **sin progreso**. Sin esto una vuelta larga que tenga 8 fallos transitorios repartidos en 25 min (backoff 30 s→900 s) muere pese a estar avanzando. Reversible: una línea del UPDATE.
+**[propuesta D2b]** Por la misma razón, la página confirmada lleva `attempts = LEAST(attempts, 1)`: `max_attempts=8` pasa a contar intentos consecutivos **sin progreso**. Sin esto una vuelta larga que tenga 8 fallos transitorios repartidos en 25 min (backoff 30 s→900 s) muere pese a estar avanzando. Reversible: una línea del UPDATE. **[aprobado por opt-c1] Tope de edad total:** el motor, antes de cada página, verifica `now() − started_at > 6 h` y lanza un error **no reintentable** (`EDAD_MAXIMA`) ⇒ `fallarCorrida(..., reintentable=false)` ⇒ `failed`. Cierra el caso de un defecto que «avance» sin avanzar de verdad (zombi), ya que D2 y D2b por sí solos podrían mantener viva una corrida indefinidamente.
 
 ### D3 — `ml.items` en dos fases
 **(a) Enumerar** `search_type=scan&limit=100`: sólo llamadas scan, seguidas, dentro de la vida del scroll. **(b) Detalle** `/items/bulk?ids=` de a 20 desde un cursor persistido sobre la lista de ids, sin límite de tiempo.
@@ -71,7 +71,7 @@ Un log por página de barrido, más eventos de ciclo de vida, todos sin PII (sin
 
 ## Arquitectura
 
-- `migrations/0028_barridos_reanudables.sql`: `sweep_runs.position`, `sweep_runs.pages_done`, tabla `sweep_work_items`.
+- `migrations/0032_barridos_reanudables.sql`: `sweep_runs.position`, `sweep_runs.pages_done`, tabla `sweep_work_items`.
 - `src/reconciliacion/trabajo.ts`: acceso a la tabla de trabajo (agregar, reiniciar, leer lote, contar, purgar).
 - `src/reconciliacion/motor.ts`: posición y trabajo dentro de la transacción de página; reset de `deferred_since`/`attempts`; log por página.
 - `src/reconciliacion/ritmo.ts`: ritmador por corriente (uno por proceso) y `ritmar(transporte, ritmo)`; tabla de reservas.
@@ -88,19 +88,19 @@ Un log por página de barrido, más eventos de ciclo de vida, todos sin PII (sin
 
 ---
 
-### Tarea 1: Migración 0028 — posición y tabla de trabajo
+### Tarea 1: Migración 0032 — posición y tabla de trabajo
 
 **Archivos:**
-- Crear: `plataforma/migrations/0028_barridos_reanudables.sql`
-- Modificar: `plataforma/test/migraciones.test.ts` (lista de migraciones esperada: agregar `0028_barridos_reanudables.sql`)
+- Crear: `plataforma/migrations/0032_barridos_reanudables.sql`
+- Modificar: `plataforma/test/migraciones.test.ts` (lista de migraciones esperada: agregar `0032_barridos_reanudables.sql`)
 - Test: `plataforma/test/reconciliacion/esquema.test.ts` (casos nuevos)
 
-**Contenido:** `SET lock_timeout='5s'`; `ALTER TABLE integrations.sweep_runs ADD COLUMN position jsonb, ADD COLUMN pages_done integer NOT NULL DEFAULT 0, ADD CONSTRAINT sweep_runs_position_check CHECK (position IS NULL OR (jsonb_typeof(position)='object' AND pg_column_size(position) < 8192))`; `CREATE TABLE integrations.sweep_work_items (run_id bigint NOT NULL REFERENCES integrations.sweep_runs(id) ON DELETE CASCADE, seq bigint GENERATED ALWAYS AS IDENTITY, resource_id text NOT NULL CHECK (length(resource_id) BETWEEN 1 AND 512), PRIMARY KEY (run_id, seq), UNIQUE (run_id, resource_id))`; `GRANT DELETE ON integrations.sweep_work_items TO plataforma_app`. Numeración: **0028**, siguiente libre en el repo (24 aplicadas en prod; 0025–0027 existen en el repo y **no se renumeran**). Ver el riesgo R1: el migrador aplica todas las pendientes en orden.
+**Contenido:** `SET lock_timeout='5s'`; `ALTER TABLE integrations.sweep_runs ADD COLUMN position jsonb, ADD COLUMN pages_done integer NOT NULL DEFAULT 0, ADD CONSTRAINT sweep_runs_position_check CHECK (position IS NULL OR (jsonb_typeof(position)='object' AND pg_column_size(position) < 8192))`; `CREATE TABLE integrations.sweep_work_items (run_id bigint NOT NULL REFERENCES integrations.sweep_runs(id) ON DELETE CASCADE, seq bigint GENERATED ALWAYS AS IDENTITY, resource_id text NOT NULL CHECK (length(resource_id) BETWEEN 1 AND 512), PRIMARY KEY (run_id, seq), UNIQUE (run_id, resource_id))`; `GRANT DELETE ON integrations.sweep_work_items TO plataforma_app`. Numeración: **0032**. La rama sin fusionar `fix/e3c3-segunda-opinion` ya usa 0028 (`atributos_sin_modelo`), 0029 (`validar_atributos_sin_modelo`), 0030 (`e3_canario_leases`) y 0031 (`e3_canario_cuenta`); 0025–0027 existen en esta rama y no se renumeran (24 aplicadas en prod). **Precondición:** `leerArchivos` (`src/db/migrar.ts`) exige que los archivos del directorio sean contiguos desde 0001 (`a.numero !== i + 1` ⇒ `ErrorMigracion` «hueco o repetición»); un 0032 sin 0028–0031 presentes hace fallar **toda** migración y toda base de prueba (`crearBaseVacia` migra el directorio). Por lo tanto esta tarea sólo puede implementarse sobre un árbol donde 0028–0031 ya estén (fusión previa de esa rama). Ver el riesgo R1: el migrador aplica todas las pendientes en orden.
 
 **Tests (rojo primero):**
 - [ ] `esquema.test.ts`: `position` acepta objeto y rechaza array/escalar; rechaza un objeto ≥ 8 KB; `pages_done` default 0.
 - [ ] `sweep_work_items`: `UNIQUE(run_id, resource_id)` rechaza duplicado; `seq` crece; borrar la corrida borra sus filas (cascade); `plataforma_app` puede `DELETE` sobre la tabla (conexión de la app), y sigue **sin** poder sobre `sweep_runs`.
-- [ ] `migraciones.test.ts`: la lista esperada incluye `0028…`; dos bases migradas dan el mismo esquema (test existente E1-SCH-02).
+- [ ] `migraciones.test.ts`: la lista esperada incluye `0032…`; dos bases migradas dan el mismo esquema (test existente E1-SCH-02).
 
 **Criterios de aceptación:** migrar una base vacía y una base en el estado de prod (0001–0024) hasta 0028 funciona; los tests de esquema y `migraciones.test.ts` verdes; `npm run typecheck` limpio.
 
@@ -124,6 +124,7 @@ Un log por página de barrido, más eventos de ciclo de vida, todos sin PII (sin
 - [ ] Tras completar, `position IS NULL`, `pages_done = 3`, la ventana no cambió entre intentos.
 - [ ] D2: corrida con `deferred_since` de hace 40 min que confirma una página ⇒ `deferred_since IS NULL`; un diferimiento inmediato posterior **no** cae a `CUPO_SOMBRA_AGOTADO`/`fallarCorrida`. Control: sin páginas confirmadas por > 30 min sigue cayendo (test existente en `corridas.test.ts`, se mantiene).
 - [ ] D2b: corrida con `attempts=7` que confirma una página vuelve a `attempts=1`; un fallo sin progreso sigue consumiéndolos hasta `failed`.
+- [ ] **Tope de edad:** una corrida con `started_at` de hace 6 h 1 min que reclama y va a leer una página termina `failed` con `EDAD_MAXIMA` sin llamar a `listar`; con 5 h 59 min sigue normal; una corrida que avanza páginas cada minuto pero supera las 6 h también muere (el reset de `deferred_since`/`attempts` no lo evita).
 - [ ] Lease perdido antes de la transacción de página ⇒ rollback completo: ni `position`, ni filas de trabajo, ni observaciones (mismo criterio que el test actual de lease ajeno).
 - [ ] `trabajo.reiniciar` + `agregar` en la misma página: las filas viejas desaparecen y las nuevas quedan, atómico.
 - [ ] Purga: corrida `succeeded`/`failed` sin filas de trabajo; `pending`/`retryable` las conserva.
@@ -294,7 +295,7 @@ Medido sobre las 24 h posteriores al despliegue, con consultas de sólo lectura 
 Nada de esto se ejecuta sin la autorización de José pasando por opt-c1.
 
 1. **Compuerta previa:** suite verde, auditoría de opt-c1 y auditoría con Codex (regla vigente de deploy de Recepción/E1).
-2. **Migración 0028 aplicada por José** (`npm run migrar` con el usuario migrador) **antes** de reemplazar el worker. Es aditiva (columnas nulables + tabla nueva): el worker viejo sigue funcionando con ella (ignora `position`), así que migrar primero es seguro. **Ojo (R1):** el migrador aplica *todas* las pendientes en orden y exige numeración contigua: aplicará también 0025, 0026 y 0027 (E3, con sus flags en 0). José debe saberlo y aceptarlo, o esas tres se aplican antes por separado. Efectos reales (leídos del SQL, no hay flags en SQL; los flags `E3_*` están en la config del código): 0025 reemplaza el CHECK de `identity_decisions` que hoy prohíbe `auto_sku`+`aplicar` (sólo cambia qué se permite insertar), 0026 crea `catalog.e3_canario_corridas` y `e3_canario_casos`, 0027 reemplaza `identity_cases_tipo_check` (amplía los tipos permitidos) y crea `catalog.identity_commands` con su índice único.
+2. **Migración 0032 aplicada por José** (`npm run migrar` con el usuario migrador) **antes** de reemplazar el worker. Es aditiva (columnas nulables + tabla nueva): el worker viejo sigue funcionando con ella (ignora `position`), así que migrar primero es seguro. **Ojo (R1):** el migrador aplica *todas* las pendientes en orden y exige numeración contigua: aplicará también 0025, 0026 y 0027 (E3, con sus flags en 0). El migrador NO compara con el orden de lo aplicado: itera los archivos en orden y aplica los que no están en `core.schema_migrations` (verifica el sha256 de los ya aplicados y falla si una aplicada desapareció del directorio). Consecuencias: (i) con 0001–0032 presentes y prod en 0024, aplica **0025–0031 y 0032 juntas**, no sólo la nuestra (es decisión de José, que opt-c1 le presenta); (ii) un archivo de número menor que aparezca después de haberse aplicado uno mayor **se aplica sin quejas** (no hay chequeo de orden), y (iii) el directorio con 0032 pero sin 0028–0031 se rechaza por hueco; por eso el worker no puede construirse desde una rama que tenga 0032 y no tenga 0028–0031. Además 0028–0031 de la rama E3 quedan aplicadas con el mismo comando. José debe saberlo y aceptarlo, o esas se aplican antes por separado. Efectos reales (leídos del SQL, no hay flags en SQL; los flags `E3_*` están en la config del código): 0025 reemplaza el CHECK de `identity_decisions` que hoy prohíbe `auto_sku`+`aplicar` (sólo cambia qué se permite insertar), 0026 crea `catalog.e3_canario_corridas` y `e3_canario_casos`, 0027 reemplaza `identity_cases_tipo_check` (amplía los tipos permitidos) y crea `catalog.identity_commands` con su índice único.
 3. **Sólo la imagen del worker.** No se reconstruyen `api` ni el legado. `fusion-plataforma:local` es compartido entre contenedores: **antes de reconstruir, taggear la imagen que usa cada contenedor** (`docker tag <imagen-actual-del-worker> fusion-plataforma:rollback-worker-<fecha>`, y lo mismo para cualquier otro contenedor que la use) y **verificar con `docker image inspect`** que cada tag resuelve al mismo ID que el contenedor en ejecución (`docker inspect --format '{{.Image}}'`).
 4. **Construir desde un worktree limpio** del commit final (`git worktree add`), no desde este árbol de trabajo (tiene cambios ajenos sin commitear); verificar el hash del commit dentro de la imagen.
 5. Reemplazar el contenedor `worker` únicamente. Observar los logs de la Tarea 8 durante la primera vuelta de `ml.shipments` (≈ 20 min) y confirmar el ritmo (≤ 11 llamadas/min) y que `missed_feeds` deja de dar cupo agotado en la siguiente ronda.
@@ -305,7 +306,7 @@ Nada de esto se ejecuta sin la autorización de José pasando por opt-c1.
 
 | # | Riesgo | Mitigación |
 |---|---|---|
-| R1 | El migrador aplica 0025–0027 junto con 0028 (numeración contigua, sin aplicar por número). Esas tres tocan `catalog`: dos reemplazos de CHECK (`identity_decisions`, `identity_cases`) y tablas nuevas de canario/comandos. | Avisar a José con los efectos reales (ver Despliegue, paso 2); revisar los tres SQL antes de migrar; backup habitual; el código E3 no los usa con los flags `E3_*` en 0. |
+| R1 | El migrador aplica 0025–0027 junto con 0032 (numeración contigua, sin aplicar por número). Esas tres tocan `catalog`: dos reemplazos de CHECK (`identity_decisions`, `identity_cases`) y tablas nuevas de canario/comandos. | Avisar a José con los efectos reales (ver Despliegue, paso 2); revisar los tres SQL antes de migrar; backup habitual; el código E3 no los usa con los flags `E3_*` en 0. |
 | R2 | La vida real del scroll de ML no está precisada (¿desde la creación o desde el último uso?). | Se asume la peor (creación) con tope de 240 s; si ML lo vence antes, hay reinicios con tope de 3 y evento `scroll reiniciado` en logs. |
 | R3 | La demanda de señales por minuto supera la reserva (4/3 rpm). | Las señales se difieren sin consumir intento; el dato se mide (pregunta 1) y las constantes son un solo archivo. |
 | R4 | Las constantes de reserva (`ritmo.ts`) se desincronizan de `GATEWAY_ML_SHADOW_RPM_*` (`.env` del legado) si José cambia un cupo. | Comentario y test de consistencia interna; a futuro el gateway podría devolver el cupo restante en un header. |
@@ -317,10 +318,11 @@ Nada de esto se ejecuta sin la autorización de José pasando por opt-c1.
 | R10 | Tabla de trabajo huérfana si una corrida termina fuera de los caminos que purgan. | `ON DELETE CASCADE` + purga de respaldo periódica; test de purga. |
 | R11 | Un `ErrorPaginaInvalida` persistente en una página congela la corrida en esa posición hasta agotar intentos. | Igual que hoy (reintenta la misma ventana); ahora además queda `position` y `pages_done` para diagnosticar. |
 
-## Preguntas abiertas para opt-c1
+## Decisiones de opt-c1 (2026-09-30)
 
-1. ¿Puede correr (sólo lectura) señales creadas por hora y por tópico en los últimos 7 días (`reconciliation_signals`) para ratificar las reservas 4/4/3? Yo no toco producción.
-2. ¿Confirma D2b (reset de `attempts` con cada página confirmada)?
-3. ¿Confirma quitar la compuerta de 6 h del `unread` y la enumeración de 30 días de packs, con la pérdida de cobertura descrita?
-4. ¿Deja la guarda del 50 % (`ENUMERACION_SOSPECHOSA`) en la Tarea 7, o la saca?
-5. Sobre el punto 1 del criterio global para `ml.items`: ¿se espera hasta la próxima corrida diaria o José decide adelantar `next_run_at`?
+1. Demanda de señales medida en 48 h: items 2626 (~0,9/min), shipments 300 (~0,1/min), messages 16, orders 104; con 2–3 llamadas por señal las reservas 4/4/3 alcanzan con margen: **ratificadas**.
+2. D2b aprobado, más el tope de edad de 6 h (`EDAD_MAXIMA`).
+3. Se elimina la compuerta de 6 h y la enumeración de 30 días; la pérdida de cobertura descrita queda aceptada.
+4. La guarda del 50 % se mantiene.
+5. `ml.items` espera su `full_scan` natural; **no se toca `next_run_at`**.
+6. Migración: número **0032** (0028–0031 pertenecen a `fix/e3c3-segunda-opinion`).
