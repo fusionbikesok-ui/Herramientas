@@ -100,6 +100,7 @@ export async function aplicarD16(tx: Consultable, o: OpcionesD16): Promise<Resum
   // Los modelos se toman por la categoría OBSERVADA de Woo (por nombre: Woo guarda el nombre), no archivados.
   const filas = (await tx.query<{ modelo: string; titulo: string; edad: string[] }>(
     `SELECT p.id AS modelo, p.titulo,
+            -- La faceta se calcula por modelo; una fila sin model_id no puede sumar un modelo infantil.
             COALESCE((SELECT array_agg(DISTINCT e.valor ORDER BY e.valor) FROM catalog.model_attributes e
                        WHERE e.model_id = p.id AND e.nombre_normalizado = 'edad' AND e.vigente_hasta IS NULL), '{}') AS edad
        FROM catalog.product_models p

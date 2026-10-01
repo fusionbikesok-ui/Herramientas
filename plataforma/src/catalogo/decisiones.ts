@@ -20,7 +20,8 @@
 import { randomUUID } from 'node:crypto';
 import { registrarEvento } from '../audit/auditoria.ts';
 import type { Consultable } from '../db/pool.ts';
-import { decisionVigente } from '../identidad/autoridad.ts';
+import { decisionVigente, modoAutoSku, type ModoAutoSku } from '../identidad/autoridad.ts';
+import { clasificarModelos } from './clasificacion.ts';
 
 /**
  * Candado de las decisiones de una cuenta, hasta el fin de la transacción. Lo toman los eventos, las copias, el
@@ -41,28 +42,102 @@ type Deseado =
   | { tipo: 'omitida' }
   | { tipo: 'pendiente'; caso: 'sku_pendiente' | 'sku_inexistente_en_woo'; sku: string | null };
 
+/** Opciones de autoridad que viajan desde el llamador hasta `decisionVigente`. */
+export interface OpcionesAutoridad {
+  bandeja: boolean;
+  /** Modo explícito (lo usa aplicarAutoSku, que acaba de insertar la decisión `aplicar`). */
+  autoSku?: ModoAutoSku;
+  /** Flags del entorno: si `autoSku` no viene, el modo se decide con `modoAutoSku`. Ausentes = apagado. */
+  flagsAutoSku?: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean };
+}
+
 const CASOS_DE_PENDIENTE = ['sku_pendiente', 'sku_inexistente_en_woo'];
+
+export async function reclasificarModelosAfectados(
+  tx: Consultable, empresa: string, modelos: Iterable<string>, categoriaCambio: Iterable<string>,
+): Promise<void> {
+  const afectados = [...new Set(modelos)].sort();
+  if (!afectados.length) return;
+  await tx.query('SAVEPOINT clasificacion_decision');
+  try {
+    await clasificarModelos(tx, {
+      empresa, dryRun: false, modelos: afectados, categoriaCambio: new Set(categoriaCambio),
+    });
+    await tx.query('RELEASE SAVEPOINT clasificacion_decision');
+  } catch (err) {
+    // Fail-open a propósito: el vínculo ya decidido no debe caer por la clasificación, que se rehace en la próxima
+    // corrida; queda el evento para que no sea silencioso.
+    await tx.query('ROLLBACK TO SAVEPOINT clasificacion_decision');
+    await tx.query('RELEASE SAVEPOINT clasificacion_decision');
+    await registrarEvento(tx, {
+      companyId: empresa, actorType: 'system', actorId: 'plataforma.catalogo', action: 'catalogo.clasificacion_fallida',
+      aggregateType: 'company', aggregateId: empresa, correlationId: randomUUID(),
+      reason: err instanceof Error ? err.message.slice(0, 200) : 'error de clasificación', payload: { modelos: afectados },
+    });
+  }
+}
+
+async function categoriasDesalineadas(tx: Consultable, representacion: string, modeloDestino: string | null): Promise<Set<string>> {
+  const filas = (await tx.query<{ model_id: string | null }>(
+    `SELECT model_id FROM catalog.model_attributes
+      WHERE representation_id = $1 AND nombre_normalizado = 'categoria_canal' AND vigente_hasta IS NULL
+        AND model_id IS DISTINCT FROM $2`, [representacion, modeloDestino])).rows;
+  const cambio = new Set(filas.map((r) => r.model_id).filter((id): id is string => Boolean(id)));
+  if (filas.length && modeloDestino) cambio.add(modeloDestino);
+  return cambio;
+}
+
+export interface ResumenReparacionExtras {
+  atributos: number; imagenes: number; modelos: Set<string>; categoriaCambio: Set<string>;
+}
+
+/** Alinea los extras de una representación y reclasifica sólo si movió alguna fila de modelo. */
+export async function repararExtrasDeRepresentacion(
+  tx: Consultable, empresa: string, representacion: string, modeloDestino: string | null,
+): Promise<ResumenReparacionExtras> {
+  const hay = (await tx.query<{ hay: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2)
+         OR EXISTS (SELECT 1 FROM catalog.model_images WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2) AS hay`,
+    [representacion, modeloDestino])).rows[0]!.hay;
+  if (!hay) return { atributos: 0, imagenes: 0, modelos: new Set(), categoriaCambio: new Set() };
+  const modelos = new Set((await tx.query<{ model_id: string }>(
+    `SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2
+     UNION SELECT model_id FROM catalog.model_images WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2`,
+    [representacion, modeloDestino])).rows.map((r) => r.model_id).filter(Boolean));
+  if (modeloDestino) modelos.add(modeloDestino);
+  const categoriaCambio = await categoriasDesalineadas(tx, representacion, modeloDestino);
+  for (const m of categoriaCambio) modelos.add(m);
+  const atributos = (await tx.query(
+    'UPDATE catalog.model_attributes SET model_id = $2 WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2',
+    [representacion, modeloDestino])).rowCount ?? 0;
+  const imagenes = (await tx.query(
+    'UPDATE catalog.model_images SET model_id = $2 WHERE representation_id = $1 AND model_id IS DISTINCT FROM $2',
+    [representacion, modeloDestino])).rowCount ?? 0;
+  if (atributos || imagenes) await reclasificarModelosAfectados(tx, empresa, modelos, categoriaCambio);
+  return { atributos, imagenes, modelos, categoriaCambio };
+}
 
 export async function reconciliarClave(
   tx: Consultable, cuenta: string, recurso: string, variacion: string, motivo: string,
-  o: { bandeja: boolean },
+  o: OpcionesAutoridad,
 ): Promise<Reconciliacion> {
   // Toma el candado ella misma (hallazgo BAJO de la revisión de Codex sobre T2): `pg_advisory_xact_lock` es
   // reentrante dentro de la misma transacción, así que si el llamador ya lo tomó esto no cuesta nada extra;
   // si un llamador futuro se olvida de tomarlo antes, el orden documentado en el módulo (candado de cuenta
   // antes que filas) queda garantizado igual, en vez de depender de que cada caller lo recuerde.
   await bloquearDecisiones(tx, cuenta);
-  const rep = (await tx.query<{ id: string; company_id: string; variant_id: string | null; omitida_por_decision: boolean }>(
-    `SELECT id, company_id, variant_id, omitida_por_decision FROM catalog.external_representations
+  const rep = (await tx.query<{ id: string; company_id: string; model_id: string | null; variant_id: string | null; omitida_por_decision: boolean }>(
+    `SELECT id, company_id, model_id, variant_id, omitida_por_decision FROM catalog.external_representations
       WHERE channel_account_id = $1 AND recurso = $2 AND variacion_normalizada = $3 AND tipo = 'vendible' FOR UPDATE`,
     [cuenta, recurso, variacion])).rows[0];
   // Todavía no se vio la publicación: cuando el proyector la vea, la vincula con la decisión vigente.
   if (!rep) return 'sin_representacion';
   const empresa = rep.company_id;
 
-  const dec = await decisionVigente(tx, cuenta, recurso, variacion, o);
+  const autoSku = o.autoSku ?? (o.flagsAutoSku ? await modoAutoSku(tx, cuenta, recurso, variacion, o.flagsAutoSku) : 'apagado');
+  const dec = await decisionVigente(tx, cuenta, recurso, variacion, { bandeja: o.bandeja, autoSku });
   let deseado: Deseado;
-  if (dec?.fuente === 'humano' && dec.eleccion === 'vincular') {
+  if ((dec?.fuente === 'humano' || dec?.fuente === 'auto_sku') && dec.eleccion === 'vincular') {
     deseado = { tipo: 'variante', variante: dec.variantId };
   } else if (dec?.fuente === 'humano' && (dec.eleccion === 'omitir' || dec.eleccion === 'mantener_omision')) {
     deseado = { tipo: 'omitida' };
@@ -77,8 +152,8 @@ export async function reconciliarClave(
     deseado = destino ? { tipo: 'variante', variante: destino.id } : { tipo: 'pendiente', caso: 'sku_inexistente_en_woo', sku: dec.sku };
   } else deseado = { tipo: 'pendiente', caso: 'sku_pendiente', sku: null };
 
-  const actual = rep.variant_id ? (await tx.query<{ sku: string | null }>(
-    'SELECT sku FROM catalog.sellable_variants WHERE id = $1 FOR UPDATE', [rep.variant_id])).rows[0]! : null;
+  const actual = rep.variant_id ? (await tx.query<{ sku: string | null; model_id: string | null }>(
+    'SELECT sku, model_id FROM catalog.sellable_variants WHERE id = $1 FOR UPDATE', [rep.variant_id])).rows[0]! : null;
 
   const abrir = (tipo: string, objeto: { variante?: string; representacion?: string }, prioridad = 'normal', detalle: object = {}) => tx.query(
     `INSERT INTO catalog.identity_cases (company_id, tipo, prioridad, variant_id, representation_id, detalle)
@@ -96,27 +171,43 @@ export async function reconciliarClave(
         AND COALESCE((detalle->>'d5')::boolean, false) IS NOT TRUE`, [rep.id, `la decisión cambió: ${motivo}`]);
 
   // ¿Ya está donde tiene que estar?
-  if (deseado.tipo === 'variante' && rep.variant_id === deseado.variante) return 'sin_cambios';
-  if (deseado.tipo === 'omitida' && rep.omitida_por_decision) return 'sin_cambios';
+  if (deseado.tipo === 'variante' && rep.variant_id === deseado.variante) {
+    await repararExtrasDeRepresentacion(tx, empresa, rep.id, actual?.model_id ?? rep.model_id);
+    return 'sin_cambios';
+  }
+  if (deseado.tipo === 'omitida' && rep.omitida_por_decision) {
+    await repararExtrasDeRepresentacion(tx, empresa, rep.id, null);
+    return 'sin_cambios';
+  }
   if (deseado.tipo === 'pendiente' && rep.variant_id && actual?.sku === null) {
     // Sigue pendiente; sólo puede haber cambiado el motivo (sin decisión ↔ SKU que no existe).
     const otro = deseado.caso === 'sku_pendiente' ? 'sku_inexistente_en_woo' : 'sku_pendiente';
     await cerrarDeVariante(rep.variant_id, [otro], `la decisión cambió: ${motivo}`);
     await abrir(deseado.caso, { variante: rep.variant_id }, 'normal', deseado.sku ? { sku: deseado.sku } : {});
+    await repararExtrasDeRepresentacion(tx, empresa, rep.id, actual?.model_id ?? rep.model_id);
     return 'sin_cambios';
   }
 
   let nueva: string | null = null;
-  if (deseado.tipo === 'variante') nueva = deseado.variante;
+  let modeloDestino: string | null = null;
+  if (deseado.tipo === 'variante') {
+    nueva = deseado.variante;
+    modeloDestino = (await tx.query<{ model_id: string | null }>(
+      'SELECT model_id FROM catalog.sellable_variants WHERE id = $1', [nueva])).rows[0]?.model_id ?? null;
+  }
   if (deseado.tipo === 'pendiente') {
+    modeloDestino = await modeloPropioMl(tx, empresa, cuenta, recurso);
     nueva = (await tx.query<{ id: string }>(
       'INSERT INTO catalog.sellable_variants (company_id, model_id) VALUES ($1, $2) RETURNING id',
-      [empresa, await modeloPropioMl(tx, empresa, cuenta, recurso)])).rows[0]!.id;
+      [empresa, modeloDestino])).rows[0]!.id;
     await abrir(deseado.caso, { variante: nueva }, 'normal', deseado.sku ? { sku: deseado.sku } : {});
   }
+  const categoriaCambio = await categoriasDesalineadas(tx, rep.id, modeloDestino);
   await tx.query(
     'UPDATE catalog.external_representations SET variant_id = $2, omitida_por_decision = $3 WHERE id = $1',
     [rep.id, nueva, deseado.tipo === 'omitida']);
+  await tx.query('UPDATE catalog.model_attributes SET model_id = $2 WHERE representation_id = $1', [rep.id, modeloDestino]);
+  await tx.query('UPDATE catalog.model_images SET model_id = $2 WHERE representation_id = $1', [rep.id, modeloDestino]);
   if (deseado.tipo === 'omitida') await abrir('omitida_revisar', { representacion: rep.id }, 'baja');
   else await cerrarOmitida();
 
@@ -132,6 +223,12 @@ export async function reconciliarClave(
       await cerrarDeVariante(rep.variant_id, CASOS_DE_PENDIENTE, destino);
     }
   }
+
+  const modelosAfectados = new Set<string>();
+  if (actual?.model_id && actual.model_id !== modeloDestino) modelosAfectados.add(actual.model_id);
+  if (modeloDestino && modeloDestino !== actual?.model_id) modelosAfectados.add(modeloDestino);
+  for (const m of categoriaCambio) modelosAfectados.add(m);
+  await reclasificarModelosAfectados(tx, empresa, modelosAfectados, categoriaCambio);
 
   await registrarEvento(tx, {
     companyId: empresa, actorType: 'system', actorId: 'plataforma.catalogo', action: 'catalogo.vinculo_cambiado',
@@ -150,7 +247,7 @@ export async function reconciliarClave(
  * consultar si había una decisión HUMANA vigente que debía seguir mandando — pisándola en silencio.
  */
 export async function reconciliarSku(
-  tx: Consultable, empresa: string, sku: string, motivo: string, o: { bandeja: boolean },
+  tx: Consultable, empresa: string, sku: string, motivo: string, o: OpcionesAutoridad,
 ): Promise<number> {
   const claves = (await tx.query<{ channel_account_id: string; recurso: string; variacion_normalizada: string }>(
     `SELECT channel_account_id, recurso, variacion_normalizada FROM catalog.matcher_decisions

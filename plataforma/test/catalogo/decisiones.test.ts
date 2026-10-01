@@ -9,6 +9,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { abrirCopia, aplicarEvento, confirmarCopia, hashFilas, recibirLote, type EventoDecision, type FilaDecision } from '../../src/catalogo/copias.ts';
 import { crearProyector } from '../../src/catalogo/proyector.ts';
+import { reconciliarClave } from '../../src/catalogo/decisiones.ts';
 import { encolarInbox } from '../../src/colas/colas.ts';
 import { crearPool, enTransaccion } from '../../src/db/pool.ts';
 import { cifrarSobre, type KeyringSobre } from '../../src/seguridad/sobre.ts';
@@ -141,6 +142,29 @@ describe('E2-DEC-01 decisiones y fusión', () => {
     await aplicar(evento('MLA9', 'confirmar', 'FB-80'));
     expect(await q("SELECT count(*)::int n FROM audit.audit_events WHERE action = 'catalogo.vinculo_cambiado' AND payload->>'recurso' = 'MLA9'"))
       .toEqual([{ n: 1 }]);
+  });
+
+  it('repara extras desalineados al devolver sin_cambios para una publicación vinculada', async () => {
+    await woos(81); await publicacion('MLA81'); await aplicar(evento('MLA81', 'confirmar', 'FB-81'));
+    const modelo = (await q<{ model_id: string }>(`SELECT v.model_id FROM catalog.external_representations r
+      JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.recurso = 'MLA81'`))[0]!.model_id;
+    const repId = (await q<{ id: string }>(`SELECT id FROM catalog.external_representations WHERE recurso = 'MLA81'`))[0]!.id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES (NULL,$1,'marca','heredada',now())`, [repId]);
+    const resultado = await enTransaccion(app, tx => reconciliarClave(tx, ml, 'MLA81', '', 'reparar', { bandeja: false }));
+    expect(resultado).toBe('sin_cambios');
+    expect((await q<{ model_id: string }>('SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1', [repId]))[0]!.model_id).toBe(modelo);
+  });
+
+  it('repara extras viejos al devolver sin_cambios para una publicación omitida', async () => {
+    await publicacion('MLA82'); await aplicar(evento('MLA82', 'omitir', null));
+    const repId = (await q<{ id: string }>(`SELECT id FROM catalog.external_representations WHERE recurso = 'MLA82'`))[0]!.id;
+    const viejo = (await q<{ id: string }>(`INSERT INTO catalog.product_models
+      (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1,$2,'ml_simple',$3,'viejo') RETURNING id`, [empresa, ml, randomUUID()]))[0]!.id;
+    await admin.query(`INSERT INTO catalog.model_images (model_id, representation_id, url, observado_en) VALUES ($1,$2,'https://x/vieja.jpg',now())`, [viejo, repId]);
+    const resultado = await enTransaccion(app, tx => reconciliarClave(tx, ml, 'MLA82', '', 'reparar', { bandeja: false }));
+    expect(resultado).toBe('sin_cambios');
+    expect((await q<{ model_id: string | null }>('SELECT model_id FROM catalog.model_images WHERE representation_id = $1', [repId]))[0]!.model_id).toBeNull();
   });
 
   it('Woo asigna el SKU mientras llega la decisión que apunta a él: en cualquier orden, queda vinculada', async () => {

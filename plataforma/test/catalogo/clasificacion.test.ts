@@ -207,6 +207,18 @@ describe('E2-CLA-02 dry-run', () => {
     expect((await filas()).length).toBe(1);   // sólo la de la persona
     expect(await casos()).toEqual([]);
   });
+
+  it('no cuenta una fila de atributo sin modelo como un modelo clasificable', async () => {
+    const rep = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations
+         (company_id, channel_account_id, canal, recurso, tipo, omitida_por_decision)
+       VALUES ($1, $2, 'mercadolibre', $3, 'vendible', true) RETURNING id`, [empresa, ml, 'MLA-SIN-MODELO-1'])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES (NULL, $1, 'categoria_canal', 'MLA_SIN_MODELO', now())`, [rep]);
+
+    const r = await foto({ dryRun: true });
+    expect(r.modelos).toBe(12);
+  });
 });
 
 describe('E2-CLA-03 aplicar', () => {

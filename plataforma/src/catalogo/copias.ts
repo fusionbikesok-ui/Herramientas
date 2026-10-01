@@ -18,7 +18,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Consultable } from '../db/pool.ts';
 import { registrarEvento } from '../audit/auditoria.ts';
 import { canonizar } from '../informes/jcs.ts';
-import { bloquearDecisiones, reconciliarClave } from './decisiones.ts';
+import { bloquearDecisiones, reconciliarClave, type OpcionesAutoridad } from './decisiones.ts';
 
 export type Accion = 'confirmar' | 'asignar' | 'omitir';
 
@@ -109,7 +109,7 @@ export interface ResultadoConfirmacion {
 
 /** Verifica y aplica la copia. Debe llamarse dentro de una transacción: todo o nada. */
 export async function confirmarCopia(
-  tx: Consultable, copia: string, cuenta: string, o: { bandeja: boolean },
+  tx: Consultable, copia: string, cuenta: string, o: OpcionesAutoridad,
 ): Promise<ResultadoConfirmacion> {
   const c = await copiaAbierta(tx, copia, true);
   const vacio: ResultadoConfirmacion = { yaConfirmada: false, abiertas: 0, cerradas: 0, sinCambios: 0, masNuevasQueLaCopia: 0, sinRepresentacion: 0 };
@@ -139,7 +139,7 @@ interface Vigente { id: string; recurso: string; variacion_normalizada: string; 
 
 async function aplicarDecisiones(
   tx: Consultable, empresa: string, cuenta: string, copia: string, corte: Date, filas: FilaDecision[],
-  o: { bandeja: boolean },
+  o: OpcionesAutoridad,
 ): Promise<Partial<ResultadoConfirmacion>> {
   await bloquearDecisiones(tx, cuenta);
   const vigentes = new Map((await tx.query<Vigente>(
@@ -260,7 +260,7 @@ export type ResultadoEvento = 'aplicado' | 'repetido' | 'viejo';
  * `identity_cases` (representation_id, tipo, …) ya existe desde 0013 y lo evita.
  */
 export async function aplicarEvento(
-  tx: Consultable, empresa: string, cuenta: string, e: EventoDecision, o: { bandeja: boolean },
+  tx: Consultable, empresa: string, cuenta: string, e: EventoDecision, o: OpcionesAutoridad,
 ): Promise<ResultadoEvento> {
   await bloquearDecisiones(tx, cuenta);
   const nuevo = await tx.query('INSERT INTO catalog.eventos_recibidos (evento_id) VALUES ($1) ON CONFLICT DO NOTHING', [e.evento_id]);

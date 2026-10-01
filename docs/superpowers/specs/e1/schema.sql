@@ -851,13 +851,14 @@ CREATE INDEX format_observations_ultima ON catalog.format_observations (channel_
 -- misma fila. `nombre_normalizado` es léxico (minúsculas, sin acentos, `_`); no hay sinónimos.
 CREATE TABLE catalog.model_attributes (
   id                 bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  model_id           uuid NOT NULL REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
+  model_id           uuid REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
   representation_id  uuid NOT NULL REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
   nombre_normalizado text NOT NULL CHECK (length(nombre_normalizado) > 0),
   valor              text NOT NULL,
   observado_en       timestamptz NOT NULL,
   vigente_hasta      timestamptz,             -- NULL = vigente
-  CONSTRAINT model_attributes_un_valor UNIQUE (representation_id, nombre_normalizado, valor)
+  CONSTRAINT model_attributes_un_valor UNIQUE (representation_id, nombre_normalizado, valor),
+  CONSTRAINT model_attributes_model_or_rep_check CHECK (model_id IS NOT NULL OR representation_id IS NOT NULL)
 );
 CREATE INDEX model_attributes_modelo ON catalog.model_attributes (model_id);
 CREATE INDEX model_attributes_nombre_valor ON catalog.model_attributes (nombre_normalizado, valor);
@@ -866,13 +867,14 @@ CREATE INDEX model_attributes_nombre_valor ON catalog.model_attributes (nombre_n
 -- uno conserva su procedencia. Misma regla de vigencia que los atributos.
 CREATE TABLE catalog.model_images (
   id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  model_id          uuid NOT NULL REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
+  model_id          uuid REFERENCES catalog.product_models(id) ON DELETE RESTRICT,
   representation_id uuid NOT NULL REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
   url               text NOT NULL CHECK (length(url) > 0),
   orden             integer,
   observado_en      timestamptz NOT NULL,
   vigente_hasta     timestamptz,
-  CONSTRAINT model_images_una_url UNIQUE (representation_id, url)
+  CONSTRAINT model_images_una_url UNIQUE (representation_id, url),
+  CONSTRAINT model_images_model_or_rep_check CHECK (model_id IS NOT NULL OR representation_id IS NOT NULL)
 );
 CREATE INDEX model_images_modelo ON catalog.model_images (model_id);
 
@@ -923,7 +925,8 @@ CREATE TABLE catalog.identity_cases (
                     -- atributos en conflicto. Se revisa, nunca se fusiona sola.
                     'atributo_divergente',
                     -- Clasificación en el árbol (0019): cuelgan del MODELO, no de una publicación.
-                    'categoria_en_desacuerdo', 'categoria_sin_mapeo', 'categoria_persona_contradicha')),
+                    'categoria_en_desacuerdo', 'categoria_sin_mapeo', 'categoria_persona_contradicha',
+                    'sku_cambiado', 'formato_cambiado')),
   prioridad       text NOT NULL DEFAULT 'normal' CHECK (prioridad IN ('baja', 'normal', 'urgente')),
   variant_id      uuid REFERENCES catalog.sellable_variants(id) ON DELETE RESTRICT,
   representation_id uuid REFERENCES catalog.external_representations(id) ON DELETE RESTRICT,
@@ -989,7 +992,10 @@ CREATE TABLE catalog.identity_decisions (
   creado_en timestamptz NOT NULL DEFAULT now(),
   CHECK ((eleccion = 'vincular') = (variant_id IS NOT NULL)),
   CHECK (origen <> 'humano' OR efecto = 'aplicar'),
-  CHECK (origen <> 'auto_sku' OR efecto = 'sombra')   -- el corte 3 lo reemplaza
+  -- 0025 (corte 3, tarea 3): reemplaza el CHECK original (origen<>auto_sku OR efecto=sombra), que prohibía
+  -- auto_sku+aplicar. Ahora lo permite, pero exige hash_payload_ml como evidencia de qué se releyó.
+  CONSTRAINT auto_sku_aplicar_con_hash
+    CHECK (origen <> 'auto_sku' OR efecto = 'sombra' OR (efecto = 'aplicar' AND hash_payload_ml IS NOT NULL))
 );
 -- Una decisión vigente por clave (canal, recurso, variación) y efecto: humana (aplicar) y auto_sku
 -- (sombra) sobre la misma publicación conviven sin chocar, son dos anotaciones distintas.
@@ -1466,3 +1472,22 @@ CREATE TABLE catalog.identity_decision_results (
   vinculo text NOT NULL, version int NOT NULL,
   creado_en timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE catalog.e3_canario_corridas (
+  id uuid PRIMARY KEY DEFAULT uuidv7(), company_id uuid NOT NULL REFERENCES core.companies(id), dia date NOT NULL,
+  estado text NOT NULL DEFAULT 'abierta' CHECK (estado IN ('abierta','cerrada','abortada')),
+  congelado_en timestamptz NOT NULL DEFAULT now(), cerrado_en timestamptz, clasificacion jsonb, UNIQUE (company_id, dia));
+CREATE UNIQUE INDEX e3_canario_una_abierta ON catalog.e3_canario_corridas (company_id) WHERE estado = 'abierta';
+CREATE TABLE catalog.e3_canario_casos (
+  corrida_id uuid NOT NULL REFERENCES catalog.e3_canario_corridas(id), case_id uuid NOT NULL REFERENCES catalog.identity_cases(id),
+  channel_account_id uuid NOT NULL, recurso text NOT NULL, variacion_normalizada text NOT NULL, sku_congelado text NOT NULL, variant_id_congelada uuid NOT NULL,
+  estado text NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente','vinculado','bandeja','intervention','parked','ya_resuelto')),
+  intentos int NOT NULL DEFAULT 0, detalle jsonb, tomado_por text, tomado_hasta timestamptz, PRIMARY KEY (corrida_id, case_id));
+
+CREATE TABLE catalog.identity_commands (
+  id uuid PRIMARY KEY DEFAULT uuidv7(), case_id uuid NOT NULL REFERENCES catalog.identity_cases(id),
+  tipo text NOT NULL CHECK (tipo IN ('pausar_publicacion')),
+  estado text NOT NULL DEFAULT 'parked' CHECK (estado IN ('parked')), motivo text NOT NULL,
+  creado_en timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX identity_commands_un_case_tipo ON catalog.identity_commands (case_id, tipo);

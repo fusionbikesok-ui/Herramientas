@@ -11,6 +11,14 @@
     falta: { clase: 'mk--miss', simbolo: '—', texto: 'falta' },
     equivalente: { clase: 'mk--eq', simbolo: '≈', texto: 'equivalente' }
   };
+  // Mantener esta lista en paridad con ATRIBUTOS_COMPARABLES de plataforma/src/identidad/comparar.ts.
+  var ATRIBUTOS_COMPARABLES = { marca: true, modelo: true, color: true, talle: true, tamano_del_cuadro: true,
+    rodado: true, material: true, tipo_de_producto: true, tipo_de_bicicleta: true, genero: true, edad: true, cantidad_de_velocidades: true };
+  function nombreCanonico(nombre) {
+    var n = String(nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s-]+/g, '_');
+    if (n === 'tamano_del_cuadro') return 'talle';
+    return n === 'material_del_cuadro' ? 'material' : n;
+  }
 
   var COPY = {
     version_conflict: 'Este caso cambió mientras lo revisabas; tu elección se conserva.',
@@ -55,6 +63,63 @@
   // Sólo se reintenta lo que puede arreglarse solo: red caída (status 0), 5xx y 429. Un 4xx es una respuesta definitiva.
   function esReintentable(status) { return status === 0 || status === 429 || status >= 500; }
 
+  // Guardia por caso: una decisión incierta no se puede reemplazar por otra elección ni por otra clave.
+  // La UI puede navegar mientras el POST está en vuelo, por eso el índice actual no alcanza como bloqueo.
+  function crearGuardiaDecisiones(crearClave) {
+    var porCaso = new Map();
+    function iniciar(datos) {
+      var existente = porCaso.get(datos.caseId);
+      if (existente) return { entrada: existente, nueva: false };
+      var entrada = Object.assign({}, datos, { key: crearClave(), estado: 'pendiente' });
+      porCaso.set(entrada.caseId, entrada);
+      return { entrada: entrada, nueva: true };
+    }
+    function terminar(entrada, respuesta) {
+      if (respuesta.status === 200 || !esReintentable(respuesta.status)) {
+        porCaso.delete(entrada.caseId);
+        return;
+      }
+      entrada.estado = 'fallido';
+    }
+    function reintentar(entrada) {
+      if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'fallido') return null;
+      entrada.estado = 'pendiente';
+      return entrada;
+    }
+    function reconciliar(entrada) {
+      if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'fallido') return null;
+      entrada.estado = 'reconciliando';
+      return entrada;
+    }
+    function volverAFallido(entrada) {
+      if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'reconciliando') return false;
+      entrada.estado = 'fallido';
+      return true;
+    }
+    function cancelar(entrada, reconciliacion) {
+      if (porCaso.get(entrada.caseId) !== entrada || entrada.estado !== 'reconciliando'
+        || !reconciliacion || reconciliacion.status !== 200) return false;
+      porCaso.delete(entrada.caseId);
+      return true;
+    }
+    return {
+      iniciar: iniciar,
+      terminar: terminar,
+      reintentar: reintentar,
+      reconciliar: reconciliar,
+      volverAFallido: volverAFallido,
+      cancelar: cancelar,
+      estaReconciliando: function (entrada) {
+        return porCaso.get(entrada.caseId) === entrada && entrada.estado === 'reconciliando';
+      },
+      estaBloqueado: function (caseId) { return porCaso.has(caseId); }
+    };
+  }
+
+  function puedeAvanzarTrasGuardar(cola, idx, caseId) {
+    return !!(cola && cola[idx] && cola[idx].id === caseId);
+  }
+
   // Backoff exponencial con jitter (±25 %), tope de 15 s por espera y de 5 intentos en total: con la plataforma
   // caída el operador ve el error en ~30 s en vez de esperar para siempre.
   var MAX_INTENTOS = 5;
@@ -65,6 +130,10 @@
   }
 
   var VENTANA_DESHACER_MS = 10000;
+  function textoCuentaRegresiva(segundos) {
+    var n = Math.max(0, Math.ceil(Number(segundos) || 0));
+    return 'Deshacer: z (' + n + ' s)';
+  }
   function puedeDeshacer(ultima, ahora) {
     return !!ultima && !ultima.consumida && ahora - ultima.ts <= VENTANA_DESHACER_MS;
   }
@@ -83,7 +152,9 @@
 
   function formatoPrecio(precio, moneda) {
     if (precio === null || precio === undefined || precio === '') return 'Sin precio';
-    return String(precio) + (moneda ? ' ' + moneda : '');
+    var n = Number(precio);
+    var valor = Number.isFinite(n) ? new Intl.NumberFormat('es-AR').format(n) : String(precio);
+    return valor + (moneda ? ' ' + moneda : '');
   }
   function formatoStock(stock) {
     if (stock === null || stock === undefined) return 'Stock sin dato';
@@ -154,7 +225,8 @@
         if (n > nCandidatos) return null; // candidato no existe
         return { tipo: 'seleccionar', n: n };
       }
-      if (k === 'enter') return { tipo: 'vincular' };
+      if (k === 'enter') return ctx.candidatoVisible && nCandidatos > 0 ? { tipo: 'vincular' } : null;
+      if (k === 'x') return { tipo: 'rechazar' };
       if (k === '?') return { tipo: 'apartar' };
       if (k === 'o') return { tipo: 'omitir_por_ahora' };
       if (k === 'n') return { tipo: 'no_existe' };
@@ -292,15 +364,159 @@
     });
   }
 
+  var FRASES_TIPO = {
+    sku_pendiente: 'revisá si el SKU observado corresponde al candidato',
+    omitida_revisar: 'revisá la publicación que quedó apartada',
+    sku_inexistente_en_woo: 'confirmá si existe una variante Woo para este SKU',
+    woo_sin_sku: 'revisá título y atributos porque Woo no tiene SKU',
+    woo_sku_duplicado: 'revisá la duplicación del SKU antes de vincular',
+    woo_sku_no_canonico: 'revisá si el SKU de Woo es el canónico',
+    decision_en_conflicto: 'compará la decisión vigente con la nueva evidencia',
+    identidad_legado: 'revisá la identidad heredada y sus datos principales',
+    user_product_divergente: 'revisá si ML y Woo representan la misma variante',
+    atributo_divergente: 'revisá los atributos que difieren',
+    categoria_en_desacuerdo: 'revisá la categoría en ambos canales',
+    categoria_sin_mapeo: 'revisá la categoría sin mapeo',
+    categoria_persona_contradicha: 'revisá la categoría sugerida y la evidencia',
+    sku_cambiado: 'revisá el cambio de SKU',
+    formato_cambiado: 'revisá el formato y la variante publicada'
+  };
+  function fraseTipo(tipo) { return FRASES_TIPO[tipo] || 'compará publicación y candidato antes de decidir'; }
+  function valorAtributo(a, lado) {
+    var original = lado === 'ml' ? a.valorMlOriginal : a.valorCandidatoOriginal;
+    var valor = lado === 'ml' ? a.valorMl : a.valorCandidato;
+    if (original !== undefined && original !== null && String(original).trim() !== '') return String(original);
+    if (valor !== undefined && valor !== null && String(valor).trim() !== '') return String(valor);
+    return '—';
+  }
+  function diferenciasVisibles(explicacion, publicacion) {
+    var e = explicacion && explicacion.explicacion ? explicacion.explicacion : (explicacion || {});
+    var vistos = {};
+    var lista = (e.atributos || []).map(function (a) { return { dato: a, otro: false }; })
+      .concat((e.otros_atributos || []).map(function (a) { return { dato: a, otro: true }; })).filter(function (envoltura) {
+      var a = envoltura.dato;
+      if (!a || !a.nombre || vistos[a.nombre]) return false;
+      var canonico = nombreCanonico(a.nombre);
+      if (envoltura.otro && !ATRIBUTOS_COMPARABLES[canonico]) return false;
+      if (vistos[canonico]) return false;
+      vistos[canonico] = true;
+      return true;
+    }).map(function (envoltura) { var a = envoltura.dato; return Object.assign({}, a, { nombre: nombreCanonico(a.nombre) }); });
+    var otros = e.otros_atributos || [];
+    var tieneFlagMl = publicacion && typeof publicacion.atributos_ml_cargados === 'boolean';
+    var sinAtributosMl = tieneFlagMl
+      ? !publicacion.atributos_ml_cargados
+      : otros.length > 0 && otros.every(function (a) { return !String(a && a.valorMl || '').trim(); })
+        && (e.atributos || []).every(function (a) { return !String(a && a.valorMl || '').trim(); });
+    if (sinAtributosMl) return { diferencias: [], iguales: 0, nombresIguales: [], sinAtributosMl: true };
+    var grupos = { difiere: [], falta: [], equivalente: [], coincide: [] };
+    lista.forEach(function (a) {
+      var marcaActual = a.marca === 'coincide' || a.marca === 'equivalente' ? a.marca : (a.marca === 'falta' ? 'falta' : 'difiere');
+      var copy = marca(marcaActual);
+      var fila = { nombre: a.nombre, marca: marcaActual, simbolo: copy.simbolo, texto: copy.texto,
+        valorMl: valorAtributo(a, 'ml'), valorCandidato: valorAtributo(a, 'candidato') };
+      grupos[marcaActual].push(fila);
+    });
+    var orden = ['difiere', 'falta', 'equivalente'];
+    return {
+      diferencias: orden.reduce(function (out, marca) { return out.concat(grupos[marca]); }, []),
+      iguales: grupos.coincide.length,
+      nombresIguales: grupos.coincide.map(function (a) { return a.nombre; }),
+      sinAtributosMl: false
+    };
+  }
+  function textoDiferencias(n) {
+    return n === 0 ? 'sin diferencias' : n + (n === 1 ? ' diferencia' : ' diferencias');
+  }
+  function resumenCandidato(opcion) {
+    var titulo = opcion && opcion.titulo ? String(opcion.titulo) : 'Sin título';
+    var limite = 28;
+    return {
+      titulo: titulo.length > limite ? titulo.slice(0, limite - 1) + '…' : titulo,
+      diferencias: diferenciasVisibles(opcion && opcion.explicacion).diferencias.length
+    };
+  }
+  function diferenciasDeResultado(resultado) {
+    return diferenciasVisibles(resultado && resultado.explicacion).diferencias.length;
+  }
+  function formatoFilaResultado(resultado) {
+    var diferencias = diferenciasDeResultado(resultado);
+    return {
+      variant_id: resultado && resultado.variant_id,
+      titulo: resultado && resultado.titulo ? String(resultado.titulo) : 'Sin título',
+      sku: resultado && resultado.sku ? String(resultado.sku) : 'Sin SKU',
+      foto: resultado && resultado.foto ? resultado.foto : null,
+      precio: formatoPrecio(resultado && resultado.precio, resultado && resultado.moneda),
+      stock: formatoStock(resultado && resultado.stock),
+      diferencias: diferencias,
+      textoDiferencias: diferencias + ' dif.'
+    };
+  }
+  function indiceResultadoBusqueda(actual, cantidad, delta) {
+    var n = Number(cantidad) || 0;
+    if (n < 1) return -1;
+    var i = Number.isInteger(Number(actual)) ? Number(actual) : -1;
+    return (i + (Number(delta) < 0 ? -1 : 1) + n) % n;
+  }
+  function textoDecision(opcion, diferencias) {
+    if (!opcion) return 'Elegí una acción para este caso';
+    var sku = opcion.sku || 'este candidato';
+    var lista = diferencias && diferencias.diferencias ? diferencias.diferencias : (diferencias || []);
+    return 'Enter = VINCULAR a ' + sku + ' (' + textoDiferencias(lista.length) + ')';
+  }
+
+  function siguienteNivelZoom(nivel, accion) {
+    var actual = Number(nivel);
+    if (actual !== 1 && actual !== 2 && actual !== 3) actual = 1;
+    if (accion === '0') return 1;
+    if (accion === '-' || accion === 'menos') return actual === 1 ? 3 : actual - 1;
+    return actual === 3 ? 1 : actual + 1;
+  }
+
+  function tamanoZoom(nivel) {
+    var n = Number(nivel);
+    if (n !== 1 && n !== 2 && n !== 3) n = 1;
+    return { nivel: n, porcentaje: n * 100 };
+  }
+
+  function indiceCandidatoVisor(actual, n, delta) {
+    n = Number(n) || 0;
+    if (n < 1) return -1;
+    var i = Number(actual);
+    if (!Number.isInteger(i) || i < 0 || i >= n) i = delta < 0 ? 0 : -1;
+    return (i + (Number(delta) < 0 ? -1 : 1) + n) % n;
+  }
+
+  function paresParaVisor(caso, opcion) {
+    var publicacion = (caso && caso.publicacion) || {};
+    var candidato = opcion || null;
+    return {
+      ml: {
+        foto: publicacion.foto || publicacion.thumbnail || null,
+        titulo: publicacion.titulo || 'Sin título',
+        sku: publicacion.sku_observado || publicacion.sku || 'Sin SKU'
+      },
+      candidato: candidato ? {
+        foto: candidato.foto || candidato.thumbnail || null,
+        titulo: candidato.titulo || 'Sin título',
+        sku: candidato.sku || 'Sin SKU'
+      } : null
+    };
+  }
+
   var api = {
     marca: marca, copyError: copyError, puedeDispararAtajo: puedeDispararAtajo, esReintentable: esReintentable,
-    demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
+    demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, textoCuentaRegresiva: textoCuentaRegresiva, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
     formatoStock: formatoStock, opcionesDe: opcionesDe, nombresAtributos: nombresAtributos, atributoDe: atributoDe,
     filaVisible: filaVisible, accionDeTecla: accionDeTecla, siguienteNoSalteado: siguienteNoSalteado,
     indiceNoSalteado: indiceNoSalteado,
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
-    porQue: porQue, atributosIguales: atributosIguales,
-    GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS
+    porQue: porQue, atributosIguales: atributosIguales, fraseTipo: fraseTipo, diferenciasVisibles: diferenciasVisibles,
+    textoDiferencias: textoDiferencias, resumenCandidato: resumenCandidato, diferenciasDeResultado: diferenciasDeResultado,
+    formatoFilaResultado: formatoFilaResultado, indiceResultadoBusqueda: indiceResultadoBusqueda, textoDecision: textoDecision,
+    siguienteNivelZoom: siguienteNivelZoom, tamanoZoom: tamanoZoom, indiceCandidatoVisor: indiceCandidatoVisor, paresParaVisor: paresParaVisor,
+    GRUPOS: GRUPOS, GRUPO_NOMBRE: GRUPO_NOMBRE, VENTANA_DESHACER_MS: VENTANA_DESHACER_MS,
+    crearGuardiaDecisiones: crearGuardiaDecisiones, puedeAvanzarTrasGuardar: puedeAvanzarTrasGuardar
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BandejaLogica = api;
