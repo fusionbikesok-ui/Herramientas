@@ -29,6 +29,11 @@ ML distingue `elegible`, `no_elegible` e `inconcluso`: faltan `shipping.id` o
 `logistic_type` son inconclusos/fail-open; solo logística externa explícita permite
 invalidar/podar. El cron poda ausencias únicamente con listado confiable.
 
+En shipments, el tipo de logística se lee mediante `tipoLogisticaMl` (formato viejo y nuevo),
+ubicado en `lib/mlUtil.js` y reexportado por `lib/preparacion.js` por compatibilidad. Para
+logística local, el SLA operativo puede venir de `GET /shipments/{id}/sla` (con
+`x-format-new: true`); si esa consulta falla se conserva el fallback de campos históricos.
+
 Solo con decisiones verificadas que cambien contratos, invariantes, fuentes de datos o rutas
 canónicas de esta integración. No dupliques reglas normativas: enlazalas a su única fuente.
 

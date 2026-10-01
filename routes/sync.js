@@ -16,14 +16,13 @@ import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
 import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { norm, tsr } from '../lib/matcherEngine.js';
-import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
+import { partirClaveMl, extraerErrorMl, tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { espera } from '../lib/esperas.js';
-import { tipoLogisticaMl } from '../lib/preparacion.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -612,7 +611,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
         throw new Error(`ML respondió ${shipResp.status} al consultar /shipments/${orden.shipping.id}`);
       }
       const ship = shipResp.data;
-      const addr = ship?.receiver_address;
+      // En formato nuevo la guía de ML ubica la dirección bajo destination; el
+      // root queda como fallback por convivencia. Forma no verificada contra una
+      // respuesta real de ML, confirmar con sonda cuando haya permisos.
+      const addr = ship?.destination?.receiver_address || ship?.receiver_address;
       // Solo se arma `shipping` si hay al menos un dato real (nombre o calle) — si no, un
       // objeto shipping vacío deja al pedido con una dirección "declarada" pero en blanco,
       // y la preparación/etiqueta muestra un destinatario vacío en vez de dejar clara la
@@ -638,7 +640,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
           country: 'AR',
         };
       }
-      metodoEnvio = tipoLogisticaMl(ship) || ship?.shipping_option?.name || null;
+      metodoEnvio = ship?.lead_time?.shipping_method?.name
+        || ship?.lead_time?.shipping_method?.type
+        || tipoLogisticaMl(ship)
+        || ship?.shipping_option?.name || null;
     } catch (eShip) {
       // No aborta, no libera ni retiene la reserva: es solo un aviso para detectar el caso.
       logSync(db, {

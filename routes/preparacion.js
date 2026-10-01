@@ -12,8 +12,9 @@ import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
-  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio, tipoLogisticaMl,
+  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
 } from '../lib/preparacion.js';
+import { tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
@@ -21,7 +22,7 @@ import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 const TRACKING_META_KEY = '_andreani_tracking';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
 import { claveGtin } from '../lib/gtin.js';
-import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment, calcularSlaPreparacion } from '../lib/horariosDespacho.js';
+import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment, calcularSlaPreparacion, resolverSlaShipment } from '../lib/horariosDespacho.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -2240,6 +2241,8 @@ export function preparacionRouter(db, cfg) {
           }
           return res.status(409).json({ ok: false, error: 'No hay evidencia suficiente de que el envío ML esté habilitado para preparación.', estado_elegibilidad: elegibilidad.estado, motivo_elegibilidad: elegibilidad.motivo });
         }
+        // El SLA se consulta después de validar elegibilidad: Full/Flex/cancelados no lo necesitan.
+        envio = await resolverSlaShipment({ db, mlCfg: cfg.ml, shipmentId, shipment: envio, logisticType: tipoLogisticaMl(envio), manual: true });
         const items = itemsDesdeOrdenMl(db, orden);
         if (!items.length) {
           return res.status(409).json({ ok: false, code: 'PREPARACION_SIN_ITEMS', error: 'La orden no tiene productos preparados para iniciar.' });
@@ -3504,7 +3507,7 @@ async function pendientesMl(db, mlCfg) {
       fallosHttp.push(`${shipmentId}→${shipResp.status}`);
       continue;
     }
-    const envio = shipResp.data;
+    let envio = shipResp.data;
     // Un 200 sin `status` es un dato inservible, no un éxito: la columna es NOT NULL y
     // cachear NULL/vacío tira SqliteError, que sube sin capturar y le hace perder a
     // syncPedidosCache la sección ML entera de la corrida (ver revisión 2026-08-08). Se
@@ -3543,6 +3546,7 @@ async function pendientesMl(db, mlCfg) {
       if (elegibilidad.estado === 'inconcluso') clavesInconclusas.add(`ml:${orden.id}`);
       continue;
     }
+    envio = await resolverSlaShipment({ db, mlCfg, shipmentId, shipment: envio, logisticType });
     const sla = calcularSlaPreparacion({ canal: 'ml', logisticType, shipment: envio, ahora: new Date() });
     if (sla.estado === 'excluido') continue;
 
@@ -3863,6 +3867,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, logisticType);
     return;
   }
+  envio = await resolverSlaShipment({ db, mlCfg, shipmentId, shipment: envio, logisticType });
   const sla = calcularSlaPreparacion({ canal: 'ml', logisticType, shipment: envio, ahora: new Date() });
   if (sla.estado === 'excluido') return;
 
