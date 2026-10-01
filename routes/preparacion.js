@@ -12,7 +12,7 @@ import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
-  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
+  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio, tipoLogisticaMl,
 } from '../lib/preparacion.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
@@ -2236,7 +2236,7 @@ export function preparacionRouter(db, cfg) {
         const elegibilidad = clasificarElegibilidadMl(orden, envio);
         if (elegibilidad.estado !== 'elegible') {
           if (elegibilidad.estado === 'no_elegible') {
-            invalidarCacheMlNoElegible(db, orden.id || id, orden.status, envio?.status, envio?.logistic_type);
+            invalidarCacheMlNoElegible(db, orden.id || id, orden.status, envio?.status, tipoLogisticaMl(envio));
           }
           return res.status(409).json({ ok: false, error: 'No hay evidencia suficiente de que el envío ML esté habilitado para preparación.', estado_elegibilidad: elegibilidad.estado, motivo_elegibilidad: elegibilidad.motivo });
         }
@@ -3513,11 +3513,12 @@ async function pendientesMl(db, mlCfg) {
       fallosSinStatus.push(String(shipmentId));
       continue;
     }
+    const logisticType = tipoLogisticaMl(envio);
     db.prepare(`
       INSERT INTO ml_shipment_estado (shipment_id, status, substatus, logistic_type, actualizado_en)
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, substatus=excluded.substatus, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
-    `).run(String(shipmentId), envio.status, envio.substatus || null, envio.logistic_type || null, now());
+    `).run(String(shipmentId), envio.status, envio.substatus || null, logisticType || null, now());
 
     // El paquete ya salió (status shipped/delivered, o ready_to_ship con substatus adelantado
     // -- ver envioMlYaSalio) mientras una preparación seguía abierta acá adentro: mismo
@@ -3542,7 +3543,7 @@ async function pendientesMl(db, mlCfg) {
       if (elegibilidad.estado === 'inconcluso') clavesInconclusas.add(`ml:${orden.id}`);
       continue;
     }
-    const sla = calcularSlaPreparacion({ canal: 'ml', logisticType: envio.logistic_type, shipment: envio, ahora: new Date() });
+    const sla = calcularSlaPreparacion({ canal: 'ml', logisticType, shipment: envio, ahora: new Date() });
     if (sla.estado === 'excluido') continue;
 
     const ov = normalizarOrdenMl(orden);
@@ -3563,7 +3564,7 @@ async function pendientesMl(db, mlCfg) {
       despacho_motivo: sla.razon,
       shipment_limite_original: sla.shipment_original,
       sla,
-      logistic_type: envio.logistic_type,
+      logistic_type: logisticType,
       substatus: envio.substatus || null,
       items: itemsDesdeOrdenMl(db, orden),
       preparacion_id: prep?.id || null,
@@ -3852,16 +3853,17 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     envio = shipResp.data;
   }
   const elegibilidad = clasificarElegibilidadMl(orden, envio);
+  const logisticType = tipoLogisticaMl(envio);
   if (shipmentId && envio?.status) db.prepare(`
     INSERT INTO ml_shipment_estado (shipment_id, status, substatus, logistic_type, actualizado_en)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, substatus=excluded.substatus, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
-  `).run(String(shipmentId), envio.status, envio.substatus || null, envio.logistic_type || null, now());
+  `).run(String(shipmentId), envio.status, envio.substatus || null, logisticType || null, now());
   if (elegibilidad.estado === 'no_elegible') {
-    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, envio?.logistic_type);
+    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, logisticType);
     return;
   }
-  const sla = calcularSlaPreparacion({ canal: 'ml', logisticType: envio?.logistic_type, shipment: envio, ahora: new Date() });
+  const sla = calcularSlaPreparacion({ canal: 'ml', logisticType, shipment: envio, ahora: new Date() });
   if (sla.estado === 'excluido') return;
 
   const ov = normalizarOrdenMl(orden);
@@ -3879,7 +3881,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     estado_envio: 'pendiente',
     estado_wc: null,
     espejo_ml: 0,
-    logistic_type: envio?.logistic_type || null,
+    logistic_type: logisticType || null,
     substatus: envio?.substatus || null,
     items_json: JSON.stringify(itemsDesdeOrdenMl(db, orden)),
     actualizado_en: now(),
