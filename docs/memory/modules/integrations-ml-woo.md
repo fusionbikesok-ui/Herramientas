@@ -124,3 +124,21 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   sin variación. `otros_atributos` usa la lista cerrada de identidad comparable, por lo que IDs,
   impuestos, guía de talles y campos `*_del_seller` no generan diferencias. El proxy legado puede
   completar una foto ML faltante desde `ml_publicaciones_cache.thumbnail` de sólo lectura y fail-open.
+- **Canario E3 — invariantes de concurrencia y cuenta (2026-09-27, segunda opinión):** cuatro reglas,
+  todas fail-closed. (1) El fence de cada confirmación incluye el estado de la corrida, no sólo el
+  lease del caso: `aplicarAutoSku` hace `SELECT ... FROM catalog.e3_canario_corridas WHERE id=$1 AND
+  estado='abierta' FOR UPDATE` en la MISMA transacción que aplica el vínculo y confirma el caso de
+  canario; un corredor que quedó esperando ML no puede aplicar su decisión después de que otro abortó
+  la corrida. (2) `cerrarCanario` corre un reaper (`UPDATE ... SET estado='parked' WHERE estado=
+  'en_proceso' AND tomado_hasta < clock_timestamp()`) ANTES del chequeo de lease vivo y de clasificar
+  D6: sin esto, un `en_proceso` con lease vencido no matchea ninguna rama de la clasificación y se
+  pierde silencioso, dando un falso `cero_errores`. (3) `congelarCanario` exige `--cuenta` si la
+  empresa tiene más de una cuenta ML activa (`archived_at IS NULL`); la cuenta elegida se persiste en
+  `catalog.e3_canario_corridas.channel_account_id` (migración `0031_e3_canario_cuenta.sql`, nullable
+  para no romper corridas históricas) y el CLI (`scripts/e3-canario.ts`) resuelve el transporte por
+  ese id exacto de la corrida, nunca por `registro.find()` (que devolvía la primera cuenta ML sin
+  importar cuál corrida se estaba corriendo). (4) Los leases de `catalog.e3_canario_casos` llevan
+  owner (UUID por ejecución) + `fencing_token` monotónico (migración `0030_e3_canario_leases.sql`);
+  cada `UPDATE` de estado hace CAS contra `tomado_por` y `fencing_token`, y la renovación del lease
+  ocurre antes de esperar un `Retry-After` de ML (hasta 300 s, mayor que el lease base). Patrón:
+  Martin Kleppmann, "How to do distributed locking".

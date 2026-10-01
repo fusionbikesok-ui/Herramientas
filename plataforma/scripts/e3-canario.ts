@@ -4,6 +4,7 @@ import { cargarKeyring } from '../src/seguridad/keyring.ts';
 import { cargarRegistro } from '../src/reconciliacion/registro.ts';
 import { crearClienteCanal } from '../src/reconciliacion/cliente-http.ts';
 import { crearTransporteGateway } from '../src/reconciliacion/transporte-gateway.ts';
+import { resolverTransporteDeCorrida } from '../src/identidad/transporte-canario.ts';
 import { crearRelectoresMl } from '../src/reconciliacion/relectura.ts';
 import { congelarCanario, correrCanario, cerrarCanario } from '../src/identidad/canario.ts';
 
@@ -26,12 +27,10 @@ try {
     )).rows[0];
     if (!corrida) throw new Error('canario: corrida inexistente');
     if (!corrida.channel_account_id) throw new Error('canario: la corrida no tiene channel_account_id; no se puede resolver la cuenta ML');
-    const cuenta = registro.find((c) => c.channel === 'mercadolibre' && c.id === corrida.channel_account_id);
-    if (!cuenta || cuenta.channel !== 'mercadolibre') throw new Error(`canario: la cuenta ${corrida.channel_account_id} de la corrida no está en el registro ML`);
     const keyring = cargarKeyring(process.env.CATALOGO_KEYRING_FILE);
     // Relectura de E3 por el cupo sombra con consumidor 'identidad' (E1 T5 §2.8): en producción ese cupo está cerrado
     // (GATEWAY_ML_SHADOW_RPM_E2E3=0) hasta que José lo abra, así que el canario no puede leer ML antes de tiempo.
-    const transporte = cuenta.transporte === 'gateway' ? crearTransporteGateway({ url: cuenta.base_url, keyring, consumidor: 'identidad', sellerId: cuenta.seller_id }) : crearClienteCanal({ baseUrl: cuenta.base_url });
+    const transporte = resolverTransporteDeCorrida(registro, corrida, { keyring, crearTransporteGateway, crearClienteCanal });
     const r = await correrCanario(pool, crearRelectoresMl({ transporte })['ml.items']!, { corridaId: valor('--corrida'), bandeja: true }); console.log(JSON.stringify(r));
   } else if (comando === 'cerrar') console.log(JSON.stringify(await cerrarCanario(pool, { corridaId: valor('--corrida') })));
   else if (comando === 'estado') { const r = await pool.query(`SELECT estado, count(*)::int AS casos FROM catalog.e3_canario_casos WHERE corrida_id=$1 GROUP BY estado`, [valor('--corrida')]); console.log(JSON.stringify(r.rows)); }

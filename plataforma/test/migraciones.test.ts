@@ -16,6 +16,8 @@ function esquemaDe(nombre: string): string {
   return salida.split('\n').filter((l) => !l.startsWith('--') && !l.startsWith('\\restrict') && !l.startsWith('\\unrestrict')).join('\n');
 }
 
+const MIGRACIONES_ESPERADAS = ['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql', '0009_informes_entregas.sql', '0010_webauthn_desafios.sql', '0011_intentos_recuperacion.sql', '0012_entregas_oculto.sql', '0013_catalogo.sql', '0014_catalogo_atributos.sql', '0015_catalogo_taxonomia.sql', '0016_taxonomia_mapeo_muchos_a_uno.sql', '0017_categorias_sin_equivalencia.sql', '0018_model_facets.sql', '0019_casos_de_modelo.sql', '0020_identidad.sql', '0021_titulo_observado.sql', '0022_casos_apartados.sql', '0023_e3_canario.sql', '0024_cupo_sombra_diferido.sql', '0025_e3_auto_sku_aplicar.sql', '0026_e3_canario_corridas.sql', '0027_e3_intervention.sql', '0028_atributos_sin_modelo.sql', '0029_validar_atributos_sin_modelo.sql', '0030_e3_canario_leases.sql', '0031_e3_canario_cuenta.sql'];
+
 async function valor<T>(url: string, sql: string): Promise<T> {
   const c = new pg.Client({ connectionString: url }); await c.connect();
   try { return (await c.query(sql)).rows[0] as T; } finally { await c.end(); }
@@ -33,7 +35,7 @@ describe('migraciones', () => {
   });
   it('E1-SCH-02 migrar dos bases vacías da el mismo esquema', async () => {
     const a = await nueva(); const b = await nueva();
-    expect(await migrar(a.urlMigrador, DIR_MIGRACIONES)).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql', '0009_informes_entregas.sql', '0010_webauthn_desafios.sql', '0011_intentos_recuperacion.sql', '0012_entregas_oculto.sql', '0013_catalogo.sql', '0014_catalogo_atributos.sql', '0015_catalogo_taxonomia.sql', '0016_taxonomia_mapeo_muchos_a_uno.sql', '0017_categorias_sin_equivalencia.sql', '0018_model_facets.sql', '0019_casos_de_modelo.sql', '0020_identidad.sql', '0021_titulo_observado.sql', '0022_casos_apartados.sql', '0023_e3_canario.sql', '0024_cupo_sombra_diferido.sql', '0025_e3_auto_sku_aplicar.sql', '0026_e3_canario_corridas.sql', '0027_e3_intervention.sql', '0028_atributos_sin_modelo.sql', '0029_validar_atributos_sin_modelo.sql', '0030_e3_canario_leases.sql', '0031_e3_canario_cuenta.sql']);
+    expect(await migrar(a.urlMigrador, DIR_MIGRACIONES)).toEqual(MIGRACIONES_ESPERADAS);
     await migrar(b.urlMigrador, DIR_MIGRACIONES);
     expect(esquemaDe(a.nombre)).toBe(esquemaDe(b.nombre));
   });
@@ -68,7 +70,7 @@ describe('migraciones', () => {
   it('E1-SCH-02 dos migradores concurrentes aplican una sola vez', async () => {
     const a = await nueva();
     const [r1, r2] = await Promise.all([migrar(a.urlMigrador, DIR_MIGRACIONES), migrar(a.urlMigrador, DIR_MIGRACIONES)]);
-    expect([...r1, ...r2].sort()).toEqual(['0001_esquema_base.sql', '0002_permisos.sql', '0003_reconciliacion.sql', '0004_corrientes.sql', '0005_senales.sql', '0006_nonces_senales.sql', '0007_relectura_senales.sql', '0008_resumen_sombra.sql', '0009_informes_entregas.sql', '0010_webauthn_desafios.sql', '0011_intentos_recuperacion.sql', '0012_entregas_oculto.sql', '0013_catalogo.sql', '0014_catalogo_atributos.sql', '0015_catalogo_taxonomia.sql', '0016_taxonomia_mapeo_muchos_a_uno.sql', '0017_categorias_sin_equivalencia.sql', '0018_model_facets.sql', '0019_casos_de_modelo.sql', '0020_identidad.sql', '0021_titulo_observado.sql', '0022_casos_apartados.sql', '0023_e3_canario.sql', '0024_cupo_sombra_diferido.sql', '0025_e3_auto_sku_aplicar.sql', '0026_e3_canario_corridas.sql', '0027_e3_intervention.sql', '0028_atributos_sin_modelo.sql', '0029_validar_atributos_sin_modelo.sql', '0030_e3_canario_leases.sql', '0031_e3_canario_cuenta.sql']);
+    expect([...r1, ...r2].sort()).toEqual(MIGRACIONES_ESPERADAS);
   });
 
   it('0031 conserva corridas existentes y mantiene el CHECK de estado', async () => {
@@ -90,6 +92,43 @@ describe('migraciones', () => {
       'SELECT id, dia, channel_account_id FROM catalog.e3_canario_corridas WHERE id = $1', [corrida.id]))).toMatchObject({ rows: [{ id: corrida.id, dia: corrida.dia, channel_account_id: null }] });
     await expect(despues.query(
       "INSERT INTO catalog.e3_canario_corridas(company_id, dia, estado) VALUES ($1, '2026-09-02', 'estado_invalido')", [empresa],
+    )).rejects.toThrow();
+    await despues.end();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('0030 actualiza casos existentes, acepta en_proceso y rechaza fencing negativo', async () => {
+    const a = await nueva();
+    const dir = mkdtempSync(join(tmpdir(), 'migr-upgrade-'));
+    cpSync(DIR_MIGRACIONES, dir, { recursive: true });
+    rmSync(join(dir, '0030_e3_canario_leases.sql'));
+    rmSync(join(dir, '0031_e3_canario_cuenta.sql'));
+    await migrar(a.urlMigrador, dir);
+
+    const antes = new pg.Client({ connectionString: a.urlAdmin }); await antes.connect();
+    const empresa = (await antes.query<{ id: string }>("INSERT INTO core.companies(legal_name) VALUES ('legada-0030') RETURNING id")).rows[0]!.id;
+    const cuenta = (await antes.query<{ id: string }>("INSERT INTO core.channel_accounts(company_id, channel, external_account) VALUES ($1, 'mercadolibre', '0030') RETURNING id", [empresa])).rows[0]!.id;
+    const modelo = (await antes.query<{ id: string }>("INSERT INTO catalog.product_models(company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'ml_simple', '0030', 'legado') RETURNING id", [empresa, cuenta])).rows[0]!.id;
+    const variante = (await antes.query<{ id: string }>("INSERT INTO catalog.sellable_variants(company_id, model_id, sku) VALUES ($1, $2, 'FB-3000') RETURNING id", [empresa, modelo])).rows[0]!.id;
+    const caso = (await antes.query<{ id: string }>("INSERT INTO catalog.identity_cases(company_id, tipo, variant_id) VALUES ($1, 'sku_pendiente', $2) RETURNING id", [empresa, variante])).rows[0]!.id;
+    const corrida = (await antes.query<{ id: string }>("INSERT INTO catalog.e3_canario_corridas(company_id, dia) VALUES ($1, '2026-09-03') RETURNING id", [empresa])).rows[0]!.id;
+    const canario = (await antes.query<{ corrida_id: string; case_id: string }>(
+      "INSERT INTO catalog.e3_canario_casos(corrida_id, case_id, channel_account_id, recurso, variacion_normalizada, sku_congelado, variant_id_congelada) VALUES ($1, $2, $3, 'MLC0030', '', 'FB-3000', $4) RETURNING corrida_id, case_id",
+      [corrida, caso, cuenta, variante],
+    )).rows[0]!;
+    await antes.end();
+
+    cpSync(join(DIR_MIGRACIONES, '0030_e3_canario_leases.sql'), join(dir, '0030_e3_canario_leases.sql'));
+    await migrar(a.urlMigrador, dir);
+    const despues = new pg.Client({ connectionString: a.urlAdmin }); await despues.connect();
+    expect((await despues.query<{ fencing_token: string; estado: string }>(
+      'SELECT fencing_token, estado FROM catalog.e3_canario_casos WHERE corrida_id = $1 AND case_id = $2', [canario.corrida_id, canario.case_id],
+    ))).toMatchObject({ rows: [{ fencing_token: '0', estado: 'pendiente' }] });
+    await expect(despues.query(
+      "UPDATE catalog.e3_canario_casos SET estado = 'en_proceso' WHERE corrida_id = $1 AND case_id = $2", [corrida, caso],
+    )).resolves.toBeDefined();
+    await expect(despues.query(
+      "UPDATE catalog.e3_canario_casos SET fencing_token = -1 WHERE corrida_id = $1 AND case_id = $2", [corrida, caso],
     )).rejects.toThrow();
     await despues.end();
     rmSync(dir, { recursive: true, force: true });
