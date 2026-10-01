@@ -4,6 +4,7 @@ import { requireAdmin } from '../lib/auth.js';
 import { pausarPublicacionMl } from '../lib/matcherPush.js';
 import { perfilPublicacionMl } from '../lib/guardiaMlAprendizaje.js';
 import { decidirCasoIdentidad } from '../lib/identidadProductos.js';
+import { detectarContradiccion } from '../lib/contradiccionTitulo.js';
 import { randomUUID } from 'node:crypto';
 function actor(req) { return req.user?.username || 'desconocido'; }
 function puedeResolver(req) {
@@ -96,6 +97,9 @@ export function guardiaMlRouter(db, cfg) {
       }
       const sku=String(req.body?.sku||'').trim(); const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
       if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
+      const pub = db.prepare('SELECT titulo,color,talle,variations_texto FROM ml_publicaciones_cache WHERE clave=?').get(c.clave);
+      const contradiccion = detectarContradiccion({ tituloMl: pub?.titulo, nombreWoo: prod.nombre, colorMl: pub?.color, talleMl: pub?.talle, variacionesMl: pub?.variations_texto });
+      if (contradiccion.contradice) return res.status(409).json({ ok:false, error:'contradiccion_titulo', motivos: contradiccion.motivos });
       // Compartir SKU entre publicaciones es lo NORMAL del negocio (511 SKUs ya comparten entre
       // 1.176 publicaciones). Se registra en guardia_ml_stock_compartido como dato informativo
       // si no estaba, pero NO se bloquea la vinculación.
@@ -195,6 +199,8 @@ export function guardiaMlRouter(db, cfg) {
       if(!pub)return res.status(404).json({ok:false,error:'publicación no encontrada en ML'});
       const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
       if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
+      const contradiccion = detectarContradiccion({ tituloMl: pub.titulo, nombreWoo: prod.nombre });
+      if (contradiccion.contradice) return res.status(409).json({ ok:false, error:'contradiccion_titulo', motivos: contradiccion.motivos });
 
       // ── Un solo escritor por clave (UM1.6) ─────────────────────────────────────
       // Si Identidad de productos ya gobierna esta clave, la decisión se toma AHÍ y la

@@ -24,6 +24,7 @@ import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { espera } from '../lib/esperas.js';
 import { tipoLogisticaMl } from '../lib/preparacion.js';
+import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -1256,8 +1257,8 @@ export async function syncWcToMl(db, cfg, opts = {}) {
   if (_wcToMlEnCurso) return { omitido: true };
   _wcToMlEnCurso = true;
   try {
-    await _syncWcToMl(db, cfg, opts);
-    return { omitido: false };
+    const bloqueos = await _syncWcToMl(db, cfg, opts);
+    return { omitido: false, bloqueados_contradiccion: bloqueos };
   } finally {
     _wcToMlEnCurso = false;
   }
@@ -1306,6 +1307,8 @@ async function _syncWcToMl(db, cfg, opts = {}) {
   // bloqueado, etc.) NO suman — ver comentario de la constante más arriba.
   let llamadasMl = 0;
   let cortadoPorTope = false;
+  let bloqueadosContradiccion = 0;
+  const contradicciones = new Map();
   try {
     const cacheStatus = db.prepare('SELECT DISTINCT item_id, status FROM ml_publicaciones_cache').all();
     for (const r of cacheStatus) {
@@ -1328,6 +1331,18 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     const cantidad = Math.max(0, Math.round(stock_disponible_ml));
 
     try {
+      if (cantidad > 0) {
+        let contradiccion = contradicciones.get(clave);
+        if (contradiccion === undefined) {
+          contradiccion = contradiccionDeClave(db, clave, sku);
+          contradicciones.set(clave, contradiccion);
+        }
+        if (contradiccion.contradice) {
+          bloqueadosContradiccion++;
+          logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: diff.cantidad_ml, cantNueva: cantidad, estado: 'bloqueado_contradiccion', error: JSON.stringify(contradiccion.motivos) });
+          continue;
+        }
+      }
       if (!estadoItem.has(itemId)) {
         llamadasMl++;
         const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
@@ -1420,6 +1435,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     // grande, se retoma la próxima corrida)" de "cortó por 429" en el log.
     logSync(db, { direccion: 'wc_ml', clave: null, sku: null, estado: 'info', error: `Tope de ${maxLlamadas} llamadas a ML alcanzado — corte de corrida, se retoma en el próximo ciclo` });
   }
+  return bloqueadosContradiccion;
 }
 
 // ─── reconciliarStockMl ──────────────────────────────────────────────────────

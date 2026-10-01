@@ -25,6 +25,12 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 
 ## Cuándo actualizar
 
+- **Bloqueo por contradicción de título (2026-10-01):** `lib/contradiccionTitulo.js` compara
+  transmisión, velocidades, color y talle entre `ml_publicaciones_cache` y `catalogo_cache`;
+  auto-vínculos, vínculos manuales, la decisión legacy y subidas positivas de stock quedan
+  bloqueados cuando ambos lados declaran atributos incompatibles. El stock cero sigue permitido
+  para proteger de sobreventa y el sync cachea el resultado por clave dentro de cada corrida.
+
 ML distingue `elegible`, `no_elegible` e `inconcluso`: faltan `shipping.id` o
 `logistic_type` son inconclusos/fail-open; solo logística externa explícita permite
 invalidar/podar. El cron poda ausencias únicamente con listado confiable.
