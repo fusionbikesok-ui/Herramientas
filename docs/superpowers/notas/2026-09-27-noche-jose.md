@@ -173,3 +173,25 @@ La otra sesión los corrige con luna, escribiendo primero un test que falle para
 E3 queda completo en código. Para encender el canario siguen faltando las tareas operativas que ya están listadas arriba y tu autorización.
 
 `fix/bandeja-debt` toca `public/`, así que antes de desplegarla necesita además el auditor de despliegue y la prueba en navegador con Playwright.
+
+## ⚠ Producción avanzó: el paso 2 del deploy de `350cd95a` ya no sirve (2026-10-01)
+
+El árbol de producción ya no está en `27dc22f4`. Está en **`05f37638`**, con 12 commits del 30/09:
+- barridos reanudables;
+- menos errores 429 de ML;
+- cambios en preparaciones.
+
+**No corras el paso 2 de arriba:** `git merge --ff-only 350cd95a` va a fallar.
+
+Lo que comprobé:
+- **Conflictos:** `git merge-tree` entre `05f37638` y `350cd95a` sale **limpio**.
+- **Migraciones:** producción sigue en la **0027**, no hay ninguna nueva.
+
+Lo que hace ahora la otra sesión:
+1. Arma la rama `fix/integracion-0028` (merge de `350cd95a` sobre `05f37638`).
+2. Corre la suite completa.
+3. Pasa el revisor y el auditor de despliegue.
+
+Cuando eso esté verde te paso los comandos actualizados. El resto del procedimiento queda igual: backups, migración, recrear los servicios y backfill.
+
+**Pregunta 5:** ¿`05f37638` lo desplegaste vos o lo hizo otra sesión? En `evidence/` no hay registro de ese deploy.
