@@ -103,7 +103,7 @@ describe('E3-SCH-01 esquema de identity_decisions/candidates/evidence', () => {
     await expect(decisionHumana(db, e, c, v)).resolves.toBeTruthy();
   });
 
-  it('(b) una decisión auto_sku/aplicar viola el CHECK', async () => {
+  it('(b) una decisión auto_sku/aplicar SIN hash_payload_ml viola el CHECK (0023, tarea 3: el corte 3 permite auto_sku/aplicar, pero exige la evidencia de qué se releyó)', async () => {
     const db = await admin(); const e = await sembrar(db);
     const m = await modelo(db, e); const v = await variante(db, e.empresa, m);
     const c = await caso(db, e, v);
@@ -112,6 +112,32 @@ describe('E3-SCH-01 esquema de identity_decisions/candidates/evidence', () => {
          (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id,
           origen, actor, efecto, idempotency_key)
        VALUES ($1, $2, $3, 'MLA1', '', 'vincular', $4, 'auto_sku', 'motor', 'aplicar', $5)`,
+      [e.empresa, c, e.ml, v, randomUUID()],
+    )).rejects.toThrow(/check/i);
+  });
+
+  it('(b2) 0023 paso 1b: auto_sku/aplicar CON hash_payload_ml se acepta (ya no lo rechaza el CHECK viejo, sólo el nuevo, que sí lo permite)', async () => {
+    const db = await admin(); const e = await sembrar(db);
+    const m = await modelo(db, e); const v = await variante(db, e.empresa, m);
+    const c = await caso(db, e, v);
+    await expect(db.query(
+      `INSERT INTO catalog.identity_decisions
+         (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id,
+          origen, actor, efecto, hash_payload_ml, idempotency_key)
+       VALUES ($1, $2, $3, 'MLA1', '', 'vincular', $4, 'auto_sku', 'motor', 'aplicar', 'deadbeef', $5)`,
+      [e.empresa, c, e.ml, v, randomUUID()],
+    )).resolves.toBeTruthy();
+  });
+
+  it('(b3) 0023 paso 1b: humano/sombra sigue rechazado (el otro CHECK, origen<>humano OR efecto=aplicar, no lo toca esta migración)', async () => {
+    const db = await admin(); const e = await sembrar(db);
+    const m = await modelo(db, e); const v = await variante(db, e.empresa, m);
+    const c = await caso(db, e, v);
+    await expect(db.query(
+      `INSERT INTO catalog.identity_decisions
+         (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id,
+          origen, actor, efecto, idempotency_key)
+       VALUES ($1, $2, $3, 'MLA1', '', 'vincular', $4, 'humano', 'test', 'sombra', $5)`,
       [e.empresa, c, e.ml, v, randomUUID()],
     )).rejects.toThrow(/check/i);
   });

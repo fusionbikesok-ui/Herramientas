@@ -1343,6 +1343,7 @@ async function abrirDetalle(id,empujar){
     return;
   }
   PREP=r.body.data;
+  try{var tareasRotulado=await api('/'+PREP.id+'/etiquetas-manuales');PREP.etiquetas_manuales=tareasRotulado.body.data||[];}catch(e){PREP.etiquetas_manuales=[];}
   if(empujar!==false&&pedidoDeLaUrl()!==Number(id))history.pushState({pedido:Number(id)},'',urlPedido(id));
   ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, (PREP.eventos&&PREP.eventos[0])?PREP.eventos[0].id:0);
   renderDetalle();
@@ -1508,7 +1509,7 @@ function renderDetalle(){
     return;
   }
 
-  var paso1=p.items.every(function(it){return itemListo(it)||it.despacho==='deposito_delegado';});
+  var paso1=p.items.length>0&&p.items.every(function(it){return itemListo(it)||it.despacho==='deposito_delegado';});
   // El requisito de fotos de paquete se salta acá mismo criterio que el backend
   // (routes/preparacion.js /completar): mientras haya ítems 'deposito_delegado' sin
   // resolver, ESTE /completar va a dejar la preparación en 'pendiente_deposito' sin pedir
@@ -1556,6 +1557,13 @@ function renderDetalle(){
   html+='<section aria-labelledby="checklist-productos-title"><h2 id="checklist-productos-title" style="font-size:16px;margin:14px 0 8px">Checklist de productos <span class="badge '+(paso1?'b-ok':'b-mut')+'">'+unidadesVerificadas+'/'+unidadesEsperadas+' unidades</span></h2>'
     +'<p class="sub" style="margin:0 0 10px">Escaneá cada unidad. Una línea se completa únicamente al alcanzar la cantidad esperada.</p>'
     +p.items.map(itemHtml).join('')+'</section>';
+  var tareas=p.etiquetas_manuales||[];
+  if(tareas.length){var pendientesEtiqueta=tareas.filter(function(t){return t.estado==='pendiente';});
+    html+='<section><h2 style="font-size:16px">Etiquetas pendientes de reposición</h2>'
+      +(pendientesEtiqueta.length?'<p class="sub">'+pendientesEtiqueta.length+' pendiente(s). El despacho puede continuar; la salida sin etiqueta queda para revisión.</p>':'<p class="sub">Todas las etiquetas manuales están hechas.</p>')
+      +tareas.map(function(t){return '<div class="item"><b>'+esc(t.nombre||t.sku||'Producto')+'</b> · '+Number(t.unidades)+' unidad(es) · '+esc(t.sku||'')
+        +(t.estado==='hecha'?'<span class="badge b-ok">Hecha · '+esc(t.hecha_por||'')+' · '+esc(t.hecha_en||'')+'</span>':'<button class="btn sec" onclick="marcarEtiquetaManualHecha('+p.id+','+t.id+')">Marcar etiqueta hecha</button>')+'</div>';}).join('')+'</section>';
+  }
   html+=renderFotosPaquete(p);
 
   html+='<div style="margin-top:16px">'+renderActividad()+'</div>';
@@ -1888,9 +1896,17 @@ async function refrescarDetalle(){
   var r=await api('/'+PREP.id);
   if(r.body.ok){
     PREP=r.body.data;
+    try{var tm=await api('/'+PREP.id+'/etiquetas-manuales');PREP.etiquetas_manuales=tm.body.data||[];}catch(e){PREP.etiquetas_manuales=[];}
     ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, (PREP.eventos&&PREP.eventos[0])?PREP.eventos[0].id:0);
     renderDetalle();
   }
+}
+
+async function marcarEtiquetaManualHecha(prepId,taskId){
+  if(!PREP||PREP.id!==prepId)return;
+  try{var r=await api('/'+prepId+'/etiquetas-manuales/'+taskId+'/hecha',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(!r.body.ok)throw new Error(r.body.error||'falló');await refrescarDetalle();}
+  catch(e){flash('bad','No se pudo marcar la etiqueta como hecha. Revisá la conexión y reintentá.');}
 }
 
 async function refrescarSoloActividad(){
@@ -2061,7 +2077,7 @@ function programarConfirmacionManual(motivo,detalleTexto){
     pese=true;
   }
   if(pendienteManual)clearTimeout(pendienteManual.timer);
-  var pend={itemId:itemId,motivo:motivo,detalleTexto:detalleTexto,pese:pese};
+  var pend={preparacionId:PREP.id,itemId:itemId,motivo:motivo,detalleTexto:detalleTexto,pese:pese};
   pendienteManual=pend;
   flashDeshacer('Confirmando "'+nombreItem+'" sin código…',function(){
     if(pendienteManual!==pend)return;
@@ -2072,23 +2088,29 @@ function programarConfirmacionManual(motivo,detalleTexto){
   pend.timer=setTimeout(function(){
     if(pendienteManual!==pend)return; // se deshizo antes de disparar
     pendienteManual=null;
-    enviarConfirmacionManual(itemId,motivo,detalleTexto,pend.pese);
+    enviarConfirmacionManual(itemId,motivo,detalleTexto,pend.pese,pend.preparacionId);
   },MANUAL_UNDO_MS);
 }
-async function enviarConfirmacionManual(itemId,motivo,detalleTexto,pese){
+async function enviarConfirmacionManual(itemId,motivo,detalleTexto,pese,preparacionId){
+  preparacionId=preparacionId||PREP.id;
   var body={motivo:motivo};
   if(detalleTexto)body.detalle_texto=detalleTexto;
   if(pese)body.pese_a_no_coincide=true;
-  var r=await api('/'+PREP.id+'/item/'+itemId+'/confirmar-manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  var r;
+  try{r=await api('/'+preparacionId+'/item/'+itemId+'/confirmar-manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
+  catch(e){flash('bad','No se pudo confirmar sin código. Volvé al pedido y reintentá.');if(PREP&&PREP.id===preparacionId)refrescarDetalle();return;}
   if(r.status===409&&r.body.code==='NO_COINCIDE_PREVIO'&&!pese){
     // Lecturas de antes de recargar la página: el servidor las recuerda aunque la pantalla no.
-    NO_COINCIDE_LOCAL[PREP.id]=r.body.lecturas||[];
-    if(confirm('Antes se leyeron códigos que NO son de este pedido:\n'+textoLecturasNoCoinciden(r.body.lecturas)+'\n\n¿Revisaste la unidad y querés confirmarla sin código igual?'))return enviarConfirmacionManual(itemId,motivo,detalleTexto,true);
+    NO_COINCIDE_LOCAL[preparacionId]=r.body.lecturas||[];
+    if(confirm('Antes se leyeron códigos que NO son de este pedido:\n'+textoLecturasNoCoinciden(r.body.lecturas)+'\n\n¿Revisaste la unidad y querés confirmarla sin código igual?'))return enviarConfirmacionManual(itemId,motivo,detalleTexto,true,preparacionId);
     flash('warn','No se confirmó. Revisá la unidad y volvé a escanearla.');
     return;
   }
-  if(r.body.ok&&mergeItemLocal(r.body.item)){renderDetalle();refrescarSoloActividad();}
-  else{flash('bad',r.body.error||'No se pudo confirmar sin código');refrescarDetalle();}
+  if(r.body.ok&&PREP&&PREP.id===preparacionId){
+    try{await refrescarDetalle();}
+    catch(e){flash('bad','La confirmación se guardó, pero no pudimos actualizar las tareas. Volvé a cargar el pedido.');}
+  }
+  else if(!r.body.ok&&PREP&&PREP.id===preparacionId){flash('bad',r.body.error||'No se pudo confirmar sin código');refrescarDetalle();}
 }
 
 // Corta en seco la espera del "Deshacer" y manda YA lo que estaba pendiente, por
@@ -2106,14 +2128,14 @@ function flushConfirmacionManualPendiente(){
   var body={motivo:pend.motivo};
   if(pend.detalleTexto)body.detalle_texto=pend.detalleTexto;
   if(pend.pese)body.pese_a_no_coincide=true;
-  var url='/api/preparacion/'+PREP.id+'/item/'+pend.itemId+'/confirmar-manual';
+  var url='/api/preparacion/'+pend.preparacionId+'/item/'+pend.itemId+'/confirmar-manual';
   if(navigator.sendBeacon){
     navigator.sendBeacon(url,new Blob([JSON.stringify(body)],{type:'application/json'}));
   }else{
     // Navegador sin sendBeacon (rarísimo hoy): mejor un fetch disparado igual que nada —
     // puede no llegar a completarse si la página se va a mitad de camino, pero el refetch
     // al volver a foco (visibilitychange→'visible') va a decir la verdad de todos modos.
-    enviarConfirmacionManual(pend.itemId,pend.motivo,pend.detalleTexto);
+    enviarConfirmacionManual(pend.itemId,pend.motivo,pend.detalleTexto,pend.pese,pend.preparacionId);
   }
 }
 document.addEventListener('visibilitychange',function(){
@@ -2711,6 +2733,7 @@ async function cargarSeguimientos(){
 function badgeEstadoPrep(estado){
   if(estado==='en_preparacion')return '<span class="badge b-warn">en preparación</span>';
   if(estado==='despachada_sin_verificar')return '<span class="badge b-mut">despachada sin verificar</span>';
+  if(estado==='cancelada_sin_retiro_registrado')return '<span class="badge b-mut">cancelada sin retiro registrado</span>';
   if(estado==='cerrada_sin_evidencia')return '<span class="badge b-warn">cerrada sin evidencia</span>';
   // Está escaneada y verificada: lo opuesto de "sin preparación" (hallazgo del revisor,
   // caía en el default y mentía). Ver ESTADOS_BLOQUEADOS_PARA_TRABAJAR en preparacion.js:
@@ -3234,6 +3257,7 @@ async function cargarHistorial(){
     var rows=r.body.data||[];
     var dep=rows.filter(function(p){return p.estado==='pendiente_deposito';});
     var comp=rows.filter(function(p){return p.estado==='completada';});
+    var canceladasSinRetiro=rows.filter(function(p){return p.estado==='cancelada_sin_retiro_registrado';});
     var sinPreparar=rows.filter(function(p){return p.estado==='enviado_sin_preparar';});
     var html='';
     if(sinPreparar.length){
@@ -3244,6 +3268,10 @@ async function cargarHistorial(){
       html+='<h1 style="font-size:1.1rem">Pendientes de <em>depósito</em></h1><div class="ped-grid" style="margin-bottom:20px">'
         +dep.map(cardHistorial).join('')+'</div>';
     }
+    if(canceladasSinRetiro.length){
+      html+='<h1 style="font-size:1.1rem">Canceladas sin retiro registrado</h1><div class="ped-grid" style="margin-bottom:20px">'
+        +canceladasSinRetiro.map(cardHistorial).join('')+'</div>';
+    }
     html+='<h1 style="font-size:1.1rem">Completadas</h1>';
     html+=comp.length?'<div class="ped-grid">'+comp.map(cardHistorial).join('')+'</div>':'<div class="loading">Todavía no hay preparaciones completadas.</div>';
     c.innerHTML=html;
@@ -3252,7 +3280,7 @@ async function cargarHistorial(){
 
 function cardHistorial(p){
   var canal=p.canal==='web'?'<span class="badge b-web">WEB</span>':'<span class="badge b-ml">ML</span>';
-  var st=p.estado==='completada'?'<span class="badge b-ok">completada</span>':'<span class="badge b-dep">pendiente depósito</span>';
+  var st=p.estado==='completada'?'<span class="badge b-ok">completada</span>':(p.estado==='cancelada_sin_retiro_registrado'?badgeEstadoPrep(p.estado):'<span class="badge b-dep">pendiente depósito</span>');
   var corregirBtn=p.canal==='web'
     ?'<button class="btn mini sec" style="margin-left:auto" onclick="abrirCorreccionTracking('+p.wc_order_id+',event)">Corregir tracking</button>'
     :'';

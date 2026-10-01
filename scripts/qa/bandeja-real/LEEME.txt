@@ -1,0 +1,9 @@
+Bandeja de identidad sobre la plataforma real, pero completamente efímera.
+
+  node scripts/qa/bandeja-real/levantar.mjs
+  BANDEJA_REAL_URL=http://127.0.0.1:PUERTO/herramientas/bandeja-identidad/ node scripts/qa/bandeja-real/medir.mjs ./tmp/bandeja-real
+  node scripts/qa/bandeja-real/levantar.mjs apagar
+
+El levantador crea un Postgres propio, aplica las migraciones, siembra casos, levanta la API real y
+un servidor legacy mínimo. Ctrl-C ejecuta la misma limpieza (`docker rm -f -v`). No usar contra una
+base existente; la URL de Postgres se construye únicamente con el puerto publicado por el contenedor.

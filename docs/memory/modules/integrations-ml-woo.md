@@ -15,6 +15,7 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 
 ## Contratos vigentes de Entrega 1
 
+- Desde el ajuste E1 del 2026-09-30, las notificaciones `ml.messages` se releen por ID con `GET /messages/{id}?tag=post_sale`; `/messages/unread` queda como barrido redundante cada seis horas. Los GET individuales de `ml.shipments` se hacen en serie, con 300 ms entre ellos y `x-format-new: true`. El gateway mantiene rutas y parámetros cerrados. Ver `docs/superpowers/evidence/e1/2026-09-30-E1-429-api-fix-deploy.md`; la calibración de cupos y la campaña PM-186 siguen sujetas a la medición Tarea 0.
 - La reasignación manual de un vínculo ML→Woo exige el SKU observado por el cliente y
   responde conflicto si otra operación lo cambió antes de escribir.
 - Un timeout durante el primer PUT de tracking a Woo es un resultado incierto: se persiste y
@@ -79,6 +80,10 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
     `matcher:write`, con un único recordatorio a los 120 min y título "Venta liberada" al resolverse;
     deep link `incidentes/{id}` (la App ya lo abre). El inicio muestra el chip
     `atencion.ventas_retenidas_guardia` → `/herramientas/guardia-ml/`.
+- **Búsqueda manual rica de identidad (2026-09-26):** `GET /internal/v1/identidad/variantes` acepta
+  `caso_id` opcional; cuando pertenece a la misma empresa agrega `explicacion` contra la publicación ML
+  resuelta del caso, usando la misma proyección de atributos del detalle. Sin `caso_id` conserva el contrato
+  anterior; UUID inválido responde 400 y un caso ajeno 404.
 - **Verificado por sonda autenticada de sólo lectura (2026-09-13):** `GET /orders/search` acepta
   `order.date_last_updated.from` y lo aplica (sin filtro 2.446, desde ayer 3, desde +30 días 0).
   `GET /shipments/{id}` responde 200 **sin** `x-format-new` y trae `last_updated`, aunque la

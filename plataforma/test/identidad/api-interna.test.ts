@@ -3,7 +3,7 @@
  * Mismo patrón que test/catalogo/api-interna.test.ts.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { crearApi } from '../../src/api/app.ts';
 import { PREFIJO_IDENTIDAD } from '../../src/api/identidad-interna.ts';
 import type { Canal } from '../../src/api/senales.ts';
@@ -307,6 +307,29 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     expect((await get(`${PREFIJO_IDENTIDAD}/casos/${randomUUID()}`)).status).toBe(404);
   });
 
+  it('el detalle devuelve la primera foto vigente de la representación ML, o null si no existe', async () => {
+    const conFoto = await caso('MLA_FOTO');
+    const sinFoto = await caso('MLA_SIN_FOTO');
+    const vencida = await caso('MLA_FOTO_VENCIDA');
+    await admin.query(
+      `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en)
+       SELECT $1, r.id, x.url, x.orden, now() - interval '1 hour'
+       FROM catalog.external_representations r
+       CROSS JOIN (VALUES ('https://img/vigente.jpg', 2), ('https://img/primera.jpg', 1)) x(url, orden)
+       WHERE r.recurso = 'MLA_FOTO'`,
+      [conFoto.modelo],
+    );
+    await admin.query(
+      `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en, vigente_hasta)
+       SELECT $1, r.id, 'https://img/vencida.jpg', 1, now() - interval '2 hours', now() - interval '1 hour'
+       FROM catalog.external_representations r WHERE r.recurso = 'MLA_FOTO_VENCIDA'`, [vencida.modelo],
+    );
+
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${conFoto.id}`)).body.publicacion.foto).toBe('https://img/primera.jpg');
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${sinFoto.id}`)).body.publicacion.foto).toBeNull();
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${vencida.id}`)).body.publicacion.foto).toBeNull();
+  });
+
   /*
    * Bug reportado por opt-16 (2026-09-24, revisión de las decisiones de José): sin título ML (representación
    * ya colgada de una variante woo_*, sin ml_simple/ml_clasico propio ni titulo_observado), el motor no
@@ -423,6 +446,83 @@ describe('E3-API-01 API interna de la bandeja de identidad', () => {
     // E: el SKU exacto se normaliza (upper/trim), como en el plan.
     expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=%20fb-100%20`)).body.variantes[0].sku).toBe('FB-100');
     expect((await get(`${PREFIJO_IDENTIDAD}/variantes`)).status).toBe(422);
+  });
+
+  it('buscar otra variante con caso_id agrega la explicación contra la publicación ML del caso', async () => {
+    const c = await caso('MLA_BUSQUEDA_EXPLICADA');
+    const cand = await variante('Casco Bell Negro', 'FB-7777');
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, 'marca', 'negro', now() FROM catalog.external_representations r WHERE r.recurso = 'MLA_BUSQUEDA_EXPLICADA'`, [c.modelo],
+    );
+    await admin.query(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, estado_remoto)
+       VALUES ($1, $2, 'woocommerce', 'vendible', 'WOO_BUSQ_EXPLICADA', '', $3, 'publish')`, [empresa, ml, cand.variante]);
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, 'marca', 'rojo', now() FROM catalog.external_representations r WHERE r.recurso = 'WOO_BUSQ_EXPLICADA'`, [cand.modelo]);
+
+    const conCaso = await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-7777&caso_id=${c.id}`);
+    expect(conCaso.status).toBe(200);
+    expect(conCaso.body.variantes[0]).toMatchObject({ sku: 'FB-7777', explicacion: {
+      atributos: [],
+      otros_atributos: [{ nombre: 'marca', marca: 'difiere', valorMl: 'negro', valorCandidato: 'rojo' }],
+    } });
+
+    const sinCaso = await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-7777`);
+    expect(sinCaso.body.variantes[0]).not.toHaveProperty('explicacion');
+  });
+
+  it('buscar otra variante rechaza caso_id inválido con el único contrato de validación 422', async () => {
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-100&caso_id=no-es-uuid`)).status).toBe(422);
+  });
+
+  it('buscar otra variante obtiene los atributos de todos los candidatos con una consulta real agrupada', async () => {
+    const c = await caso('MLA_CONTEO_CONSULTAS');
+    const candidatos = [
+      await variante('Casco Bell Negro', 'FB-8101'),
+      await variante('Casco Bell Negro', 'FB-8102'),
+      await variante('Casco Bell Negro', 'FB-8103'),
+    ];
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, 'marca', 'negro', now() FROM catalog.external_representations r WHERE r.recurso = 'MLA_CONTEO_CONSULTAS'`, [c.modelo],
+    );
+    for (const [i, candidato] of candidatos.entries()) {
+      const recurso = `WOO_CONTEO_CONSULTAS_${i}`;
+      await admin.query(
+        `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, estado_remoto)
+         VALUES ($1, $2, 'woocommerce', 'vendible', $3, '', $4, 'publish')`, [empresa, ml, recurso, candidato.variante],
+      );
+      await admin.query(
+        `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+         SELECT $1, r.id, 'marca', 'rojo', now() FROM catalog.external_representations r WHERE r.recurso = $2`, [candidato.modelo, recurso],
+      );
+    }
+
+    const consultas = vi.spyOn(pool, 'query');
+    consultas.mockClear();
+    const resultado = await get(`${PREFIJO_IDENTIDAD}/variantes?q=Casco&caso_id=${c.id}`);
+    const consultasDeAtributos = consultas.mock.calls.filter(([sql]) => typeof sql === 'string' && sql.includes('catalog.model_attributes'));
+    consultas.mockRestore();
+
+    expect(resultado.status).toBe(200);
+    expect(resultado.body.variantes).toHaveLength(3);
+    // Una consulta carga los atributos de la publicación ML y una segunda agrupa los tres modelos Woo.
+    expect(consultasDeAtributos).toHaveLength(2);
+    expect(consultasDeAtributos.some(([sql]) => String(sql).includes('model_id = ANY($1::uuid[])'))).toBe(true);
+  });
+
+  it('buscar otra variante rechaza con 404 un caso de otra empresa', async () => {
+    const otra = (await admin.query<{ id: string }>("INSERT INTO core.companies(legal_name) VALUES ('Otra') RETURNING id")).rows[0]!.id;
+    const modelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'woo_simple', $3, 'Otra') RETURNING id`, [otra, ml, randomUUID()])).rows[0]!.id;
+    const v = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, 'FB-9001') RETURNING id`, [otra, modelo])).rows[0]!.id;
+    const ajeno = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.identity_cases (company_id, tipo, variant_id) VALUES ($1, 'sku_pendiente', $2) RETURNING id`, [otra, v])).rows[0]!.id;
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-100&caso_id=${ajeno}`)).status).toBe(404);
   });
 
   it('apartados: van a su propio grupo 7, se cuentan en contadores.apartados y no aparecen filtrando por otro grupo', async () => {

@@ -1595,7 +1595,7 @@ components:
         id: { type: string, nullable: true, description: "id de la preparación; null si todavía no se inició" }
         clave: { type: string, description: "Identificador estable del pedido (canal:numero)" }
         canal: { type: string, enum: [ml, web] }
-        estado: { type: string, enum: [sin_iniciar, en_preparacion, pendiente_deposito, completada, despachada_sin_verificar, cerrada_sin_evidencia] }
+        estado: { type: string, enum: [sin_iniciar, en_preparacion, pendiente_deposito, completada, despachada_sin_verificar, cerrada_sin_evidencia, cancelada_pendiente_devolucion, cancelada_sin_retiro_registrado] }
         pack_id: { type: string, nullable: true, description: "Identificador de pack de ML; null para pedidos sin pack o web" }
         numero_pedido: { type: string, nullable: true }
         comprador: { type: string, nullable: true }

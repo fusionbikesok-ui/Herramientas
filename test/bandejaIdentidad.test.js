@@ -16,6 +16,15 @@ import { crearOrigenes, verificarInterna } from '../plataforma/src/seguridad/int
 const mod = await import('../public/bandeja-identidad/logica.js');
 const L = mod.default?.marca ? mod.default : mod.marca ? mod : (globalThis.BandejaLogica ?? globalThis.window?.BandejaLogica);
 
+describe('E3 T7 — zoom puro del visor comparativo', () => {
+  it('cada nivel conserva una escala real y el valor inválido vuelve a 1x', () => {
+    expect(L.tamanoZoom(1)).toEqual({ nivel: 1, porcentaje: 100 });
+    expect(L.tamanoZoom(2)).toEqual({ nivel: 2, porcentaje: 200 });
+    expect(L.tamanoZoom(3)).toEqual({ nivel: 3, porcentaje: 300 });
+    expect(L.tamanoZoom(0)).toEqual({ nivel: 1, porcentaje: 100 });
+  });
+});
+
 const clave = crypto.randomBytes(32);
 const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
 const origenes = crearOrigenes('127.0.0.1/32');
@@ -47,10 +56,35 @@ const operador = { id: 2, username: 'maria', is_admin: false, permisos: [{ herra
 const auditor = { id: 3, username: 'auditor', is_admin: false, permisos: [{ herramienta: 'matcher', nivel: 'read' }] };
 
 describe('E3 T3 — lógica pura de teclas y acciones', () => {
-  it('1/2/3 seleccionan si existe el candidato y Enter vincula', () => {
+  it('1/2/3 seleccionan si existe el candidato y Enter vincula al visible', () => {
     expect(L.accionDeTecla('2', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'seleccionar', n: 2 });
-    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular' });
+    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, candidatoVisible: true, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'vincular' });
+    expect(L.accionDeTecla('Enter', { confirmable: false, nCandidatos: 3, candidatoVisible: false, tipoCaso: 'sku_pendiente' })).toBeNull();
     expect(L.accionDeTecla('3', { confirmable: false, nCandidatos: 2, tipoCaso: 'sku_pendiente' })).toBeNull();
+  });
+
+  it('x es rechazar en todos los casos y ninguna tecla manda eleccion omitir', () => {
+    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 0, tipoCaso: 'sku_pendiente' })).toEqual({ tipo: 'rechazar' });
+    expect(L.accionDeTecla('x', { confirmable: false, nCandidatos: 3, tipoCaso: 'conflicto' })).toEqual({ tipo: 'rechazar' });
+    expect(L.accionDeTecla('x', { confirmable: true, nCandidatos: 0, tipoCaso: 'omitida_revisar' })).toEqual({ tipo: 'rechazar' });
+    const teclas = ['1','2','3','x','s','n','o','?','/','z','a','Enter','d','f'];
+    for (const conf of [false, true]) for (const k of teclas) {
+      const acc = L.accionDeTecla(k, { confirmable: conf, nCandidatos: 3, candidatoVisible: true, tipoCaso: 'sku_pendiente' });
+      const decisiones = [];
+      if (acc) L.ejecutarAccion(acc, { cola: [{ id: 'c' }], idx: 0, sel: 'v1', detalle: { version: 1 } },
+        { decidir: (c) => decisiones.push(c), omitir: () => {}, mostrar: () => {}, apartar: () => {}, deshacer: () => {}, buscar: () => {}, ayuda: () => {}, confirmar: () => {} });
+      expect(decisiones.some((d) => d.eleccion === 'omitir')).toBe(false);
+    }
+  });
+
+  it('Enter confirmable sigue actuando aunque no haya candidato visible', () => {
+    expect(L.accionDeTecla('Enter', { confirmable: true, nCandidatos: 0, candidatoVisible: false, tipoCaso: 'omitida_revisar' })).toEqual({ tipo: 'confirmar' });
+  });
+
+  it('textoCuentaRegresiva muestra la duración real restante', () => {
+    expect(L.textoCuentaRegresiva(10)).toBe('Deshacer: z (10 s)');
+    expect(L.textoCuentaRegresiva(1)).toBe('Deshacer: z (1 s)');
+    expect(L.textoCuentaRegresiva(0)).toBe('Deshacer: z (0 s)');
   });
 
   it('? aparta, a es ayuda, O omite por ahora, N no existe', () => {
@@ -232,6 +266,15 @@ describe('E3 T6 proxy de la bandeja de identidad', () => {
     expect(p.recibidos.map((x) => x.firmaValida)).toEqual([true, true]);
     expect(decodeURIComponent(p.recibidos[0].ruta.split('q=')[1].replace(/\+/g, ' '))).toBe('casco ñandú 50% a_b');
     expect(p.recibidos[1].ruta).not.toContain('extra');
+  });
+
+  it('búsqueda manual conserva caso_id en la query firmada', async () => {
+    const p = plataformaFalsa();
+    await request(app({ user: operador, fetch: p.fetch })).get('/api/bandeja-identidad/variantes')
+      .query({ q: 'casco', caso_id: ID });
+    expect(new URL(p.recibidos[0].ruta, 'http://x').searchParams.get('q')).toBe('casco');
+    expect(new URL(p.recibidos[0].ruta, 'http://x').searchParams.get('caso_id')).toBe(ID);
+    expect(p.recibidos[0].firmaValida).toBe(true);
   });
 
   it('el filtro por grupo de los chips llega a la plataforma (y firmado)', async () => {

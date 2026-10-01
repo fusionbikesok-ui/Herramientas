@@ -133,17 +133,20 @@ describe('E1-RER-01 relectura puntual por señal', () => {
     expect(await contar("select count(*) n from integrations.resource_relations where relation_type='product_variation'")).toBe(1);
   });
 
-  it('mensajes no resuelven el id del aviso: adelantan el barrido de la cuenta sin GET', async () => {
+  it('la notificación messages relee el ID individual con tag=post_sale y encola el mensaje', async () => {
     await admin.query("update integrations.reconciliation_cursors set next_run_at=now()+interval '1 hour'");
-    const id = await senal(ml, 'ml.messages', 'a8f3e2c1b0');
-    const { w, llamadasMl } = worker({});
+    const mensajeId = 'a8f3e2c1b0';
+    const id = await senal(ml, 'ml.messages', mensajeId);
+    const mensaje = {
+      message_id: mensajeId, status: 'available', date: '2026-09-16T10:00:00Z',
+      date_available: '2026-09-16T10:00:00Z', resource: 'orders', resource_id: '5000', text: { plain: 'mensaje fixture' },
+    };
+    const { w, llamadasMl } = worker({ [`/messages/${mensajeId}?tag=post_sale`]: { status: 200, body: mensaje } });
     await w.unaVuelta();
-    expect(llamadasMl).toEqual([]);
-    expect(await estado(id)).toMatchObject({ status: 'succeeded', error_detail: 'sweep_triggered' });
-    const cursores = (await admin.query<{ cuenta: string; adelantado: boolean }>(
-      "select channel_account_id::text cuenta, next_run_at<=now() adelantado from integrations.reconciliation_cursors where topic='ml.messages'")).rows;
-    expect(cursores).toEqual([{ cuenta: ml, adelantado: true }]);
-    expect(await contar('select count(*) n from integrations.inbox_messages')).toBe(0);
+    expect(llamadasMl).toEqual([`/messages/${mensajeId}?tag=post_sale`]);
+    expect(await estado(id)).toMatchObject({ status: 'succeeded', error_detail: 'enqueued' });
+    expect(await contar("select count(*) n from integrations.resource_observations where topic='ml.messages' and resource_id=$1", [mensajeId])).toBe(1);
+    expect(await contar("select count(*) n from integrations.inbox_messages where topic='ml.messages' and source='signal_reread'", [])).toBe(1);
   });
 
   it('429 reintenta con Retry-After, una respuesta incomprensible reintenta y un id inválido se excluye sin red', async () => {

@@ -674,6 +674,22 @@ Cualquier usuario puede usarla (no se restringe a admin); motivo, usuario y hora
 - Response 404: preparación o ítem inexistente (sin cambios).
 - Re-confirmar un ítem ya `verificado` sigue siendo no-op para el evento (no duplica), pero
   igual exige `motivo` válido en el request — no hay atajo para saltear la validación.
+- Una confirmación manual crea, en la misma transacción y antes de completar `cantidad_escaneada`,
+  una tarea durable `preparacion_etiquetas_manuales` con SKU, producto y unidades que faltaban
+  escanear. No se generan tareas históricas/backfill. Son tareas de rotulado posteriores; no
+  bloquean el despacho y una tarea pendiente indica que la salida requiere revisión. Un retry
+  mientras el ítem sigue verificado es no-op; si el ítem se reabre y vuelve a confirmarse,
+  genera una nueva tarea asociada a esa confirmación.
+- `GET /api/preparacion/:id/etiquetas-manuales` devuelve las tareas con su estado y
+  `requiere_revision_salida`. `POST /api/preparacion/:id/etiquetas-manuales/:taskId/hecha`
+  las marca idempotentemente y conserva `hecha_por`/`hecha_en`. El middleware de escritura
+  autoriza la acción; no requiere claim, para permitir cerrar la tarea después de completar o
+  despachar la preparación y vencer el claim.
+- La confirmación de despacho (con escaneo o manual) mantiene su comportamiento y devuelve
+  `requiere_revision_rotulado` y `tareas_rotulado_pendientes`; el evento de salida conserva
+  esos valores. Una etiqueta pendiente nunca bloquea la salida.
+- `POST /api/preparacion/iniciar` no crea una preparación sin líneas. `POST
+  /api/preparacion/:id/completar` rechaza preparaciones vacías con `PREPARACION_SIN_ITEMS`.
 
 ### GET /api/preparacion/:id (campo agregado: `requisitos_foto` con nota de cantidad)
 Cuando un ítem tiene `cantidad_esperada > 1`, el slot de foto "de artículo" (o "de piezas"
@@ -757,8 +773,8 @@ la preparación (`marcarPreparacionEnviada`, misma función para el endpoint y e
   salió, no es trabajo pendiente) y **no se mezcla** con `GET /historial` (solo trae
   `completada`/`pendiente_deposito`) — se consulta desde `GET /despachadas-sin-verificar`.
 
-#### GET /api/preparacion/despachadas-sin-verificar (nuevo; `total`/`truncado` agregados)
-Lista las preparaciones en `despachada_sin_verificar`, canal `web`, más recientes primero.
+#### GET /api/preparacion/despachadas-sin-verificar (`total`/`truncado` agregados)
+Lista las preparaciones en `despachada_sin_verificar` de ambos canales, más recientes primero.
 Mismo criterio y consulta que `GET /cerradas-sin-evidencia` — un estado que existe para
 poder consultarlo ante un reclamo, así que tiene que tener dónde listarse igual que el
 otro. **No filtra por ventana temporal, a propósito** (ver `despachados_sin_verificar` en
@@ -770,6 +786,31 @@ del revisor).
 - Request: sin body.
 - Response 200: `{ "ok": true, "data": [ { ...preparación, total_items, total_fotos } ], "total": 3, "truncado": false }`.
   `data` viene con `LIMIT 200`; `truncado:true` si `total > data.length`.
+
+#### GET /api/preparacion/historial — canceladas sin retiro registrado
+Incluye `cancelada_sin_retiro_registrado`: WooCommerce o MercadoLibre confirmó una cancelación
+consultada directamente y la preparación no tenía unidades escaneadas ni embaladas. El estado
+no afirma que el producto nunca se movió físicamente; solo indica que no hay retiro registrado.
+Las preparaciones canceladas con unidades levantadas siguen en `cancelada_pendiente_devolucion`
+y conservan su tarea de devolución.
+
+#### Reconciliación automática de preparaciones abiertas
+Cada diez minutos se consulta hasta 50 preparaciones históricas `en_preparacion` directamente en
+WooCommerce (`GET /orders/{id}`) o en MercadoLibre (`GET /orders/{id}` y, si hay envío,
+`GET /shipments/{id}`). Solo `completed`/estado final de despacho de Woo, o un envío ML con
+`shipped`/`delivered` (incluidos los subestados confiables de salida) cierran como `completada`
+si la evidencia está verificada o `despachada_sin_verificar` en otro caso. Una cancelación
+explícita cierra sin retiro registrado o abre la devolución cuando hay unidades levantadas.
+Timeout, error HTTP, respuesta sin estado o estado desconocido se registra en
+`preparacion_reconciliaciones.error`, mantiene la preparación abierta y vuelve a intentarse.
+La corrida no se solapa consigo misma; cada transición usa un `UPDATE` condicionado a que la
+preparación siga abierta y registra un único evento de sistema. Fotos, ítems y autoría se
+conservan. La migración 115 crea el registro del último intento.
+
+Antes de habilitar el cron en producción, respaldar y verificar el respaldo de la base; después
+ejecutar `node scripts/preview-preparacion-reconciliacion.mjs` y revisar todos los IDs/estados
+previstos. El script consulta en páginas de hasta 50 y no cambia estados ni registra intentos
+en preparaciones. El cron permanece apagado salvo `PREPARACION_RECONCILIACION_ACTIVA=true`.
 
 ### Estado nuevo: `cerrada_sin_evidencia`
 Preparaciones viejas que nunca se completaron ni verificaron de verdad, cerradas por el
@@ -3547,3 +3588,14 @@ Cuando se llama `POST /api/recepciones/:id/confirmar` a una recepción que YA es
 la recuperación de arranque recién corrió pero todavía está en `procesando` momentáneamente),
 la respuesta es ahora 409 en lugar de 400. Esto diferencia claramente "hay una confirmación
 en progreso" (conflicto transitorio, reintentar) de "el estado es inválido" (no reintentable).
+
+### GET /api/sync/cambios-formato/:id/comparacion
+Compara los productos de catálogo de un aviso de migración (`catalog_product_id`). Lee `GET /products/{viejo}` y
+`/{nuevo}` de ML con caché sqlite (`ml_productos_cache`, 6 h; 1 h si ML devolvió 404; 429/5xx no se cachean).
+Devuelve `{ ok, viejo, nuevo, diferencias[], veredicto: coincide|no_coincide|sin_datos, comparados }`; cada producto trae
+`{ id, nombre, borrado, activo, link }` (`link` solo si está activo). `ok:false` con `error` ante fallo de ML.
+
+### GET /api/bandeja-identidad/casos/:id y GET /api/bandeja-identidad/variantes (estación de decisión)
+Proxy firmado (HMAC) a la plataforma; el actor sale de la sesión.
+- `GET /casos/:id`: `publicacion.foto` (URL de la primera imagen vigente de ML en `catalog.model_images`, o `null`) y `tipo` (tipo del caso).
+- `GET /variantes?q=<texto>[&caso_id=<uuid>]`: búsqueda manual (SKU exacto primero, luego título, máx. 20; cada variante trae `foto`, `precio`, `stock`). Con `caso_id` agrega `explicacion` (`atributos`, `otros_atributos`) contra la publicación ML del caso. Errores: 400 `caso_id` no-UUID, 404 caso de otra empresa o inexistente, 422 `caso_sin_publicacion`.

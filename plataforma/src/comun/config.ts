@@ -78,6 +78,9 @@ export interface Config {
    * despliegue, no un estado válido en silencio.
    */
   bandeja: boolean;
+  /** E3 corte 3: flags del auto-SKU (apagados por omisión). Los leen worker y API por igual. */
+  flagsAutoSku: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean };
+  E3_INTERVENTION: '0' | '1';
   /**
    * E3 corte 1 tarea 4: si el ciclo del motor en sombra corre en este worker (src/worker/identidad.ts).
    * Apagado por omisión, mismo criterio que `bandeja` arriba: TOP-LEVEL, no dentro de `catalogo`, para
@@ -151,6 +154,10 @@ const Esquema = z.object({
   // quedar en valores distintos por un typo en un solo servicio.
   E3_BANDEJA: z.enum(['0', '1']).default('0'),
   E3_MOTOR: z.enum(['0', '1']).default('0'),
+  // E3 corte 3: apagados por omisión; nada se enciende sin José y sin E1 aceptada (PM-187).
+  E3_CANARIO: z.enum(['0', '1']).default('0'),
+  E3_AUTO_SKU: z.enum(['0', '1']).default('0'),
+  E3_INTERVENTION: z.enum(['0', '1']).default('0'),
   E3_MOTOR_PAUSA_MS: z.coerce.number().int().min(1000).default(1_800_000), // 30 minutos, el default del plan.
 });
 
@@ -288,6 +295,8 @@ export function cargarConfig(envCrudo: NodeJS.ProcessEnv, leerArchivo: (ruta: st
     pgUrl: `postgres://${encodeURIComponent(e.PG_USER)}:${encodeURIComponent(clave)}@${e.PG_HOST}:${e.PG_PORT}/${e.PG_DATABASE}`,
     apiPuerto: e.API_PUERTO, estadoPgDir: e.ESTADO_PG_DIR, heartbeatMaxS: e.HEARTBEAT_MAX_S, heartbeatIntervalMs: e.HEARTBEAT_INTERVAL_MS,
     bandeja, motor, motorPausaMs: e.E3_MOTOR_PAUSA_MS,
+    flagsAutoSku: { E3_AUTO_SKU: e.E3_AUTO_SKU === '1', E3_CANARIO: e.E3_CANARIO === '1' },
+    E3_INTERVENTION: e.E3_INTERVENTION,
     ...(barridos ? { barridos } : {}),
     ...(senales ? { senales } : {}),
     ...(informes ? { informes } : {}),

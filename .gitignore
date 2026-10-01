@@ -34,3 +34,6 @@ docs/.obsidian/cache
 docs/.obsidian/plugins/
 docs/.obsidian/themes/
 docs/.obsidian/snippets/
+
+# Capturas de QA de auditorías: no se versionan
+docs/superpowers/audits/capturas-*/

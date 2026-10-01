@@ -1,4 +1,4 @@
-import { envioMl, itemMl, ordenMl, preguntaMl, reclamoMl, recursoNoEncontrado } from './adaptadores/ml.ts';
+import { envioMl, itemMl, mensajeMl, ordenMl, preguntaMl, reclamoMl, recursoNoEncontrado } from './adaptadores/ml.ts';
 import { pedidoWoo, productoWoo } from './adaptadores/woo.ts';
 import { esRegistro, exigirLista, exigirRegistro, idTexto } from './adaptadores/comun.ts';
 import { ErrorBarridoReintentable } from '../worker/barridos.ts';
@@ -62,8 +62,16 @@ export function crearRelectoresMl(dep: { transporte: TransporteCanal }): Record<
         return { tipo: 'recursos', recursos: [itemMl(entrada.body)] };
       },
     },
-    // Mensajes: el id del aviso no es resoluble con credenciales de vendedor; se barre por packs.
-    { topic: 'ml.messages', versionKind: 'hash', id: /^.{1,256}$/, async releer() { return { tipo: 'barrido' }; } },
+    // La notificación `messages` entrega el ID resoluble por GET /messages/{id}?tag=post_sale.
+    {
+      topic: 'ml.messages', versionKind: 'hash', id: /^[A-Za-z0-9_-]{1,128}$/,
+      async releer(id) {
+        const r = await t.get(`/messages/${encodeURIComponent(id)}?tag=post_sale`);
+        // ML documenta que un 404 puede ser temporal para este recurso y recomienda reintentar en segundos.
+        if (r.status === 404) throw new ErrorBarridoReintentable(`HTTP_404 /messages/${id}`);
+        return { tipo: 'recursos', recursos: [mensajeMl(r.body)] };
+      },
+    },
   ];
   return Object.fromEntries(relectores.map((r) => [r.topic, r]));
 }

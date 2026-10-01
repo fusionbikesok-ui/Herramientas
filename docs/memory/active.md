@@ -1160,3 +1160,11 @@ publicación: colgarlos de una elegida rompe la idempotencia cuando esa publicac
 una fila `persona`: devuelve `'respetada'`; bajar/promover una primaria cierra la fila con motivo. Pendiente: 6b
 (enganchar en la ingestión, se prueba en contenedor aparte).
 
+
+
+## Despliegue de reconciliación de preparaciones (2026-09-29)
+
+- Producción quedó en commits 7678096a-57272c22; respaldo SQLite verificado en /opt/fusionbikes/backups/db/predeploy-preparacion-20260929T200500Z.sqlite. Migraciones 115 y 116 aplicadas, quick_check=ok, PM2 online y /healthz=200.
+- Vista previa completa en vivo ejecutada el 2026-09-29: 11/11 preparaciones abiertas consultadas, cero errores. ML `2000018214080180` (prep 238) figuraba `cancelled`; las diez órdenes Web abiertas (preps 307, 366, 393, 404, 430, 431, 454, 458, 459, 466) figuraban `enviadoandreani`.
+- Cron habilitado con `PREPARACION_RECONCILIACION_ACTIVA=true`; primer tick 23:58 UTC procesó las 11: prep 238 → `cancelada_sin_retiro_registrado`; las otras diez → `despachada_sin_verificar`. Cero errores, 11 intentos, cero abiertas. Cada transición tiene exactamente un evento; ítems, fotos y eventos anteriores/autores quedaron conservados. PM2 online y `/healthz` 200. Flag permanece activa para corridas acotadas cada 10 minutos.
+- La salida diagnóstica previa imprimió credenciales de autenticación de Woo. No hay evidencia de acceso de terceros; el usuario rotará la clave otro día y decidió que eso no bloquea esta operación. La vista previa y el tick consultaron los pedidos con la credencial vigente sin volver a imprimirla. Pedido 70312 (prep 446) quedó intacto y fuera del lote: sigue completado, con 0 ítems, 2 fotos y 10 eventos; requiere revisión separada de sus fotos/discrepancia de escaneo, sin inventar un escaneo.

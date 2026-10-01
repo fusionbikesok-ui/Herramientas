@@ -56,7 +56,7 @@ const ConsultaCola = z.strictObject({
   tipo: z.string().max(64).optional(), estado: z.string().max(32).optional(), grupo: z.coerce.number().int().min(0).max(7).optional(),
   cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(LIMITE_MAXIMO).default(LIMITE_POR_DEFECTO),
 });
-const ConsultaVariantes = z.strictObject({ q: z.string().trim().min(1).max(200) });
+const ConsultaVariantes = z.strictObject({ q: z.string().trim().min(1).max(200), caso_id: z.uuid().optional() });
 /** Rediseño de la bandeja: apartar/desapartar («No estoy seguro»), con Idempotency-Key igual que decidir. */
 const Apartar = z.strictObject({
   expected_version: z.number().int().min(1),
@@ -132,9 +132,19 @@ async function atributosDe(pool: pg.Pool, sql: string, id: string): Promise<Atri
   return m;
 }
 
+/** Explicación de un candidato contra la publicación ML del caso. Es la misma proyección que usa el detalle. */
+async function explicacionCandidato(
+  pool: pg.Pool, atributosMl: Atributos, modelId: string, atributosMotor: unknown[] = [],
+) {
+  const atrCand = await atributosDe(pool,
+    'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE model_id = $1 AND vigente_hasta IS NULL', modelId);
+  return { atributos: atributosMotor, otros_atributos: otrosAtributos(atributosMl, atrCand) };
+}
+
 export function registrarIdentidadInterna(
   app: FastifyInstance<Server, IncomingMessage, ServerResponse, Logger>, pool: pg.Pool, logger: Logger,
   opciones: OpcionesSenales, ahora: () => Date, bandeja: boolean,
+  flagsAutoSku?: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean },
 ): void {
   void app.register(async (sub) => {
     sub.addContentTypeParser('application/json', { parseAs: 'buffer', bodyLimit: LIMITE_CUERPO }, (_req, cuerpo, listo) => listo(null, cuerpo));
@@ -242,6 +252,8 @@ export function registrarIdentidadInterna(
         `SELECT c.id, c.tipo, c.estado, c.prioridad, c.version, c.detalle, c.abierto_en, c.cerrado_en, c.motivo_cierre,
                 r.id AS rep_id, r.channel_account_id, r.recurso, r.variacion_normalizada, r.sku_observado, r.estado_remoto,
                 r.stock_canal, r.precio, r.moneda, r.model_id, ${tituloMlSql('r')} AS titulo
+                ,(SELECT i.url FROM catalog.model_images i WHERE i.representation_id = r.id AND i.vigente_hasta IS NULL
+                  ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto
            FROM catalog.identity_cases c
            ${PUBLICACION}
           WHERE c.id = $1 AND c.company_id = $2`, [req.params.id, auth.empresa])).rows[0];
@@ -268,12 +280,11 @@ export function registrarIdentidadInterna(
           ORDER BY k.rank`, [c.id])).rows;
       const candidatos = [];
       for (const k of cands) {
-        const atrCand = await atributosDe(pool, 'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE model_id = $1 AND vigente_hasta IS NULL', String(k.model_id));
         const atributos = (k.explicacion as { atributos?: unknown[] } | null)?.atributos ?? [];
         candidatos.push({
           rank: k.rank, variant_id: k.variant_id, sku: k.sku ?? null, titulo: k.titulo, foto: k.foto ?? null,
           precio: k.precio ?? null, moneda: k.moneda ?? null, stock: k.stock ?? null,
-          explicacion: { atributos, otros_atributos: otrosAtributos(atributosMl, atrCand) },
+          explicacion: await explicacionCandidato(pool, atributosMl, String(k.model_id), atributos),
         });
       }
 
@@ -305,11 +316,10 @@ export function registrarIdentidadInterna(
                                  ORDER BY observado_en DESC LIMIT 1) w ON true
             WHERE v.id = $1 AND v.archivado_en IS NULL`, [sombra.variant_id])).rows[0];
         if (v) {
-          const atrCand = await atributosDe(pool, 'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE model_id = $1 AND vigente_hasta IS NULL', String(v.model_id));
           candidatos.unshift({
             rank: 0, variant_id: v.variant_id, sku: v.sku ?? null, titulo: v.titulo, foto: v.foto ?? null,
             precio: v.precio ?? null, moneda: v.moneda ?? null, stock: v.stock ?? null,
-            explicacion: { atributos: [], otros_atributos: otrosAtributos(atributosMl, atrCand) },
+            explicacion: await explicacionCandidato(pool, atributosMl, String(v.model_id)),
           });
         }
       }
@@ -320,7 +330,7 @@ export function registrarIdentidadInterna(
         publicacion: c.recurso ? {
           recurso: c.recurso, variacion: c.variacion_normalizada, titulo: c.titulo ?? null, sku_observado: c.sku_observado ?? null,
           estado: c.estado_remoto ?? null, stock: c.stock_canal ?? null, precio: c.precio ?? null, moneda: c.moneda ?? null,
-          link_ml: linkMl(String(c.recurso)), atributos: Object.fromEntries(atributosMl),
+          link_ml: linkMl(String(c.recurso)), foto: c.foto ?? null, atributos: Object.fromEntries(atributosMl),
         } : null,
         candidatos,
         auto_sku_en_sombra: sombra ? { decision_id: sombra.id, sku: sombra.sku ?? null, creado_en: sombra.creado_en } : null,
@@ -363,7 +373,7 @@ export function registrarIdentidadInterna(
         caseId: req.params.id, expectedVersion: d.data.expected_version, eleccion: d.data.eleccion,
         ...(d.data.variant_id ? { variantId: d.data.variant_id } : {}), actor: d.data.actor.usuario, esAdmin: d.data.actor.es_admin,
         ...(motivo ? { motivo } : {}), idempotencyKey: clave, ...(d.data.revierte ? { revierte: d.data.revierte } : {}),
-      }, { bandeja });
+      }, { bandeja, ...(flagsAutoSku ? { flagsAutoSku } : {}) });
       if (r.ok) return reply.code(200).send({ decision_id: r.decisionId, version: r.version, vinculo: r.vinculo });
       return error(req, reply, STATUS_DECISION[r.code], r.code, `No se pudo decidir: ${r.code}.`, r.details ? { details: r.details } : {});
     });
@@ -411,9 +421,21 @@ export function registrarIdentidadInterna(
       const auth = await autenticar(req, reply, 'GET'); if (!auth) return reply;
       const q = ConsultaVariantes.safeParse(req.query);
       if (!q.success) return error(req, reply, 422, 'invalid_query', 'Falta el texto a buscar.');
+      let atributosMl: Atributos | null = null;
+      if (q.data.caso_id) {
+        const caso = (await pool.query<Fila>(
+          `SELECT c.id, r.id AS rep_id
+             FROM catalog.identity_cases c
+             ${PUBLICACION}
+            WHERE c.id = $1 AND c.company_id = $2`, [q.data.caso_id, auth.empresa])).rows[0];
+        if (!caso) return error(req, reply, 404, 'caso_inexistente', 'No existe el caso.');
+        if (!caso.rep_id) return error(req, reply, 422, 'caso_sin_publicacion', 'El caso no tiene una publicación única.');
+        atributosMl = await atributosDe(pool,
+          'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE representation_id = $1 AND vigente_hasta IS NULL', String(caso.rep_id));
+      }
       const patron = '%' + q.data.q.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
       const r = await pool.query<Fila>(
-        `SELECT v.id AS variant_id, v.sku, m.titulo,
+        `SELECT v.id AS variant_id, v.sku, v.model_id, m.titulo,
                 (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
                   ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto,
                 w.precio, w.moneda, w.stock_canal AS stock
@@ -424,8 +446,27 @@ export function registrarIdentidadInterna(
                                ORDER BY observado_en DESC LIMIT 1) w ON true
           WHERE v.company_id = $1 AND v.archivado_en IS NULL AND (upper(trim(v.sku)) = upper(trim($2)) OR m.titulo ILIKE $3)
           ORDER BY (upper(trim(v.sku)) = upper(trim($2))) DESC, m.titulo, v.sku LIMIT 20`, [auth.empresa, q.data.q, patron]);
-      return { variantes: r.rows.map((f) => ({ variant_id: f.variant_id, sku: f.sku ?? null, titulo: f.titulo, foto: f.foto ?? null,
-        precio: f.precio ?? null, moneda: f.moneda ?? null, stock: f.stock ?? null })) };
+      const modelIds = [...new Set(r.rows.map((f) => String(f.model_id)))];
+      const atributosPorModelo = new Map<string, Atributos>();
+      if (atributosMl && modelIds.length) {
+        const atributos = await pool.query<{ model_id: string; nombre: string; valor: string }>(
+          `SELECT model_id, nombre_normalizado AS nombre, valor
+             FROM catalog.model_attributes
+            WHERE model_id = ANY($1::uuid[]) AND vigente_hasta IS NULL`, [modelIds]);
+        for (const f of atributos.rows) {
+          let mapa = atributosPorModelo.get(String(f.model_id));
+          if (!mapa) { mapa = new Map(); atributosPorModelo.set(String(f.model_id), mapa); }
+          mapa.set(f.nombre, mapa.has(f.nombre) ? `${mapa.get(f.nombre)} / ${f.valor}` : f.valor);
+        }
+      }
+      const variantes = [];
+      for (const f of r.rows) {
+        const variante = { variant_id: f.variant_id, sku: f.sku ?? null, titulo: f.titulo, foto: f.foto ?? null,
+          precio: f.precio ?? null, moneda: f.moneda ?? null, stock: f.stock ?? null } as Record<string, unknown>;
+        if (atributosMl) variante.explicacion = { atributos: [], otros_atributos: otrosAtributos(atributosMl, atributosPorModelo.get(String(f.model_id)) || new Map()) };
+        variantes.push(variante);
+      }
+      return { variantes };
     });
   });
 }

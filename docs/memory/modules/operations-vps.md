@@ -2,6 +2,8 @@
 
 ## Hechos durables
 
+- Ajuste E1 contra 429 de ML desplegado el 2026-09-30: worker en imagen `fusion-plataforma:e1-ml429-20260930T031014Z` y gateway legado recargado en PM2; sin migraciones ni cambios de RPM. API y scheduler no se recrearon. Rollback e IDs de imagen constan en `docs/superpowers/evidence/e1/2026-09-30-E1-429-api-fix-deploy.md`. La medición Tarea 0 de 24–48 horas todavía decide la calibración y el inicio de PM-186; el despliegue no equivale a aceptación E1.
+
 - El VPS `/opt/fusionbikes/herramientas` es producción real y sirve la rama
   `conteo-confiable`; cualquier referencia histórica que lo llame staging está obsoleta.
 - Política objetivo: un pipeline verde podrá publicar backend/web con migración compatible,

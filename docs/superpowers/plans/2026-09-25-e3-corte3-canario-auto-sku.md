@@ -217,7 +217,7 @@ El SKU de la variación: si `variacion` no es `''`, se toma el `seller_custom_fi
 - Produce: `decisionVigente(tx, cuenta, recurso, variacion, o: { bandeja: boolean; autoSku?: 'apagado'|'aplicado' })`. Con `'aplicado'`, el orden es el de §3: humano → legado → auto_sku. El auto_sku aplicado sólo se consulta si no hay humana ni legado. Devuelve `{ fuente: 'auto_sku'; eleccion: 'vincular'; variantId; decisionId }`.
 - El modo se decide en el llamador: `'aplicado'` si `E3_AUTO_SKU=1`, o si `E3_CANARIO=1` y la clave está en la corrida de canario abierta (Tarea 5). Para eso: `modoAutoSku(tx, cuenta, recurso, variacion, flags): Promise<'apagado'|'aplicado'>` en `autoridad.ts`.
 
-- [ ] **Paso 1: Migración (parte 2):**
+- [x] **Paso 1: Migración (parte 2):**
 
 `hash_payload_ml` ya existe (0020:38, nulable): esta parte NO lo agrega de nuevo. Lo que sí hay que
 reemplazar es el CHECK sin nombre de 0020:45 (`CHECK (origen <> 'auto_sku' OR efecto = 'sombra')`), que hoy
@@ -257,22 +257,22 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
   CHECK (origen <> 'auto_sku' OR efecto = 'sombra' OR (efecto = 'aplicar' AND hash_payload_ml IS NOT NULL));
 ```
 
-- [ ] **Paso 1b: Tests de esquema** (antes o junto con el Paso 2): un INSERT `auto_sku`/`aplicar` SIN
+- [x] **Paso 1b: Tests de esquema** (antes o junto con el Paso 2): un INSERT `auto_sku`/`aplicar` SIN
   `hash_payload_ml` es rechazado por el CHECK; el mismo INSERT CON `hash_payload_ml` pasa (y ya NO es
   rechazado por el CHECK viejo: confirma que 0020:45 quedó reemplazado y no sólo agregado uno nuevo al
   lado); un INSERT `humano`/`sombra` (combinación inválida por el otro CHECK de 0020:44) sigue rechazado.
   Corren contra la base de prueba ya migrada, no contra producción.
 
-- [ ] **Paso 2: Tests que fallan** en `autoridad.test.ts`:
+- [x] **Paso 2: Tests que fallan** en `autoridad.test.ts`:
   - `[esc:flag-apagado]` con `autoSku` omitido o `'apagado'`: una `auto_sku`/`aplicar` vigente es INVISIBLE (devuelve lo mismo que hoy);
   - con `'aplicado'` y sin humana ni legado: devuelve la `auto_sku`;
   - con `'aplicado'` y un legado `omitir`: gana el legado;
   - con `'aplicado'` y una humana: gana la humana;
   - una `auto_sku` con efecto `sombra` nunca se devuelve, en ningún modo.
-- [ ] **Paso 3: Ver que fallan** → `/tmp/claude-0/c3-t3-rojo.txt`
-- [ ] **Paso 4: Implementar** en `autoridad.ts` y pasar el modo desde cada llamador. **Invariante:** con `E3_CANARIO=0` y `E3_AUTO_SKU=0`, ningún llamador consulta `e3_canario_*` ni la rama nueva. Test que lo afirma contando queries con un `Consultable` espía.
-- [ ] **Paso 5: Verde** (`autoridad.test.ts`, `decidir.test.ts`, `motor.test.ts` y los tests de `catalogo/` que usan `decisionVigente`) → `/tmp/claude-0/c3-t3-verde.txt`
-- [ ] **Paso 6: Commit.**
+- [x] **Paso 3: Ver que fallan** → `/tmp/claude-0/c3-t3-rojo.txt`
+- [x] **Paso 4: Implementar** en `autoridad.ts` y pasar el modo desde cada llamador. **Invariante:** con `E3_CANARIO=0` y `E3_AUTO_SKU=0`, ningún llamador consulta `e3_canario_*` ni la rama nueva. Test que lo afirma contando queries con un `Consultable` espía.
+- [x] **Paso 5: Verde** (`autoridad.test.ts`, `decidir.test.ts`, `motor.test.ts` y los tests de `catalogo/` que usan `decisionVigente`) → `/tmp/claude-0/c3-t3-verde.txt`
+- [x] **Paso 6: Commit.**
 
 ### Tarea 4: Aplicar un auto-SKU (§6, una transacción)
 
@@ -307,7 +307,7 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
    `parked` (`reconciliar_distinto`).
 7. Caso a `verified` y `version+1`; evento de auditoría `identidad.auto_sku_aplicado` con el antes y el después.
 
-- [ ] **Paso 1: Tests que fallan:**
+- [x] **Paso 1: Tests que fallan:**
   - `[esc:auto-sku-unico]` vincula;
   - `[esc:aplicar-no-supera-sombra]` cuando hay una `auto_sku`/`sombra` vigente para la misma clave: la decisión `aplicar` se inserta con `supersede_a = NULL` y NO la supera (`superada_en` de la sombra sigue NULL después); las dos coexisten en la tabla;
   - SKU que dejó de ser único → `bandeja` y sin decisión;
@@ -316,10 +316,10 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
   - la bandeja decide en paralelo: dos transacciones concurrentes (patrón del test `[esc:409-dos-operadores]` de `decidir.test.ts`) → exactamente una decisión vigente y ningún efecto parcial;
   - reintentar `aplicarAutoSku` sobre una clave ya vinculada → `ya_resuelto`, sin segunda decisión;
   - si `reconciliarClave` no vincula → rollback completo (0 decisiones nuevas y caso sin cambios).
-- [ ] **Paso 2: Ver que fallan** → `/tmp/claude-0/c3-t4-rojo.txt`
-- [ ] **Paso 3: Implementar.**
-- [ ] **Paso 4: Verde** → `/tmp/claude-0/c3-t4-verde.txt`
-- [ ] **Paso 5: Commit.**
+- [x] **Paso 2: Ver que fallan** → `/tmp/claude-0/c3-t4-rojo.txt`
+- [x] **Paso 3: Implementar.**
+- [x] **Paso 4: Verde** → `/tmp/claude-0/c3-t4-verde.txt`
+- [x] **Paso 5: Commit.**
 
 ### Tarea 5: Canario: congelar, correr, cerrar con D6
 
@@ -354,7 +354,7 @@ ALTER TABLE catalog.identity_decisions ADD CONSTRAINT auto_sku_aplicar_con_hash
         camino que deshacer).
   - `cerrarCanario(pool, { corridaId }): Promise<ClasificacionD6>`, con `ClasificacionD6 = { errores: Array<{ tipo: 'corregido_por_jose'|'parked_sin_resolver'; recurso: string }>; noErrores: Record<'redundante'|'intervention'|'dejo_de_ser_unico'|'no_disponible', number>; veredicto: 'cero_errores'|'con_errores'|'abortado' }`.
 
-- [ ] **Paso 1: Migración (parte 3):**
+- [x] **Paso 1: Migración (parte 3):**
 
 ```sql
 -- Parte 3: conjunto congelado del día de canario (spec §7.1).
@@ -382,7 +382,7 @@ CREATE TABLE catalog.e3_canario_casos (
   PRIMARY KEY (corrida_id, case_id));
 ```
 
-- [ ] **Paso 2: Tests que fallan:**
+- [x] **Paso 2: Tests que fallan:**
   - `congelar` excluye D5, las que tienen humana o legado, y SKU `varias`;
   - una segunda `congelar` el mismo día falla (UNIQUE) y no toca la primera;
   - un caso abierto DESPUÉS del congelado no entra;
@@ -396,10 +396,10 @@ CREATE TABLE catalog.e3_canario_casos (
     - una decisión humana posterior a otra variante cuenta como error `corregido_por_jose`;
     - una humana igual cuenta como `redundante`;
     - el veredicto es `cero_errores` sólo si no hay ningún error.
-- [ ] **Paso 3: Ver que fallan** → `/tmp/claude-0/c3-t5-rojo.txt`
-- [ ] **Paso 4: Implementar `canario.ts` y el CLI.** El CLI arma el relector igual que `src/worker/main.ts:53-60` (transporte por cuenta desde el registro), usa `DATABASE_URL` y `CATALOGO_KEYRING_FILE` como el backfill, e imprime un resumen sin PII (conteos y recursos MLA).
-- [ ] **Paso 5: Verde** → `/tmp/claude-0/c3-t5-verde.txt`
-- [ ] **Paso 6: Commit.**
+- [x] **Paso 3: Ver que fallan** → `/tmp/claude-0/c3-t5-rojo.txt`
+- [x] **Paso 4: Implementar `canario.ts` y el CLI.** El CLI arma el relector igual que `src/worker/main.ts:53-60` (transporte por cuenta desde el registro), usa `DATABASE_URL` y `CATALOGO_KEYRING_FILE` como el backfill, e imprime un resumen sin PII (conteos y recursos MLA).
+- [x] **Paso 5: Verde** → `/tmp/claude-0/c3-t5-verde.txt`
+- [x] **Paso 6: Commit.**
 
 ### Tarea 6: Transición `verified → intervention` por cambio posterior (§8)
 
@@ -427,7 +427,7 @@ CREATE TABLE catalog.e3_canario_casos (
   - si el formato dio `resultado: 'cambio'` (con `que: 'formato'`; `que: 'sku'` ya lo cubre la rama anterior) → caso `intervention` + un `identity_commands` `pausar_publicacion` `parked`. El vínculo NO cambia;
   - en los dos casos, evento de auditoría `identidad.intervention`.
 
-- [ ] **Paso 1: Tests que fallan:**
+- [x] **Paso 1: Tests que fallan:**
   - cambio de SKU → intervention sin tocar `variant_id`;
   - cambio de formato → intervention + 1 comando parked;
   - la misma observación repetida no duplica el caso ni el comando;
@@ -436,10 +436,10 @@ CREATE TABLE catalog.e3_canario_casos (
   - `E3_INTERVENTION=1` con `E3_CANARIO=0` y `E3_AUTO_SKU=0`: SÍ abre casos `intervention` igual (es sombra, no depende del canario ni del auto-SKU aplicado);
   - `E3_INTERVENTION=1` sobre una clave con decisión VIGENTE humana `vincular` (sin ninguna `auto_sku`): también abre `intervention` si cambia el SKU o el formato — el flag gatea la transición en sí, no sólo el camino del auto-SKU;
   - con `E3_INTERVENTION=0`, `registrarFormato` y la observación de `sku_observado` SIGUEN corriendo (se ve la fila nueva en `format_observations`), sólo la apertura del caso `intervention` queda desactivada — confirma que el flag no desactiva la observación, sólo la reacción.
-- [ ] **Paso 2: Rojo** → `/tmp/claude-0/c3-t6-rojo.txt`
-- [ ] **Paso 3: Implementar.** Verificar en 0020 que `'intervention'` esté en el CHECK de `estado` (lo está) y si `tipo` tiene CHECK; si lo tiene, agregar `'sku_cambiado'` en la parte 4.
-- [ ] **Paso 4: Verde** → `/tmp/claude-0/c3-t6-verde.txt`
-- [ ] **Paso 5: Commit.**
+- [x] **Paso 2: Rojo** → `/tmp/claude-0/c3-t6-rojo.txt`
+- [x] **Paso 3: Implementar.** Verificar en 0020 que `'intervention'` esté en el CHECK de `estado` (lo está) y si `tipo` tiene CHECK; si lo tiene, agregar `'sku_cambiado'` en la parte 4.
+- [x] **Paso 4: Verde** → `/tmp/claude-0/c3-t6-verde.txt`
+- [x] **Paso 5: Commit.**
 
 ### Tarea 7: Replay previo al canario (§7.2)
 
@@ -469,25 +469,25 @@ verdad contra la cual comparar, así que ni suma a `coinciden` ni a `difieren`. 
 seguro») no es una decisión (invariante ya establecida en `identity_cases.apartado_en`, rediseño de
 bandeja) y tampoco entra.
 
-- [ ] **Paso 1: Tests que fallan:**
+- [x] **Paso 1: Tests que fallan:**
   - una `auto_sku`/`sombra` igual a la humana `vincular` → coincide;
   - una distinta → `difieren` y `no_apto`;
   - una humana `sin_candidato` sobre una clave con `auto_sku` → cuenta en `difieren` (el humano dijo que no es esa);
   - una humana `mantener_omision` sobre una clave con `auto_sku` → cuenta en `difieren`, igual que `omitir`;
   - una humana `apartado` (no es decisión) no cuenta;
   - una `auto_sku` sobre una clave SIN ninguna decisión humana (ni vincular ni sin_candidato/omitir) → no entra en el denominador: no suma ni a `coinciden` ni a `difieren`.
-- [ ] **Paso 2: Rojo** → `/tmp/claude-0/c3-t7-rojo.txt`
-- [ ] **Paso 3: Implementar**, más el CLI: sólo lectura, imprime el JSON.
-- [ ] **Paso 4: Verde** → `/tmp/claude-0/c3-t7-verde.txt`
-- [ ] **Paso 5: Commit.**
+- [x] **Paso 2: Rojo** → `/tmp/claude-0/c3-t7-rojo.txt`
+- [x] **Paso 3: Implementar**, más el CLI: sólo lectura, imprime el JSON.
+- [x] **Paso 4: Verde** → `/tmp/claude-0/c3-t7-verde.txt`
+- [x] **Paso 5: Commit.**
 
 ### Tarea 8: `test:e3` completo y cierre
 
 **Archivos:**
 - Modificar: `plataforma/test/identidad/cobertura-e3.test.ts`: los tres `it.todo` de E3-COV-02 pasan a exigir `[esc:relectura-cambio]`, `[esc:relectura-5xx]` y `[esc:canario-401]`.
 
-- [ ] **Paso 1:** Reemplazar los `it.todo` por claves en una lista `C3` con el mismo `it.each` que `C1`.
-- [ ] **Paso 2:** `npm run test:e3` (dentro de `plataforma`) → `/tmp/claude-0/c3-t8-teste3.txt`. Tiene que pasar y no puede quedar ningún `todo`.
+- [x] **Paso 1:** Reemplazar los `it.todo` por claves en una lista `C3` con el mismo `it.each` que `C1`.
+- [x] **Paso 2:** `npm run test:e3` (dentro de `plataforma`) → `/tmp/claude-0/c3-t8-teste3.txt`. Tiene que pasar y no puede quedar ningún `todo`.
 - [ ] **Paso 3:** Segunda opinión de Codex sobre el diff COMPLETO del corte → `/tmp/claude-0/codex-c3-final.txt`.
 - [ ] **Paso 4:** Avisar a opt-55. opt-55 revisa y corre la suite completa una vez.
 - [ ] **Paso 5 (con José):**

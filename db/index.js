@@ -161,6 +161,27 @@ export function openDb(dbPath) {
   // CREATE TABLE IF NOT EXISTS del router no puede ampliar una tabla existente.
   migrateMlClaims(db);
   migrateClaimsBackbone(db);
+  const productosCacheMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_productos_cache_114'").get();
+  if (!productosCacheMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '114_ml_productos_cache.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_productos_cache_114')").run();
+    })();
+  }
+  const preparacionReconciliacionMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_reconciliacion_115'").get();
+  if (!preparacionReconciliacionMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '115_preparacion_reconciliacion.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_reconciliacion_115')").run();
+    })();
+  }
+  const preparacionEtiquetasManualesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_etiquetas_manuales_116'").get();
+  if (!preparacionEtiquetasManualesMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '116_preparacion_etiquetas_manuales.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('preparacion_etiquetas_manuales_116')").run();
+    })();
+  }
   const recepcionUrgenteMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='recepcion_aliases_proveedor_109'").get();
   if (!recepcionUrgenteMigration) {
     db.transaction(() => {
@@ -908,6 +929,10 @@ export function openDb(dbPath) {
       }
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_publicacion_cambios_103')").run();
     })();
+  }
+  // Se agrega aparte porque hay bases productivas que ya tienen la tabla 103 aplicada.
+  try { db.exec('ALTER TABLE ml_publicacion_cambios ADD COLUMN bloquea_reactivador INTEGER NOT NULL DEFAULT 0'); } catch (e) {
+    if (!String(e.message || e).includes('duplicate column name')) throw e;
   }
   // E1 T3 C1: ciclo de vida de la copia de sombra sobre integration_events. Las columnas se agregan
   // una por una según PRAGMA para que una base con la migración a medio aplicar se complete sola; los
