@@ -121,6 +121,26 @@ describe('E3-CAN-01 canario', () => {
     expect(est[c.recurso]!.estado).toBe('pendiente');
   });
 
+  it('clasifica el caso pendiente que queda tras abortar la corrida', async () => {
+    const e = await escenario();
+    const yaResuelto = await escenario();
+    const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
+    const terminal: Relector = {
+      topic: 'ml.items', versionKind: 'temporal', id: /.*/, releer: vi.fn(async () => {
+        throw new ErrorCanalTerminal('no autorizado', 401);
+      }),
+    };
+
+    await correrCanario(app, terminal, { corridaId, bandeja: true });
+    await admin.query(`UPDATE catalog.e3_canario_casos SET estado='ya_resuelto' WHERE corrida_id=$1 AND recurso=$2`, [corridaId, yaResuelto.recurso]);
+    const r = await cerrarCanario(app, { corridaId });
+
+    expect(r.noErrores.pendiente_tras_abort).toBe(1);
+    expect(r.noErrores.ya_resuelto).toBe(1);
+    expect(e.recurso).toBe('MLA1');
+    expect(r.veredicto).toBe('abortado');
+  });
+
   it('[esc:relectura-5xx] queda parked y un segundo correr lo reintenta a vinculado', async () => {
     const e = await escenario(); const { corridaId } = await congelarCanario(app, { empresa, dia: DIA });
     const caido: Relector = { topic: 'ml.items', versionKind: 'temporal', id: /.*/, releer: vi.fn(async () => { throw new ErrorBarridoReintentable('BULK_503', 0); }) };

@@ -8,7 +8,7 @@ export interface EntradaCanario { corridaId: string; bandeja: boolean; esperar?:
 export interface ResumenCanario { procesados: number; vinculados: number; bandeja: number; parked: number; abortado: boolean }
 export interface ClasificacionD6 {
   errores: Array<{ tipo: 'corregido_por_jose' | 'parked_sin_resolver'; recurso: string }>;
-  noErrores: Record<'redundante' | 'intervention' | 'dejo_de_ser_unico' | 'no_disponible', number>;
+  noErrores: Record<'redundante' | 'intervention' | 'dejo_de_ser_unico' | 'no_disponible' | 'pendiente_tras_abort' | 'ya_resuelto', number>;
   veredicto: 'cero_errores' | 'con_errores' | 'abortado' | 'incompleto';
 }
 
@@ -83,13 +83,15 @@ export async function cerrarCanario(pool: pg.Pool, o: { corridaId: string }): Pr
                 ORDER BY d.creado_en DESC LIMIT 1) AS humana
          FROM catalog.e3_canario_casos k WHERE k.corrida_id = $1`, [o.corridaId, corrida.congelado_en])).rows;
     const errores: ClasificacionD6['errores'] = [];
-    const noErrores = { redundante: 0, intervention: 0, dejo_de_ser_unico: 0, no_disponible: 0 };
+    const noErrores = { redundante: 0, intervention: 0, dejo_de_ser_unico: 0, no_disponible: 0, pendiente_tras_abort: 0, ya_resuelto: 0 };
     for (const f of filas) {
       if (f.humana && f.humana !== f.variant_id_congelada) errores.push({ tipo: 'corregido_por_jose', recurso: f.recurso });
       else if (f.humana) noErrores.redundante++;
       else if (f.estado === 'parked') errores.push({ tipo: 'parked_sin_resolver', recurso: f.recurso });
       else if (f.estado === 'intervention') noErrores.intervention++;
       else if (f.estado === 'bandeja') { if (f.detalle?.motivo === 'sku_no_unico_o_cambiado') noErrores.dejo_de_ser_unico++; else noErrores.no_disponible++; }
+      else if (corrida.estado === 'abortada' && f.estado === 'pendiente') noErrores.pendiente_tras_abort++;
+      else if (f.estado === 'ya_resuelto') noErrores.ya_resuelto++;
     }
     const pendientes = filas.filter((f) => f.estado === 'pendiente').length;
     // Con casos sin procesar no hay veredicto D6 posible: no se cierra (cero_errores sería un falso positivo).

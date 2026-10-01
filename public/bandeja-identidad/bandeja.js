@@ -127,6 +127,23 @@
     banda();
   }
 
+  function soloSalteados() {
+    S.idx = -1; S.detalle = null;
+    var root = $('root'); vaciar(root);
+    var d = el('div', 'api-estado api-estado--vacio', null, { role: 'status', tabindex: '-1', id: 'caso-focus' });
+    d.appendChild(el('p', null, 'Sólo quedan casos que salteaste'));
+    root.appendChild(d);
+    d.focus();
+    banda();
+  }
+
+  function abrirSiguienteTrasQuitar(i, opts) {
+    var siguiente = L.siguienteNoSalteado(S.cola, i - 1, S.salteados);
+    if (siguiente >= 0) return abrirCaso(siguiente, opts);
+    if (S.salteados.size > 0) return soloSalteados();
+    return vacio();
+  }
+
   function mostrarEstado(texto, rol) {
     var root = $('root'); vaciar(root);
     var d = el('div', 'api-estado api-estado--cargando', null, { role: rol });
@@ -197,7 +214,7 @@
     if (!listo) mostrarEstado('Cargando caso…', 'status');
     return detalleDe(caso.id).then(function (d) {
       if (token !== S.navToken) return;
-      if (d.cerrado_en) { anunciar('Ese caso ya se resolvió. Pasamos al siguiente.'); S.cola.splice(i, 1); return S.cola.length ? abrirCaso(Math.min(i, S.cola.length - 1), opts) : vacio(); }
+      if (d.cerrado_en) { anunciar('Ese caso ya se resolvió. Pasamos al siguiente.'); S.cola.splice(i, 1); return abrirSiguienteTrasQuitar(i, opts); }
       S.tokenBusqueda++;
       S.detalle = d; S.consulta = ''; S.busqueda = []; S.buscando = !(d.candidatos || []).length; S.resultadoElegido = false; S.resultadoIndice = -1; S.estadoBusqueda = 'vacio'; S.candidatoAnterior = null; S.mostrarIguales = false; // T4: no una preferencia de sesión como soloDif
       precargarFotos(d, token, { publicacion: true, candidato: false });
@@ -222,7 +239,7 @@
     var r = (e && e.res) || { status: 0, data: {} };
     var msg = r.status === 404 ? L.copyError('caso_inexistente') : 'No pudimos cargar este caso.';
     var acc = r.status === 404
-      ? [{ texto: 'Ir al siguiente', alClick: function () { quitarAviso('detalle'); S.cola.splice(i, 1); S.cola.length ? abrirCaso(Math.min(i, S.cola.length - 1), { foco: true }) : vacio(); } }]
+      ? [{ texto: 'Ir al siguiente', alClick: function () { quitarAviso('detalle'); S.cola.splice(i, 1); abrirSiguienteTrasQuitar(i, { foco: true }); } }]
       : [{ texto: 'Reintentar', alClick: function () { quitarAviso('detalle'); abrirCaso(i, { foco: true }); } }];
     var b = aviso('detalle', msg, acc);
     var btn = b.querySelector('.btn'); if (btn) btn.focus();
@@ -252,31 +269,13 @@
         var siguienteCargado = L.siguienteNoSalteado(S.cola, S.idx, S.salteados);
         if (siguienteCargado >= 0) return abrirCaso(siguienteCargado, { foco: true });
         // Si todos están salteados, mostrar aviso
-        if (S.salteados.size > 0) {
-          S.idx = -1; S.detalle = null;
-          var root = $('root'); vaciar(root);
-          var d = el('div', 'api-estado api-estado--vacio', null, { role: 'status', tabindex: '-1', id: 'caso-focus' });
-          d.appendChild(el('p', null, 'Sólo quedan casos que salteaste'));
-          root.appendChild(d);
-          d.focus();
-          banda();
-          return;
-        }
+        if (S.salteados.size > 0) return soloSalteados();
         return vacio();
       });
     }
 
     // Si todos están salteados, mostrar aviso
-    if (S.salteados.size > 0) {
-      S.idx = -1; S.detalle = null;
-      var root = $('root'); vaciar(root);
-      var d = el('div', 'api-estado api-estado--vacio', null, { role: 'status', tabindex: '-1', id: 'caso-focus' });
-      d.appendChild(el('p', null, 'Sólo quedan casos que salteaste'));
-      root.appendChild(d);
-      d.focus();
-      banda();
-      return;
-    }
+    if (S.salteados.size > 0) return soloSalteados();
     return vacio();
   }
 
@@ -462,7 +461,7 @@
     S.salteados.add(caseId);
     S.ultima = { tipo: 'salteado', casoId: caseId, ts: Date.now(), consumida: false };
     S.hechos++;
-    mostrarDeshacer('Salteada por ahora. Z deshace');
+    mostrarDeshacer('Salteada por ahora. Z deshace', S.ultima);
     banda();
     avanzar();
   }
@@ -1307,7 +1306,7 @@
   }
 
   if (window.__bandejaIdentidadTest) {
-    window.__bandejaIdentidadTest = { state: S, decidir: decidir, avanzar: avanzar, traerMas: traerMas, cargarCola: cargarCola };
+    window.__bandejaIdentidadTest = { state: S, decidir: decidir, omitirPorAhora: omitirPorAhora, abrirCaso: abrirCaso, failDetalle: failDetalle, avanzar: avanzar, traerMas: traerMas, cargarCola: cargarCola };
   }
 
   document.addEventListener('DOMContentLoaded', inicializar);

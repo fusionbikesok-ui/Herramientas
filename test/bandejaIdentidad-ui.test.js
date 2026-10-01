@@ -29,7 +29,7 @@ const ev = (o = {}) => ({ key: 'j', target: { tagName: 'DIV', closest: () => nul
 
 function cargarBandejaConDomInyectado(fetchImpl = () => Promise.resolve({ status: 200, json: async () => ({}) })) {
   function nodo(tagName = 'DIV') {
-    return {
+    const n = {
       tagName, children: [], textContent: '', className: '', style: {},
       attrs: {},
       setAttribute(k, v) { this.attrs[k] = v; },
@@ -38,7 +38,14 @@ function cargarBandejaConDomInyectado(fetchImpl = () => Promise.resolve({ status
       click() { if (this.listeners?.click) this.listeners.click({ target: this }); },
       focus() {},
       hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); },
-      classList: { add() {}, remove() {}, toggle() {} },
+      classes: new Set(),
+      classList: {
+        add(...names) { names.forEach((name) => this.owner.classes.add(name)); },
+        remove(...names) { names.forEach((name) => this.owner.classes.delete(name)); },
+        toggle(name) { if (this.owner.classes.has(name)) this.owner.classes.delete(name); else this.owner.classes.add(name); },
+        contains(name) { return this.owner.classes.has(name); },
+        owner: null,
+      },
       querySelector(selector) {
         if (selector === '.btn') return this.children.find((hijo) => hijo.tagName === 'BUTTON') || null;
         if (selector.startsWith('[data-clave="')) {
@@ -49,9 +56,12 @@ function cargarBandejaConDomInyectado(fetchImpl = () => Promise.resolve({ status
       },
       removeChild(hijo) { this.children = this.children.filter((x) => x !== hijo); },
     };
+    n.classList.owner = n;
+    return n;
   }
   const avisos = nodo();
-  const elementos = new Map([['avisos', avisos]]);
+  const root = nodo();
+  const elementos = new Map([['avisos', avisos], ['root', root]]);
   const document = {
     getElementById(id) { if (id === 'chip-no-decidibles') return null; if (!elementos.has(id)) elementos.set(id, nodo()); return elementos.get(id); },
     createElement(tag) { const h = nodo(tag.toUpperCase()); const set = h.setAttribute; h.setAttribute = (k, v) => { h.attrs = h.attrs || {}; h.attrs[k] = v; set.call(h, k, v); }; return h; },
@@ -64,7 +74,7 @@ function cargarBandejaConDomInyectado(fetchImpl = () => Promise.resolve({ status
   const sandbox = { window, document, crypto: { randomUUID: () => 'generated-key' }, fetch: fetchImpl, navigator: window.navigator, URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval, console };
   vm.createContext(sandbox);
   vm.runInContext(readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8'), sandbox);
-  return { app: sandbox.window.__bandejaIdentidadTest, avisos };
+  return { app: sandbox.window.__bandejaIdentidadTest, avisos, root, undo: document.getElementById('aviso-deshacer') };
 }
 
 describe('bandeja: logica pura', () => {
@@ -459,6 +469,36 @@ describe('bandeja: decisión bloqueada comunica el estado en el DOM', () => {
   });
 });
 
+describe('bandeja: cola agotada sin páginas ni salteados', () => {
+  it('muestra el estado vacío cuando no quedan casos y S.siguiente es null', () => {
+    const { app, root } = cargarBandejaConDomInyectado();
+    app.state.cola = [{ id: 'caso-visto' }];
+    app.state.idx = 0;
+    app.state.siguiente = null;
+
+    app.avanzar();
+
+    expect(app.state.idx).toBe(-1);
+    expect(root.children[0].children[0].textContent).toContain('No quedan casos en este filtro');
+  });
+});
+
+describe('bandeja: el deshacer de omitir por ahora sigue a su propia entrada', () => {
+  it('oculta el aviso del salteo anterior cuando otra acción reemplaza S.ultima', () => {
+    vi.useFakeTimers();
+    const { app, undo } = cargarBandejaConDomInyectado();
+    app.state.cola = [{ id: 'caso-a' }];
+    app.state.idx = 0;
+
+    app.omitirPorAhora('caso-a');
+    app.state.ultima = { tipo: 'decision', casoId: 'caso-b', ts: Date.now(), consumida: false };
+    vi.advanceTimersByTime(1000);
+
+    expect(undo.classList.contains('aviso-deshacer--oculto')).toBe(true);
+    vi.useRealTimers();
+  });
+});
+
 describe('bandeja: descartar un caso cerrado conserva la posición del operador', () => {
   const cerrado = (id) => ({ id, version: 9, cerrado_en: '2026-09-26T00:00:00Z' });
   const preparar = (fetchImpl, ids, idx, entryIdx = idx) => {
@@ -521,6 +561,39 @@ describe('bandeja: descartar un caso cerrado conserva la posición del operador'
     await vi.waitFor(() => expect(app.state.detalle?.id).toBe('caso-b'));
     expect(app.state.cola.map((c) => c.id)).toEqual(['caso-b']);
     expect(app.state.idx).toBe(0);
+  });
+
+  it('al abrir un caso cerrado saltea el siguiente caso omitido y abre el próximo disponible', async () => {
+    const { app } = cargarBandejaConDomInyectado(async (request) => {
+      const id = request.split('/').pop();
+      return { status: 200, json: async () => id === 'caso-a'
+        ? cerrado('caso-a')
+        : { id, version: 1, candidatos: [] } };
+    });
+    app.state.cola = [{ id: 'caso-a' }, { id: 'caso-b' }, { id: 'caso-c' }];
+    app.state.idx = 0;
+    app.state.salteados.add('caso-b');
+
+    await app.abrirCaso(0, { foco: true });
+
+    await vi.waitFor(() => expect(app.state.detalle?.id).toBe('caso-c'));
+    expect(app.state.cola.map((c) => c.id)).toEqual(['caso-b', 'caso-c']);
+  });
+
+  it('al descartar un 404 saltea el siguiente caso omitido y abre el próximo disponible', async () => {
+    const { app, avisos } = cargarBandejaConDomInyectado(async (request) => {
+      const id = request.split('/').pop();
+      return { status: 200, json: async () => ({ id, version: 1, candidatos: [] }) };
+    });
+    app.state.cola = [{ id: 'caso-a' }, { id: 'caso-b' }, { id: 'caso-c' }];
+    app.state.idx = 0;
+    app.state.salteados.add('caso-b');
+
+    app.failDetalle({ res: { status: 404, data: {} } }, 0);
+    avisos.children[0].children.find((n) => n.textContent === 'Ir al siguiente').click();
+
+    await vi.waitFor(() => expect(app.state.detalle?.id).toBe('caso-c'));
+    expect(app.state.cola.map((c) => c.id)).toEqual(['caso-b', 'caso-c']);
   });
 });
 

@@ -15,7 +15,7 @@
   var ATRIBUTOS_COMPARABLES = { marca: true, modelo: true, color: true, talle: true, tamano_del_cuadro: true,
     rodado: true, material: true, tipo_de_producto: true, tipo_de_bicicleta: true, genero: true, edad: true, cantidad_de_velocidades: true };
   function nombreCanonico(nombre) {
-    var n = String(nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s-]+/g, '_');
+    var n = String(nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/[\s-]+/g, '_');
     if (n === 'tamano_del_cuadro') return 'talle';
     return n === 'material_del_cuadro' ? 'material' : n;
   }
@@ -507,7 +507,7 @@
   var api = {
     marca: marca, copyError: copyError, puedeDispararAtajo: puedeDispararAtajo, esReintentable: esReintentable,
     demora: demora, MAX_INTENTOS: MAX_INTENTOS, puedeDeshacer: puedeDeshacer, textoCuentaRegresiva: textoCuentaRegresiva, totalFiltro: totalFiltro, formatoPrecio: formatoPrecio,
-    formatoStock: formatoStock, opcionesDe: opcionesDe, nombresAtributos: nombresAtributos, atributoDe: atributoDe,
+    formatoStock: formatoStock, opcionesDe: opcionesDe, nombresAtributos: nombresAtributos, atributoDe: atributoDe, nombreCanonico: nombreCanonico,
     filaVisible: filaVisible, accionDeTecla: accionDeTecla, siguienteNoSalteado: siguienteNoSalteado,
     indiceNoSalteado: indiceNoSalteado,
     ejecutarAccion: ejecutarAccion, TEXTO_SOLO_SALTEADOS: TEXTO_SOLO_SALTEADOS,
