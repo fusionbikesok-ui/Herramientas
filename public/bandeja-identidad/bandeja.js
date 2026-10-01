@@ -22,7 +22,7 @@
     ultima: null,           // { tipo: 'decision'|'apartado'|'salteado', ... } para deshacer
     salteados: new Set(),   // Set de IDs de casos omitidos por ahora (sólo en la sesión)
     atajos: leerAtajos(), navToken: 0, timerDeshacer: null, timerBusqueda: null, tokenBusqueda: 0, candidatoAnterior: null,
-    guardiaDecisiones: null,
+    guardiaDecisiones: null, promesaMas: null,
     visor: null
   };
   S.guardiaDecisiones = L.crearGuardiaDecisiones(function () { return crypto.randomUUID(); });
@@ -140,6 +140,18 @@
   function abrirSiguienteTrasQuitar(i, opts) {
     var siguiente = L.siguienteNoSalteado(S.cola, i - 1, S.salteados);
     if (siguiente >= 0) return abrirCaso(siguiente, opts);
+    var anterior = L.indiceNoSalteado(S.cola, i, -1, S.salteados);
+    if (anterior >= 0) return abrirCaso(anterior, opts);
+    if (S.siguiente) {
+      return traerMas().then(function () {
+        var siguienteCargado = L.siguienteNoSalteado(S.cola, i - 1, S.salteados);
+        if (siguienteCargado >= 0) return abrirCaso(siguienteCargado, opts);
+        var anteriorCargado = L.indiceNoSalteado(S.cola, i, -1, S.salteados);
+        if (anteriorCargado >= 0) return abrirCaso(anteriorCargado, opts);
+        if (S.salteados.size > 0) return soloSalteados();
+        return vacio();
+      });
+    }
     if (S.salteados.size > 0) return soloSalteados();
     return vacio();
   }
@@ -152,18 +164,21 @@
   }
 
   function traerMas() {
-    if (!S.siguiente || S.cargandoMas) return;
+    if (!S.siguiente) return Promise.resolve();
+    if (S.cargandoMas) return S.promesaMas || Promise.resolve();
     S.cargandoMas = true;
     var grupoAlPedir = S.grupo;
     var tokenAlPedir = S.navToken;
-    http('GET', rutaCola(S.siguiente)).then(function (r) {
+    S.promesaMas = http('GET', rutaCola(S.siguiente)).then(function (r) {
       S.cargandoMas = false;
+      S.promesaMas = null;
       if (r.status !== 200 || grupoAlPedir !== S.grupo || tokenAlPedir !== S.navToken) return;
       var ya = {}; S.cola.forEach(function (c) { ya[c.id] = true; });
       (r.data.casos || []).forEach(function (c) { if (!ya[c.id]) S.cola.push(c); });
       S.siguiente = r.data.siguiente || null;
       banda();
     });
+    return S.promesaMas;
   }
 
   function detalleDe(id) {
@@ -384,7 +399,7 @@
           S.cola.splice(i, 1);
           if (i === indiceActual) {
             S.detalle = null;
-            if (S.cola.length) abrirCaso(Math.min(i, S.cola.length - 1), { foco: true });
+            if (S.cola.length) abrirSiguienteTrasQuitar(i, { foco: true });
             else { S.idx = -1; if (S.siguiente) avanzar(); }
           } else if (i < indiceActual) {
             S.idx -= 1;

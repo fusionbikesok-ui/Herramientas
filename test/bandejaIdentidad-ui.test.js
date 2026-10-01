@@ -563,6 +563,63 @@ describe('bandeja: descartar un caso cerrado conserva la posición del operador'
     expect(app.state.idx).toBe(0);
   });
 
+  it('al cerrar el último caso local busca hacia atrás y reabre el anterior no salteado', async () => {
+    const { app } = cargarBandejaConDomInyectado(async (request) => {
+      const id = request.split('/').pop();
+      return { status: 200, json: async () => id === 'caso-b'
+        ? cerrado('caso-b')
+        : { id, version: 1, candidatos: [] } };
+    });
+    app.state.cola = [{ id: 'caso-a' }, { id: 'caso-b' }];
+    app.state.idx = 1;
+
+    await app.abrirCaso(1, { foco: true });
+
+    await vi.waitFor(() => expect(app.state.detalle?.id).toBe('caso-a'));
+    expect(app.state.idx).toBe(0);
+  });
+
+  it('al cerrar el último caso no salteado local carga la página siguiente antes de mostrar sólo salteados', async () => {
+    let llamadas = 0;
+    const { app } = cargarBandejaConDomInyectado(async (request) => {
+      llamadas += 1;
+      const id = request.split('/').pop();
+      if (llamadas === 1) return { status: 200, json: async () => cerrado('caso-a') };
+      if (request.includes('cursor=cursor-2')) return { status: 200, json: async () => ({ casos: [{ id: 'caso-c', version: 1 }], siguiente: null }) };
+      return { status: 200, json: async () => ({ id, version: 1, candidatos: [] }) };
+    });
+    app.state.cola = [{ id: 'caso-a' }, { id: 'caso-b' }];
+    app.state.idx = 0;
+    app.state.salteados.add('caso-b');
+    app.state.siguiente = 'cursor-2';
+
+    await app.abrirCaso(0, { foco: true });
+
+    await vi.waitFor(() => expect(app.state.detalle?.id).toBe('caso-c'));
+    expect(llamadas).toBeGreaterThanOrEqual(3);
+    expect(app.state.cola.map((c) => c.id)).toEqual(['caso-b', 'caso-c']);
+  });
+
+  it('al reconciliar y cerrar el caso actual no abre un caso salteado', async () => {
+    const { app, avisos, root } = cargarBandejaConDomInyectado(async () => ({
+      status: 200,
+      json: async () => cerrado('caso-a')
+    }));
+    app.state.cola = [{ id: 'caso-a' }, { id: 'caso-b' }];
+    app.state.idx = 0;
+    app.state.salteados.add('caso-b');
+    app.state.detalle = { id: 'caso-a', version: 1, candidatos: [] };
+    const entrada = app.state.guardiaDecisiones.iniciar({ caseId: 'caso-a', casoId: 'caso-a', cuerpo: {} }).entrada;
+    app.state.guardiaDecisiones.terminar(entrada, { status: 503 });
+    app.decidir('omitir');
+
+    avisos.children[0].children.find((n) => n.textContent === 'Descartar').click();
+
+    await vi.waitFor(() => expect(app.state.guardiaDecisiones.estaBloqueado('caso-a')).toBe(false));
+    expect(root.children[0].children[0].textContent).toContain('Sólo quedan casos que salteaste');
+    expect(app.state.detalle).toBeNull();
+  });
+
   it('al abrir un caso cerrado saltea el siguiente caso omitido y abre el próximo disponible', async () => {
     const { app } = cargarBandejaConDomInyectado(async (request) => {
       const id = request.split('/').pop();
