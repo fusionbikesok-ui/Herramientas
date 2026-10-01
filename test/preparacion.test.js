@@ -3588,6 +3588,27 @@ describe('syncPedidoMlPuntual', () => {
     expect(db.prepare("SELECT * FROM preparaciones WHERE clave='ml:ORD-INCONCLUSA-2'").get()).toBeUndefined();
   });
 
+  it('POST /iniciar ML no consulta /sla porque el resultado no participa del alta', async () => {
+    mlFetch.mockImplementation(async (_db, _cfg, _method, path) => {
+      if (path.endsWith('/sla')) throw new Error('no debe consultar SLA al iniciar manualmente');
+      if (path === '/orders/ORD-SIN-SLA') return {
+        status: 200,
+        data: {
+          id: 'ORD-SIN-SLA', status: 'paid', buyer: { nickname: 'x' }, shipping: { id: 815 },
+          order_items: [{ item: { id: 'SKU-815', title: 'Producto' }, seller_sku: 'SKU-815', quantity: 1 }],
+        },
+      };
+      if (path === '/shipments/815') return { status: 200, data: { status: 'ready_to_ship', logistic_type: 'cross_docking' } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/iniciar')
+      .send({ canal: 'ml', id: 'ORD-SIN-SLA' });
+
+    expect(res.status).toBe(200);
+    expect(mlFetch.mock.calls.some(call => String(call[3]).endsWith('/sla'))).toBe(false);
+  });
+
   it('trae SOLO la orden pedida (paid + ready_to_ship + envío local) y hace upsert inmediato', async () => {
     mlFetch
       .mockResolvedValueOnce({ status: 200, data: { id: 'ORD-9', status: 'paid', date_created: '2026-08-26T00:00:00Z', buyer: { nickname: 'compradorml' }, order_items: [], shipping: { id: 777 } } })

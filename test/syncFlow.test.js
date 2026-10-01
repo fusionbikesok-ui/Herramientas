@@ -648,7 +648,7 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     expect(body.line_items).toEqual([{ quantity: 1, subtotal: '200.00', total: '200.00', product_id: 100 }]);
   });
 
-  it('payload completo nuevo usa destination.receiver_address y lead_time.shipping_method', async () => {
+  it('payload completo nuevo usa destination.shipping_address y lead_time.shipping_method', async () => {
     const orden = ordenConEnvio('ORD-SHIP-NUEVO', 556);
     mlFetch.mockImplementation(async (d, cfg, method, path) => {
       if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
@@ -657,8 +657,8 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
         data: {
           status: 'ready_to_ship',
           logistic: { type: 'cross_docking', mode: 'me2', direction: 'forward' },
-          destination: { receiver_address: {
-            receiver_name: 'Ana María Díaz', street_name: 'San Martín', street_number: '123',
+          destination: { receiver_name: 'Ana María Díaz', shipping_address: {
+            street_name: 'San Martín', street_number: '123',
             comment: 'Portero 4', city: { name: 'CABA' }, state: { name: 'Buenos Aires' }, zip_code: '1001',
           } },
           lead_time: { shipping_method: { id: 77, type: 'standard', name: 'Colecta AM' } },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import fs from 'fs';
@@ -9,8 +9,14 @@ import { calcularFechaDespacho, fechaEstimadaShipment, fechaHoraEstimadaShipment
 import { hashPassword, requireAuth } from '../lib/auth.js';
 import { buildApp } from '../server.js';
 import { permiteAcceso, resolvePermiso } from '../lib/permisos.js';
+import { mlFetch } from '../lib/mlClient.js';
+import { resolverSlaShipment } from '../lib/horariosDespacho.js';
+
+vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn() }));
 
 const laborables = normalizarHorarios([]);
+
+beforeEach(() => { mlFetch.mockClear(); });
 
 describe('horarios de despacho', () => {
   it('valida cortes HH:MM', () => {
@@ -61,6 +67,34 @@ describe('horarios de despacho', () => {
     expect(calcularSlaPreparacion({ canal: 'web', ahora: new Date('2026-09-02T18:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'WEB_CORTE_15:00_SUPERADO' });
     expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'cross_docking', shipment: {}, ahora: new Date('2026-09-02T14:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'SLA_SHIPMENT_HORA_FALTANTE' });
     expect(calcularSlaPreparacion({ canal: 'ml', logisticType: 'cross_docking', shipment: { sla: { expected_date: '2026-09-02' } }, ahora: new Date('2026-09-02T14:00:00Z') })).toMatchObject({ estado: 'diferido', razon: 'SLA_SHIPMENT_HORA_FALTANTE', limite: null });
+  });
+
+  it('combina el SLA cacheado con el estado fresco del shipment', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: { expected_date: '2026-09-02T18:30:00Z' } });
+    const db = openDb(':memory:');
+    const primero = await resolverSlaShipment({
+      db, mlCfg: {}, shipmentId: 'SHIP-ROTACION',
+      shipment: { status: 'pending', logistic_type: 'cross_docking' }, logisticType: 'cross_docking',
+    });
+    const segundo = await resolverSlaShipment({
+      db, mlCfg: {}, shipmentId: 'SHIP-ROTACION',
+      shipment: { status: 'ready_to_ship', logistic_type: 'cross_docking' }, logisticType: 'cross_docking',
+    });
+
+    expect(primero).toMatchObject({ status: 'pending', sla: { expected_date: '2026-09-02T18:30:00Z' } });
+    expect(segundo).toMatchObject({ status: 'ready_to_ship', sla: { expected_date: '2026-09-02T18:30:00Z' } });
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+    db.close();
+  });
+
+  it.each([undefined, null, 'self_service', 'fulfillment', 'full', 'tipo_futuro'])('no consulta SLA para logisticType %s', async (logisticType) => {
+    const db = openDb(':memory:');
+    await resolverSlaShipment({
+      db, mlCfg: {}, shipmentId: `SHIP-${String(logisticType)}`,
+      shipment: { status: 'ready_to_ship', logistic_type: logisticType }, logisticType,
+    });
+    expect(mlFetch).not.toHaveBeenCalled();
+    db.close();
   });
 
   it('expone y actualiza los siete días mediante el router', async () => {

@@ -611,10 +611,12 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
         throw new Error(`ML respondió ${shipResp.status} al consultar /shipments/${orden.shipping.id}`);
       }
       const ship = shipResp.data;
-      // En formato nuevo la guía de ML ubica la dirección bajo destination; el
-      // root queda como fallback por convivencia. Forma no verificada contra una
-      // respuesta real de ML, confirmar con sonda cuando haya permisos.
-      const addr = ship?.destination?.receiver_address || ship?.receiver_address;
+      // En formato nuevo ML separa el nombre del receptor y la dirección dentro de
+      // destination. Solo el formato viejo usa receiver_address en la raíz.
+      const direccionNueva = ship?.destination?.shipping_address;
+      const addr = direccionNueva
+        ? { ...direccionNueva, receiver_name: direccionNueva.receiver_name || ship.destination.receiver_name }
+        : (!ship?.destination ? ship?.receiver_address : null);
       // Solo se arma `shipping` si hay al menos un dato real (nombre o calle) — si no, un
       // objeto shipping vacío deja al pedido con una dirección "declarada" pero en blanco,
       // y la preparación/etiqueta muestra un destinatario vacío en vez de dejar clara la

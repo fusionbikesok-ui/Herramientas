@@ -35,6 +35,15 @@ const PERFILES_VALIDOS = ['bici', 'kit_transmision', 'sellado'];
 // propósito — el objetivo es dejar rastro auditable, no dar una excusa en blanco.
 const MOTIVOS_CONFIRMACION_MANUAL = ['codigo_ilegible', 'sin_etiqueta', 'otro'];
 const MOTIVOS_DESPACHO_MANUAL = ['ya_despachado_sin_codigo'];
+const ML_GET_SPACING_MS = 300;
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function esperarEntreGetsMl(estado) {
+  const espera = Math.max(0, ML_GET_SPACING_MS - (Date.now() - estado.ultimoGet));
+  if (espera) await sleep(espera);
+  estado.ultimoGet = Date.now();
+}
 
 function imagenProductoPendiente(db, item) {
   const idWoo = item.variation_id || item.product_id;
@@ -2241,8 +2250,6 @@ export function preparacionRouter(db, cfg) {
           }
           return res.status(409).json({ ok: false, error: 'No hay evidencia suficiente de que el envío ML esté habilitado para preparación.', estado_elegibilidad: elegibilidad.estado, motivo_elegibilidad: elegibilidad.motivo });
         }
-        // El SLA se consulta después de validar elegibilidad: Full/Flex/cancelados no lo necesitan.
-        envio = await resolverSlaShipment({ db, mlCfg: cfg.ml, shipmentId, shipment: envio, logisticType: tipoLogisticaMl(envio), manual: true });
         const items = itemsDesdeOrdenMl(db, orden);
         if (!items.length) {
           return res.status(409).json({ ok: false, code: 'PREPARACION_SIN_ITEMS', error: 'La orden no tiene productos preparados para iniciar.' });
@@ -3443,6 +3450,7 @@ async function pendientesMl(db, mlCfg) {
   let offset = 0;
   let hayMas = true;
   let resultados = [];
+  const ritmoGets = { ultimoGet: 0 };
   // Fail-closed: si una página después de la primera falla, se corta la paginación (no se
   // reintenta indefinidamente) y se marca el listado como no confiable -> el caller no poda
   // con un resultado parcial. Si falla la primera página, se aborta con throw como antes
@@ -3453,6 +3461,7 @@ async function pendientesMl(db, mlCfg) {
     // Si filtramos por paid, perdemos precisamente los paquetes que ya fueron
     // despachados. Consultamos el universo reciente y usamos el estado del shipment
     // como fuente de verdad logística.
+    await esperarEntreGetsMl(ritmoGets);
     const resp = await mlFetch(db, mlCfg, 'get',
       `/orders/search?seller=${mlCfg.userId}&sort=date_desc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limite}`);
     if (resp.status !== 200) {
@@ -3502,6 +3511,7 @@ async function pendientesMl(db, mlCfg) {
       if (edadMs < VIGENCIA_SHIPMENT_TERMINAL_MS) continue;
     }
 
+    await esperarEntreGetsMl(ritmoGets);
     const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`, null, { headers: { 'x-format-new': 'true' } });
     if (shipResp.status !== 200) {
       fallosHttp.push(`${shipmentId}→${shipResp.status}`);
@@ -3546,7 +3556,8 @@ async function pendientesMl(db, mlCfg) {
       if (elegibilidad.estado === 'inconcluso') clavesInconclusas.add(`ml:${orden.id}`);
       continue;
     }
-    envio = await resolverSlaShipment({ db, mlCfg, shipmentId, shipment: envio, logisticType });
+    envio = await resolverSlaShipment({ db, mlCfg, shipmentId, shipment: envio, logisticType,
+      beforeFetch: () => esperarEntreGetsMl(ritmoGets) });
     const sla = calcularSlaPreparacion({ canal: 'ml', logisticType, shipment: envio, ahora: new Date() });
     if (sla.estado === 'excluido') continue;
 
