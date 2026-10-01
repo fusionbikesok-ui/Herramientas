@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { backfillAtributos, type FilaCache, type FuenteLegado } from '../../src/catalogo/backfill-atributos.ts';
+import { backfillAtributos, repararExtras, type FilaCache, type FuenteLegado } from '../../src/catalogo/backfill-atributos.ts';
 import { extraerExtrasMl } from '../../src/catalogo/ml.ts';
 import { extraerExtrasWoo } from '../../src/catalogo/woo.ts';
 import { crearPool } from '../../src/db/pool.ts';
@@ -47,6 +47,13 @@ async function rep(canal: 'woocommerce' | 'mercadolibre', recurso: string, varia
   return (await admin.query<{ id: string }>(`INSERT INTO catalog.external_representations
     (company_id, channel_account_id, canal, recurso, variacion_normalizada, tipo, model_id, variant_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
     [empresa, cuenta, canal, recurso, variacion, tipo, tipo === 'contenedor' ? modelo : null, variante])).rows[0]!.id;
+}
+
+async function repMlOmitida(recurso = 'MLA100', capturada = true) {
+  return (await admin.query<{ id: string }>(`INSERT INTO catalog.external_representations
+    (company_id, channel_account_id, canal, recurso, variacion_normalizada, tipo, model_id, variant_id,
+     omitida_por_decision, capturado_en) VALUES ($1,$2,'mercadolibre',$3,'','vendible',NULL,NULL,true,$4) RETURNING id`,
+    [empresa, ml, recurso, capturada ? new Date() : null])).rows[0]!.id;
 }
 
 const filaWoo = (id: number, extra: FilaCache = {}): FilaCache => ({
@@ -146,6 +153,115 @@ describe('E2-BKF-01 el backfill', () => {
     expect((await admin.query(`SELECT precio, stock_canal, gtin FROM catalog.external_representations WHERE variacion_normalizada = '55'`)).rows[0])
       .toEqual({ precio: '9100.00', stock_canal: 2, gtin: '4550' });
   });
+
+  it('ML omitida ya capturada sólo se backfillea con la opción y conserva model_id NULL', async () => {
+    const id = await repMlOmitida();
+    const m = { 'MLA100|': { category_id: 'MLA3', thumbnail: 'https://m/omitida.jpg', precio: 9100,
+      available_quantity: 2, atributos_json: JSON.stringify([{ id: 'COLOR', name: 'Color', value_name: 'Rojo' }]) } };
+
+    expect((await backfillAtributos(app, fuente({}, m), { lote: 10, dryRun: false })).procesadas).toBe(0);
+    expect(await contar('model_attributes')).toBe(0);
+
+    const r = await backfillAtributos(app, fuente({}, m), { lote: 10, dryRun: false, omitidasMl: true });
+    expect(r).toMatchObject({ procesadas: 1, conDatos: 1, sinDatos: 0, atributos: 2, imagenes: 1 });
+    expect((await admin.query(`SELECT model_id, representation_id, nombre_normalizado, valor
+      FROM catalog.model_attributes WHERE representation_id = $1 ORDER BY nombre_normalizado`, [id])).rows)
+      .toEqual([{ model_id: null, representation_id: id, nombre_normalizado: 'categoria_canal', valor: 'MLA3' },
+        { model_id: null, representation_id: id, nombre_normalizado: 'color', valor: 'Rojo' }]);
+    expect((await admin.query(`SELECT model_id, representation_id, url FROM catalog.model_images WHERE representation_id = $1`, [id])).rows)
+      .toEqual([{ model_id: null, representation_id: id, url: 'https://m/omitida.jpg' }]);
+  });
+
+  it('en modo omitidas conserva los JSON crudos actuales aunque la caché sea más vieja', async () => {
+    const id = await repMlOmitida();
+    await admin.query(`UPDATE catalog.external_representations
+      SET atributos_crudos = '{"actual":true}'::jsonb, comercial_crudo = '{"precio":777}'::jsonb WHERE id = $1`, [id]);
+    const m = { 'MLA100|': { category_id: 'MLA3', thumbnail: 'https://m/omitida.jpg', precio: 9100,
+      available_quantity: 2, atributos_json: JSON.stringify([{ id: 'COLOR', name: 'Color', value_name: 'Rojo' }]) } };
+
+    await backfillAtributos(app, fuente({}, m), { lote: 10, dryRun: false, omitidasMl: true });
+
+    expect((await admin.query(`SELECT atributos_crudos, comercial_crudo FROM catalog.external_representations WHERE id = $1`, [id])).rows[0])
+      .toEqual({ atributos_crudos: { actual: true }, comercial_crudo: { precio: 777 } });
+  });
+
+  it('el modo de omitidas es idempotente y no vuelve a procesar una representación con atributos', async () => {
+    const id = await repMlOmitida();
+    const m = { 'MLA100|': { category_id: 'MLA3', thumbnail: 'https://m/omitida.jpg', atributos_json: JSON.stringify([]) } };
+    const uno = await backfillAtributos(app, fuente({}, m), { lote: 10, dryRun: false, omitidasMl: true });
+    const dos = await backfillAtributos(app, fuente({}, m), { lote: 10, dryRun: false, omitidasMl: true });
+    expect(uno.procesadas).toBe(1); expect(dos.procesadas).toBe(0);
+    expect(await contar('model_images')).toBe(1);
+    expect((await admin.query('SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1', [id])).rows[0].n).toBe(1);
+  });
+
+  it('el dry-run de omitidas informa sin escribir', async () => {
+    const id = await repMlOmitida();
+    const m = { 'MLA100|': { category_id: 'MLA3', thumbnail: 'https://m/omitida.jpg', atributos_json: JSON.stringify([]) } };
+    const r = await backfillAtributos(app, fuente({}, m), { lote: 10, dryRun: true, omitidasMl: true });
+    expect(r).toMatchObject({ procesadas: 1, conDatos: 1, sinDatos: 0, atributos: 1, imagenes: 1 });
+    expect(await contar('model_attributes')).toBe(0); expect(await contar('model_images')).toBe(0);
+    expect((await admin.query('SELECT capturado_en FROM catalog.external_representations WHERE id = $1', [id])).rows[0].capturado_en).not.toBeNull();
+  });
+
+  it('en modo omitidas no pisa capturado_en ni el precio ya cargado, y sin caché no escribe nada', async () => {
+    const id = await repMlOmitida();
+    await admin.query(`UPDATE catalog.external_representations SET precio = 7777, capturado_en = '2020-01-01T00:00:00Z' WHERE id = $1`, [id]);
+    await backfillAtributos(app, fuente(), { lote: 10, dryRun: false, omitidasMl: true });
+    const q = `SELECT precio::text, capturado_en::text FROM catalog.external_representations WHERE id = $1`;
+    const antes = (await admin.query(q, [id])).rows[0];
+    expect(antes.capturado_en).toContain('2020-01-01');
+    const m = { 'MLA100|': { category_id: 'MLA3', thumbnail: 'https://m/omitida.jpg', precio: 9100, atributos_json: JSON.stringify([]) } };
+    await backfillAtributos(app, fuente({}, m), { lote: 10, dryRun: false, omitidasMl: true });
+    const despues = (await admin.query(q, [id])).rows[0];
+    expect(despues.capturado_en).toContain('2020-01-01');
+    expect(despues.precio).toBe('7777.00');
+    expect(await contar('model_images')).toBe(1);
+  });
+
+  it('una omitida sin datos cuenta sinDatos y no incluye Woo, ML no omitidas ni representaciones con modelo', async () => {
+    await repMlOmitida('MLA100');
+    await rep('woocommerce', '100');
+    await rep('mercadolibre', 'MLA101');
+    await rep('mercadolibre', 'MLA102', '', 'contenedor');
+    const r = await backfillAtributos(app, fuente(), { lote: 10, dryRun: false, omitidasMl: true });
+    expect(r).toMatchObject({ procesadas: 1, conDatos: 0, sinDatos: 1, atributos: 0, imagenes: 0 });
+  });
+
+  it('repara extras heredados en dry-run y ejecución, cuenta modelos y es idempotente', async () => {
+    const vinculada = await rep('woocommerce', '110');
+    const omitida = await repMlOmitida('MLA110');
+    const modeloViejo = (await admin.query<{ id: string }>(`INSERT INTO catalog.product_models
+      (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1,$2,'ml_simple',$3,'viejo') RETURNING id`,
+    [empresa, ml, randomUUID()])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES ($1,$2,'marca','vieja',now()), ($3,$2,'color','rojo',now())`, [modeloViejo, omitida, modeloViejo]);
+    await admin.query(`INSERT INTO catalog.model_images (model_id, representation_id, url, observado_en)
+      VALUES ($1,$2,'https://x/vieja.jpg',now())`, [modeloViejo, omitida]);
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES (NULL,$1,'marca','nula',now())`, [vinculada]);
+    await admin.query(`INSERT INTO catalog.model_images (model_id, representation_id, url, observado_en)
+      VALUES (NULL,$1,'https://x/nula.jpg',now())`, [vinculada]);
+    const alineada = await rep('woocommerce', '111');
+    const modeloAlineado = (await admin.query<{ model_id: string }>(`SELECT v.model_id FROM catalog.external_representations r
+      JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [alineada])).rows[0]!.model_id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES ($1,$2,'marca','igual',now())`, [modeloAlineado, alineada]);
+
+    const seco = await repararExtras(app, { lote: 2, dryRun: true });
+    expect(seco).toEqual({ atributos: 3, imagenes: 2, representaciones: 2, modelos: 2 });
+    expect((await admin.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id = $2`, [omitida, modeloViejo])).rows[0].n).toBe(2);
+    expect((await admin.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS NULL`, [vinculada])).rows[0].n).toBe(1);
+
+    const real = await repararExtras(app, { lote: 2, dryRun: false });
+    expect(real).toEqual(seco);
+    expect((await admin.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id IS NULL`, [omitida])).rows[0].n).toBe(2);
+    const modeloVinculada = (await admin.query(`SELECT v.model_id FROM catalog.external_representations r JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [vinculada])).rows[0].model_id;
+    expect((await admin.query(`SELECT count(*)::int AS n FROM catalog.model_attributes WHERE representation_id = $1 AND model_id = $2`, [vinculada, modeloVinculada])).rows[0].n).toBe(1);
+    expect(await repararExtras(app, { lote: 2, dryRun: false })).toEqual({ atributos: 0, imagenes: 0, representaciones: 0, modelos: 0 });
+    expect((await admin.query(`SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1`, [alineada])).rows)
+      .toEqual([{ model_id: modeloAlineado }]);
+  });
 });
 
 describe('E2-BKF-02 el script', () => {
@@ -156,6 +272,7 @@ describe('E2-BKF-02 el script', () => {
     s.exec(`CREATE TABLE catalogo_cache (id_woo INTEGER PRIMARY KEY, tipo TEXT, stock INTEGER, precio REAL, regular_price REAL, gtin TEXT, img TEXT, categorias_json TEXT, atributos_json TEXT);
       CREATE TABLE ml_publicaciones_cache (clave TEXT PRIMARY KEY, item_id TEXT, thumbnail TEXT, precio REAL, available_quantity INTEGER, gtin TEXT, category_id TEXT, atributos_json TEXT);`);
     s.prepare('INSERT INTO catalogo_cache VALUES (?,?,?,?,?,?,?,?,?)').run(100, 'simple', 4, 1000, 1500, '779', 'https://x/a.jpg', '["Cubiertas"]', '[{"name":"Marca","option":"Maxxis"}]');
+    s.prepare('INSERT INTO ml_publicaciones_cache VALUES (?,?,?,?,?,?,?,?)').run('MLA100|', 'MLA100', 'https://m/omitida.jpg', 9100, 2, null, 'MLA3', '[{"id":"COLOR","name":"Color","value_name":"Rojo"}]');
     s.close();
     return () => rmSync(dir, { recursive: true, force: true });
   });
@@ -182,5 +299,34 @@ describe('E2-BKF-02 el script', () => {
     expect(real.status, real.stderr).toBe(0);
     expect(JSON.parse(real.stdout)).toMatchObject({ dryRun: false, procesadas: 1, conDatos: 1 });
     expect(await pendientes()).toBe(0); expect(await contar('model_attributes')).toBe(2); // marca + categoria_canal
+  });
+
+  it('--omitidas-ml informa y ejecuta el backfill de ML ya capturado', async () => {
+    await repMlOmitida();
+    const seco = correr(['--omitidas-ml']);
+    expect(seco.status, seco.stderr).toBe(0);
+    expect(JSON.parse(seco.stdout)).toMatchObject({ dryRun: true, omitidasMl: true, procesadas: 1, conDatos: 1, atributos: 2, imagenes: 1 });
+    expect(await contar('model_attributes')).toBe(0);
+    const real = correr(['--omitidas-ml', '--ejecutar']);
+    expect(real.status, real.stderr).toBe(0);
+    expect(JSON.parse(real.stdout)).toMatchObject({ dryRun: false, omitidasMl: true, procesadas: 1, conDatos: 1, atributos: 2, imagenes: 1 });
+    expect(await contar('model_attributes')).toBe(2);
+  });
+
+  it('--reparar-extras es dry-run por defecto, escribe con --ejecutar y rechaza combinaciones inválidas', async () => {
+    const repId = await repMlOmitida('MLA111');
+    const viejo = (await admin.query<{ id: string }>(`INSERT INTO catalog.product_models
+      (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1,$2,'ml_simple',$3,'viejo') RETURNING id`,
+    [empresa, ml, randomUUID()])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES ($1,$2,'marca','vieja',now())`, [viejo, repId]);
+    const seco = correr(['--reparar-extras']);
+    expect(seco.status, seco.stderr).toBe(0);
+    expect(JSON.parse(seco.stdout)).toMatchObject({ dryRun: true, atributos: 1, imagenes: 0, representaciones: 1 });
+    const real = correr(['--reparar-extras', '--ejecutar']);
+    expect(real.status, real.stderr).toBe(0);
+    expect(JSON.parse(real.stdout)).toMatchObject({ dryRun: false, atributos: 1, imagenes: 0, representaciones: 1 });
+    expect((await admin.query('SELECT model_id FROM catalog.model_attributes WHERE representation_id = $1', [repId])).rows[0].model_id).toBeNull();
+    expect(correr(['--reparar-extras', '--omitidas-ml']).status).toBe(2);
   });
 });

@@ -18,6 +18,9 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 - Desde el ajuste E1 del 2026-09-30, las notificaciones `ml.messages` se releen por ID con `GET /messages/{id}?tag=post_sale`; `/messages/unread` queda como barrido redundante cada seis horas. Los GET individuales de `ml.shipments` se hacen en serie, con 300 ms entre ellos y `x-format-new: true`. El gateway mantiene rutas y parámetros cerrados. Ver `docs/superpowers/evidence/e1/2026-09-30-E1-429-api-fix-deploy.md`; la calibración de cupos y la campaña PM-186 siguen sujetas a la medición Tarea 0.
 - La reasignación manual de un vínculo ML→Woo exige el SKU observado por el cliente y
   responde conflicto si otra operación lo cambió antes de escribir.
+- En la plataforma, los atributos e imágenes de una representación ML omitida se conservan por
+  `representation_id` con `model_id` nulo; toda decisión que cambie el vínculo reasigna esos extras
+  al modelo destino o los deja nulos y reclasifica los modelos viejo/nuevo dentro de la misma transacción.
 - Un timeout durante el primer PUT de tracking a Woo es un resultado incierto: se persiste y
   la UI no afirma que el tracking o el mail fueron confirmados hasta reconciliar con Woo.
 - `pack_id` es la identidad canónica del paquete ML para preparación; las filas anteriores se
@@ -84,6 +87,16 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   `caso_id` opcional; cuando pertenece a la misma empresa agrega `explicacion` contra la publicación ML
   resuelta del caso, usando la misma proyección de atributos del detalle. Sin `caso_id` conserva el contrato
   anterior; UUID inválido responde 400 y un caso ajeno 404.
+- **Extras de publicaciones ML omitidas (2026-09-27):** la migración de plataforma `0028_atributos_sin_modelo.sql`
+  permite `model_id NULL` en `catalog.model_attributes` y `catalog.model_images`, conservando
+  `representation_id` como procedencia obligatoria. `persistirExtras` guarda atributos e imágenes de una
+  representación omitida por decisión, pero no la agrega al resumen ni dispara clasificación por modelo;
+  los informes y clasificadores agrupan por modelo y la excluyen naturalmente, mientras la bandeja lee por
+  representación y sí muestra sus extras.
+- **Bandeja de identidad — aislamiento de fotos (2026-09-27):** los respaldos de foto de candidatos,
+  sombras y búsqueda manual sólo consideran imágenes vigentes cuya representación del mismo modelo sea Woo
+  y no esté archivada; una imagen ML nunca cruza al lado Woo. El detalle expone `publicacion.atributos_ml_cargados`,
+  verdadero si la representación ML tiene al menos un atributo vigente, incluso si no es comparable.
 - **Verificado por sonda autenticada de sólo lectura (2026-09-13):** `GET /orders/search` acepta
   `order.date_last_updated.from` y lo aplica (sin filtro 2.446, desde ayer 3, desde +30 días 0).
   `GET /shipments/{id}` responde 200 **sin** `x-format-new` y trae `last_updated`, aunque la
@@ -103,3 +116,10 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   FB-4746 y FB-10376 (jul–5 sep) era un `user_product` compartido entre productos Woo distintos
   (causa documentada en `UM1.1-cierre-sku-ml.md`). `conflictosDeBolsaCompartida` da 0 hoy; la
   reactivación de FB-32234 del 12-09 fue legítima (venta y reposición).
+- **Bandeja de identidad — atributos y foto (2026-09-27):** la comparación canoniza
+  `tamano_del_cuadro` como `talle` y normaliza valores ignorando mayúsculas, acentos, espacios y
+  separadores. Los atributos del candidato se proyectan sólo desde representaciones Woo vigentes
+  de su variante; el nivel modelo sólo completa nombres ausentes y también debe ser Woo, vigente y
+  sin variación. `otros_atributos` usa la lista cerrada de identidad comparable, por lo que IDs,
+  impuestos, guía de talles y campos `*_del_seller` no generan diferencias. El proxy legado puede
+  completar una foto ML faltante desde `ml_publicaciones_cache.thumbnail` de sólo lectura y fail-open.

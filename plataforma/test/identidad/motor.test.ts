@@ -247,6 +247,23 @@ describe('E3-MOTOR-01 correrMotor', () => {
     expect(candidatos[0]).toMatchObject({ rank: 1, engine_version: ENGINE_VERSION });
   });
 
+  it('usa tamano_del_cuadro como talle para desempatar S contra M', async () => {
+    const { rep, caso } = await casoConSkuObservado('MLB_TALLE_ALIAS', null, 'Bicicleta montaña');
+    await varianteConSkuYAtributosWoo('FB-7101', 'Bicicleta montaña', [{ name: 'Talle', option: 'S' }]);
+    await varianteConSkuYAtributosWoo('FB-7102', 'Bicicleta montaña', [{ name: 'Talle', option: 'M' }]);
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT COALESCE(r.model_id, v.model_id), r.id, 'tamano_del_cuadro', 'M', now()
+         FROM catalog.external_representations r LEFT JOIN catalog.sellable_variants v ON v.id = r.variant_id WHERE r.id = $1`, [rep]);
+
+    await correrMotor(app, { empresa, limite: 500, log: logSilencioso });
+    const filas = await q<{ sku: string; rank: number }>(
+      `SELECT v.sku, k.rank FROM catalog.identity_candidates k
+         JOIN catalog.sellable_variants v ON v.id = k.variant_id
+        WHERE k.case_id = $1 ORDER BY k.rank`, [caso]);
+    expect(filas.slice(0, 2)).toEqual([{ sku: 'FB-7102', rank: 1 }, { sku: 'FB-7101', rank: 2 }]);
+  });
+
   describe('marca D5 (omitida_revisar con omitir legado vigente + SKU único)', () => {
     /** Igual que casoConSkuObservado pero con tipo omitida_revisar (D5 sólo aplica a ese tipo). */
     async function casoOmitidaRevisar(recurso: string, skuObservado: string | null) {

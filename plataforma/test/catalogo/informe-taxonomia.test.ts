@@ -65,6 +65,13 @@ async function representacion(canal: 'woocommerce' | 'mercadolibre', modelo: str
     [empresa, cuenta, canal, randomUUID(), variante])).rows[0]!.id;
 }
 
+async function representacionSinModelo() {
+  return (await admin.query<{ id: string }>(
+    `INSERT INTO catalog.external_representations
+       (company_id, channel_account_id, canal, recurso, tipo, omitida_por_decision)
+     VALUES ($1, $2, 'mercadolibre', $3, 'vendible', true) RETURNING id`, [empresa, cuentaMl, randomUUID()])).rows[0]!.id;
+}
+
 /** Un modelo con un valor de `categoria_canal` (y opcionalmente `marca`) capturado como atributo, en un canal dado. */
 async function modeloConCategoria(
   canal: 'woocommerce' | 'mercadolibre', categoria: string | null, opts: { marca?: string } = {},
@@ -97,6 +104,15 @@ describe('E2-INF-01 candidatos', () => {
     const cubiertas = c.find((x) => x.ejemplos.includes('CUBIERTAS'));
     expect(cubiertas?.modelos).toBe(2);
     expect(cubiertas?.ejemplos).toEqual(expect.arrayContaining(['CUBIERTAS', 'Cubiertas']));
+  });
+
+  it('ignora atributos de representaciones sin modelo al contar candidatos', async () => {
+    const rep = await representacionSinModelo();
+    await admin.query(`INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+      VALUES (NULL, $1, 'categoria_canal', 'CASCOS', now())`, [rep]);
+
+    const c = await candidatosDesdeAtributo(app, empresa);
+    expect(c).toEqual([]);
   });
 });
 

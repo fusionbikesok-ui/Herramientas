@@ -700,7 +700,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     let keyring = null;
     try { if (process.env.SOMBRA_KEYRING_FILE) keyring = cargarKeyringInternoActivo(process.env.SOMBRA_KEYRING_FILE); }
     catch (e) { console.error('[bandeja-identidad] keyring inválido:', e.message); }
-    return bandejaIdentidadRouter({ url: process.env.SOMBRA_PLATAFORMA_URL, keyring });
+    return bandejaIdentidadRouter({ url: process.env.SOMBRA_PLATAFORMA_URL, keyring, db });
   })());
   app.use('/api/sync', syncRouter(db, syncCfg));
   app.use('/api/recepciones', recepcionesRouter(db, wooCfg));

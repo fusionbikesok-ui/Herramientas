@@ -18,4 +18,13 @@ describe('otrosAtributos (mismas reglas de marca que T4)', () => {
   it('color y talle los compara el motor: no se repiten acá', () => {
     expect(otrosAtributos(m({ color: 'negro', talle: 'M' }), m({ color: 'rojo' }))).toEqual([]);
   });
+  it('canoniza material_del_cuadro y compara edad', () => {
+    expect(otrosAtributos(
+      m({ material_del_cuadro: 'Carbono', edad: 'Adultos' }),
+      m({ material: 'Aluminio', edad: 'Niños' }),
+    )).toEqual([
+      { nombre: 'edad', marca: 'difiere', valorMl: 'Adultos', valorCandidato: 'Niños' },
+      { nombre: 'material', marca: 'difiere', valorMl: 'Carbono', valorCandidato: 'Aluminio' },
+    ]);
+  });
 });

@@ -24,7 +24,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import type { Logger } from 'pino';
 import { z } from 'zod';
-import { otrosAtributos, type Atributos } from '../identidad/comparar.ts';
+import { ATRIBUTOS_COMPARABLES, nombreCanonico, otrosAtributos, type Atributos } from '../identidad/comparar.ts';
 import { decidirCaso, type ResultadoDecision } from '../identidad/decidir.ts';
 import { apartarCaso, desapartarCaso } from '../identidad/apartar.ts';
 import { verificarInterna } from '../seguridad/interna.ts';
@@ -35,6 +35,13 @@ const RETENCION_NONCE = '10 minutes';
 const LIMITE_CUERPO = 64 * 1024;
 const LIMITE_POR_DEFECTO = 50;
 const LIMITE_MAXIMO = 200;
+const FOTO_MODELO_WOO = `(SELECT i.url FROM catalog.model_images i
+    WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
+      AND EXISTS (SELECT 1 FROM catalog.external_representations ir
+                   WHERE ir.id = i.representation_id AND ir.model_id = v.model_id
+                     AND ir.canal = 'woocommerce' AND ir.tipo = 'contenedor'
+                     AND ir.variant_id IS NULL AND ir.archivado_en IS NULL)
+    ORDER BY i.orden NULLS LAST, i.id LIMIT 1)`;
 
 const Decision = z.strictObject({
   expected_version: z.number().int().min(1),
@@ -132,13 +139,80 @@ async function atributosDe(pool: pg.Pool, sql: string, id: string): Promise<Atri
   return m;
 }
 
+interface FilaAtributoCandidato { variant_id: string; nombre: string; valor: string; representation_id: string; nivel: 'variante' | 'modelo'; id: string }
+
+/**
+ * Proyecta una variante Woo sin mezclar las representaciones de sus hermanas.
+ * Dentro de una misma representación se conservan los valores repetidos (` / `); el modelo sólo aporta
+ * nombres que la representación vendible de la variante no afirmó.
+ */
+export function combinarAtributos(rows: FilaAtributoCandidato[]): Map<string, Atributos> {
+  const porVariante = new Map<string, { variante: Map<string, string>; modelo: Map<string, string> }>();
+  const porRepresentacion = new Map<string, Map<string, string>>();
+  for (const f of rows) {
+    const nombre = nombreCanonico(f.nombre);
+    if (!ATRIBUTOS_COMPARABLES.has(nombre)) continue;
+    const clave = `${f.variant_id}:${f.representation_id}`;
+    let rep = porRepresentacion.get(clave);
+    if (!rep) { rep = new Map(); porRepresentacion.set(clave, rep); }
+    rep.set(nombre, rep.has(nombre) ? `${rep.get(nombre)} / ${f.valor}` : f.valor);
+    let grupos = porVariante.get(f.variant_id);
+    if (!grupos) { grupos = { variante: new Map(), modelo: new Map() }; porVariante.set(f.variant_id, grupos); }
+    const destino = f.nivel === 'variante' ? grupos.variante : grupos.modelo;
+    if (!destino.has(nombre)) destino.set(nombre, f.valor);
+  }
+  // Relee el valor agregado por representación para no concatenar filas que vengan de representaciones distintas.
+  for (const f of rows) {
+    const nombre = nombreCanonico(f.nombre);
+    if (!ATRIBUTOS_COMPARABLES.has(nombre)) continue;
+    const grupos = porVariante.get(f.variant_id)!;
+    const valor = porRepresentacion.get(`${f.variant_id}:${f.representation_id}`)!.get(nombre)!;
+    const destino = f.nivel === 'variante' ? grupos.variante : grupos.modelo;
+    destino.set(nombre, valor);
+  }
+  const resultado = new Map<string, Atributos>();
+  for (const [variantId, grupos] of porVariante) {
+    const atributos = new Map(grupos.variante);
+    for (const [nombre, valor] of grupos.modelo) if (!atributos.has(nombre)) atributos.set(nombre, valor);
+    resultado.set(variantId, atributos);
+  }
+  return resultado;
+}
+
+const ATRIBUTOS_VARIANTES = `
+  WITH variantes_woo AS (
+    SELECT DISTINCT ON (r.variant_id) r.variant_id, r.id AS representation_id
+      FROM catalog.external_representations r
+     WHERE r.variant_id = ANY($1::uuid[]) AND r.canal = 'woocommerce' AND r.archivado_en IS NULL
+     ORDER BY r.variant_id, r.observado_en DESC, r.id DESC
+  ), modelos_woo AS (
+    SELECT DISTINCT ON (r.model_id) r.model_id, r.id AS representation_id
+      FROM catalog.external_representations r
+     WHERE r.model_id = ANY($2::uuid[]) AND r.canal = 'woocommerce' AND r.tipo = 'contenedor'
+       AND r.variant_id IS NULL AND r.archivado_en IS NULL
+     ORDER BY r.model_id, r.observado_en DESC, r.id DESC
+  )
+  SELECT vr.variant_id, a.nombre_normalizado AS nombre, a.valor, a.representation_id, 'variante'::text AS nivel, a.id::text
+    FROM variantes_woo vr JOIN catalog.model_attributes a ON a.representation_id = vr.representation_id
+   WHERE a.vigente_hasta IS NULL
+  UNION ALL
+  SELECT v.id AS variant_id, a.nombre_normalizado AS nombre, a.valor, a.representation_id, 'modelo'::text AS nivel, a.id::text
+    FROM catalog.sellable_variants v JOIN modelos_woo mr ON mr.model_id = v.model_id
+    JOIN catalog.model_attributes a ON a.representation_id = mr.representation_id
+   WHERE v.id = ANY($1::uuid[]) AND a.vigente_hasta IS NULL
+  ORDER BY variant_id, nivel, representation_id, id`;
+
+async function atributosDeVariantes(pool: pg.Pool, variantIds: string[], modelIds: string[]): Promise<Map<string, Atributos>> {
+  if (!variantIds.length) return new Map();
+  const r = await pool.query<FilaAtributoCandidato>(ATRIBUTOS_VARIANTES, [variantIds, [...new Set(modelIds)]]);
+  return combinarAtributos(r.rows);
+}
+
 /** Explicación de un candidato contra la publicación ML del caso. Es la misma proyección que usa el detalle. */
-async function explicacionCandidato(
-  pool: pg.Pool, atributosMl: Atributos, modelId: string, atributosMotor: unknown[] = [],
+function explicacionCandidato(
+  atributosMl: Atributos, atributosCandidato: Atributos, atributosMotor: unknown[] = [],
 ) {
-  const atrCand = await atributosDe(pool,
-    'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE model_id = $1 AND vigente_hasta IS NULL', modelId);
-  return { atributos: atributosMotor, otros_atributos: otrosAtributos(atributosMl, atrCand) };
+  return { atributos: atributosMotor, otros_atributos: otrosAtributos(atributosMl, atributosCandidato) };
 }
 
 export function registrarIdentidadInterna(
@@ -260,33 +334,39 @@ export function registrarIdentidadInterna(
       if (!c) return error(req, reply, 404, 'caso_inexistente', 'No existe el caso.');
 
       const atributosMl = c.rep_id
+        // La bandeja lee los extras de la representación: esto incluye una publicación omitida sin modelo.
         ? await atributosDe(pool, 'SELECT nombre_normalizado AS nombre, valor FROM catalog.model_attributes WHERE representation_id = $1 AND vigente_hasta IS NULL', String(c.rep_id))
         : new Map<string, string>();
+
+      const posibleDuplicado = c.rep_id && c.sku_observado
+        ? (await pool.query<{ recurso: string; sku_observado: string }>(
+          `SELECT recurso, sku_observado
+             FROM catalog.external_representations
+            WHERE company_id = $1 AND channel_account_id = $2 AND canal = 'mercadolibre'
+              AND tipo = 'vendible' AND archivado_en IS NULL AND id <> $3
+              AND variant_id IS NOT NULL AND sku_observado IS NOT NULL AND sku_observado = $4
+            ORDER BY observado_en DESC NULLS LAST, id DESC LIMIT 1`,
+          [auth.empresa, c.channel_account_id, c.rep_id, c.sku_observado],
+        )).rows[0] ?? null
+        : null;
 
       // El último top-3 (la corrida más reciente), SIN puntaje.
       const cands = (await pool.query<Fila>(
         `SELECT k.rank, k.explicacion, v.id AS variant_id, v.sku, v.model_id, m.titulo,
-                (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
-                  ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto,
+                COALESCE((SELECT url FROM catalog.model_images i WHERE i.representation_id = w.id AND i.vigente_hasta IS NULL
+                  ORDER BY i.orden NULLS LAST, i.id LIMIT 1),
+                ${FOTO_MODELO_WOO}) AS foto,
                 w.precio, w.moneda, w.stock_canal AS stock
            FROM catalog.identity_candidates k
-           JOIN catalog.sellable_variants v ON v.id = k.variant_id
+          JOIN catalog.sellable_variants v ON v.id = k.variant_id AND v.archivado_en IS NULL
            JOIN catalog.product_models m ON m.id = v.model_id
-           LEFT JOIN LATERAL (SELECT precio, moneda, stock_canal FROM catalog.external_representations
+          LEFT JOIN LATERAL (SELECT id, precio, moneda, stock_canal FROM catalog.external_representations
                                WHERE variant_id = v.id AND canal = 'woocommerce' AND archivado_en IS NULL
                                ORDER BY observado_en DESC LIMIT 1) w ON true
           WHERE k.case_id = $1
             AND k.run_id = (SELECT run_id FROM catalog.identity_candidates WHERE case_id = $1 ORDER BY creado_en DESC, id DESC LIMIT 1)
           ORDER BY k.rank`, [c.id])).rows;
-      const candidatos = [];
-      for (const k of cands) {
-        const atributos = (k.explicacion as { atributos?: unknown[] } | null)?.atributos ?? [];
-        candidatos.push({
-          rank: k.rank, variant_id: k.variant_id, sku: k.sku ?? null, titulo: k.titulo, foto: k.foto ?? null,
-          precio: k.precio ?? null, moneda: k.moneda ?? null, stock: k.stock ?? null,
-          explicacion: await explicacionCandidato(pool, atributosMl, String(k.model_id), atributos),
-        });
-      }
+      const candidatosDatos: Fila[] = cands.map((k) => ({ ...k }));
 
       const historial = c.recurso === null || c.recurso === undefined ? [] : (await pool.query<Fila>(
         `SELECT d.id, d.origen, d.efecto, d.eleccion, d.actor, d.motivo, d.creado_en, d.superada_en, d.supersede_a, d.variant_id, v.sku
@@ -304,25 +384,36 @@ export function registrarIdentidadInterna(
       // coincidencia — si no, José nunca la veía, aunque el sistema ya la hubiera resuelto. Se agrega como
       // rank 0 (primer lugar) cuando no está entre los candidatos del motor, con los mismos datos de Woo
       // que cualquier candidato.
-      if (sombra?.variant_id && !candidatos.some((cnd) => cnd.variant_id === sombra.variant_id)) {
+      if (sombra?.variant_id && !candidatosDatos.some((cnd) => cnd.variant_id === sombra.variant_id)) {
         const v = (await pool.query<Fila>(
           `SELECT v.id AS variant_id, v.sku, v.model_id, m.titulo,
-                  (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
-                    ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto,
+                  COALESCE((SELECT url FROM catalog.model_images i WHERE i.representation_id = w.id AND i.vigente_hasta IS NULL
+                    ORDER BY i.orden NULLS LAST, i.id LIMIT 1),
+                  ${FOTO_MODELO_WOO}) AS foto,
                   w.precio, w.moneda, w.stock_canal AS stock
              FROM catalog.sellable_variants v JOIN catalog.product_models m ON m.id = v.model_id
-             LEFT JOIN LATERAL (SELECT precio, moneda, stock_canal FROM catalog.external_representations
+            LEFT JOIN LATERAL (SELECT id, precio, moneda, stock_canal FROM catalog.external_representations
                                  WHERE variant_id = v.id AND canal = 'woocommerce' AND archivado_en IS NULL
                                  ORDER BY observado_en DESC LIMIT 1) w ON true
             WHERE v.id = $1 AND v.archivado_en IS NULL`, [sombra.variant_id])).rows[0];
         if (v) {
-          candidatos.unshift({
-            rank: 0, variant_id: v.variant_id, sku: v.sku ?? null, titulo: v.titulo, foto: v.foto ?? null,
-            precio: v.precio ?? null, moneda: v.moneda ?? null, stock: v.stock ?? null,
-            explicacion: await explicacionCandidato(pool, atributosMl, String(v.model_id)),
-          });
+          candidatosDatos.unshift({ rank: 0, ...v });
         }
       }
+
+      const atributosPorVariante = await atributosDeVariantes(
+        pool,
+        candidatosDatos.map((f) => String(f.variant_id)),
+        candidatosDatos.map((f) => String(f.model_id)),
+      );
+      const candidatos = candidatosDatos.map((k) => {
+        const atributos = (k.explicacion as { atributos?: unknown[] } | null)?.atributos ?? [];
+        return {
+          rank: k.rank, variant_id: k.variant_id, sku: k.sku ?? null, titulo: k.titulo, foto: k.foto ?? null,
+          precio: k.precio ?? null, moneda: k.moneda ?? null, stock: k.stock ?? null,
+          explicacion: explicacionCandidato(atributosMl, atributosPorVariante.get(String(k.variant_id)) ?? new Map(), atributos),
+        };
+      });
 
       return {
         id: c.id, tipo: c.tipo, estado: c.estado, prioridad: c.prioridad, version: c.version, abierto_en: c.abierto_en,
@@ -331,6 +422,8 @@ export function registrarIdentidadInterna(
           recurso: c.recurso, variacion: c.variacion_normalizada, titulo: c.titulo ?? null, sku_observado: c.sku_observado ?? null,
           estado: c.estado_remoto ?? null, stock: c.stock_canal ?? null, precio: c.precio ?? null, moneda: c.moneda ?? null,
           link_ml: linkMl(String(c.recurso)), foto: c.foto ?? null, atributos: Object.fromEntries(atributosMl),
+          atributos_ml_cargados: atributosMl.size > 0,
+          ...(posibleDuplicado ? { posible_duplicado: { recurso: posibleDuplicado.recurso, sku: posibleDuplicado.sku_observado } } : {}),
         } : null,
         candidatos,
         auto_sku_en_sombra: sombra ? { decision_id: sombra.id, sku: sombra.sku ?? null, creado_en: sombra.creado_en } : null,
@@ -436,34 +529,27 @@ export function registrarIdentidadInterna(
       const patron = '%' + q.data.q.replace(/[\\%_]/g, (c) => '\\' + c) + '%';
       const r = await pool.query<Fila>(
         `SELECT v.id AS variant_id, v.sku, v.model_id, m.titulo,
-                (SELECT url FROM catalog.model_images i WHERE i.model_id = v.model_id AND i.vigente_hasta IS NULL
-                  ORDER BY i.orden NULLS LAST, i.id LIMIT 1) AS foto,
+                COALESCE((SELECT url FROM catalog.model_images i WHERE i.representation_id = w.id AND i.vigente_hasta IS NULL
+                  ORDER BY i.orden NULLS LAST, i.id LIMIT 1),
+                ${FOTO_MODELO_WOO}) AS foto,
                 w.precio, w.moneda, w.stock_canal AS stock
            FROM catalog.sellable_variants v
            JOIN catalog.product_models m ON m.id = v.model_id
-           LEFT JOIN LATERAL (SELECT precio, moneda, stock_canal FROM catalog.external_representations
+          LEFT JOIN LATERAL (SELECT id, precio, moneda, stock_canal FROM catalog.external_representations
                                WHERE variant_id = v.id AND canal = 'woocommerce' AND archivado_en IS NULL
                                ORDER BY observado_en DESC LIMIT 1) w ON true
           WHERE v.company_id = $1 AND v.archivado_en IS NULL AND (upper(trim(v.sku)) = upper(trim($2)) OR m.titulo ILIKE $3)
           ORDER BY (upper(trim(v.sku)) = upper(trim($2))) DESC, m.titulo, v.sku LIMIT 20`, [auth.empresa, q.data.q, patron]);
-      const modelIds = [...new Set(r.rows.map((f) => String(f.model_id)))];
-      const atributosPorModelo = new Map<string, Atributos>();
-      if (atributosMl && modelIds.length) {
-        const atributos = await pool.query<{ model_id: string; nombre: string; valor: string }>(
-          `SELECT model_id, nombre_normalizado AS nombre, valor
-             FROM catalog.model_attributes
-            WHERE model_id = ANY($1::uuid[]) AND vigente_hasta IS NULL`, [modelIds]);
-        for (const f of atributos.rows) {
-          let mapa = atributosPorModelo.get(String(f.model_id));
-          if (!mapa) { mapa = new Map(); atributosPorModelo.set(String(f.model_id), mapa); }
-          mapa.set(f.nombre, mapa.has(f.nombre) ? `${mapa.get(f.nombre)} / ${f.valor}` : f.valor);
-        }
-      }
+      const atributosPorVariante = atributosMl && r.rows.length
+        ? combinarAtributos((await pool.query<FilaAtributoCandidato>(ATRIBUTOS_VARIANTES, [
+          r.rows.map((f) => String(f.variant_id)), [...new Set(r.rows.map((f) => String(f.model_id)))],
+        ])).rows)
+        : new Map<string, Atributos>();
       const variantes = [];
       for (const f of r.rows) {
         const variante = { variant_id: f.variant_id, sku: f.sku ?? null, titulo: f.titulo, foto: f.foto ?? null,
           precio: f.precio ?? null, moneda: f.moneda ?? null, stock: f.stock ?? null } as Record<string, unknown>;
-        if (atributosMl) variante.explicacion = { atributos: [], otros_atributos: otrosAtributos(atributosMl, atributosPorModelo.get(String(f.model_id)) || new Map()) };
+        if (atributosMl) variante.explicacion = { atributos: [], otros_atributos: otrosAtributos(atributosMl, atributosPorVariante.get(String(f.variant_id)) || new Map()) };
         variantes.push(variante);
       }
       return { variantes };

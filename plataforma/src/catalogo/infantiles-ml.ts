@@ -81,6 +81,7 @@ export async function aplicarD22(tx: Consultable, o: OpcionesD22): Promise<Resum
   const filas = (await tx.query<ModeloD22>(
     `SELECT DISTINCT p.id AS modelo, p.titulo, a.valor AS categoria
        FROM catalog.product_models p
+       -- D22 cuenta modelos publicados; los atributos de una representación sin modelo quedan fuera.
        JOIN catalog.model_attributes a ON a.model_id = p.id AND a.nombre_normalizado = 'categoria_canal'
             AND a.vigente_hasta IS NULL AND a.valor = ANY($2)
        JOIN catalog.external_representations r ON r.id = a.representation_id

@@ -64,6 +64,7 @@ export async function candidatosDesdeAtributo(
   const r = await tx.query<{ valor: string; modelos: string }>(
     `SELECT a.valor, count(DISTINCT a.model_id) AS modelos
        FROM catalog.model_attributes a
+       -- Este informe cuenta modelos: las filas de representaciones sin modelo no entran.
        JOIN catalog.product_models m ON m.id = a.model_id
       WHERE m.company_id = $1 AND a.nombre_normalizado = 'categoria_canal' AND a.vigente_hasta IS NULL
       GROUP BY a.valor`, [empresa]);
@@ -155,6 +156,7 @@ export async function marcasConocidas(tx: Consultable, empresa: string): Promise
       WHERE a.company_id = $1`, [empresa]);
   const desdeAtributoMl = await tx.query<{ valor: string }>(
     `SELECT DISTINCT a.valor FROM catalog.model_attributes a
+       -- Las filas sin modelo son evidencia de la bandeja, no marcas de un modelo.
        JOIN catalog.product_models m ON m.id = a.model_id
       WHERE m.company_id = $1 AND a.nombre_normalizado IN ('marca', 'brand') AND a.vigente_hasta IS NULL`, [empresa]);
   const set = new Set(desdeBrands.rows.map((r) => r.n));
@@ -303,6 +305,7 @@ export async function medirCobertura(
   const filas = (await tx.query<FilaCategoriaModelo>(
     `SELECT a.model_id AS "modelId", r.canal, a.valor
        FROM catalog.model_attributes a
+       -- El informe de cobertura agrupa por modelo y, por eso, excluye evidencia sin model_id.
        JOIN catalog.product_models m ON m.id = a.model_id
        JOIN catalog.external_representations r ON r.id = a.representation_id
       WHERE m.company_id = $1 AND a.nombre_normalizado = 'categoria_canal' AND a.vigente_hasta IS NULL

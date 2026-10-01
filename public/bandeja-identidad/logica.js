@@ -11,6 +11,14 @@
     falta: { clase: 'mk--miss', simbolo: '—', texto: 'falta' },
     equivalente: { clase: 'mk--eq', simbolo: '≈', texto: 'equivalente' }
   };
+  // Mantener esta lista en paridad con ATRIBUTOS_COMPARABLES de plataforma/src/identidad/comparar.ts.
+  var ATRIBUTOS_COMPARABLES = { marca: true, modelo: true, color: true, talle: true, tamano_del_cuadro: true,
+    rodado: true, material: true, tipo_de_producto: true, tipo_de_bicicleta: true, genero: true, edad: true, cantidad_de_velocidades: true };
+  function nombreCanonico(nombre) {
+    var n = String(nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s-]+/g, '_');
+    if (n === 'tamano_del_cuadro') return 'talle';
+    return n === 'material_del_cuadro' ? 'material' : n;
+  }
 
   var COPY = {
     version_conflict: 'Este caso cambió mientras lo revisabas; tu elección se conserva.',
@@ -381,14 +389,26 @@
     if (valor !== undefined && valor !== null && String(valor).trim() !== '') return String(valor);
     return '—';
   }
-  function diferenciasVisibles(explicacion) {
+  function diferenciasVisibles(explicacion, publicacion) {
     var e = explicacion && explicacion.explicacion ? explicacion.explicacion : (explicacion || {});
     var vistos = {};
-    var lista = (e.atributos || []).concat(e.otros_atributos || []).filter(function (a) {
+    var lista = (e.atributos || []).map(function (a) { return { dato: a, otro: false }; })
+      .concat((e.otros_atributos || []).map(function (a) { return { dato: a, otro: true }; })).filter(function (envoltura) {
+      var a = envoltura.dato;
       if (!a || !a.nombre || vistos[a.nombre]) return false;
-      vistos[a.nombre] = true;
+      var canonico = nombreCanonico(a.nombre);
+      if (envoltura.otro && !ATRIBUTOS_COMPARABLES[canonico]) return false;
+      if (vistos[canonico]) return false;
+      vistos[canonico] = true;
       return true;
-    });
+    }).map(function (envoltura) { var a = envoltura.dato; return Object.assign({}, a, { nombre: nombreCanonico(a.nombre) }); });
+    var otros = e.otros_atributos || [];
+    var tieneFlagMl = publicacion && typeof publicacion.atributos_ml_cargados === 'boolean';
+    var sinAtributosMl = tieneFlagMl
+      ? !publicacion.atributos_ml_cargados
+      : otros.length > 0 && otros.every(function (a) { return !String(a && a.valorMl || '').trim(); })
+        && (e.atributos || []).every(function (a) { return !String(a && a.valorMl || '').trim(); });
+    if (sinAtributosMl) return { diferencias: [], iguales: 0, nombresIguales: [], sinAtributosMl: true };
     var grupos = { difiere: [], falta: [], equivalente: [], coincide: [] };
     lista.forEach(function (a) {
       var marcaActual = a.marca === 'coincide' || a.marca === 'equivalente' ? a.marca : (a.marca === 'falta' ? 'falta' : 'difiere');
@@ -401,7 +421,8 @@
     return {
       diferencias: orden.reduce(function (out, marca) { return out.concat(grupos[marca]); }, []),
       iguales: grupos.coincide.length,
-      nombresIguales: grupos.coincide.map(function (a) { return a.nombre; })
+      nombresIguales: grupos.coincide.map(function (a) { return a.nombre; }),
+      sinAtributosMl: false
     };
   }
   function textoDiferencias(n) {
