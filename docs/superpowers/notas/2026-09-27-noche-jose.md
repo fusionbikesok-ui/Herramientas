@@ -152,3 +152,24 @@ Los altos:
 - validar `ATRIBUTOS_PACK` contra payloads reales;
 - declarar `E3_CANARIO` y `E3_AUTO_SKU` en api y worker, y `E3_INTERVENTION` en worker, dentro de `compose.yml`;
 - correr el replay de 7 días con la muestra de 299.
+
+## Revisión Codex sol en lote (2026-10-01)
+
+Cupo antes de correrla: ventana de 5 h al 2 %, semanal al 54 %. Esfuerzo medio, solo lectura.
+
+| Rama | HEAD | Revisor | Codex sol |
+|---|---|---|---|
+| `fix/e3c3-segunda-opinion` | `2a8a372c` | OK | **desplegable** |
+| `fix/snapshot-clasificar-columnas` | `5c4ad07f` | OK | **desplegable** |
+| `fix/bandeja-debt` | `cc91b7d8` | OK | **con cambios**: 3 problemas de prioridad media en `bandeja.js` |
+
+Los 3 problemas de `fix/bandeja-debt` están en la navegación de la cola:
+- Al quitar el último caso visible, la bandeja no vuelve a los casos anteriores.
+- No tiene en cuenta la página siguiente antes de decir "solo quedan salteados".
+- La reconciliación al descartar puede abrir un caso que salteaste.
+
+La otra sesión los corrige con luna, escribiendo primero un test que falle para cada uno.
+
+E3 queda completo en código. Para encender el canario siguen faltando las tareas operativas que ya están listadas arriba y tu autorización.
+
+`fix/bandeja-debt` toca `public/`, así que antes de desplegarla necesita además el auditor de despliegue y la prueba en navegador con Playwright.
