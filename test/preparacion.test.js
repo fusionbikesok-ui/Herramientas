@@ -9,6 +9,7 @@ import {
   resolverPerfil, requisitosFoto, fotosFaltantes, esEnvioLocal, requisitosConCantidad,
   clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
 } from '../lib/preparacion.js';
+import * as preparacionLib from '../lib/preparacion.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
 // Las tablas de ubicaciones las crea el router de inventario al construirse (ensureTables).
 // En producción los dos routers conviven; acá se monta igual para que el test corra contra
@@ -21,6 +22,39 @@ vi.mock('heic-convert', () => ({ default: vi.fn() }));
 vi.mock('../routes/woo.js', async () => {
   const actual = await vi.importActual('../routes/woo.js');
   return { ...actual, wooFetch: vi.fn() };
+});
+
+describe('logística de envíos ML', () => {
+  const ordenPagada = { status: 'paid', shipping: { id: 'SHIP-1' } };
+  const tiposLocales = ['self_service', 'cross_docking', 'drop_off', 'xd_drop_off'];
+
+  it.each([
+    [{ logistic_type: 'self_service' }, 'self_service'],
+    [{ logistic: { type: 'self_service', mode: 'me2', direction: 'forward' } }, 'self_service'],
+    [{}, undefined],
+  ])('resuelve el tipo de logística ML desde formato viejo, nuevo o ausente', (envio, esperado) => {
+    expect(preparacionLib.tipoLogisticaMl).toBeTypeOf('function');
+    if (typeof preparacionLib.tipoLogisticaMl !== 'function') return;
+    expect(preparacionLib.tipoLogisticaMl(envio)).toBe(esperado);
+  });
+
+  it.each(tiposLocales)('clasifica %s como elegible en formato viejo y nuevo', (tipo) => {
+    expect(clasificarElegibilidadMl(ordenPagada, {
+      status: 'ready_to_ship', logistic_type: tipo,
+    })).toEqual({ estado: 'elegible', motivo: 'logistica_local' });
+    expect(clasificarElegibilidadMl(ordenPagada, {
+      status: 'ready_to_ship', logistic: { type: tipo, mode: 'me2', direction: 'forward' },
+    })).toEqual({ estado: 'elegible', motivo: 'logistica_local' });
+  });
+
+  it('mantiene fulfillment como logística externa explícita en ambos formatos', () => {
+    expect(clasificarElegibilidadMl(ordenPagada, {
+      status: 'ready_to_ship', logistic_type: 'fulfillment',
+    })).toEqual({ estado: 'no_elegible', motivo: 'logistica_externa' });
+    expect(clasificarElegibilidadMl(ordenPagada, {
+      status: 'ready_to_ship', logistic: { type: 'fulfillment', mode: 'me2', direction: 'forward' },
+    })).toEqual({ estado: 'no_elegible', motivo: 'logistica_externa' });
+  });
 });
 
 describe('guards U0.B: casos funcionales de claims y ML inconcluso', () => {
