@@ -423,4 +423,52 @@ describe('el flujo de seguimiento no se borra con repintados tardíos del detall
     real.reintentarSubidaLocal('tmp-9');
     expect(real.SUBIDAS_PENDIENTES['tmp-9'].fallida).toBeUndefined();
   });
+
+  async function confirmarSaliendoEnVuelo(respuesta) {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+    await real.abrirFlujoTracking();
+    real.TRACKING_FLUJO.tracking = 'AND123';
+    real.TRACKING_FLUJO.fila = { envio: { pedido: '70502' } };
+    let liberar;
+    real.enviarTracking = vi.fn(() => new Promise((r) => { liberar = r; }));
+    real.flash = vi.fn();
+    real.ir = vi.fn();
+    const p = real.confirmarTrackingFlujo();
+    // el operario sale con el POST en vuelo: el flujo sigue activo (enviando) pero la pantalla es otro pedido
+    real.cerrarFlujoTrackingAlSalir();
+    real.PREP = { ...prep(), id: 777, wc_order_id: 70999, estado: 'en_preparacion' };
+    cuerpo.innerHTML = 'OTRO PEDIDO';
+    liberar(respuesta);
+    await p;
+  }
+
+  it('POST en vuelo que termina bien con el operario ya en otro pedido: no navega ni repinta', async () => {
+    await confirmarSaliendoEnVuelo({ status: 200, body: { ok: true } });
+    expect(real.ir).not.toHaveBeenCalled();
+    expect(cuerpo.innerHTML).toBe('OTRO PEDIDO');
+    expect(real.TRACKING_FLUJO.activo).toBe(false);
+    expect(real.flash).toHaveBeenCalledWith('ok', expect.stringContaining('AND123'));
+  });
+
+  it('POST en vuelo que falla con el operario ya en otro pedido: avisa con flash y no repinta', async () => {
+    await confirmarSaliendoEnVuelo({ status: 500, body: { ok: false, error: 'Falló Andreani' } });
+    expect(cuerpo.innerHTML).toBe('OTRO PEDIDO');
+    expect(real.TRACKING_FLUJO.activo).toBe(false);
+    expect(real.flash).toHaveBeenCalledWith('bad', 'Falló Andreani');
+  });
+
+  it('POST en vuelo que termina bien con el flujo todavía abierto: navega a seguimientos', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+    await real.abrirFlujoTracking();
+    real.TRACKING_FLUJO.tracking = 'AND123';
+    real.TRACKING_FLUJO.fila = { envio: { pedido: '70502' } };
+    real.enviarTracking = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+    real.ir = vi.fn();
+    await real.confirmarTrackingFlujo();
+    expect(real.ir).toHaveBeenCalledWith('seguimientos');
+  });
 });

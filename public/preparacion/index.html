@@ -2640,8 +2640,10 @@ async function confirmarTrackingFlujo(forzado){
       SEG.guardadosSesion[tracking]={wcOrderId:wcId,pedido:(TRACKING_FLUJO.fila&&TRACKING_FLUJO.fila.envio||{}).pedido};
       if(TRACKING_FLUJO.origen==='seguimientos')quitarFilaSeg(wcId);
       if(TRACKING_FLUJO.origen==='seguimientos'&&typeof quitarTarjetaPorId==='function')quitarTarjetaPorId('seg-'+wcId,{alDiaFallback:true});
+      var abiertoAlTerminar=flujoTrackingAbierto();
       TRACKING_FLUJO.activo=false;
-      ir('seguimientos');
+      if(abiertoAlTerminar)ir('seguimientos');
+      else flash('ok','Seguimiento '+tracking+' guardado.');
       return;
     }
     if(r.status===502&&r.body.colgado){
@@ -2655,7 +2657,12 @@ async function confirmarTrackingFlujo(forzado){
   }catch(e){TRACKING_FLUJO.error='No se guardó, volvé a intentar.';}
   finally{
     TRACKING_FLUJO.enviando=false;
-    if(TRACKING_FLUJO.activo||TRACKING_FLUJO.error)renderTrackingConfirmacion(tracking,TRACKING_FLUJO.fila);
+    // Si el operario salió con el POST en vuelo, no se repinta sobre la pantalla actual (otro pedido):
+    // se cierra el flujo y el resultado de error se avisa con un flash.
+    if(TRACKING_FLUJO.activo&&!flujoTrackingAbierto()){
+      TRACKING_FLUJO.activo=false;
+      if(TRACKING_FLUJO.error)flash('bad',TRACKING_FLUJO.error);
+    }else if(TRACKING_FLUJO.activo||TRACKING_FLUJO.error)renderTrackingConfirmacion(tracking,TRACKING_FLUJO.fila);
   }
 }
 
