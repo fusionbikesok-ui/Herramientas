@@ -368,4 +368,59 @@ describe('el flujo de seguimiento no se borra con repintados tardíos del detall
     await real.completar();
     expect(real.api).not.toHaveBeenCalled();
   });
+
+  it('salir del overlay con ir() cierra el flujo y abrir otro pedido pinta (Atrás del celular)', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async (url) => {
+      if (url === '/seguimientos') return { status: 200, body: { ok: true, data: {} } };
+      if (url === '/777') return { status: 200, body: { ok: true, data: { ...prep(), id: 777, wc_order_id: 70999, numero_pedido: '70999', estado: 'en_preparacion' } } };
+      return { status: 200, body: { ok: true, data: [] } };
+    });
+    await real.abrirFlujoTracking();
+    expect(real.TRACKING_FLUJO.activo).toBe(true);
+    // ir() y abrirDetalle() arrancan con esta llamada (se verifica abajo); ir() entero necesita un DOM real.
+    real.cerrarFlujoTrackingAlSalir();
+    expect(real.TRACKING_FLUJO.activo).toBe(false);
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toMatch(/function ir\(v\)\{\n  cerrarFlujoTrackingAlSalir\(\);/);
+    expect(html).toMatch(/async function abrirDetalle\(id,empujar\)\{\n  cerrarFlujoTrackingAlSalir\(\);/);
+    real.modoPedido = vi.fn(); real.ocultarAvisoNuevosPendientes = vi.fn();
+    real.PREP = null; real.VISTA = 'pendientes';
+    cuerpo.innerHTML = 'Cargando…';
+    await real.abrirDetalle(777);
+    expect(cuerpo.innerHTML).not.toBe('Cargando…');
+  });
+
+  it('con el flag activo pero otra pantalla/pedido, renderDetalle igual pinta', () => {
+    real.PREP = { ...prep(), id: 888, wc_order_id: 71000, estado: 'en_preparacion' };
+    real.VISTA = 'detalle';
+    real.TRACKING_FLUJO.activo = true;
+    real.TRACKING_FLUJO.wcOrderId = 70502; // flujo de otro pedido
+    cuerpo.innerHTML = 'Cargando…';
+    real.renderDetalle();
+    expect(cuerpo.innerHTML).not.toBe('Cargando…');
+  });
+
+  it('con un POST en vuelo, salir de la pantalla no cierra el flujo', () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+    real.abrirFlujoTracking();
+    real.TRACKING_FLUJO.enviando = true;
+    real.cerrarFlujoTrackingAlSalir();
+    expect(real.TRACKING_FLUJO.activo).toBe(true);
+  });
+
+  it('el reintento de una foto fallida limpia la marca fallida', () => {
+    real.PREP = prep();
+    real.SUBIDAS_PENDIENTES['tmp-9'] = { itemId: null, tipo: 'paquete', archivo: {}, fallida: true };
+    real.URL = { createObjectURL: () => 'blob:x', revokeObjectURL() {} };
+    real.fetch = vi.fn(() => new Promise(() => {}));
+    real.FormData = class { append() {} };
+    real.AbortController = class { constructor() { this.signal = {}; } abort() {} };
+    real.document.querySelector = () => ({ classList: { remove() {} }, querySelector() { return null; } });
+    real.reintentarSubidaLocal('tmp-9');
+    expect(real.SUBIDAS_PENDIENTES['tmp-9'].fallida).toBeUndefined();
+  });
 });

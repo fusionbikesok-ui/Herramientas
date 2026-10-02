@@ -477,6 +477,7 @@ function actAbierta(){ return sessionStorage.getItem('prep_actividad_abierta')==
 function setActAbierta(v){ sessionStorage.setItem('prep_actividad_abierta', v?'1':'0'); }
 
 function ir(v){
+  cerrarFlujoTrackingAlSalir();
   modoPedido(false);
   // El aviso vive fuera de #cuerpo (fixed), así que ninguna vista lo tapa solo por
   // renderizar encima. Si no se apaga acá, sigue flotando sobre cualquier otra pantalla
@@ -1317,6 +1318,7 @@ function modoPedido(activo){
 }
 
 async function abrirDetalle(id,empujar){
+  cerrarFlujoTrackingAlSalir();
   modoPedido(true);
   // Este camino no pasa por ir() (click en una card no lo llama), así que hay que apagar
   // el aviso acá también — si no, queda flotando sobre el encabezado del detalle.
@@ -1496,7 +1498,16 @@ function avisoCanal(p){
 // tardío del detalle (refresco en vuelo, subida de foto, polling) lo borraría con el operario
 // escribiendo. El estado (PREP) igual se actualiza; solo se difiere el pintado hasta cerrar el flujo.
 function flujoTrackingAbierto(origen){
-  return typeof TRACKING_FLUJO!=='undefined'&&TRACKING_FLUJO.activo&&(!origen||TRACKING_FLUJO.origen===origen);
+  if(typeof TRACKING_FLUJO==='undefined'||!TRACKING_FLUJO.activo)return false;
+  if(origen&&TRACKING_FLUJO.origen!==origen)return false;
+  // Solo cuenta como "abierto" si la pantalla actual es la del flujo: si el operario salió (Atrás del celular,
+  // otra pestaña) el flag puede quedar activo y bloquearía el próximo render.
+  if(TRACKING_FLUJO.origen==='seguimientos')return VISTA==='seguimientos';
+  return VISTA==='detalle'&&!!PREP&&String(PREP.wc_order_id)===String(TRACKING_FLUJO.wcOrderId);
+}
+// Al salir de la pantalla por cualquier camino, el flujo se cierra salvo que haya un POST en vuelo.
+function cerrarFlujoTrackingAlSalir(){
+  if(typeof TRACKING_FLUJO!=='undefined'&&TRACKING_FLUJO.activo&&!TRACKING_FLUJO.enviando)TRACKING_FLUJO.activo=false;
 }
 function renderDetalle(){
   if(flujoTrackingAbierto('preparacion'))return;
