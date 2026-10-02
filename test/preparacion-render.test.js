@@ -127,6 +127,11 @@ describe('preparacion/index.html — render de pedidos nuevos', () => {
     expect(ctx.cardPendiente({ canal: 'ml', logistic_type: 'cross_docking', estado_despacho: 'activo', items: [] })).not.toContain('Límite interno:');
     expect(html).toContain('02/09/2026, 15:30');
   });
+  it('explica que Andreani retira los pedidos web y que Despacho queda para ML', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('Andreani retira los pedidos web');
+    expect(html).toContain('Despacho aplica a MercadoLibre');
+  });
   it('muestra las reglas operativas de Flex y Web y el diferimiento', () => {
     expect(ctx.cardPendiente({ canal: 'ml', logistic_type: 'self_service', estado_despacho: 'activo', items: [] })).toContain('Salida máxima Flex: 17:00');
     expect(ctx.cardPendiente({ canal: 'web', estado_despacho: 'activo', items: [] })).toContain('Preparar antes de las 15:00');

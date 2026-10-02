@@ -1133,6 +1133,11 @@ function usuarioQueSubio(db, fotoId, preparacionId) {
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
+// Web con seguimiento ya confirmado (tracking cargado, paso 2 de Woo sin pendientes y pedido enviado).
+const SQL_NO_WEB_CONFIRMADO = `NOT (p.canal = 'web' AND COALESCE(p.tracking, '') <> ''
+  AND p.woo_paso2_pendiente = 0 AND COALESCE(p.woo_paso1_incierto, 0) = 0
+  AND (pc.estado_wc = 'enviadoandreani' OR p.estado = 'despachada_sin_verificar'))`;
+
 export function preparacionRouter(db, cfg) {
   ensureTables(db);
   const router = express.Router();
@@ -1360,6 +1365,10 @@ export function preparacionRouter(db, cfg) {
     else if (fecha) { where.push('(jornada_fecha = ? OR (p.canal = \'web\' AND jornada_fecha IS NULL))'); params.push(fecha); }
     if (estado) { where.push('d.estado = ?'); params.push(estado); }
     if (canal) { where.push('p.canal = ?'); params.push(canal); }
+    // Decisión de José 2026-10-02: Andreani retira los pedidos web, el viaje es solo ML. Un web con
+    // seguimiento ya confirmado cierra su ciclo al escanear: no figura pendiente en Despacho.
+    // El soporte de lotes web sigue; solo se deja de exigir.
+    where.push(SQL_NO_WEB_CONFIRMADO);
     if (q) {
       where.push(`(lower(d.grupo_clave) LIKE ? OR lower(COALESCE(p.numero_pedido, '')) LIKE ?
         OR lower(COALESCE(p.clave, '')) LIKE ?)`);
@@ -1383,7 +1392,8 @@ export function preparacionRouter(db, cfg) {
     const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha DESC, d.creado_en DESC`).all(...params);
     const jornada = fecha || 'sin_fecha';
     const allParams = fecha === 'sin_fecha' ? [] : fecha ? [fecha] : [];
-    const summaryRows = db.prepare(`${base}${fecha === 'sin_fecha' ? ' HAVING jornada_fecha IS NULL' : fecha ? " HAVING (jornada_fecha = ? OR (p.canal = 'web' AND jornada_fecha IS NULL))" : ''}`).all(...allParams);
+    const filtroResumen = fecha === 'sin_fecha' ? 'jornada_fecha IS NULL' : fecha ? "(jornada_fecha = ? OR (p.canal = 'web' AND jornada_fecha IS NULL))" : '';
+    const summaryRows = db.prepare(`${base} HAVING ${filtroResumen ? `${filtroResumen} AND ` : ''}${SQL_NO_WEB_CONFIRMADO}`).all(...allParams);
     const resumen = { total: summaryRows.length, pendientes: 0, escaneados: 0, confirmados: 0 };
     for (const row of summaryRows) resumen[row.estado === 'pendiente' ? 'pendientes' : `${row.estado}s`] += 1;
     return res.json({ ok: true, jornada: { fecha: jornada, zona_horaria: 'America/Argentina/Buenos_Aires' }, resumen, data: rows });

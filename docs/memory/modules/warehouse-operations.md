@@ -112,7 +112,7 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
 ## Retención y alertas
 
 - En preparación, volver a la cola conserva el claim del operador. La tarjeta queda como `Continuar` y el reingreso usa `/tomar` de forma idempotente para renovar el claim; otro operador sigue bloqueado hasta liberación o vencimiento.
-- Las etiquetas Web/Andreani se generan fuera del VPS: durante el embalaje el preparador escanea código interno y tracking, confirma la asociación y el sistema bloquea duplicados/conflictos. Despacho solo reconcilia el código interno al retirar; la notificación a Woo ocurre después de confirmar salida. MercadoLibre no carga tracking en este sistema.
+- Las etiquetas Web/Andreani se generan fuera del VPS: durante el embalaje el preparador escanea código interno y tracking, confirma la asociación y el sistema bloquea duplicados/conflictos. Despacho solo reconcilia el código interno al retirar. Decisión José 2026-10-02: el preparador escanea el seguimiento Andreani al terminar (o después desde Cargar seguimientos) y la notificación a Woo/mail de enviado ocurre al CONFIRMAR ese escaneo (POST /seguimientos/:wcOrderId); ese escaneo cierra el ciclo del pedido web. Andreani retira los pedidos web, así que no hay viaje web: la hoja de Despacho (`/despacho/cola`) no lista ni cuenta como pendientes los web con tracking confirmado; el soporte de lotes web (`POST /despacho/lotes`) se conserva pero no se exige. El viaje aplica solo a MercadoLibre, que no carga tracking en este sistema.
 
 ## Seguimiento inline después de preparación Web (2026-10-02)
 
