@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { openDb } from '../db/index.js';
 import { preparacionRouter, crearPreparacion } from '../routes/preparacion.js';
-import { procesarColaFotos, reintentarFoto, _resetCandadoParaTests } from '../lib/fotosPreparacionCola.js';
+import { procesarColaFotos, reintentarFoto, prepararReduccionHistorica, _resetCandadoParaTests } from '../lib/fotosPreparacionCola.js';
 import { rutaAbsoluta } from '../utils/storage.js';
 
 const TEST_DB = './test/tmp-fotos-cola.sqlite';
@@ -37,22 +37,25 @@ beforeEach(() => {
 
 afterEach(() => {
   db.close();
-  try { fs.unlinkSync(TEST_DB); } catch {}
-  try { fs.rmSync('./uploads/preparacion/900', { recursive: true, force: true }); } catch {}
+  try { fs.unlinkSync(TEST_DB); } catch { /* El archivo puede no haberse creado. */ }
+  try { fs.rmSync('./uploads/preparacion/900', { recursive: true, force: true }); } catch { /* Limpieza best effort. */ }
 });
 
 describe('procesarColaFotos', () => {
-  it('procesa una foto pendiente: queda listo con url_liviana y sin error', async () => {
+  it('procesa una foto pendiente: deja una sola copia reducida como archivo canónico', async () => {
     const fotoId = subirFotoDirecto({ url: '/uploads/preparacion/900/1-a.jpg' });
+    const original = rutaAbsoluta('/uploads/preparacion/900/1-a.jpg');
 
     const r = await procesarColaFotos(db, { workerPath: WORKER_OK });
 
     expect(r).toEqual({ omitido: false, procesadas: 1, ok: 1, errores: 0 });
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=?').get(fotoId);
     expect(foto.estado_proceso).toBe('listo');
-    expect(foto.url_liviana).toBe('/uploads/preparacion/900/1-a-liviana.jpg');
+    expect(foto.url).toBe('/uploads/preparacion/900/1-a-reducida.jpg');
+    expect(foto.url_liviana).toBe('/uploads/preparacion/900/1-a-reducida.jpg');
     expect(foto.ultimo_error).toBeNull();
-    expect(fs.existsSync(rutaAbsoluta(foto.url_liviana))).toBe(true);
+    expect(fs.existsSync(rutaAbsoluta(foto.url))).toBe(true);
+    expect(fs.existsSync(original)).toBe(false);
   });
 
   it('no toca fotos que ya están en estado_proceso=listo', async () => {
@@ -164,5 +167,19 @@ describe('reintentarFoto', () => {
 
     expect(ok).toBe(false);
     expect(db.prepare('SELECT estado_proceso FROM preparacion_fotos WHERE id=?').get(fotoId).estado_proceso).toBe('listo');
+  });
+});
+
+describe('prepararReduccionHistorica', () => {
+  it('encola las fotos vigentes que todavía conservan original y omite las ya reducidas', () => {
+    const originalId = subirFotoDirecto({ url: '/uploads/preparacion/900/historica.jpg' });
+    const reducidaId = subirFotoDirecto({ url: '/uploads/preparacion/900/ya-reducida.jpg' });
+    db.prepare("UPDATE preparacion_fotos SET url='/uploads/preparacion/900/ya-reducida-reducida.jpg', url_liviana='/uploads/preparacion/900/ya-reducida-reducida.jpg', estado_proceso='listo' WHERE id=?").run(reducidaId);
+
+    const resultado = prepararReduccionHistorica(db);
+
+    expect(resultado.encoladas).toBe(1);
+    expect(db.prepare('SELECT estado_proceso FROM preparacion_fotos WHERE id=?').get(originalId).estado_proceso).toBe('pendiente');
+    expect(db.prepare('SELECT estado_proceso FROM preparacion_fotos WHERE id=?').get(reducidaId).estado_proceso).toBe('listo');
   });
 });

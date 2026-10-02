@@ -53,6 +53,7 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
       'ml.order': { id: '1' }, 'woo.order': { id: '1' }, 'woo.product': { id: '1' },
       'ml.shipment': { id: '1' }, 'ml.questions.search': { offset: 0 }, 'ml.question': { id: '1' },
       'ml.claims.search': { offset: 0 }, 'ml.claim': { id: '1' }, 'ml.messages.unread': {}, 'ml.messages.pack': { pack: '1' },
+      'ml.message': { id: 'a8f3e2c1-b0' },
       'ml.items.scan': { scroll_id: 'abc' }, 'ml.items.multiget': { ids: ['MLA1'] },
       'woo.orders.list': { after: '2026-09-16T00:00:00Z', before: '2026-09-16T06:00:00Z', page: 1, status: 'any' },
       'woo.products.list': { after: '2026-09-16T00:00:00Z', before: '2026-09-16T06:00:00Z', page: 1 },
@@ -75,6 +76,13 @@ describe('E1-GW-01 catálogo cerrado del gateway', () => {
     expect(() => construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'orders_v2', offset: 0, app_id: '1' } }, ctx)).toThrow(ErrorOperacionInvalida);
     expect(() => construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'payments', offset: 0 } }, ctx)).toThrow(ErrorOperacionInvalida);
     expect(() => construirOperacion({ op: 'ml.missed_feeds', params: { topic: 'orders_v2', offset: 0 } }, { ...ctx, mlAppId: null })).toThrow(ErrorOperacionInvalida);
+  });
+
+  it('ML messages notification fetches the individual message with post_sale and rejects unsafe IDs', () => {
+    expect(construirOperacion({ op: 'ml.message', params: { id: 'a8f3e2c1-b0' } }, ctx)).toEqual({
+      canal: 'ml', ruta: '/messages/a8f3e2c1-b0?tag=post_sale', headers: { 'x-format-new': 'true' },
+    });
+    expect(() => construirOperacion({ op: 'ml.message', params: { id: '../orders/1' } }, ctx)).toThrow(ErrorOperacionInvalida);
   });
 
   it('presupuesto shadow en cero: ML responde 429 sintético sin llamar a ML', async () => {

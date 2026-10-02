@@ -144,12 +144,12 @@ export function adaptadorEnviosMl(dep: DependenciasMl): AdaptadorBarrido {
           ORDER BY 1 LIMIT $4`,
         [ctx.corrida.channelAccountId, despuesDe, new Date(ctx.windowTo.getTime() - 30 * DIA_MS), LOTE_INDIVIDUAL],
       )).rows.map((f) => f.target_id);
-      const leidos = await Promise.all(ids.map((id) =>
-        dep.transporte.get(`/shipments/${encodeURIComponent(id)}`, { headers: { 'x-format-new': 'true' } })));
       const resources: RecursoRemoto[] = [];
-      for (const r of leidos) {
-        if (r.status === 404) continue;
-        resources.push(envioMl(r.body));
+      const esperar = dep.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+      for (let i = 0; i < ids.length; i++) {
+        const r = await dep.transporte.get(`/shipments/${encodeURIComponent(ids[i]!)}`, { headers: { 'x-format-new': 'true' } });
+        if (r.status !== 404) resources.push(envioMl(r.body));
+        if (i + 1 < ids.length) await esperar(PAUSA_ENTRE_PAGINAS_MS);
       }
       return {
         resources,
@@ -267,13 +267,45 @@ export function adaptadorReclamosMl(dep: DependenciasMl): AdaptadorBarrido {
 }
 
 const RECURSO_PACK = /^\/packs\/[^/?#]+\/sellers\/[^/?#]+$/;
+// La guía de ML recomienda `/messages/unread` sólo como validación redundante del flujo de notificaciones.
+// Las notificaciones y missed_feeds cubren el flujo frecuente; este respaldo se consulta cada seis horas.
+const INTERVALO_UNREAD_MS = 6 * 60 * 60 * 1000;
+
+/** Forma común entre GET /messages/{id} (notificación) y GET /messages/packs/{pack}/sellers/{seller}. */
+export function mensajeMl(crudo: unknown, packId?: string): RecursoRemoto {
+  const sobre = exigirRegistro(crudo, 'mensaje ML');
+  // GET /messages/{id} puede devolver el mensaje directo (formato legacy) o el sobre actualizado
+  // { messages: [...] }. El pack también entrega cada mensaje dentro de esa lista.
+  const mensajes = Array.isArray(sobre.messages) ? exigirLista(sobre.messages, 'mensaje ML messages') : [sobre];
+  if (mensajes.length !== 1) throw new ErrorCanalTerminal('FORMA_MENSAJE_ML');
+  const m = exigirRegistro(mensajes[0], 'mensaje ML');
+  const fechas = esRegistro(m.message_date) ? m.message_date : {};
+  const id = idTexto(m.id ?? m.message_id);
+  const packEnRecursos = Array.isArray(m.message_resources)
+    ? m.message_resources.find((r) => esRegistro(r) && r.name === 'packs' && typeof r.id === 'string')
+    : undefined;
+  const pack = packId ?? (esRegistro(packEnRecursos) ? packEnRecursos.id as string : null);
+  const projection = {
+    id, pack_id: pack, status: valorOnull(m.status),
+    date_created: valorOnull(fechas.created ?? m.date_created ?? m.date ?? m.date_received),
+    date_available: valorOnull(fechas.available ?? m.date_available),
+  };
+  return { id, version: versionHash(projection), updatedAt: null, lifecycle: 'open', payload: m, projection };
+}
 
 export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
     topic: 'ml.messages', cursorKind: 'state_sweep', fullScan: false, versionKind: 'hash',
-    async listar(ctx, posicion): Promise<PaginaRemota> {
-      const cursorAfter = cursorGeneracion(ctx.windowTo);
-      if (posicion === null) {
+    async listar(ctx, posicionInicial): Promise<PaginaRemota> {
+      const ultimoUnread = typeof ctx.corrida.cursorBefore?.last_unread_at === 'string'
+        ? Date.parse(ctx.corrida.cursorBefore.last_unread_at) : Number.NaN;
+      const comprobarUnread = !Number.isFinite(ultimoUnread) || ctx.windowTo.getTime() - ultimoUnread >= INTERVALO_UNREAD_MS;
+      const cursorAfter = {
+        ...cursorGeneracion(ctx.windowTo),
+        last_unread_at: comprobarUnread ? ctx.windowTo.toISOString() : new Date(ultimoUnread).toISOString(),
+      };
+      let posicion = posicionInicial;
+      if (posicion === null && comprobarUnread) {
         const body = exigirRegistro(exigirOk(await dep.transporte.get('/messages/unread?role=seller&tag=post_sale'), '/messages/unread'), '/messages/unread');
         // `resource` se usa tal como lo devuelve ML: rearmarlo con otro vendedor produce 404.
         const pendientes = exigirLista(body.results, '/messages/unread results')
@@ -281,6 +313,7 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
           .filter((r) => RECURSO_PACK.test(r));
         return { resources: [], nextPosition: { pendientes, despuesDe: '' }, cursorAfter };
       }
+      if (posicion === null) posicion = { pendientes: [], despuesDe: '' };
       const pendientesPrevios = Array.isArray(posicion.pendientes) ? posicion.pendientes.filter((p): p is string => typeof p === 'string') : [];
       let lote: string[]; let resto: string[]; let despuesDe = textoPosicion(posicion, 'despuesDe') ?? '';
       let fin = false;
@@ -304,18 +337,9 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
       const resources: RecursoRemoto[] = [];
       leidos.forEach((r, i) => {
         if (r.status === 404) return;
-        const pack = decodeURIComponent(lote[i]!.split('/')[2]!);
         const body = exigirRegistro(r.body, 'pack ML');
-        for (const crudo of exigirLista(body.messages, 'pack ML messages')) {
-          const m = exigirRegistro(crudo, 'mensaje ML');
-          const fechas = esRegistro(m.message_date) ? m.message_date : {};
-          const id = idTexto(m.id);
-          const projection = {
-            id, pack_id: pack, status: valorOnull(m.status),
-            date_created: valorOnull(fechas.created ?? m.date_created), date_available: valorOnull(fechas.available ?? m.date_available),
-          };
-          resources.push({ id, version: versionHash(projection), updatedAt: null, lifecycle: 'open', payload: m, projection });
-        }
+        const packId = decodeURIComponent(lote[i]!.split('/')[2]!);
+        resources.push(...exigirLista(body.messages, 'pack ML messages').map((m) => mensajeMl(m, packId)));
       });
       return { resources, nextPosition: fin ? null : { pendientes: resto, despuesDe }, cursorAfter };
     },

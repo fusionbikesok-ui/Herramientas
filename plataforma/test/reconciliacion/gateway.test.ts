@@ -1,8 +1,8 @@
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { crearAdaptadoresMl } from '../../src/reconciliacion/adaptadores/ml.ts';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { adaptadorEnviosMl, adaptadorMensajesMl, crearAdaptadoresMl } from '../../src/reconciliacion/adaptadores/ml.ts';
 import { crearAdaptadoresWoo } from '../../src/reconciliacion/adaptadores/woo.ts';
 import { ErrorCanalTerminal, ErrorDestinoProhibido } from '../../src/reconciliacion/cliente-http.ts';
 import type { CorridaReclamada } from '../../src/reconciliacion/corridas.ts';
@@ -114,12 +114,13 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
     for (const [ruta, headers] of [
       ['/shipments/9000', { 'x-format-new': 'true' }], ['/questions/1', {}], ['/post-purchase/v1/claims/31', {}],
       [`/messages/packs/8001/sellers/${SELLER}?tag=post_sale&mark_as_read=false`, {}],
+      ['/messages/a8f3e2c1-b0?tag=post_sale', { 'x-format-new': 'true' }],
       ['/orders/5000', {}], ['/wp-json/wc/v3/orders/300', {}], ['/wp-json/wc/v3/products/10', {}],
       ['/missed_feeds?topic=items&offset=0&limit=50', {}],
     ] as const) await transporte.get(ruta, { headers });
     expect(new Set(traducidas)).toEqual(new Set([
       'ml.orders.search', 'ml.missed_feeds', 'ml.order', 'woo.order', 'woo.product', 'ml.shipment', 'ml.questions.search', 'ml.question', 'ml.claims.search', 'ml.claim',
-      'ml.messages.unread', 'ml.messages.pack', 'ml.items.scan', 'ml.items.multiget',
+      'ml.messages.unread', 'ml.messages.pack', 'ml.message', 'ml.items.scan', 'ml.items.multiget',
       'woo.orders.list', 'woo.products.list', 'woo.variations.list', 'woo.presence.list',
     ]));
     expect(rutasVistas.length).toBeGreaterThan(10);
@@ -148,6 +149,42 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
     for (const destino of ['http://api.mercadolibre.com', 'http://user:pw@127.0.0.1:3001', 'http://10.0.0.5:3001', 'http://127.0.0.1:3001/otro']) {
       expect(() => crearTransporteGateway({ url: destino, keyring }), destino).toThrow(ErrorDestinoProhibido);
     }
+  });
+
+  it('shipments lee IDs en serie y deja 300 ms entre GET individuales', async () => {
+    let activos = 0; let maxActivos = 0;
+    const esperar = vi.fn(async () => {});
+    const transporte = {
+      async get(ruta: string, opciones?: { headers?: Readonly<Record<string, string>> }) {
+        expect(opciones?.headers).toEqual({ 'x-format-new': 'true' });
+        activos++;
+        maxActivos = Math.max(maxActivos, activos);
+        await new Promise((r) => setTimeout(r, 1));
+        activos--;
+        return { status: 200, headers: new Headers(), body: { id: ruta.split('/').at(-1), status: 'ready_to_ship', last_updated: '2026-09-15T11:00:00Z' } };
+      },
+    };
+    const db = { query: async () => ({ rows: Array.from({ length: 20 }, (_, i) => ({ target_id: String(9000 + i) })) }) } as never;
+    const adaptador = adaptadorEnviosMl({ transporte, db, sellerId: SELLER, esperar });
+    const pagina = await adaptador.listar({ corrida: { channelAccountId: 'cuenta-ml' } as CorridaReclamada, windowFrom: null, windowTo: WINDOW_TO }, null);
+    expect(maxActivos).toBe(1);
+    expect(pagina.resources).toHaveLength(20);
+    expect(esperar).toHaveBeenCalledTimes(19);
+  });
+
+  it('messages/unread se consulta solo cuando venció la ventana de reconciliación redundante', async () => {
+    const transporte = { get: vi.fn(async () => ({ status: 200, headers: new Headers(), body: { results: [] } })) };
+    const db = { query: async () => ({ rows: [] }) } as never;
+    const adaptador = adaptadorMensajesMl({ transporte, db, sellerId: SELLER });
+    const corrida = {
+      channelAccountId: 'cuenta-ml', topic: 'ml.messages', cursorBefore: {
+        v: 1, generation: WINDOW_TO.toISOString(), last_unread_at: new Date(WINDOW_TO.getTime() - 60 * 60_000).toISOString(),
+      },
+    } as unknown as CorridaReclamada;
+    const pagina = await adaptador.listar({ corrida, windowFrom: null, windowTo: WINDOW_TO }, null);
+    expect(transporte.get).not.toHaveBeenCalled();
+    expect(pagina.nextPosition).toBeNull();
+    expect(pagina.cursorAfter?.last_unread_at).toBe(corrida.cursorBefore!.last_unread_at);
   });
 
   it('mapea los estados del gateway y del canal igual que el cliente T2', async () => {

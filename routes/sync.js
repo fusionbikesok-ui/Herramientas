@@ -23,6 +23,7 @@ import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { espera } from '../lib/esperas.js';
+import { tipoLogisticaMl } from '../lib/preparacion.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -637,7 +638,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
           country: 'AR',
         };
       }
-      metodoEnvio = ship?.logistic_type || ship?.shipping_option?.name || null;
+      metodoEnvio = tipoLogisticaMl(ship) || ship?.shipping_option?.name || null;
     } catch (eShip) {
       // No aborta, no libera ni retiene la reserva: es solo un aviso para detectar el caso.
       logSync(db, {

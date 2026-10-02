@@ -218,7 +218,7 @@ describe('GET /seguimientos (contrato nuevo: 3 secciones + contadores, plan 2026
   });
 
   it('reparte TODO el universo lpaandreani entre esperando y sin_preparacion, sin excluir en_preparacion', async () => {
-    const mk = (id) => ({ id, number: String(id), shipping: { first_name: 'N', last_name: 'A', address_1: 'Calle 1', city: 'Cordoba', state: 'Cordoba', postcode: '5000' }, billing: {}, meta_data: [] });
+    const mk = (id) => ({ id, number: String(id), shipping: { first_name: 'N', last_name: 'A', address_1: 'Calle 1', city: 'Cordoba', state: 'Cordoba', postcode: '5000' }, billing: {}, meta_data: [], line_items: id === 900 ? [{ product_id: 10, variation_id: 11, sku: 'CASCO-9', name: 'Casco', quantity: 2 }] : [] });
     // 900: preparación 'completada' (verificada) -> esperando
     // 901: sin ninguna fila local -> sin_preparacion
     // 902: en_preparacion (p.ej. solo "etiqueta lista") -> sin_preparacion, NO se excluye
@@ -238,6 +238,7 @@ describe('GET /seguimientos (contrato nuevo: 3 secciones + contadores, plan 2026
     expect(res.body.data.esperando.map(f => f.wc_order_id)).toEqual([900]);
     expect(res.body.data.esperando[0].envio.pedido).toBe('900');
     expect(res.body.data.esperando[0].estado_preparacion).toBe('completada');
+    expect(res.body.data.esperando[0].items).toEqual([{ product_id: 10, variation_id: 11, sku: 'CASCO-9', nombre: 'Casco', cantidad: 2 }]);
 
     const sinPrepIds = res.body.data.sin_preparacion.map(f => f.wc_order_id).sort();
     expect(sinPrepIds).toEqual([901, 902, 903]);
@@ -378,6 +379,38 @@ describe('POST /seguimientos/:wcOrderId', () => {
   afterEach(() => {
     db.close();
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+
+  it('rechaza un segundo POST simultáneo para el mismo pedido sin tocar Woo dos veces', async () => {
+    let liberarGet;
+    const getBloqueado = new Promise((resolve) => { liberarGet = resolve; });
+    wooFetch.mockImplementation(async (_cfg, _path, method) => {
+      if (!method) {
+        await getBloqueado;
+        return { data: { id: 915, status: 'lpaandreani', meta_data: [] } };
+      }
+      return { data: { id: 915, status: method === 'put' ? 'completed' : 'lpaandreani' } };
+    });
+
+    const app = buildTestApp(db);
+    const primera = new Promise((resolve, reject) => {
+      request(app).post('/api/preparacion/seguimientos/915').send({ tracking: 'AND915' })
+        .end((error, response) => (error ? reject(error) : resolve(response)));
+    });
+    await vi.waitFor(() => expect(wooFetch).toHaveBeenCalledTimes(1), { timeout: 10000 });
+
+    const segunda = await request(app).post('/api/preparacion/seguimientos/915').send({ tracking: 'AND915' });
+    expect(segunda.status).toBe(409);
+    expect(segunda.body).toEqual({
+      ok: false,
+      error: 'ya se está cargando el seguimiento de este pedido',
+      code: 'EN_CURSO',
+    });
+
+    liberarGet();
+    const primeraRes = await primera;
+    expect(primeraRes.status).toBe(200);
+    expect(wooFetch.mock.calls.filter((call) => call[2] === 'put')).toHaveLength(2);
   });
 
   it('preserva el id del meta existente y encadena completed → enviadoandreani; sin verificación previa queda despachada_sin_verificar, NO completada', async () => {
@@ -656,6 +689,24 @@ describe('permisos de despacho sobre el tracking (decisión del usuario, 2026-09
     wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: CFG.andreaniStatus, meta_data: [], billing: {}, shipping: {} } });
     const res = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
     expect(res.status).not.toBe(409);
+  });
+
+  it('un rechazo por claim no deja el pedido trabado en EN_CURSO: el POST válido posterior pasa', async () => {
+    let usuario = OPERARIO;
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.user = usuario; next(); });
+    app.use('/api/preparacion', preparacionRouter(db, CFG));
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: CFG.andreaniStatus, meta_data: [], billing: {}, shipping: {} } });
+
+    const rechazado = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(rechazado.status).toBe(409);
+    expect(rechazado.body.code).not.toBe('EN_CURSO');
+
+    usuario = { username: 'tester', is_admin: 1 };
+    const valido = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(valido.status).not.toBe(409);
   });
 
   it('un operario de preparación SIN la toma sigue sin poder cargarlo', async () => {
