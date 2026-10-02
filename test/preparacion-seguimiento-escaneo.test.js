@@ -77,9 +77,9 @@ describe('seguimiento Andreani desde Finalizar preparación', () => {
       .toBe('Ese es un código de producto, no un seguimiento');
   });
 
-  it('rechaza un GTIN válido aunque no esté en los ítems del pedido', () => {
-    expect(ctx.validarTrackingEscaneo('4006381333931', []).error)
-      .toBe('Ese es un código de producto, no un seguimiento');
+  it('acepta un GTIN válido si no coincide con un código del pedido', () => {
+    expect(ctx.validarTrackingEscaneo('4006381333931', []))
+      .toEqual({ ok: true, valor: '4006381333931' });
   });
 
   it('muestra el escaneo solo para web completada, no para ML ni pendiente de depósito', () => {
@@ -113,6 +113,27 @@ describe('seguimiento Andreani desde Finalizar preparación', () => {
     expect(ctx.ir).toHaveBeenCalledWith('seguimientos');
   });
 
+  it('bloquea todo el flujo mientras el POST está en vuelo y libera enviando al terminar', async () => {
+    let resolver;
+    ctx.api = vi.fn(() => new Promise((resolve) => { resolver = resolve; }));
+    ctx.PREP = { canal: 'web', estado: 'completada', wc_order_id: 45, comprador: 'Ana', items: [] };
+    ctx.renderTrackingConfirmacion('360003042094910', null);
+
+    const confirmacion = ctx.confirmarTrackingFlujo();
+    expect(ctx.TRACKING_FLUJO.enviando).toBe(true);
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toContain('Escanear de nuevo');
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toMatch(/disabled[^>]*>Escanear de nuevo/);
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toMatch(/disabled[^>]*>Lo cargo después/);
+
+    ctx.loCargoDespuesTracking();
+    expect(ctx.TRACKING_FLUJO.enviando).toBe(true);
+    expect(ctx.ir).not.toHaveBeenCalled();
+
+    resolver({ status: 200, body: { ok: true } });
+    await confirmacion;
+    expect(ctx.TRACKING_FLUJO.enviando).toBe(false);
+  });
+
   it.each([
     [409, { ok: false, error: 'el pedido ya no está disponible' }, 'el pedido ya no está disponible'],
     [502, { ok: false, colgado: true, error: 'se reintentará solo' }, 'se reintentará solo'],
@@ -123,6 +144,30 @@ describe('seguimiento Andreani desde Finalizar preparación', () => {
     await ctx.confirmarTrackingFlujo();
     expect(ctx.document.getElementById('cuerpo').innerHTML).toContain(mensaje);
     expect(ctx.api).toHaveBeenCalledTimes(1);
+  });
+
+  it('distingue un resultado incierto de un tracking guardado con paso interno pendiente', async () => {
+    ctx.PREP = { canal: 'web', estado: 'completada', wc_order_id: 46, comprador: 'Ana', items: [] };
+    ctx.api = vi.fn(async () => ({ status: 502, body: { ok: false, colgado: true, incierto: true } }));
+    ctx.renderTrackingConfirmacion('360003042094910', null);
+    await ctx.confirmarTrackingFlujo();
+    expect(ctx.document.getElementById('cuerpo').innerHTML)
+      .toContain('Resultado incierto: el sistema lo reconcilia solo; no vuelvas a cargarlo');
+    expect(ctx.document.getElementById('cuerpo').innerHTML).not.toContain('El tracking se guardó');
+  });
+
+  it('usa el mismo mensaje prudente en Cargar seguimientos ante una respuesta incierta', async () => {
+    ctx.SEG = { data: { esperando: [{ wc_order_id: 47, envio: { nombre: 'Ana', pedido: 'W-47' } }], sin_preparacion: [], a_medias: [] }, guardadosSesion: {} };
+    ctx.api = vi.fn(async () => ({ status: 502, body: { ok: false, colgado: true, incierto: true } }));
+    ctx.refrescarCargadosHoy = vi.fn();
+    ctx.toastSeg = vi.fn();
+    const input = ctx.document.getElementById('trk-47');
+    input.value = '360003042094910';
+    await ctx.guardarTracking(47);
+    expect(ctx.toastSeg).toHaveBeenCalledWith(
+      'Resultado incierto: el sistema lo reconcilia solo; no vuelvas a cargarlo',
+      'warn',
+    );
   });
 });
 

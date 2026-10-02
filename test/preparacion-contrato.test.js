@@ -381,6 +381,38 @@ describe('POST /seguimientos/:wcOrderId', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
+  it('rechaza un segundo POST simultáneo para el mismo pedido sin tocar Woo dos veces', async () => {
+    let liberarGet;
+    const getBloqueado = new Promise((resolve) => { liberarGet = resolve; });
+    wooFetch.mockImplementation(async (_cfg, _path, method) => {
+      if (!method) {
+        await getBloqueado;
+        return { data: { id: 915, status: 'lpaandreani', meta_data: [] } };
+      }
+      return { data: { id: 915, status: method === 'put' ? 'completed' : 'lpaandreani' } };
+    });
+
+    const app = buildTestApp(db);
+    const primera = new Promise((resolve, reject) => {
+      request(app).post('/api/preparacion/seguimientos/915').send({ tracking: 'AND915' })
+        .end((error, response) => (error ? reject(error) : resolve(response)));
+    });
+    await vi.waitFor(() => expect(wooFetch).toHaveBeenCalledTimes(1), { timeout: 10000 });
+
+    const segunda = await request(app).post('/api/preparacion/seguimientos/915').send({ tracking: 'AND915' });
+    expect(segunda.status).toBe(409);
+    expect(segunda.body).toEqual({
+      ok: false,
+      error: 'ya se está cargando el seguimiento de este pedido',
+      code: 'EN_CURSO',
+    });
+
+    liberarGet();
+    const primeraRes = await primera;
+    expect(primeraRes.status).toBe(200);
+    expect(wooFetch.mock.calls.filter((call) => call[2] === 'put')).toHaveLength(2);
+  });
+
   it('preserva el id del meta existente y encadena completed → enviadoandreani; sin verificación previa queda despachada_sin_verificar, NO completada', async () => {
     wooFetch
       .mockResolvedValueOnce({ data: { id: 900, status: 'lpaandreani', meta_data: [{ id: 55, key: '_andreani_tracking', value: '' }] } }) // GET actual

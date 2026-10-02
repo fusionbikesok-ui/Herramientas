@@ -1136,6 +1136,7 @@ function usuarioQueSubio(db, fotoId, preparacionId) {
 export function preparacionRouter(db, cfg) {
   ensureTables(db);
   const router = express.Router();
+  const seguimientosEnCurso = new Set();
   const eventoLote = (loteId, tipo, usuario, detalle = {}) => db.prepare(
     'INSERT INTO despacho_lote_eventos (lote_id, tipo, usuario, detalle_json, creado_en) VALUES (?,?,?,?,?)'
   ).run(loteId, tipo, usuario ?? null, JSON.stringify(detalle), now());
@@ -1912,6 +1913,14 @@ export function preparacionRouter(db, cfg) {
     const tracking = String(req.body?.tracking || '').trim();
     if (!tracking) return res.status(400).json({ ok: false, error: 'tracking requerido' });
     if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    if (seguimientosEnCurso.has(wcOrderId)) {
+      return res.status(409).json({
+        ok: false,
+        error: 'ya se está cargando el seguimiento de este pedido',
+        code: 'EN_CURSO',
+      });
+    }
+    seguimientosEnCurso.add(wcOrderId);
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
     // Cargar el tracking es una acción de despacho: Administración puede resolverla aunque no
     // haya tomado la preparación. Un operario de preparación sigue necesitando su claim vigente
@@ -2071,6 +2080,8 @@ export function preparacionRouter(db, cfg) {
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
+    } finally {
+      seguimientosEnCurso.delete(wcOrderId);
     }
   });
 
