@@ -472,3 +472,90 @@ describe('el flujo de seguimiento no se borra con repintados tardíos del detall
     expect(real.ir).toHaveBeenCalledWith('seguimientos');
   });
 });
+
+describe('escaneo por cámara en "Escaneá el seguimiento"', () => {
+  let real;
+  let cuerpo;
+  let scanner;
+  beforeEach(() => {
+    const document = documentoFake();
+    const sandbox = {
+      document, window: null, console, Date, Math, JSON, Intl, URLSearchParams,
+      setTimeout(fn) { fn(); return 1; }, clearTimeout, setInterval() { return 1; }, clearInterval() {},
+      sessionStorage: { getItem() { return null; }, setItem() {} },
+      location: { href: '', pathname: '/preparacion/', search: '' }, history: { pushState() {} },
+      navigator: { mediaDevices: {}, maxTouchPoints: 5 },
+      fetch: vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: false }) })),
+      alert() {}, confirm() { return true; }, prompt() { return null; },
+      addEventListener() {}, removeEventListener() {},
+    };
+    sandbox.window = sandbox;
+    real = vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/format.js'), 'utf8'), real);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/api.js'), 'utf8'), real);
+    vm.runInContext(extraerScript(fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8')), real);
+    real.beep = vi.fn();
+    scanner = { open: vi.fn(), close: vi.fn() };
+    real.Scanner = scanner;
+    cuerpo = document.getElementById('cuerpo');
+    real.PREP = { id: 493, canal: 'web', estado: 'completada', wc_order_id: 70502, numero_pedido: '70502', comprador: 'Ana', items: [{ sku: 'SKU-1', codigo_barras: '7791234567890', nombre: 'Casco', cantidad_esperada: 1 }], eventos: [], fotos_generales: [] };
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+  });
+
+  it('en dispositivo táctil abre la cámara al entrar y la pantalla tiene el botón principal', async () => {
+    await real.abrirFlujoTracking();
+    expect(scanner.open).toHaveBeenCalledTimes(1);
+    expect(scanner.open.mock.calls[0][0].mode).toBe('single');
+    expect(cuerpo.innerHTML).toContain('Escanear con la cámara');
+    expect(cuerpo.innerHTML).toContain('pistola');
+  });
+
+  it('sin pantalla táctil no abre la cámara sola', async () => {
+    real.navigator.maxTouchPoints = 0;
+    await real.abrirFlujoTracking();
+    expect(scanner.open).not.toHaveBeenCalled();
+  });
+
+  it('un código válido escaneado cierra la cámara y pasa a la confirmación', async () => {
+    await real.abrirFlujoTracking();
+    scanner.open.mock.calls[0][0].onCode('360000123456789');
+    expect(scanner.close).toHaveBeenCalled();
+    expect(real.TRACKING_FLUJO.paso).toBe('confirmacion');
+    expect(real.TRACKING_FLUJO.tracking).toBe('360000123456789');
+  });
+
+  it('el código de un producto del pedido se rechaza con el mensaje de producto', async () => {
+    await real.abrirFlujoTracking();
+    scanner.open.mock.calls[0][0].onCode('7791234567890');
+    expect(real.TRACKING_FLUJO.paso).toBe('escaneo');
+    expect(real.TRACKING_FLUJO.error).toMatch(/código de producto/);
+  });
+
+  it('un código que no es de 10 a 20 dígitos se rechaza', async () => {
+    await real.abrirFlujoTracking();
+    scanner.open.mock.calls[0][0].onCode('ABC123');
+    expect(real.TRACKING_FLUJO.paso).toBe('escaneo');
+    expect(real.TRACKING_FLUJO.error).toMatch(/10 y 20/);
+  });
+
+  it('"Lo cargo después" y salir de la pantalla cierran la cámara', async () => {
+    real.ir = vi.fn();
+    await real.abrirFlujoTracking();
+    real.loCargoDespuesTracking();
+    expect(scanner.close).toHaveBeenCalled();
+    scanner.close.mockClear();
+    await real.abrirFlujoTracking();
+    real.cerrarFlujoTrackingAlSalir();
+    expect(scanner.close).toHaveBeenCalled();
+  });
+
+  it('un código que llega tarde, con el flujo ya cerrado, se ignora', async () => {
+    await real.abrirFlujoTracking();
+    const onCode = scanner.open.mock.calls[0][0].onCode;
+    real.cerrarFlujoTrackingAlSalir();
+    onCode('360000123456789');
+    expect(real.TRACKING_FLUJO.paso).toBe('escaneo');
+    expect(real.TRACKING_FLUJO.tracking).toBe('');
+  });
+});

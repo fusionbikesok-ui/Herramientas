@@ -1507,6 +1507,7 @@ function flujoTrackingAbierto(origen){
 }
 // Al salir de la pantalla por cualquier camino, el flujo se cierra salvo que haya un POST en vuelo.
 function cerrarFlujoTrackingAlSalir(){
+  if(typeof cerrarCamaraTracking==='function')cerrarCamaraTracking();
   if(typeof TRACKING_FLUJO!=='undefined'&&TRACKING_FLUJO.activo&&!TRACKING_FLUJO.enviando)TRACKING_FLUJO.activo=false;
 }
 function renderDetalle(){
@@ -2581,7 +2582,8 @@ function renderTrackingEscaneo(){
   var bloqueado=TRACKING_FLUJO.enviando||TRACKING_FLUJO.resultadoIncierto,deshabilitado=bloqueado?' disabled aria-disabled="true"':'';
   c.innerHTML='<div class="tracking-flujo" role="dialog" aria-modal="true" aria-labelledby="trk-titulo" style="position:fixed;inset:0;z-index:20;overflow:auto;background:var(--surface);padding:clamp(16px,4vw,40px)">'
     +'<h1 id="trk-titulo">Escaneá el seguimiento</h1><p class="sub">Pedido #'+esc(numero)+' · '+esc(comprador)+'</p>'
-    +'<label for="tracking-flujo-input">Número de seguimiento Andreani</label>'
+    +'<button type="button" id="btn-camara-tracking" class="btn" style="min-height:56px;width:100%;font-size:1.1rem;margin:12px 0"'+deshabilitado+' onclick="abrirCamaraTracking()">📷 Escanear con la cámara</button>'
+    +'<label for="tracking-flujo-input">O escribilo / pistola</label>'
     +'<input id="tracking-flujo-input" type="text" inputmode="numeric" autocomplete="off" aria-describedby="tracking-flujo-error"'+deshabilitado+' onkeydown="if(event.key===\'Enter\'){event.preventDefault();leerTrackingFlujo();}">'
     +'<p id="tracking-flujo-error" aria-live="assertive" role="alert">'+esc(TRACKING_FLUJO.error||'')+'</p>'
     +'<div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" style="min-height:44px"'+deshabilitado+' onclick="leerTrackingFlujo()">Confirmar lectura</button>'
@@ -2595,6 +2597,7 @@ async function abrirFlujoTracking(opciones){
   var wcOrderId=opciones.wcOrderId!=null?opciones.wcOrderId:(PREP&&PREP.wc_order_id);
   TRACKING_FLUJO={activo:true,paso:'escaneo',tracking:'',fila:opciones.fila||null,cliente:opciones.cliente||{},items:opciones.items||((PREP&&PREP.items)||[]),wcOrderId:wcOrderId,origen:opciones.origen||'preparacion',enviando:false,error:'',duplicado:false,reintentar:false,resultadoIncierto:false};
   renderTrackingEscaneo();
+  if(typeof navigator!=='undefined'&&navigator.mediaDevices&&((navigator.maxTouchPoints||0)>0||'ontouchstart' in window))abrirCamaraTracking();
   if(!TRACKING_FLUJO.fila){
     try{
       var r=await api('/seguimientos');
@@ -2602,14 +2605,16 @@ async function abrirFlujoTracking(opciones){
     }catch(e){/* la confirmación no se bloquea si falla la consulta informativa */}
   }
 }
-function leerTrackingFlujo(){
+function leerTrackingFlujo(valorCamara){
   if(TRACKING_FLUJO.enviando)return;
-  var input=document.getElementById('tracking-flujo-input'),validar=validarTrackingEscaneo(input&&input.value,TRACKING_FLUJO.items);
+  cerrarCamaraTracking();
+  var input=document.getElementById('tracking-flujo-input'),validar=validarTrackingEscaneo(typeof valorCamara==='string'?valorCamara:(input&&input.value),TRACKING_FLUJO.items);
   if(!validar.ok){TRACKING_FLUJO.error=validar.error;beep('bad');renderTrackingEscaneo();return;}
   TRACKING_FLUJO.tracking=validar.valor;TRACKING_FLUJO.error='';TRACKING_FLUJO.paso='confirmacion';
   renderTrackingConfirmacion(validar.valor,TRACKING_FLUJO.fila);
 }
 function renderTrackingConfirmacion(tracking,fila){
+  cerrarCamaraTracking();
   TRACKING_FLUJO.tracking=String(tracking||'').trim();TRACKING_FLUJO.fila=fila||TRACKING_FLUJO.fila;
   if(TRACKING_FLUJO.wcOrderId==null&&PREP)TRACKING_FLUJO.wcOrderId=PREP.wc_order_id;
   var p=PREP||{},items=TRACKING_FLUJO.items||[],c=document.getElementById('cuerpo');
@@ -2624,7 +2629,35 @@ function renderTrackingConfirmacion(tracking,fila){
     +'<button type="button" class="btn sec" style="min-height:44px"'+deshabilitado+' onclick="abrirFlujoTracking()">Escanear de nuevo</button>'
     +'<button type="button" class="btn sec" style="min-height:44px"'+deshabilitado+' onclick="loCargoDespuesTracking()">Lo cargo después</button></div></div>';
 }
-function loCargoDespuesTracking(){if(TRACKING_FLUJO.enviando)return;TRACKING_FLUJO={activo:false,paso:'escaneo',tracking:'',fila:null,cliente:{},items:[],wcOrderId:null,origen:'preparacion',enviando:false,error:'',duplicado:false,reintentar:false,resultadoIncierto:false};ir('seguimientos');}
+// Cámara del flujo de seguimiento: reusa el modal y el lector de Seguimientos (Scanner, mode single).
+// Sin `formats` el lector acepta todos (BarcodeDetector sin argumentos / ZXing multi-formato), incluido
+// Code 128 de la etiqueta Andreani.
+var TRK_CAM_ABIERTA=false;
+function abrirCamaraTracking(){
+  if(!window.Scanner){TRACKING_FLUJO.error='No se pudo cargar el lector. Escribí el número.';renderTrackingEscaneo();return;}
+  if(TRACKING_FLUJO.enviando||!flujoTrackingAbierto()||TRACKING_FLUJO.paso!=='escaneo')return;
+  var modal=document.getElementById('seg-cam-modal'),video=document.getElementById('seg-cam-video');
+  if(!modal||!video)return;
+  SEG_CAM_WCID=null;TRK_CAM_ABIERTA=true;
+  var t=document.getElementById('seg-cam-target');if(t)t.textContent='Seguimiento del pedido #'+((PREP&&PREP.numero_pedido)||TRACKING_FLUJO.wcOrderId);
+  var m=document.getElementById('seg-cam-msg');if(m)m.textContent='Apuntá al código de barras de la etiqueta. Se completa solo apenas lo reconoce.';
+  modal.classList.add('open');
+  window.Scanner.open({video:video,mode:'single',onCode:function(v){onCodigoTracking(v);},onError:function(msg){var mm=document.getElementById('seg-cam-msg');if(mm)mm.textContent=msg;}});
+}
+function cerrarCamaraTracking(){
+  if(!TRK_CAM_ABIERTA)return;
+  TRK_CAM_ABIERTA=false;
+  if(window.Scanner)window.Scanner.close();
+  var modal=document.getElementById('seg-cam-modal');if(modal)modal.classList.remove('open');
+}
+function onCodigoTracking(codigo){
+  if(!TRK_CAM_ABIERTA)return;
+  cerrarCamaraTracking();
+  if(!flujoTrackingAbierto()||TRACKING_FLUJO.paso!=='escaneo')return;
+  if(navigator.vibrate)navigator.vibrate(40);
+  leerTrackingFlujo(String(codigo||'').trim());
+}
+function loCargoDespuesTracking(){if(TRACKING_FLUJO.enviando)return;cerrarCamaraTracking();TRACKING_FLUJO={activo:false,paso:'escaneo',tracking:'',fila:null,cliente:{},items:[],wcOrderId:null,origen:'preparacion',enviando:false,error:'',duplicado:false,reintentar:false,resultadoIncierto:false};ir('seguimientos');}
 async function confirmarTrackingFlujo(forzado){
   if(TRACKING_FLUJO.enviando||TRACKING_FLUJO.resultadoIncierto||!TRACKING_FLUJO.tracking)return;
   var tracking=TRACKING_FLUJO.tracking,wcId=TRACKING_FLUJO.wcOrderId;
@@ -3448,6 +3481,7 @@ function abrirCamaraSeg(wcId){
   var closeBtn=document.getElementById('seg-cam-close-btn');if(closeBtn)closeBtn.focus();
 }
 function cerrarCamaraSeg(devolverFoco){
+  TRK_CAM_ABIERTA=false;
   if(window.Scanner)window.Scanner.close();
   document.getElementById('seg-cam-modal').classList.remove('open');
   var wcId=SEG_CAM_WCID;
