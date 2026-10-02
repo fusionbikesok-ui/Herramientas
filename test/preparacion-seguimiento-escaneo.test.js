@@ -383,8 +383,8 @@ describe('el flujo de seguimiento no se borra con repintados tardíos del detall
     real.cerrarFlujoTrackingAlSalir();
     expect(real.TRACKING_FLUJO.activo).toBe(false);
     const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
-    expect(html).toMatch(/function ir\(v\)\{\n  cerrarFlujoTrackingAlSalir\(\);/);
-    expect(html).toMatch(/async function abrirDetalle\(id,empujar\)\{\n  cerrarFlujoTrackingAlSalir\(\);/);
+    expect(html).toMatch(/function ir\(v\)\{\n {2}cerrarFlujoTrackingAlSalir\(\);/);
+    expect(html).toMatch(/async function abrirDetalle\(id,empujar\)\{\n {2}cerrarFlujoTrackingAlSalir\(\);/);
     real.modoPedido = vi.fn(); real.ocultarAvisoNuevosPendientes = vi.fn();
     real.PREP = null; real.VISTA = 'pendientes';
     cuerpo.innerHTML = 'Cargando…';
