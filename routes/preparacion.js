@@ -1827,6 +1827,13 @@ export function preparacionRouter(db, cfg) {
         const fila = {
           wc_order_id: order.id,
           envio: normalizarEnvio(order, prep?.direccion_confirmada_fuente || null),
+          items: (order.line_items || []).map((item) => ({
+            sku: item.sku || '',
+            nombre: item.name || '',
+            cantidad: Number(item.quantity || 0),
+            product_id: item.product_id || null,
+            variation_id: item.variation_id || null,
+          })),
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
         };

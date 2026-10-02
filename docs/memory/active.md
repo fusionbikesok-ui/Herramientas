@@ -1173,4 +1173,5 @@ una fila `persona`: devuelve `'respetada'`; bajar/promover una primaria cierra l
 
 - Al completar una preparación `web` en estado `completada`, la UI ofrece escanear el tracking Andreani antes de volver a Cargar seguimientos. ML y `pendiente_deposito` conservan el flujo anterior.
 - El flujo valida 10–20 dígitos, rechaza códigos de producto de los ítems y GTIN-8/12/13/14 válidos, confirma mostrando datos de `GET /seguimientos` sin bloquear si faltan, y guarda mediante el POST existente. Escape y “Lo cargo después” no escriben.
+- El mismo flujo parametrizado también se abre desde cada tarjeta de Cargar seguimientos. Las tarjetas exponen ítems de `GET /seguimientos` derivados de `line_items` de Woo (o “Productos no disponibles”), búsqueda normalizada sin acentos y Enter con un único resultado; confirmar quita la tarjeta y “Lo cargo después” vuelve sin POST.
 - Se mantiene `SEG.guardadosSesion`, el lock contra doble envío y el tratamiento de 409/502 del backend; no se modificó `routes/preparacion.js`.

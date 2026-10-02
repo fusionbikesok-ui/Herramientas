@@ -218,7 +218,7 @@ describe('GET /seguimientos (contrato nuevo: 3 secciones + contadores, plan 2026
   });
 
   it('reparte TODO el universo lpaandreani entre esperando y sin_preparacion, sin excluir en_preparacion', async () => {
-    const mk = (id) => ({ id, number: String(id), shipping: { first_name: 'N', last_name: 'A', address_1: 'Calle 1', city: 'Cordoba', state: 'Cordoba', postcode: '5000' }, billing: {}, meta_data: [] });
+    const mk = (id) => ({ id, number: String(id), shipping: { first_name: 'N', last_name: 'A', address_1: 'Calle 1', city: 'Cordoba', state: 'Cordoba', postcode: '5000' }, billing: {}, meta_data: [], line_items: id === 900 ? [{ product_id: 10, variation_id: 11, sku: 'CASCO-9', name: 'Casco', quantity: 2 }] : [] });
     // 900: preparación 'completada' (verificada) -> esperando
     // 901: sin ninguna fila local -> sin_preparacion
     // 902: en_preparacion (p.ej. solo "etiqueta lista") -> sin_preparacion, NO se excluye
@@ -238,6 +238,7 @@ describe('GET /seguimientos (contrato nuevo: 3 secciones + contadores, plan 2026
     expect(res.body.data.esperando.map(f => f.wc_order_id)).toEqual([900]);
     expect(res.body.data.esperando[0].envio.pedido).toBe('900');
     expect(res.body.data.esperando[0].estado_preparacion).toBe('completada');
+    expect(res.body.data.esperando[0].items).toEqual([{ product_id: 10, variation_id: 11, sku: 'CASCO-9', nombre: 'Casco', cantidad: 2 }]);
 
     const sinPrepIds = res.body.data.sin_preparacion.map(f => f.wc_order_id).sort();
     expect(sinPrepIds).toEqual([901, 902, 903]);

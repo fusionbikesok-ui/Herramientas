@@ -125,3 +125,68 @@ describe('seguimiento Andreani desde Finalizar preparación', () => {
     expect(ctx.api).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('seguimiento Andreani desde Cargar seguimientos', () => {
+  it('abre el mismo flujo desde el botón de una tarjeta y conserva los ítems disponibles', () => {
+    const fila = {
+      wc_order_id: 77,
+      envio: { pedido: 'W-77', nombre: 'Ana', apellido: 'Gómez', localidad: 'Córdoba' },
+      items: [{ sku: 'CASCO-9', nombre: 'Casco', cantidad: 2 }],
+    };
+    expect(ctx.cardSeguimiento(fila, 'esperando')).toContain('abrirFlujoTrackingDesdeSeguimiento(77)');
+    ctx.SEG = { data: { esperando: [fila], sin_preparacion: [], a_medias: [] }, guardadosSesion: {} };
+    ctx.abrirFlujoTracking = vi.fn();
+    ctx.abrirFlujoTrackingDesdeSeguimiento(77);
+    expect(ctx.abrirFlujoTracking).toHaveBeenCalledWith({
+      wcOrderId: 77,
+      cliente: fila.envio,
+      items: fila.items,
+      fila,
+      origen: 'seguimientos',
+    });
+  });
+
+  it('filtra por número, nombre, apellido o localidad sin acentos y abre con Enter si queda uno', () => {
+    const filas = [
+      { wc_order_id: 1, envio: { pedido: 'A-100', nombre: 'Ana', apellido: 'Gómez', localidad: 'Córdoba' } },
+      { wc_order_id: 2, envio: { pedido: 'B-200', nombre: 'Bruno', apellido: 'Pérez', localidad: 'Rosario' } },
+    ];
+    expect(ctx.filasSeguimientoCoincidentes(filas, 'CORDOBA')).toHaveLength(1);
+    expect(ctx.filasSeguimientoCoincidentes(filas, 'perez')[0].wc_order_id).toBe(2);
+    ctx.abrirFlujoTrackingDesdeSeguimiento = vi.fn();
+    ctx.onBuscarSegKeydown({ key: 'Enter', preventDefault: vi.fn() }, filas, 'rosario');
+    expect(ctx.abrirFlujoTrackingDesdeSeguimiento).toHaveBeenCalledWith(2);
+  });
+
+  it('deja el botón secundario visible y diferido sin POST ni confirmación', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(source).toContain('Lo cargo después');
+    expect(source.match(/function loCargoDespuesTracking\(\)\{[^}]*\}/)?.[0]).not.toContain('confirm(');
+    ctx.confirm = vi.fn(() => false);
+    ctx.PREP = { canal: 'web', estado: 'completada', wc_order_id: 77, items: [] };
+    ctx.SEG = { data: { esperando: [], sin_preparacion: [], a_medias: [] }, guardadosSesion: {} };
+    ctx.loCargoDespuesTracking();
+    expect(respuestas).toHaveLength(0);
+    expect(ctx.ir).toHaveBeenCalledWith('seguimientos');
+    expect(ctx.confirm).not.toHaveBeenCalled();
+  });
+
+  it('usa una única apertura parametrizada para completar y tarjeta', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect((source.match(/function abrirFlujoTracking\(/g) || []).length).toBe(1);
+    expect(source).toContain('function abrirFlujoTracking(opciones)');
+    expect(source).toContain('abrirFlujoTrackingDesdeSeguimiento');
+  });
+
+  it('al confirmar desde una tarjeta quita esa tarjeta del DOM', async () => {
+    const card = { remove: vi.fn(), focus: vi.fn(), closest: vi.fn(() => null) };
+    ctx.document.getElementById = vi.fn(() => card);
+    ctx.PREP = { canal: 'web', wc_order_id: 77, items: [] };
+    ctx.SEG = { data: { esperando: [], sin_preparacion: [], a_medias: [] }, guardadosSesion: {} };
+    ctx.VISTA = 'seguimientos';
+    ctx.abrirFlujoTracking({ wcOrderId: 77, origen: 'seguimientos', fila: { wc_order_id: 77, envio: {} }, items: [] });
+    ctx.renderTrackingConfirmacion('360003042094910', null);
+    await ctx.confirmarTrackingFlujo();
+    expect(card.remove).toHaveBeenCalled();
+  });
+});
