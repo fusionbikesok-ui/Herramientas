@@ -369,6 +369,23 @@ describe('reactivación de pausadas por falta de stock', () => {
     expect(log.n).toBe(1);
   });
 
+  it('reactivarItems: no empuja ni activa una variación con contradicción de título', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-CONTRA', 7, { idWoo: 901 });
+    db.prepare("UPDATE catalogo_cache SET nombre='Bici Rodado 27 Talle M',precio=1350,regular_price=1350 WHERE sku='FB-CONTRA'").run();
+    seedDecision(db, 'MLA-CONTRA|v1', 'FB-CONTRA');
+    seedPublicacion(db, { clave: 'MLA-CONTRA|v1', itemId: 'MLA-CONTRA', varId: 'v1', status: 'paused', subStatus: 'out_of_stock', titulo: 'Bici Rodado 29 Talle M' });
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
+      if (/\/items\/bulk\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA-CONTRA', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
+    const r = await reactivarItems(db, ML_CFG, ['MLA-CONTRA']);
+    expect(r.resultados[0]).toMatchObject({ bloqueado: true, motivo: 'contradiccion_titulo' });
+    expect(axios.request.mock.calls.some(([cfg]) => String(cfg.method).toLowerCase() === 'put')).toBe(false);
+  });
+
   it('reactivarItems: si ML rechaza la activación, registra error y no marca activo', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-10', 4);
@@ -905,6 +922,19 @@ describe('vista de detalle', () => {
     expect(res.body.cantidad).toBe(6);
     const est = db.prepare('SELECT cantidad_ml FROM ml_stock_estado WHERE clave=?').get('MLA20|v20');
     expect(est.cantidad_ml).toBe(6);
+  });
+
+  it('reintentar-item: devuelve bloqueo explícito sin PUT ante contradicción', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-CONTRA-ITEM', 6, { idWoo: 902 });
+    db.prepare("UPDATE catalogo_cache SET nombre='Bici Rodado 27 Talle M' WHERE sku='FB-CONTRA-ITEM'").run();
+    seedDecision(db, 'MLA-CONTRA-ITEM|v', 'FB-CONTRA-ITEM');
+    seedPublicacion(db, { clave: 'MLA-CONTRA-ITEM|v', itemId: 'MLA-CONTRA-ITEM', varId: 'v', status: 'active', titulo: 'Bici Rodado 29 Talle M' });
+    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+    const res = await request(app).post('/api/sync/reintentar-item').send({ clave: 'MLA-CONTRA-ITEM|v' });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ ok: false, bloqueado: true, error: 'contradiccion_titulo' });
+    expect(axios.request.mock.calls.some(([cfg]) => String(cfg.method).toLowerCase() === 'put')).toBe(false);
   });
 
   it('reintentar-item: publicación pausada → no reintenta, sugiere reactivar', async () => {

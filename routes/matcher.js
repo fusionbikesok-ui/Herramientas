@@ -11,12 +11,12 @@ import {
 import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { escanearGuardiaMl } from '../lib/guardiaMl.js';
-import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl } from '../lib/identidadProductos.js';
+import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl, marcarClaveNoSincroniza } from '../lib/identidadProductos.js';
 import { detectarCambios } from '../lib/vigiaFormato.js';
 import { procesarCambios } from '../lib/vigiaPausado.js';
 import { espera } from '../lib/esperas.js';
 import { dispararAuditoriaPrecios } from '../lib/auditoriaPrecios.js';
-import { logSync, filasDeVinculos, cargarDescartes, senalesVigentes } from './sync.js';
+import { filasDeVinculos, cargarDescartes, senalesVigentes } from './sync.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -859,32 +859,13 @@ export function matcherRouter(db, cfg) {
     const usuario = req.user?.username;
     if (!usuario) return res.status(401).json({ ok: false, error: 'usuario requerido' });
 
-    const publicacion = db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave=?').get(clave);
-    if (!publicacion) return res.status(404).json({ ok: false, error: 'clave no encontrada' });
-    const previa = db.prepare('SELECT sku FROM sku_matcher_decisiones WHERE clave=?').get(clave);
-    const skuAnterior = previa?.sku || null;
-    const ts = now();
-
-    db.transaction(() => {
-      db.prepare(`INSERT INTO sku_matcher_decisiones
-        (clave, sku, wc_nombre, accion, origen, confirmado_por, actualizado_en)
-        VALUES (?, NULL, NULL, 'omitir', 'matcher_no_sincronizar', ?, ?)
-        ON CONFLICT(clave) DO UPDATE SET sku=NULL, wc_nombre=NULL, accion='omitir',
-          origen='matcher_no_sincronizar', confirmado_por=excluded.confirmado_por,
-          actualizado_en=excluded.actualizado_en`).run(clave, usuario, ts);
-      db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave=?').run(clave);
-      logSync(db, {
-        direccion: 'wc_ml', clave, sku: skuAnterior, estado: 'no_sincronizar',
-        error: `no sincronizar por ${usuario}`,
-      });
-    })();
-
-    return res.json({ ok: true, clave, sku_anterior: skuAnterior, accion: 'omitir' });
+    const resultado = marcarClaveNoSincroniza(db, { clave, actor: usuario, expectedSku: req.body?.expected_sku });
+    if (!resultado.ok) return res.status(resultado.status || 400).json(resultado);
+    return res.json(resultado);
   });
 
   router.get('/productos/buscar', (req, res) => {
     const q = String(req.query.q || '').trim();
-    if (q.length < 2) return res.status(400).json({ ok: false, error: 'q debe tener al menos 2 caracteres' });
     const limiteRaw = req.query.limite === undefined ? 20 : Number(req.query.limite);
     if (!Number.isInteger(limiteRaw) || limiteRaw < 1 || limiteRaw > 50) {
       return res.status(400).json({ ok: false, error: 'limite debe estar entre 1 y 50' });
@@ -894,17 +875,41 @@ export function matcherRouter(db, cfg) {
       .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
     const consulta = normalizar(q);
     const palabras = consulta.split(' ').filter(Boolean);
+    if (palabras.join('').length < 2) return res.status(400).json({ ok: false, error: 'q debe tener al menos 2 caracteres alfanuméricos' });
+    const like = (valor) => `%${String(valor).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const clausula = (columnas) => palabras.map(() => `(${columnas.map((c) => `lower(COALESCE(${c},'')) LIKE ? ESCAPE '\\'`).join(' OR ')})`).join(' AND ');
+    const params = (columnas) => palabras.flatMap((p) => columnas.map(() => like(p)));
     const contieneTodas = (valor) => {
       const texto = normalizar(valor);
       return palabras.every((palabra) => texto.includes(palabra));
     };
+    const filaLimite = Math.max(50, limiteRaw * 10);
     const catalogo = db.prepare(`SELECT sku, nombre, stock, precio, img, id_woo
-      FROM catalogo_cache WHERE COALESCE(trim(sku),'')<>'' ORDER BY stock ASC, id_woo ASC`).all();
+      FROM catalogo_cache
+      WHERE COALESCE(trim(sku),'')<>'' AND ${clausula(['sku', 'nombre'])}
+      ORDER BY stock ASC, id_woo ASC LIMIT ?`).all(...params(['sku', 'nombre']), filaLimite);
     const productoPorSku = new Map();
     for (const c of catalogo) if (!productoPorSku.has(c.sku)) productoPorSku.set(c.sku, c);
     const publicaciones = db.prepare(`SELECT p.*, d.sku AS decision_sku, d.accion,
       d.confirmado_por FROM ml_publicaciones_cache p
-      LEFT JOIN sku_matcher_decisiones d ON d.clave=p.clave`).all();
+      LEFT JOIN sku_matcher_decisiones d ON d.clave=p.clave
+      WHERE ${clausula(['p.item_id', 'p.titulo', 'p.seller_sku'])}
+      ORDER BY p.clave LIMIT ?`).all(...params(['p.item_id', 'p.titulo', 'p.seller_sku']), filaLimite);
+    const skusVinculados = [...new Set(publicaciones
+      .filter((p) => p.decision_sku && ['asignar', 'confirmar'].includes(p.accion))
+      .map((p) => p.decision_sku))];
+    if (skusVinculados.length) {
+      const placeholders = skusVinculados.map(() => '?').join(',');
+      const vinculados = db.prepare(`SELECT sku, nombre, stock, precio, img, id_woo FROM catalogo_cache
+        WHERE sku IN (${placeholders}) ORDER BY stock ASC, id_woo ASC LIMIT ?`).all(...skusVinculados, filaLimite);
+      for (const c of vinculados) if (!productoPorSku.has(c.sku)) productoPorSku.set(c.sku, c);
+      const hermanas = db.prepare(`SELECT p.*, d.sku AS decision_sku, d.accion, d.confirmado_por
+        FROM ml_publicaciones_cache p JOIN sku_matcher_decisiones d ON d.clave=p.clave
+        WHERE d.sku IN (${placeholders}) AND d.accion IN ('asignar','confirmar')
+        ORDER BY p.clave LIMIT ?`).all(...skusVinculados, filaLimite);
+      const claves = new Set(publicaciones.map((p) => p.clave));
+      publicaciones.push(...hermanas.filter((p) => !claves.has(p.clave)));
+    }
 
     const razonesPorSku = new Map();
     const huerfanas = [];

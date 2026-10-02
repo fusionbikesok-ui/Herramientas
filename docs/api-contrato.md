@@ -3,6 +3,29 @@
 Fuente de verdad del contrato entre el backend Express y el frontend interno (`public/`).
 Texto simple, no OpenAPI. Documentar acá todo endpoint que se agregue o cambie.
 
+## Vínculos del Matcher
+
+### POST /api/matcher/vinculos/no-sincronizar
+
+Mutación UM1 autenticada para marcar una publicación como `omitir`. Escribe la decisión,
+limpia revisiones pendientes y registra auditoría en Identidad/`sync_log`. Body:
+`{ "clave": "MLA...|...", "expected_sku": "SKU-opcional" }`. Si `expected_sku` no coincide
+con el vínculo actual responde 409 `{ ok:false, error:"vista_vieja", sku_actual }`; sin usuario
+responde 401. Una decisión `omitir` no es revertida por automatismos. Los vínculos manuales que
+quieran reemplazarla deben enviar `override_omitir:true`; sin ese campo responden 409
+`omitir_requiere_override`.
+
+### GET /api/matcher/productos/buscar?q=...
+
+Búsqueda acotada por SQL sobre catálogo y publicaciones ML. `q` debe contener al menos dos
+caracteres alfanuméricos después de normalizar; comodines sin texto, como `--` o `%%`, responden
+400. `limite` opcional admite 1–50.
+
+Los vínculos manuales que detecten atributos incompatibles responden 409:
+`{ ok:false, error:"contradiccion_titulo", motivos:[...] }`. El chequeo compara transmisión,
+velocidades, conjuntos de colores, rodado y talle; stock cero puede escribirse para permitir la
+protección contra sobreventa.
+
 ## Sincronización ML ↔ WooCommerce
 
 ### POST /api/sync/ml-wc

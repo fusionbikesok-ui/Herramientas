@@ -48,6 +48,27 @@ describe('detectarContradiccion', () => {
     expect(detectarContradiccion({ tituloMl: 'Bici 2x8', nombreWoo: 'Bici 2x8' }))
       .toEqual({ contradice: false, motivos: [] });
   });
+
+  it('no confunde talle M con rodado 29 y compara un talle numérico contra ambos atributos', () => {
+    expect(detectarContradiccion({
+      tituloMl: 'Bicicleta urbana rodado 29 talle M',
+      nombreWoo: 'Bicicleta urbana Rodado 29 Talle M',
+      talleMl: 'M',
+    })).toEqual({ contradice: false, motivos: [] });
+    expect(detectarContradiccion({ talleMl: '29', tituloMl: 'Bici', nombreWoo: 'Bici Rodado 29 Talle M' }))
+      .toEqual({ contradice: false, motivos: [] });
+    expect(detectarContradiccion({ talleMl: '29', tituloMl: 'Bici', nombreWoo: 'Bici Rodado 27 Talle M' }).motivos)
+      .toContainEqual({ campo: 'rodado', ml: '29', woo: '27' });
+  });
+
+  it('acepta transmisión con espacios y colores compuestos con solapamiento', () => {
+    expect(detectarContradiccion({ tituloMl: 'Bici 2 x 8 Negro/Azul', nombreWoo: 'Bici 2x 8 Negro/Rojo' }))
+      .toEqual({ contradice: false, motivos: [] });
+    expect(detectarContradiccion({ tituloMl: 'Bici Negro/Azul', nombreWoo: 'Bici Negro/Rojo' }))
+      .toEqual({ contradice: false, motivos: [] });
+    expect(detectarContradiccion({ tituloMl: 'Bici Marrón Turquesa', nombreWoo: 'Bici Beige Bordó' }).motivos)
+      .toContainEqual({ campo: 'color', ml: 'marron/turquesa', woo: 'beige/bordo' });
+  });
 });
 
 describe('contradiccionDeClave', () => {

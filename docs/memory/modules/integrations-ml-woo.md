@@ -30,6 +30,12 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
   auto-vínculos, vínculos manuales, la decisión legacy y subidas positivas de stock quedan
   bloqueados cuando ambos lados declaran atributos incompatibles. El stock cero sigue permitido
   para proteger de sobreventa y el sync cachea el resultado por clave dentro de cada corrida.
+- **No sincronizar (2026-10-02):** `POST /api/matcher/vinculos/no-sincronizar` es la mutación UM1
+  permitida para registrar una decisión humana `omitir`. La ruta delega en
+  `marcarClaveNoSincroniza`, que escribe la decisión y la auditoría de identidad/`sync_log`; así
+  no queda una escritura directa sin historial y los automatismos no pueden revivirla. La vista
+  puede enviar `expected_sku` para obtener 409 `vista_vieja` si el vínculo cambió mientras estaba
+  abierta.
 
 ML distingue `elegible`, `no_elegible` e `inconcluso`: faltan `shipping.id` o
 `logistic_type` son inconclusos/fail-open; solo logística externa explícita permite

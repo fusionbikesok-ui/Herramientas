@@ -4,7 +4,7 @@ import { requireAdmin } from '../lib/auth.js';
 import { pausarPublicacionMl } from '../lib/matcherPush.js';
 import { perfilPublicacionMl } from '../lib/guardiaMlAprendizaje.js';
 import { decidirCasoIdentidad } from '../lib/identidadProductos.js';
-import { detectarContradiccion } from '../lib/contradiccionTitulo.js';
+import { detectarContradiccion, contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 import { randomUUID } from 'node:crypto';
 function actor(req) { return req.user?.username || 'desconocido'; }
 function puedeResolver(req) {
@@ -97,6 +97,8 @@ export function guardiaMlRouter(db, cfg) {
       }
       const sku=String(req.body?.sku||'').trim(); const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
       if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
+      const previa = db.prepare('SELECT accion FROM sku_matcher_decisiones WHERE clave=?').get(c.clave);
+      if (previa?.accion === 'omitir' && req.body?.override_omitir !== true) return res.status(409).json({ ok:false,error:'omitir_requiere_override' });
       const pub = db.prepare('SELECT titulo,color,talle,variations_texto FROM ml_publicaciones_cache WHERE clave=?').get(c.clave);
       const contradiccion = detectarContradiccion({ tituloMl: pub?.titulo, nombreWoo: prod.nombre, colorMl: pub?.color, talleMl: pub?.talle, variacionesMl: pub?.variations_texto });
       if (contradiccion.contradice) return res.status(409).json({ ok:false, error:'contradiccion_titulo', motivos: contradiccion.motivos });
@@ -199,7 +201,9 @@ export function guardiaMlRouter(db, cfg) {
       if(!pub)return res.status(404).json({ok:false,error:'publicación no encontrada en ML'});
       const prod=db.prepare('SELECT sku,nombre,stock FROM catalogo_cache WHERE sku=? GROUP BY sku HAVING COUNT(*)=1').get(sku);
       if(!prod)return res.status(400).json({ok:false,error:'SKU inexistente en Woo'});
-      const contradiccion = detectarContradiccion({ tituloMl: pub.titulo, nombreWoo: prod.nombre });
+      const previa = db.prepare('SELECT accion FROM sku_matcher_decisiones WHERE clave=?').get(clave);
+      if (previa?.accion === 'omitir' && req.body?.override_omitir !== true) return res.status(409).json({ ok:false,error:'omitir_requiere_override' });
+      const contradiccion = contradiccionDeClave(db, clave, sku);
       if (contradiccion.contradice) return res.status(409).json({ ok:false, error:'contradiccion_titulo', motivos: contradiccion.motivos });
 
       // ── Un solo escritor por clave (UM1.6) ─────────────────────────────────────
@@ -229,7 +233,7 @@ export function guardiaMlRouter(db, cfg) {
           // El freno por hermanas necesita ver cuántas son y sobre qué publicación antes de
           // confirmar: eso sólo lo ofrece la pantalla de Identidad. Confirmar a ciegas desde
           // acá vaciaría el freno.
-          const estado = r.code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED' ? 409 : (r.code === 'NOT_FOUND' ? 404 : 400);
+          const estado = r.error === 'contradiccion_titulo' || r.code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED' || r.code === 'VERSION_CONFLICT' ? 409 : (r.code === 'NOT_FOUND' ? 404 : 400);
           return res.status(estado).json({ ...r, motor: 'identidad', migracion: 'Resolvelo en Identidad de productos: /herramientas/identidad-productos/' });
         }
         return res.status(202).json({ ok:true, motor:'identidad', estado:'pendiente_ml', caso_id:casoUm1.id,

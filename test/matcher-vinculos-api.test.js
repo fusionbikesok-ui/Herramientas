@@ -97,6 +97,16 @@ describe('API de vínculos del Matcher', () => {
     expect(db.prepare('SELECT accion FROM sku_matcher_decisiones WHERE clave=?').get('MLA-1|10').accion).toBe('omitir');
   });
 
+  it('rechaza no sincronizar desde una vista vieja si cambió el SKU vinculado', async () => {
+    seedCatalogo(db, { sku: 'FB-1', nombre: 'Casco Giro' });
+    seedPublicacion(db, { clave: 'MLA-VIEJA|' });
+    seedDecision(db, { clave: 'MLA-VIEJA|', sku: 'FB-1', accion: 'confirmar' });
+    const res = await request(app).post('/api/matcher/vinculos/no-sincronizar')
+      .send({ clave: 'MLA-VIEJA|', expected_sku: 'FB-OTRO' });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ ok: false, error: 'vista_vieja', sku_actual: 'FB-1' });
+  });
+
   it('busca por SKU, nombre Woo, código MLA y título ML', async () => {
     seedCatalogo(db, { sku: 'FB-CASCO', nombre: 'Casco Giro Urbano' });
     seedPublicacion(db, { clave: 'MLA123456|', itemId: 'MLA123456', titulo: 'Casco Giro Urbano Negro', sellerSku: 'FB-CASCO' });
@@ -151,5 +161,13 @@ describe('API de vínculos del Matcher', () => {
     expect((await request(app).get('/api/matcher/productos/buscar').query({ q: 'a' })).status).toBe(400);
     expect((await request(app).get('/api/matcher/productos/buscar').query({ q: 'ab', limite: 0 })).status).toBe(400);
     expect((await request(app).get('/api/matcher/productos/buscar').query({ q: 'ab', limite: 51 })).status).toBe(400);
+    expect((await request(app).get('/api/matcher/productos/buscar').query({ q: '--' })).status).toBe(400);
+  });
+
+  it('no devuelve el catálogo entero cuando la búsqueda sólo tiene comodines', async () => {
+    seedCatalogo(db, { sku: 'FB-UNO', nombre: 'Producto Uno' });
+    seedCatalogo(db, { id: 2, sku: 'FB-DOS', nombre: 'Producto Dos' });
+    const res = await request(app).get('/api/matcher/productos/buscar').query({ q: '%%' });
+    expect(res.status).toBe(400);
   });
 });
