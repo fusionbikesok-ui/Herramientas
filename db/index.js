@@ -540,6 +540,14 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('guardia_ml_claim_061')").run();
     })();
   }
+  const guardiaOverrideOmitirMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='guardia_override_omitir_117'").get();
+  if (!guardiaOverrideOmitirMigration) {
+    db.transaction(() => {
+      const columnas = db.prepare('PRAGMA table_info(guardia_ml_operaciones)').all().map((c) => c.name);
+      if (columnas.length && !columnas.includes('override_omitir')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '117_guardia_override_omitir.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('guardia_override_omitir_117')").run();
+    })();
+  }
   // Migraciones históricas de preparación usan una secuencia propia (062–065).
   // 019–022 quedan reservadas para incidentes, métricas y dispositivos; no se
   // reutilizan números aunque la base nueva ya cree estas columnas.
@@ -787,6 +795,14 @@ export function openDb(dbPath) {
     db.transaction(() => {
       db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '092_woo_webhooks_estado.sql'), 'utf8'));
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('woo_webhooks_estado_092')").run();
+    })();
+  }
+  const identidadOverrideOmitirMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_override_omitir_118'").get();
+  if (!identidadOverrideOmitirMigration) {
+    db.transaction(() => {
+      const columnas = db.prepare('PRAGMA table_info(identidad_operaciones)').all().map((c) => c.name);
+      if (columnas.length && !columnas.includes('override_omitir')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '118_identidad_override_omitir.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_override_omitir_118')").run();
     })();
   }
   const chatEventsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='chat_events_inbox_093'").get();

@@ -78,8 +78,8 @@ describe('API de vínculos del Matcher', () => {
       (clave, senal, valor_revisado, revisado_por, revisado_en)
       VALUES ('MLA-1|10', 'precio', 'viejo', 'otra', ?)`).run(ahora());
 
-    const primera = await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-1|10' });
-    const segunda = await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-1|10' });
+    const primera = await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-1|10', expected_sku: 'FB-1' });
+    const segunda = await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-1|10', expected_sku: null });
 
     expect(primera.status).toBe(200);
     expect(primera.body).toMatchObject({ ok: true, clave: 'MLA-1|10', sku_anterior: 'FB-1', accion: 'omitir' });
@@ -95,6 +95,16 @@ describe('API de vínculos del Matcher', () => {
 
     autoVincularPorSellerSku(db);
     expect(db.prepare('SELECT accion FROM sku_matcher_decisiones WHERE clave=?').get('MLA-1|10').accion).toBe('omitir');
+  });
+
+  it('exige expected_sku para un vínculo activo y null explícito para una clave sin vínculo', async () => {
+    seedPublicacion(db, { clave: 'MLA-EXPECT|', sellerSku: 'FB-1' });
+    seedDecision(db, { clave: 'MLA-EXPECT|', sku: 'FB-1', accion: 'confirmar' });
+    expect((await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-EXPECT|' })).status).toBe(400);
+
+    seedPublicacion(db, { clave: 'MLA-SIN-VINCULO|' });
+    expect((await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-SIN-VINCULO|' })).status).toBe(400);
+    expect((await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-SIN-VINCULO|', expected_sku: null })).status).toBe(200);
   });
 
   it('rechaza no sincronizar desde una vista vieja si cambió el SKU vinculado', async () => {
@@ -118,6 +128,15 @@ describe('API de vínculos del Matcher', () => {
       expect(res.body.data[0].sku).toBe('FB-CASCO');
       expect(res.body.data[0].coincidio_por).toContain(campo);
     }
+  });
+
+  it('busca nombres Woo con tildes y trae sus publicaciones vinculadas', async () => {
+    seedCatalogo(db, { sku: 'FB-CAMARA', nombre: 'Cámara de aire 29' });
+    seedPublicacion(db, { clave: 'MLA-CAMARA|', titulo: 'Cámara 29', sellerSku: 'FB-CAMARA' });
+    seedDecision(db, { clave: 'MLA-CAMARA|', sku: 'FB-CAMARA', accion: 'confirmar' });
+    const res = await request(app).get('/api/matcher/productos/buscar').query({ q: 'camara' });
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].publicaciones.map(p => p.clave)).toEqual(['MLA-CAMARA|']);
   });
 
   it('devuelve publicaciones omitidas y sin vínculo con su estado y forma completa', async () => {

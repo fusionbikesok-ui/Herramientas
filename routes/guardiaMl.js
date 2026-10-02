@@ -1,7 +1,6 @@
 import express from 'express';
 import { escanearGuardiaMl, estadoGuardiaMl, listarGuardiaMl, registrarEventoGuardia, encolarOperacionGuardia, liberarPedidoRetenido, cerrarAvisoVentaRetenida } from '../lib/guardiaMl.js';
 import { requireAdmin } from '../lib/auth.js';
-import { pausarPublicacionMl } from '../lib/matcherPush.js';
 import { perfilPublicacionMl } from '../lib/guardiaMlAprendizaje.js';
 import { decidirCasoIdentidad } from '../lib/identidadProductos.js';
 import { detectarContradiccion, contradiccionDeClave } from '../lib/contradiccionTitulo.js';
@@ -14,7 +13,7 @@ function puedeResolver(req) {
 }
 function motivoValido(m) { return ['sin_sku_woo','producto_inexistente','vinculo_dudoso','excepcion_comercial','incidencia_ml','otro'].includes(m); }
 
-export function guardiaMlRouter(db, cfg) {
+export function guardiaMlRouter(db, _cfg) {
   const router = express.Router();
   router.get('/estado', (_req, res) => res.json({ ok:true, data:estadoGuardiaMl(db) }));
   router.get('/casos', (req, res) => res.json({ ok:true, modo:estadoGuardiaMl(db).modo, data:listarGuardiaMl(db, { soloUrgentes:req.query.urgentes==='1' }) }));
@@ -117,13 +116,13 @@ export function guardiaMlRouter(db, cfg) {
       if ((actualMl && actualMl!==sku) || (decisionAnterior && decisionAnterior!==sku)) {
         // Persistir la intención antes de cualquier efecto remoto. El worker ejecuta
         // ambos pasos y puede recuperar la operación después de un reinicio.
-        encolarOperacionGuardia(db,{casoId:c.id,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion:c.expected_version});
+        encolarOperacionGuardia(db,{casoId:c.id,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion:c.expected_version,overrideOmitir:req.body?.override_omitir === true});
         registrarEventoGuardia(db,c.id,'correccion_encolada',actor(req),{sku_anterior:actualMl||decisionAnterior,sku_nuevo:sku});
         return res.status(202).json({ok:true,estado:'pendiente_ml',mensaje:'Corrección encolada; se desvinculará y vinculará de forma ordenada'});
       }
       // Toda vinculación se persiste antes del efecto remoto. Así un reinicio no
       // puede dejar ML actualizado y Fusion sin decisión local.
-      encolarOperacionGuardia(db,{casoId:c.id,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion:c.expected_version});
+        encolarOperacionGuardia(db,{casoId:c.id,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion:c.expected_version,overrideOmitir:req.body?.override_omitir === true});
       registrarEventoGuardia(db,c.id,'vinculacion_encolada',actor(req),{sku});
       return res.status(202).json({ok:true,estado:'pendiente_ml',mensaje:'Vinculación encolada; se confirmará cuando ML responda'});
     } catch (err) {
@@ -227,6 +226,7 @@ export function guardiaMlRouter(db, cfg) {
         const r = decidirCasoIdentidad(db, casoUm1.id, {
           tipo: 'vincular', product_id: productoFusion.id, operation_id: randomUUID(),
           expected_version: casoUm1.expected_version, evidence_fingerprint: casoUm1.evidencia_fingerprint,
+          override_omitir: req.body?.override_omitir === true,
           explicacion: 'vinculación desde el Matcher',
         }, actor(req));
         if (!r.ok) {
@@ -271,7 +271,7 @@ export function guardiaMlRouter(db, cfg) {
         db.prepare('INSERT OR IGNORE INTO guardia_ml_stock_compartido (sku,confirmado_en) VALUES (?,?)').run(sku,ts);
       }
       // Encolar la vinculación exactamente como el endpoint POST /casos/:id/vincular
-      encolarOperacionGuardia(db,{casoId,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion});
+      encolarOperacionGuardia(db,{casoId,tipo:'vincular',sku,error:null,operador:actor(req),casoVersion,overrideOmitir:req.body?.override_omitir === true});
       registrarEventoGuardia(db,casoId,'vinculacion_encolada',actor(req),{sku});
       return res.status(202).json({ok:true,estado:'pendiente_ml',caso_id:casoId,mensaje:'Vinculación encolada desde matcher; se confirmará cuando ML responda'});
     } catch (err) {

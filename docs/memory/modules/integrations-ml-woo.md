@@ -115,3 +115,9 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   FB-4746 y FB-10376 (jul–5 sep) era un `user_product` compartido entre productos Woo distintos
   (causa documentada en `UM1.1-cierre-sku-ml.md`). `conflictosDeBolsaCompartida` da 0 hoy; la
   reactivación de FB-32234 del 12-09 fue legítima (venta y reposición).
+- **Revisión matcher-vínculos (2026-10-02):** `contradiccionTitulo` sólo evalúa transmisión/velocidades
+  con rangos y contexto de bicicleta/transmisión, y talle/color/rodado con contexto de producto;
+  los talles numéricos no se convierten en rodado. `no-sincronizar` exige `expected_sku` (SKU actual
+  o `null` explícito), cancela operaciones durables pendientes y persiste `override_omitir` en las
+  sagas de Guardia/Identidad. La saga revalida contradicción antes de restaurar stock o activar una
+  identidad; en conflicto deja el caso abierto y registra historial.

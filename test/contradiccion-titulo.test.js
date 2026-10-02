@@ -57,8 +57,8 @@ describe('detectarContradiccion', () => {
     })).toEqual({ contradice: false, motivos: [] });
     expect(detectarContradiccion({ talleMl: '29', tituloMl: 'Bici', nombreWoo: 'Bici Rodado 29 Talle M' }))
       .toEqual({ contradice: false, motivos: [] });
-    expect(detectarContradiccion({ talleMl: '29', tituloMl: 'Bici', nombreWoo: 'Bici Rodado 27 Talle M' }).motivos)
-      .toContainEqual({ campo: 'rodado', ml: '29', woo: '27' });
+    expect(detectarContradiccion({ talleMl: '29', tituloMl: 'Bici', nombreWoo: 'Bici Rodado 27 Talle M' }))
+      .toEqual({ contradice: false, motivos: [] });
   });
 
   it('acepta transmisión con espacios y colores compuestos con solapamiento', () => {
@@ -68,6 +68,42 @@ describe('detectarContradiccion', () => {
       .toEqual({ contradice: false, motivos: [] });
     expect(detectarContradiccion({ tituloMl: 'Bici Marrón Turquesa', nombreWoo: 'Bici Beige Bordó' }).motivos)
       .toContainEqual({ campo: 'color', ml: 'marron/turquesa', woo: 'beige/bordo' });
+  });
+
+  it('no confunde talle de cuadro numérico con rodado', () => {
+    expect(detectarContradiccion({
+      tituloMl: 'Bicicleta R29',
+      talleMl: '20',
+      nombreWoo: 'Bicicleta R29 cuadro 20"',
+    })).toEqual({ contradice: false, motivos: [] });
+  });
+
+  it('no interpreta medidas de cámaras ni cajas como transmisión', () => {
+    expect(detectarContradiccion({
+      tituloMl: 'Cámara 29x2.10',
+      nombreWoo: 'Cámara 29 x 2.125',
+    })).toEqual({ contradice: false, motivos: [] });
+    expect(detectarContradiccion({
+      tituloMl: 'Caja 32 x 41',
+      nombreWoo: 'Caja 32 x 42',
+    })).toEqual({ contradice: false, motivos: [] });
+  });
+
+  it('no interpreta voltajes como velocidades', () => {
+    expect(detectarContradiccion({ tituloMl: 'Luz 12v batería', nombreWoo: 'Luz 24v batería' }))
+      .toEqual({ contradice: false, motivos: [] });
+  });
+
+  it('solo contradice transmisión, velocidades, rodado y talle en contextos válidos', () => {
+    expect(detectarContradiccion({ tituloMl: 'Venzo Gravel 2X8 16v', nombreWoo: 'Venzo Gravel 1X8 8v' }).motivos)
+      .toEqual([
+        { campo: 'transmision', ml: '2x8', woo: '1x8' },
+        { campo: 'velocidades', ml: '16', woo: '8' },
+      ]);
+    expect(detectarContradiccion({ tituloMl: 'Campera talle M', nombreWoo: 'Campera talle L' }).motivos)
+      .toEqual([{ campo: 'talle', ml: 'm', woo: 'l' }]);
+    expect(detectarContradiccion({ tituloMl: 'Zapatilla talle 42', nombreWoo: 'Zapatilla talle 41' }).motivos)
+      .toEqual([{ campo: 'talle', ml: '42', woo: '41' }]);
   });
 });
 

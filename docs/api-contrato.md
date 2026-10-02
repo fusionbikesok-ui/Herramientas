@@ -9,11 +9,12 @@ Texto simple, no OpenAPI. Documentar acá todo endpoint que se agregue o cambie.
 
 Mutación UM1 autenticada para marcar una publicación como `omitir`. Escribe la decisión,
 limpia revisiones pendientes y registra auditoría en Identidad/`sync_log`. Body:
-`{ "clave": "MLA...|...", "expected_sku": "SKU-opcional" }`. Si `expected_sku` no coincide
-con el vínculo actual responde 409 `{ ok:false, error:"vista_vieja", sku_actual }`; sin usuario
-responde 401. Una decisión `omitir` no es revertida por automatismos. Los vínculos manuales que
-quieran reemplazarla deben enviar `override_omitir:true`; sin ese campo responden 409
-`omitir_requiere_override`.
+`{ "clave": "MLA...|...", "expected_sku": "SKU-actual" }`. Es obligatorio si la clave tiene
+vínculo activo (`asignar`/`confirmar`) y debe ser `null` explícito si no lo tiene. Si no coincide
+responde 409 `{ ok:false, error:"vista_vieja", sku_actual }`; ausencia o forma incorrecta responde
+400. Sin usuario responde 401. `omitir` cancela operaciones pendientes de Guardia/Identidad y no
+es revertido por automatismos. Para reemplazarlo, los vínculos manuales deben enviar
+`override_omitir:true`; sin ese campo responden 409 `omitir_requiere_override`.
 
 ### GET /api/matcher/productos/buscar?q=...
 
@@ -23,8 +24,10 @@ caracteres alfanuméricos después de normalizar; comodines sin texto, como `--`
 
 Los vínculos manuales que detecten atributos incompatibles responden 409:
 `{ ok:false, error:"contradiccion_titulo", motivos:[...] }`. El chequeo compara transmisión,
-velocidades, conjuntos de colores, rodado y talle; stock cero puede escribirse para permitir la
-protección contra sobreventa.
+velocidades, conjuntos de colores, rodado y talle sólo con contexto de bicicleta/indumentaria;
+stock cero puede escribirse para permitir la protección contra sobreventa. El mismo 409 se aplica
+si una operación durable intenta restaurar stock o activar una identidad después de que cambió la
+evidencia.
 
 ## Sincronización ML ↔ WooCommerce
 

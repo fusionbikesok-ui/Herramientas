@@ -858,8 +858,18 @@ export function matcherRouter(db, cfg) {
     }
     const usuario = req.user?.username;
     if (!usuario) return res.status(401).json({ ok: false, error: 'usuario requerido' });
+    if (!db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave=?').get(clave)) {
+      return res.status(404).json({ ok: false, error: 'clave no encontrada' });
+    }
 
-    const resultado = marcarClaveNoSincroniza(db, { clave, actor: usuario, expectedSku: req.body?.expected_sku });
+    const expectedSkuProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'expected_sku');
+    const vinculo = db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave=? AND accion IN ('asignar','confirmar')").get(clave);
+    if (vinculo && !expectedSkuProvided) return res.status(400).json({ ok: false, error: 'expected_sku requerido para un vínculo activo' });
+    if (!vinculo && (!expectedSkuProvided || req.body.expected_sku !== null)) {
+      return res.status(400).json({ ok: false, error: 'expected_sku debe ser null explícito cuando no hay vínculo activo' });
+    }
+
+    const resultado = marcarClaveNoSincroniza(db, { clave, actor: usuario, expectedSku: req.body?.expected_sku, expectedSkuProvided });
     if (!resultado.ok) return res.status(resultado.status || 400).json(resultado);
     return res.json(resultado);
   });
@@ -877,7 +887,8 @@ export function matcherRouter(db, cfg) {
     const palabras = consulta.split(' ').filter(Boolean);
     if (palabras.join('').length < 2) return res.status(400).json({ ok: false, error: 'q debe tener al menos 2 caracteres alfanuméricos' });
     const like = (valor) => `%${String(valor).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    const clausula = (columnas) => palabras.map(() => `(${columnas.map((c) => `lower(COALESCE(${c},'')) LIKE ? ESCAPE '\\'`).join(' OR ')})`).join(' AND ');
+    const sinTildes = (c) => `replace(replace(replace(replace(replace(replace(replace(lower(COALESCE(${c},'')),'á','a'),'é','e'),'í','i'),'ó','o'),'ú','u'),'ü','u'),'ñ','n')`;
+    const clausula = (columnas) => palabras.map(() => `(${columnas.map((c) => `${sinTildes(c)} LIKE ? ESCAPE '\\'`).join(' OR ')})`).join(' AND ');
     const params = (columnas) => palabras.flatMap((p) => columnas.map(() => like(p)));
     const contieneTodas = (valor) => {
       const texto = normalizar(valor);
@@ -890,14 +901,16 @@ export function matcherRouter(db, cfg) {
       ORDER BY stock ASC, id_woo ASC LIMIT ?`).all(...params(['sku', 'nombre']), filaLimite);
     const productoPorSku = new Map();
     for (const c of catalogo) if (!productoPorSku.has(c.sku)) productoPorSku.set(c.sku, c);
-    const publicaciones = db.prepare(`SELECT p.*, d.sku AS decision_sku, d.accion,
+    const skusCatalogo = [...productoPorSku.keys()];
+    const publicacionesIniciales = db.prepare(`SELECT p.*, d.sku AS decision_sku, d.accion,
       d.confirmado_por FROM ml_publicaciones_cache p
       LEFT JOIN sku_matcher_decisiones d ON d.clave=p.clave
       WHERE ${clausula(['p.item_id', 'p.titulo', 'p.seller_sku'])}
       ORDER BY p.clave LIMIT ?`).all(...params(['p.item_id', 'p.titulo', 'p.seller_sku']), filaLimite);
-    const skusVinculados = [...new Set(publicaciones
+    const publicaciones = [...publicacionesIniciales];
+    const skusVinculados = [...new Set([...publicaciones, ...catalogo]
       .filter((p) => p.decision_sku && ['asignar', 'confirmar'].includes(p.accion))
-      .map((p) => p.decision_sku))];
+      .map((p) => p.decision_sku).concat(skusCatalogo))];
     if (skusVinculados.length) {
       const placeholders = skusVinculados.map(() => '?').join(',');
       const vinculados = db.prepare(`SELECT sku, nombre, stock, precio, img, id_woo FROM catalogo_cache
