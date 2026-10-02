@@ -1492,7 +1492,14 @@ function avisoCanal(p){
   return '';
 }
 
+// Mientras el flujo "Escaneá el seguimiento" está abierto vive dentro de #cuerpo: cualquier repintado
+// tardío del detalle (refresco en vuelo, subida de foto, polling) lo borraría con el operario
+// escribiendo. El estado (PREP) igual se actualiza; solo se difiere el pintado hasta cerrar el flujo.
+function flujoTrackingAbierto(origen){
+  return typeof TRACKING_FLUJO!=='undefined'&&TRACKING_FLUJO.activo&&(!origen||TRACKING_FLUJO.origen===origen);
+}
 function renderDetalle(){
+  if(flujoTrackingAbierto('preparacion'))return;
   var p=PREP;
 
   // Defensa contra un caso raro (otra pestaña la cerró sin evidencia mientras esta la
@@ -1893,7 +1900,10 @@ function escanearManual(){
 
 async function refrescarDetalle(){
   if(!PREP)return;
-  var r=await api('/'+PREP.id);
+  var idPedido=PREP.id;
+  var r=await api('/'+idPedido);
+  // Una respuesta tardía no puede resucitar un detalle que el operario ya dejó (ir('seguimientos'), otro pedido).
+  if(!PREP||PREP.id!==idPedido||VISTA!=='detalle')return;
   if(r.body.ok){
     PREP=r.body.data;
     try{var tm=await api('/'+PREP.id+'/etiquetas-manuales');PREP.etiquetas_manuales=tm.body.data||[];}catch(e){PREP.etiquetas_manuales=[];}
@@ -2467,7 +2477,19 @@ function anunciarFoto(msg){
   if(el)el.textContent=msg;
 }
 
+// Subidas de foto en vuelo: /completar con una foto sin terminar la deja fuera del cierre y su respuesta
+// tardía repinta el detalle. Se espera (hasta 45 s) a que terminen antes de cerrar la preparación.
+async function esperarSubidasFoto(){
+  var limite=Date.now()+45000;
+  while(Object.keys(SUBIDAS_PENDIENTES||{}).length&&Date.now()<limite){
+    flash('warn','Esperando que terminen de subir las fotos…');
+    await new Promise(function(r){setTimeout(r,300);});
+  }
+  return !Object.keys(SUBIDAS_PENDIENTES||{}).length;
+}
 async function completar(){
+  if(!(await esperarSubidasFoto())){flash('bad','Hay fotos que no terminaron de subir. Revisá la conexión y reintentá.');return;}
+  if(!PREP)return;
   var r=await api('/'+PREP.id+'/completar',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   if(r.status===400&&r.body.faltantes){
     flash('bad','Falta: '+r.body.faltantes.map(function(f){return (f.nombre||f.sku)+' ('+(f.motivo==='fotos'?'fotos':'sin verificar')+')';}).join(' · '));
@@ -3208,6 +3230,7 @@ function toggleSegExtra(tipo){
 }
 
 function renderSeguimientos(){
+  if(flujoTrackingAbierto('seguimientos'))return;
   var c=document.getElementById('cuerpo');
   if(!SEG.data){c.innerHTML='<div class="loading">Cargando…</div>';return;}
   var d=SEG.data, esperando=d.esperando||[], sinPrep=d.sin_preparacion||[], aMedias=d.a_medias||[];

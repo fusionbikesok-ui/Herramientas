@@ -235,3 +235,97 @@ describe('seguimiento Andreani desde Cargar seguimientos', () => {
     expect(card.remove).toHaveBeenCalled();
   });
 });
+
+// Hotfix prod f26bcd91 (pedido web 70502): un refrescarDetalle en vuelo resolvía después de abrirFlujoTracking y
+// renderDetalle() pisaba #cuerpo, borrando el overlay "Escaneá el seguimiento".
+describe('el flujo de seguimiento no se borra con repintados tardíos del detalle', () => {
+  let real;
+  let cuerpo;
+  beforeEach(() => {
+    const document = documentoFake();
+    const sandbox = {
+      document, window: null, console, Date, Math, JSON, Intl, URLSearchParams,
+      setTimeout(fn) { fn(); return 1; }, clearTimeout, setInterval() { return 1; }, clearInterval() {},
+      sessionStorage: { getItem() { return null; }, setItem() {} },
+      location: { href: '', pathname: '/preparacion/', search: '' }, history: { pushState() {} },
+      navigator: {}, fetch: vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: false }) })),
+      alert() {}, confirm() { return true; }, prompt() { return null; },
+      addEventListener() {}, removeEventListener() {},
+    };
+    sandbox.window = sandbox;
+    real = vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/format.js'), 'utf8'), real);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/api.js'), 'utf8'), real);
+    vm.runInContext(extraerScript(fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8')), real);
+    real.beep = vi.fn();
+    cuerpo = document.getElementById('cuerpo');
+  });
+
+  const prep = () => ({ id: 493, canal: 'web', estado: 'completada', wc_order_id: 70502, numero_pedido: '70502', comprador: 'Ana', items: [], eventos: [], fotos_generales: [] });
+
+  it('un refrescarDetalle en vuelo que resuelve después no pisa el overlay', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    let liberar;
+    const tardia = new Promise((r) => { liberar = r; });
+    real.api = vi.fn(async (url) => {
+      if (url === '/493') { await tardia; return { status: 200, body: { ok: true, data: prep() } }; }
+      if (url === '/493/etiquetas-manuales') return { status: 200, body: { ok: true, data: [] } };
+      if (url === '/seguimientos') return { status: 200, body: { ok: true, data: {} } };
+      return { status: 200, body: { ok: true } };
+    });
+    const refresco = real.refrescarDetalle();
+    await real.abrirFlujoTracking();
+    const overlay = cuerpo.innerHTML;
+    expect(overlay).toContain('tracking-flujo-input');
+    liberar();
+    await refresco;
+    expect(cuerpo.innerHTML).toBe(overlay);
+    expect(real.TRACKING_FLUJO.activo).toBe(true);
+  });
+
+  it('renderDetalle no pinta mientras el flujo de preparación está abierto, y pinta al cerrarlo', () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+    real.abrirFlujoTracking();
+    const overlay = cuerpo.innerHTML;
+    real.renderDetalle();
+    expect(cuerpo.innerHTML).toBe(overlay);
+    real.TRACKING_FLUJO.activo = false;
+    real.renderDetalle();
+    expect(cuerpo.innerHTML).not.toBe(overlay);
+  });
+
+  it('un refresco tardío no resucita el detalle después de salir a Cargar seguimientos', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    let liberar;
+    const tardia = new Promise((r) => { liberar = r; });
+    real.api = vi.fn(async (url) => {
+      if (url === '/493') { await tardia; return { status: 200, body: { ok: true, data: prep() } }; }
+      return { status: 200, body: { ok: true, data: [] } };
+    });
+    const refresco = real.refrescarDetalle();
+    real.PREP = null; real.VISTA = 'seguimientos';
+    cuerpo.innerHTML = 'SEGUIMIENTOS';
+    liberar();
+    await refresco;
+    expect(cuerpo.innerHTML).toBe('SEGUIMIENTOS');
+    expect(real.PREP).toBe(null);
+  });
+
+  it('completar espera a que terminen las subidas de foto antes de llamar /completar', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete' };
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, estado: 'pendiente_deposito', data: prep() } }));
+    real.alert = () => {};
+    let ticks = 0;
+    real.setTimeout = (fn) => { ticks++; if (ticks === 2) delete real.SUBIDAS_PENDIENTES['tmp-1']; fn(); return 1; };
+    await real.completar();
+    const llamadas = real.api.mock.calls.map((c) => c[0]);
+    expect(ticks).toBeGreaterThanOrEqual(2);
+    expect(llamadas).toContain('/493/completar');
+  });
+});
