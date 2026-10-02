@@ -121,6 +121,8 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
 - Mientras el POST está en vuelo se bloquean input, Confirmar, Escanear de nuevo, Lo cargo después y Escape; `enviando` se libera al terminar la respuesta. El backend mantiene una reserva en memoria por `wcOrderId`, responde `409 EN_CURSO` sin tocar Woo ante un segundo POST y libera la reserva en `finally`.
 - Un `502` con `colgado:true, incierto:true` se muestra como resultado incierto y no afirma guardado/mail; solo `colgado:true` sin incertidumbre informa que se guardó y falta un paso interno. La misma semántica se usa desde Cargar seguimientos.
 
+- El flujo "Escaneá el seguimiento" vive dentro de `#cuerpo`: mientras `TRACKING_FLUJO.activo` ni `renderDetalle` ni `renderSeguimientos` pintan (el estado se actualiza igual), y un `refrescarDetalle` tardío no repinta si el operario ya salió del detalle. `completar()` espera a que terminen las subidas de foto en vuelo antes de llamar `/completar` (hotfix 2026-10-02, pedido web 70502 cuyo overlay se borró).
+
 ## Reconciliación de preparaciones abiertas (2026-09-29)
 
 - El worker `reconciliarPreparacionesAbiertas` consulta directamente WooCommerce o MercadoLibre

@@ -235,3 +235,334 @@ describe('seguimiento Andreani desde Cargar seguimientos', () => {
     expect(card.remove).toHaveBeenCalled();
   });
 });
+
+// Hotfix prod f26bcd91 (pedido web 70502): un refrescarDetalle en vuelo resolvía después de abrirFlujoTracking y
+// renderDetalle() pisaba #cuerpo, borrando el overlay "Escaneá el seguimiento".
+describe('el flujo de seguimiento no se borra con repintados tardíos del detalle', () => {
+  let real;
+  let cuerpo;
+  beforeEach(() => {
+    const document = documentoFake();
+    const sandbox = {
+      document, window: null, console, Date, Math, JSON, Intl, URLSearchParams,
+      setTimeout(fn) { fn(); return 1; }, clearTimeout, setInterval() { return 1; }, clearInterval() {},
+      sessionStorage: { getItem() { return null; }, setItem() {} },
+      location: { href: '', pathname: '/preparacion/', search: '' }, history: { pushState() {} },
+      navigator: {}, fetch: vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: false }) })),
+      alert() {}, confirm() { return true; }, prompt() { return null; },
+      addEventListener() {}, removeEventListener() {},
+    };
+    sandbox.window = sandbox;
+    real = vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/format.js'), 'utf8'), real);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/api.js'), 'utf8'), real);
+    vm.runInContext(extraerScript(fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8')), real);
+    real.beep = vi.fn();
+    cuerpo = document.getElementById('cuerpo');
+  });
+
+  const prep = () => ({ id: 493, canal: 'web', estado: 'completada', wc_order_id: 70502, numero_pedido: '70502', comprador: 'Ana', items: [], eventos: [], fotos_generales: [] });
+
+  it('un refrescarDetalle en vuelo que resuelve después no pisa el overlay', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    let liberar;
+    const tardia = new Promise((r) => { liberar = r; });
+    real.api = vi.fn(async (url) => {
+      if (url === '/493') { await tardia; return { status: 200, body: { ok: true, data: prep() } }; }
+      if (url === '/493/etiquetas-manuales') return { status: 200, body: { ok: true, data: [] } };
+      if (url === '/seguimientos') return { status: 200, body: { ok: true, data: {} } };
+      return { status: 200, body: { ok: true } };
+    });
+    const refresco = real.refrescarDetalle();
+    await real.abrirFlujoTracking();
+    const overlay = cuerpo.innerHTML;
+    expect(overlay).toContain('tracking-flujo-input');
+    liberar();
+    await refresco;
+    expect(cuerpo.innerHTML).toBe(overlay);
+    expect(real.TRACKING_FLUJO.activo).toBe(true);
+  });
+
+  it('renderDetalle no pinta mientras el flujo de preparación está abierto, y pinta al cerrarlo', () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+    real.abrirFlujoTracking();
+    const overlay = cuerpo.innerHTML;
+    real.renderDetalle();
+    expect(cuerpo.innerHTML).toBe(overlay);
+    real.TRACKING_FLUJO.activo = false;
+    real.renderDetalle();
+    expect(cuerpo.innerHTML).not.toBe(overlay);
+  });
+
+  it('un refresco tardío no resucita el detalle después de salir a Cargar seguimientos', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    let liberar;
+    const tardia = new Promise((r) => { liberar = r; });
+    real.api = vi.fn(async (url) => {
+      if (url === '/493') { await tardia; return { status: 200, body: { ok: true, data: prep() } }; }
+      return { status: 200, body: { ok: true, data: [] } };
+    });
+    const refresco = real.refrescarDetalle();
+    real.PREP = null; real.VISTA = 'seguimientos';
+    cuerpo.innerHTML = 'SEGUIMIENTOS';
+    liberar();
+    await refresco;
+    expect(cuerpo.innerHTML).toBe('SEGUIMIENTOS');
+    expect(real.PREP).toBe(null);
+  });
+
+  it('completar espera a que terminen las subidas de foto antes de llamar /completar', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete' };
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, estado: 'pendiente_deposito', data: prep() } }));
+    real.alert = () => {};
+    let ticks = 0;
+    real.setTimeout = (fn) => { ticks++; if (ticks === 2) delete real.SUBIDAS_PENDIENTES['tmp-1']; fn(); return 1; };
+    await real.completar();
+    const llamadas = real.api.mock.calls.map((c) => c[0]);
+    expect(ticks).toBeGreaterThanOrEqual(2);
+    expect(llamadas).toContain('/493/completar');
+  });
+
+  it('una subida fallida corta de inmediato con aviso claro, sin esperar ni llamar /completar', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete', fallida: true };
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+    real.flash = vi.fn();
+    let esperas = 0;
+    real.setTimeout = (fn) => { esperas++; fn(); return 1; };
+    await real.completar();
+    expect(esperas).toBe(0);
+    expect(real.api).not.toHaveBeenCalled();
+    expect(real.flash).toHaveBeenCalledWith('bad', expect.stringContaining('1 foto sin subir'));
+  });
+
+  it('un doble toque en Finalizar hace un solo /completar', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete' };
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, estado: 'pendiente_deposito', data: prep() } }));
+    let ticks = 0;
+    real.setTimeout = (fn) => { ticks++; if (ticks === 2) delete real.SUBIDAS_PENDIENTES['tmp-1']; fn(); return 1; };
+    await Promise.all([real.completar(), real.completar()]);
+    expect(real.api.mock.calls.filter((c) => c[0] === '/493/completar')).toHaveLength(1);
+  });
+
+  it('si el operario cambia de pedido durante la espera, no completa el pedido equivocado', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete' };
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+    let ticks = 0;
+    real.setTimeout = (fn) => {
+      ticks++;
+      if (ticks === 2) { delete real.SUBIDAS_PENDIENTES['tmp-1']; real.PREP = { ...prep(), id: 777 }; }
+      fn(); return 1;
+    };
+    await real.completar();
+    expect(real.api).not.toHaveBeenCalled();
+  });
+
+  it('salir del overlay con ir() cierra el flujo y abrir otro pedido pinta (Atrás del celular)', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async (url) => {
+      if (url === '/seguimientos') return { status: 200, body: { ok: true, data: {} } };
+      if (url === '/777') return { status: 200, body: { ok: true, data: { ...prep(), id: 777, wc_order_id: 70999, numero_pedido: '70999', estado: 'en_preparacion' } } };
+      return { status: 200, body: { ok: true, data: [] } };
+    });
+    await real.abrirFlujoTracking();
+    expect(real.TRACKING_FLUJO.activo).toBe(true);
+    // ir() y abrirDetalle() arrancan con esta llamada (se verifica abajo); ir() entero necesita un DOM real.
+    real.cerrarFlujoTrackingAlSalir();
+    expect(real.TRACKING_FLUJO.activo).toBe(false);
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toMatch(/function ir\(v\)\{\n {2}cerrarFlujoTrackingAlSalir\(\);/);
+    expect(html).toMatch(/async function abrirDetalle\(id,empujar\)\{\n {2}cerrarFlujoTrackingAlSalir\(\);/);
+    real.modoPedido = vi.fn(); real.ocultarAvisoNuevosPendientes = vi.fn();
+    real.PREP = null; real.VISTA = 'pendientes';
+    cuerpo.innerHTML = 'Cargando…';
+    await real.abrirDetalle(777);
+    expect(cuerpo.innerHTML).not.toBe('Cargando…');
+  });
+
+  it('con el flag activo pero otra pantalla/pedido, renderDetalle igual pinta', () => {
+    real.PREP = { ...prep(), id: 888, wc_order_id: 71000, estado: 'en_preparacion' };
+    real.VISTA = 'detalle';
+    real.TRACKING_FLUJO.activo = true;
+    real.TRACKING_FLUJO.wcOrderId = 70502; // flujo de otro pedido
+    cuerpo.innerHTML = 'Cargando…';
+    real.renderDetalle();
+    expect(cuerpo.innerHTML).not.toBe('Cargando…');
+  });
+
+  it('con un POST en vuelo, salir de la pantalla no cierra el flujo', () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+    real.abrirFlujoTracking();
+    real.TRACKING_FLUJO.enviando = true;
+    real.cerrarFlujoTrackingAlSalir();
+    expect(real.TRACKING_FLUJO.activo).toBe(true);
+  });
+
+  it('el reintento de una foto fallida limpia la marca fallida', () => {
+    real.PREP = prep();
+    real.SUBIDAS_PENDIENTES['tmp-9'] = { itemId: null, tipo: 'paquete', archivo: {}, fallida: true };
+    real.URL = { createObjectURL: () => 'blob:x', revokeObjectURL() {} };
+    real.fetch = vi.fn(() => new Promise(() => {}));
+    real.FormData = class { append() {} };
+    real.AbortController = class { constructor() { this.signal = {}; } abort() {} };
+    real.document.querySelector = () => ({ classList: { remove() {} }, querySelector() { return null; } });
+    real.reintentarSubidaLocal('tmp-9');
+    expect(real.SUBIDAS_PENDIENTES['tmp-9'].fallida).toBeUndefined();
+  });
+
+  async function confirmarSaliendoEnVuelo(respuesta) {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+    await real.abrirFlujoTracking();
+    real.TRACKING_FLUJO.tracking = 'AND123';
+    real.TRACKING_FLUJO.fila = { envio: { pedido: '70502' } };
+    let liberar;
+    real.enviarTracking = vi.fn(() => new Promise((r) => { liberar = r; }));
+    real.flash = vi.fn();
+    real.ir = vi.fn();
+    const p = real.confirmarTrackingFlujo();
+    // el operario sale con el POST en vuelo: el flujo sigue activo (enviando) pero la pantalla es otro pedido
+    real.cerrarFlujoTrackingAlSalir();
+    real.PREP = { ...prep(), id: 777, wc_order_id: 70999, estado: 'en_preparacion' };
+    cuerpo.innerHTML = 'OTRO PEDIDO';
+    liberar(respuesta);
+    await p;
+  }
+
+  it('POST en vuelo que termina bien con el operario ya en otro pedido: no navega ni repinta', async () => {
+    await confirmarSaliendoEnVuelo({ status: 200, body: { ok: true } });
+    expect(real.ir).not.toHaveBeenCalled();
+    expect(cuerpo.innerHTML).toBe('OTRO PEDIDO');
+    expect(real.TRACKING_FLUJO.activo).toBe(false);
+    expect(real.flash).toHaveBeenCalledWith('ok', expect.stringContaining('AND123'));
+  });
+
+  it('POST en vuelo que falla con el operario ya en otro pedido: avisa con flash y no repinta', async () => {
+    await confirmarSaliendoEnVuelo({ status: 500, body: { ok: false, error: 'Falló Andreani' } });
+    expect(cuerpo.innerHTML).toBe('OTRO PEDIDO');
+    expect(real.TRACKING_FLUJO.activo).toBe(false);
+    expect(real.flash).toHaveBeenCalledWith('bad', 'Falló Andreani');
+  });
+
+  it('POST en vuelo que termina bien con el flujo todavía abierto: navega a seguimientos', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+    await real.abrirFlujoTracking();
+    real.TRACKING_FLUJO.tracking = 'AND123';
+    real.TRACKING_FLUJO.fila = { envio: { pedido: '70502' } };
+    real.enviarTracking = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+    real.ir = vi.fn();
+    await real.confirmarTrackingFlujo();
+    expect(real.ir).toHaveBeenCalledWith('seguimientos');
+  });
+});
+
+describe('escaneo por cámara en "Escaneá el seguimiento"', () => {
+  let real;
+  let cuerpo;
+  let scanner;
+  beforeEach(() => {
+    const document = documentoFake();
+    const sandbox = {
+      document, window: null, console, Date, Math, JSON, Intl, URLSearchParams,
+      setTimeout(fn) { fn(); return 1; }, clearTimeout, setInterval() { return 1; }, clearInterval() {},
+      sessionStorage: { getItem() { return null; }, setItem() {} },
+      location: { href: '', pathname: '/preparacion/', search: '' }, history: { pushState() {} },
+      navigator: { mediaDevices: {}, maxTouchPoints: 5 },
+      fetch: vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: false }) })),
+      alert() {}, confirm() { return true; }, prompt() { return null; },
+      addEventListener() {}, removeEventListener() {},
+    };
+    sandbox.window = sandbox;
+    real = vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/format.js'), 'utf8'), real);
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/api.js'), 'utf8'), real);
+    vm.runInContext(extraerScript(fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8')), real);
+    real.beep = vi.fn();
+    scanner = { open: vi.fn(), close: vi.fn() };
+    real.Scanner = scanner;
+    cuerpo = document.getElementById('cuerpo');
+    real.PREP = { id: 493, canal: 'web', estado: 'completada', wc_order_id: 70502, numero_pedido: '70502', comprador: 'Ana', items: [{ sku: 'SKU-1', codigo_barras: '7791234567890', nombre: 'Casco', cantidad_esperada: 1 }], eventos: [], fotos_generales: [] };
+    real.VISTA = 'detalle';
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, data: {} } }));
+  });
+
+  it('en dispositivo táctil abre la cámara al entrar y la pantalla tiene el botón principal', async () => {
+    await real.abrirFlujoTracking();
+    expect(scanner.open).toHaveBeenCalledTimes(1);
+    expect(scanner.open.mock.calls[0][0].mode).toBe('single');
+    expect(cuerpo.innerHTML).toContain('Escanear con la cámara');
+    expect(cuerpo.innerHTML).toContain('pistola');
+  });
+
+  it('si la cámara falló (permiso denegado) no se vuelve a auto-abrir', async () => {
+    await real.abrirFlujoTracking();
+    scanner.open.mock.calls[0][0].onError('No se pudo acceder a la cámara: denegado');
+    await real.abrirFlujoTracking();
+    expect(scanner.open).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin pantalla táctil no abre la cámara sola', async () => {
+    real.navigator.maxTouchPoints = 0;
+    await real.abrirFlujoTracking();
+    expect(scanner.open).not.toHaveBeenCalled();
+  });
+
+  it('un código válido escaneado cierra la cámara y pasa a la confirmación', async () => {
+    await real.abrirFlujoTracking();
+    scanner.open.mock.calls[0][0].onCode('360000123456789');
+    expect(scanner.close).toHaveBeenCalled();
+    expect(real.TRACKING_FLUJO.paso).toBe('confirmacion');
+    expect(real.TRACKING_FLUJO.tracking).toBe('360000123456789');
+  });
+
+  it('el código de un producto del pedido se rechaza con el mensaje de producto', async () => {
+    await real.abrirFlujoTracking();
+    scanner.open.mock.calls[0][0].onCode('7791234567890');
+    expect(real.TRACKING_FLUJO.paso).toBe('escaneo');
+    expect(real.TRACKING_FLUJO.error).toMatch(/código de producto/);
+  });
+
+  it('un código que no es de 10 a 20 dígitos se rechaza', async () => {
+    await real.abrirFlujoTracking();
+    scanner.open.mock.calls[0][0].onCode('ABC123');
+    expect(real.TRACKING_FLUJO.paso).toBe('escaneo');
+    expect(real.TRACKING_FLUJO.error).toMatch(/10 y 20/);
+  });
+
+  it('"Lo cargo después" y salir de la pantalla cierran la cámara', async () => {
+    real.ir = vi.fn();
+    await real.abrirFlujoTracking();
+    real.loCargoDespuesTracking();
+    expect(scanner.close).toHaveBeenCalled();
+    scanner.close.mockClear();
+    await real.abrirFlujoTracking();
+    real.cerrarFlujoTrackingAlSalir();
+    expect(scanner.close).toHaveBeenCalled();
+  });
+
+  it('un código que llega tarde, con el flujo ya cerrado, se ignora', async () => {
+    await real.abrirFlujoTracking();
+    const onCode = scanner.open.mock.calls[0][0].onCode;
+    real.cerrarFlujoTrackingAlSalir();
+    onCode('360000123456789');
+    expect(real.TRACKING_FLUJO.paso).toBe('escaneo');
+    expect(real.TRACKING_FLUJO.tracking).toBe('');
+  });
+});

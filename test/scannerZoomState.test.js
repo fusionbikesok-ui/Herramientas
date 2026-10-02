@@ -251,3 +251,45 @@ describe('scanner.js — máquina de estados de zoom (camino ZXing, fallback iPh
     });
   });
 });
+
+describe('scanner.js — close() durante un getUserMedia pendiente (prompt de permiso)', () => {
+  const savedGlobals = {};
+  beforeEach(() => { savedGlobals.window = global.window; savedGlobals.document = global.document; vi.resetModules(); vi.useFakeTimers(); });
+  afterEach(() => { global.window = savedGlobals.window; global.document = savedGlobals.document; vi.unstubAllGlobals(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('apaga los tracks del stream que llega después del close y no arranca el lector', async () => {
+    installFakeBrowserGlobals({});
+    const stop = vi.fn();
+    let conceder;
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: () => new Promise((r) => { conceder = r; }) } });
+    const { open, close } = await import('../public/lib/scanner.js');
+    const video = makeVideoMock();
+    const onCode = vi.fn();
+    const abierto = open({ video, mode: 'single', onCode, onError: (m) => { throw new Error(m); } });
+    close(); // el operario sale mientras el navegador muestra el prompt
+    conceder({ getTracks: () => [{ stop }] });
+    await abierto;
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(video.srcObject).toBeNull();
+  });
+
+  it('un open cancelado por otro open no pisa el stream del vigente', async () => {
+    installFakeBrowserGlobals({});
+    const stopViejo = vi.fn(); const stopNuevo = vi.fn();
+    const pendientes = [];
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: () => new Promise((r) => { pendientes.push(r); }) } });
+    const { open, close } = await import('../public/lib/scanner.js');
+    const onError = (m) => { throw new Error(m); };
+    const a = open({ video: makeVideoMock(), mode: 'single', onCode() {}, onError });
+    const videoB = makeVideoMock();
+    const b = open({ video: videoB, mode: 'single', onCode() {}, onError });
+    pendientes[0]({ getTracks: () => [{ stop: stopViejo }] });
+    pendientes[1]({ getTracks: () => [{ stop: stopNuevo }] });
+    await a; await b;
+    expect(stopViejo).toHaveBeenCalledTimes(1);
+    expect(stopNuevo).not.toHaveBeenCalled();
+    expect(videoB.srcObject).not.toBeNull();
+    close();
+    expect(stopNuevo).toHaveBeenCalledTimes(1);
+  });
+});
