@@ -147,6 +147,37 @@ describe('control de despacho U0.B', () => {
     expect(mlRows.body.data.map(r => r.numero_pedido)).toContain('ML-HOJA');
     expect(web).toBeTruthy(); expect(ml).toBeTruthy();
   });
+  it('no muestra Web ya confirmado con tracking, pero conserva Web sin tracking y ML', async () => {
+    const confirmado = crearPreparacion(db, { canal: 'web', wcOrderId: 68639, numeroPedido: '68639', comprador: 'Confirmado', items: [] });
+    const sinTracking = crearPreparacion(db, { canal: 'web', wcOrderId: 68640, numeroPedido: '68640', comprador: 'Pendiente', items: [] });
+    const ml = crearPreparacion(db, { canal: 'ml', mlOrderId: 'ML-HOJA-2', packId: 'PACK-ML-HOJA-2', numeroPedido: 'ML-HOJA-2', comprador: 'ML', items: [] });
+    db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar', tracking=?, woo_paso2_pendiente=0 WHERE id=?").run('AND-68639', confirmado);
+    db.prepare("UPDATE preparaciones SET estado='completada' WHERE id IN (?, ?)").run(sinTracking, ml);
+    const ahora = new Date().toISOString();
+    db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, pack_id, numero_pedido, estado_envio, estado_wc, items_json, actualizado_en, fecha_despacho)
+      VALUES (?, 'web', ?, NULL, NULL, ?, 'enviado', 'enviadoandreani', '[]', ?, ?),
+             (?, 'web', ?, NULL, NULL, ?, 'pendiente', 'lpaandreani', '[]', ?, ?),
+             (?, 'ml', NULL, ?, ?, ?, 'pendiente', NULL, '[]', ?, ?)`)
+      .run('web:68639', 68639, '68639', ahora, '2026-09-02',
+        'web:68640', 68640, '68640', ahora, '2026-09-02',
+        'ml:ML-HOJA-2', 'ML-HOJA-2', 'PACK-ML-HOJA-2', 'ML-HOJA-2', ahora, '2026-09-02');
+    db.prepare(`INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en)
+      VALUES ('web:68639', 'pendiente', ?, ?), ('web:68640', 'pendiente', ?, ?), ('PACK-ML-HOJA-2', 'pendiente', ?, ?)`)
+      .run(ahora, ahora, ahora, ahora, ahora, ahora);
+
+    const response = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola?fecha=2026-09-02');
+    expect(response.status).toBe(200);
+    expect(response.body.resumen.pendientes).toBe(2);
+    expect(response.body.data.map(row => row.numero_pedido)).not.toContain('68639');
+    expect(response.body.data.map(row => row.numero_pedido)).toEqual(expect.arrayContaining(['68640', 'ML-HOJA-2']));
+    // El resumen usa otro HAVING: sin fecha y con sin_fecha también excluye al web confirmado.
+    const sinFiltro = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola');
+    expect(sinFiltro.body.resumen.pendientes).toBe(2);
+    expect(sinFiltro.body.resumen.total).toBe(2);
+    const sinFecha = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola?fecha=sin_fecha');
+    expect(sinFecha.status).toBe(200);
+    expect(sinFecha.body.data.map(row => row.numero_pedido)).not.toContain('68639');
+  });
   it('crea lote separado, congela miembros, escanea idempotente y cierra', async () => {
     const id = crearPreparacion(db, { canal: 'web', wcOrderId: 8701, numeroPedido: '8701', comprador: 'X', items: [] });
     db.prepare("UPDATE preparaciones SET estado='completada' WHERE id=?").run(id);
