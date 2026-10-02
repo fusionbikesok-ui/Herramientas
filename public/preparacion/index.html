@@ -2474,12 +2474,120 @@ async function completar(){
     refrescarDetalle();
     return;
   }
-  if(r.body.ok){
-    if(r.body.estado==='pendiente_deposito')alert('Quedó PENDIENTE DE DEPÓSITO: el depósito completa los ítems delegados desde su celular (Historial → pendientes de depósito).');
-    refrescarDetalle();
-  }else{
-    flash('bad',r.body.error||'error');
+  completarTrasRespuesta(r.body);
+}
+function completarTrasRespuesta(body){
+  if(body.ok){
+    if(body.estado==='pendiente_deposito')alert('Quedó PENDIENTE DE DEPÓSITO: el depósito completa los ítems delegados desde su celular (Historial → pendientes de depósito).');
+    if(body.estado==='completada'&&PREP.canal==='web')abrirFlujoTracking();
+    else refrescarDetalle();
+  }else flash('bad',body.error||'error');
+}
+
+// Flujo WEB/Andreani después de cerrar la preparación. Se mantiene separado de
+// asociarTracking(): esto carga el tracking definitivo en Woo y deja el pedido en
+// "Cargar seguimientos" si el operario decide hacerlo después.
+var TRACKING_FLUJO={activo:false,paso:'escaneo',tracking:'',fila:null,enviando:false,error:'',duplicado:false,reintentar:false};
+
+function gtinValido(v){
+  var s=String(v||'');
+  if([8,12,13,14].indexOf(s.length)<0||!/^\d+$/.test(s))return false;
+  var suma=0;
+  for(var i=s.length-2;i>=0;i--){
+    var dig=Number(s[i]);
+    suma+=dig*((s.length-2-i)%2===0?3:1);
   }
+  return (10-(suma%10))%10===Number(s[s.length-1]);
+}
+function codigoProductoPreparacion(valor,items){
+  var buscado=String(valor||'').trim().toUpperCase();
+  return (items||[]).some(function(it){
+    return ['sku','ean','ean_sku','gtin','codigo','codigo_producto','codigo_barras','barcode','upc'].some(function(campo){
+      return String(it[campo]||'').trim().toUpperCase()===buscado;
+    });
+  });
+}
+function validarTrackingEscaneo(valor,items){
+  var crudo=String(valor||'').trim();
+  if(codigoProductoPreparacion(crudo,items||PREP&&PREP.items))return {ok:false,error:'Ese es un código de producto, no un seguimiento'};
+  if(!TRACKING_RE.test(crudo))return {ok:false,error:'El seguimiento debe tener entre 10 y 20 dígitos.'};
+  if(gtinValido(crudo))return {ok:false,error:'Ese es un código de producto, no un seguimiento'};
+  return {ok:true,valor:crudo};
+}
+function trackingEnPantalla(v){
+  var s=String(v||''), grupos=[];
+  for(var i=0;i<s.length;i+=4)grupos.push(s.slice(i,i+4));
+  return grupos.join(' ');
+}
+function filaTrackingFlujo(){
+  return segBuscarFila(PREP.wc_order_id);
+}
+function datosTrackingHtml(fila){
+  var e=(fila&&fila.envio)||{};
+  var nombre=nombreDe(e)||((PREP&&PREP.comprador)||'—');
+  var direccion=[e.calle,e.numeracion,e.piso_depto].filter(Boolean).join(' ');
+  var localidad=[e.localidad,e.cp].filter(Boolean).join(' · ');
+  var faltan=!fila||!fila.envio;
+  return '<section class="ped" aria-labelledby="trk-datos-title"><h2 id="trk-datos-title">Datos del cliente</h2>'
+    +'<p><b>'+esc(nombre)+'</b><br>'+esc(direccion||'—')+'<br>'+esc(localidad||'—')+'</p>'
+    +(faltan?'<p class="sub" role="status">Datos no disponibles; podés confirmar igual.</p>':'')+'</section>';
+}
+function renderTrackingEscaneo(){
+  var p=PREP||{},c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="tracking-flujo" role="dialog" aria-modal="true" aria-labelledby="trk-titulo" style="position:fixed;inset:0;z-index:20;overflow:auto;background:var(--surface,#fff);padding:clamp(16px,4vw,40px)">'
+    +'<h1 id="trk-titulo">Escaneá el seguimiento</h1><p class="sub">Pedido #'+esc(numMostrar(p)||p.wc_order_id)+' · '+esc(p.comprador||'—')+'</p>'
+    +'<label for="tracking-flujo-input">Número de seguimiento Andreani</label>'
+    +'<input id="tracking-flujo-input" type="text" inputmode="numeric" autocomplete="off" aria-describedby="tracking-flujo-error" onkeydown="if(event.key===\'Enter\'){event.preventDefault();leerTrackingFlujo();}">'
+    +'<p id="tracking-flujo-error" aria-live="assertive" role="alert">'+esc(TRACKING_FLUJO.error||'')+'</p>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" style="min-height:44px" onclick="leerTrackingFlujo()">Confirmar lectura</button>'
+    +'<button type="button" class="btn sec" style="min-height:44px" onclick="loCargoDespuesTracking()">Lo cargo después</button></div></div>';
+  var input=document.getElementById('tracking-flujo-input');
+  if(input)input.focus();
+}
+async function abrirFlujoTracking(){
+  TRACKING_FLUJO={activo:true,paso:'escaneo',tracking:'',fila:null,enviando:false,error:'',duplicado:false,reintentar:false};
+  renderTrackingEscaneo();
+  try{
+    var r=await api('/seguimientos');
+    if(r.body.ok){SEG.data=r.body.data||{};TRACKING_FLUJO.fila=filaTrackingFlujo();}
+  }catch(e){/* la confirmación no se bloquea si falla la consulta informativa */}
+}
+function leerTrackingFlujo(){
+  var input=document.getElementById('tracking-flujo-input'),validar=validarTrackingEscaneo(input&&input.value);
+  if(!validar.ok){TRACKING_FLUJO.error=validar.error;beep('bad');renderTrackingEscaneo();return;}
+  TRACKING_FLUJO.tracking=validar.valor;TRACKING_FLUJO.error='';TRACKING_FLUJO.paso='confirmacion';
+  renderTrackingConfirmacion(validar.valor,TRACKING_FLUJO.fila);
+}
+function renderTrackingConfirmacion(tracking,fila){
+  TRACKING_FLUJO.tracking=String(tracking||'').trim();TRACKING_FLUJO.fila=fila||TRACKING_FLUJO.fila;
+  var p=PREP||{},c=document.getElementById('cuerpo');
+  c.innerHTML='<div class="tracking-flujo" role="dialog" aria-modal="true" aria-labelledby="trk-confirm-title" style="position:fixed;inset:0;z-index:20;overflow:auto;background:var(--surface,#fff);padding:clamp(16px,4vw,40px)">'
+    +'<h1 id="trk-confirm-title">Confirmá el envío</h1>'+datosTrackingHtml(TRACKING_FLUJO.fila)
+    +'<section class="ped"><h2>Productos del paquete</h2><ul>'+(p.items||[]).map(function(it){return '<li>'+esc(it.nombre||it.sku||'Producto')+' · '+esc(it.sku||'')+' × '+Number(it.cantidad_esperada||it.cantidad||0)+'</li>';}).join('')+'</ul></section>'
+    +'<p class="tracking-grande" style="font:700 clamp(28px,8vw,56px)/1.2 ui-monospace,SFMono-Regular,monospace;letter-spacing:.08em;word-break:break-word" aria-label="Seguimiento '+esc(TRACKING_FLUJO.tracking)+'">'+esc(trackingEnPantalla(TRACKING_FLUJO.tracking))+'</p>'
+    +'<p id="tracking-flujo-error" aria-live="assertive" role="alert">'+esc(TRACKING_FLUJO.error||'')+(TRACKING_FLUJO.duplicado?' <button type="button" class="btn mini sec" style="min-height:44px" onclick="confirmarTrackingFlujo(true)">Cargar igual</button>':'')+'</p>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" id="btn-confirmar-tracking-flujo" class="btn" style="min-height:44px" onclick="confirmarTrackingFlujo()">'+(TRACKING_FLUJO.reintentar?'Reintentar':'Confirmar envío')+'</button>'
+    +'<button type="button" class="btn sec" style="min-height:44px" onclick="abrirFlujoTracking()">Escanear de nuevo</button>'
+    +'<button type="button" class="btn sec" style="min-height:44px" onclick="loCargoDespuesTracking()">Lo cargo después</button></div></div>';
+}
+function loCargoDespuesTracking(){TRACKING_FLUJO={activo:false,paso:'escaneo',tracking:'',fila:null,enviando:false,error:'',duplicado:false,reintentar:false};ir('seguimientos');}
+async function confirmarTrackingFlujo(forzado){
+  if(TRACKING_FLUJO.enviando||!TRACKING_FLUJO.tracking)return;
+  var tracking=TRACKING_FLUJO.tracking,wcId=PREP.wc_order_id;
+  SEG.guardadosSesion=SEG.guardadosSesion||{};
+  var dup=SEG.guardadosSesion[tracking];
+  if(dup&&dup.wcOrderId!==wcId&&!forzado){TRACKING_FLUJO.error='Este número ya se cargó en otro pedido.';TRACKING_FLUJO.duplicado=true;renderTrackingConfirmacion(tracking,TRACKING_FLUJO.fila);return;}
+  TRACKING_FLUJO.duplicado=false;
+  TRACKING_FLUJO.enviando=true;
+  var boton=document.getElementById('btn-confirmar-tracking-flujo');
+  if(boton)boton.disabled=true;
+  try{
+    var r=await enviarTracking(wcId,tracking);
+    if(r.body.ok){SEG.guardadosSesion[tracking]={wcOrderId:wcId,pedido:(TRACKING_FLUJO.fila&&TRACKING_FLUJO.fila.envio||{}).pedido};ir('seguimientos');return;}
+    TRACKING_FLUJO.reintentar=r.status===502&&r.body.colgado;
+    TRACKING_FLUJO.error=TRACKING_FLUJO.reintentar?'El tracking se guardó y falta un paso interno. '+(r.body.error||'Podés reintentar.'):(r.body.error||'No se pudo cargar el tracking.');
+  }catch(e){TRACKING_FLUJO.error='No se guardó, volvé a intentar.';}
+  TRACKING_FLUJO.enviando=false;renderTrackingConfirmacion(tracking,TRACKING_FLUJO.fila);
 }
 
 async function asociarTracking(){
@@ -2495,6 +2603,7 @@ async function asociarTracking(){
 var _buf='',_bufT=null;
 window.addEventListener('keydown',function(e){
   if(e.key==='Escape'){
+    if(typeof TRACKING_FLUJO!=='undefined'&&TRACKING_FLUJO.activo){loCargoDespuesTracking();return;}
     var camModal=document.getElementById('cam-modal');
     var manModal=document.getElementById('manual-modal');
     var segCamModal=document.getElementById('seg-cam-modal');
@@ -2853,6 +2962,9 @@ function quitarTarjetaPorId(elId,opts){
   filtrarSeg();
 }
 
+async function enviarTracking(wcId,tracking){
+  return api('/seguimientos/'+wcId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:tracking})});
+}
 async function guardarTracking(wcId,forzado){
   var input=document.getElementById('trk-'+wcId), btn=document.getElementById('btn-'+wcId);
   var tracking=input.value.trim();
@@ -2881,7 +2993,7 @@ async function guardarTracking(wcId,forzado){
   var colgado=btn.dataset.colgado==='1';
   btn.disabled=true;btn.textContent=colgado?'Reintentando…':'Guardando…';
   try{
-    var r=await api('/seguimientos/'+wcId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking:tracking})});
+    var r=await enviarTracking(wcId,tracking);
     if(r.body.ok){
       SEG.guardadosSesion[tracking]={wcOrderId:wcId,pedido:e.pedido};
       await refrescarCargadosHoy();
