@@ -1143,9 +1143,15 @@ function usuarioQueSubio(db, fotoId, preparacionId) {
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
+// Web con seguimiento ya confirmado (tracking cargado, paso 2 de Woo sin pendientes y pedido enviado).
+const SQL_NO_WEB_CONFIRMADO = `NOT (p.canal = 'web' AND COALESCE(p.tracking, '') <> ''
+  AND p.woo_paso2_pendiente = 0 AND COALESCE(p.woo_paso1_incierto, 0) = 0
+  AND (pc.estado_wc = 'enviadoandreani' OR p.estado = 'despachada_sin_verificar'))`;
+
 export function preparacionRouter(db, cfg) {
   ensureTables(db);
   const router = express.Router();
+  const seguimientosEnCurso = new Set();
   const eventoLote = (loteId, tipo, usuario, detalle = {}) => db.prepare(
     'INSERT INTO despacho_lote_eventos (lote_id, tipo, usuario, detalle_json, creado_en) VALUES (?,?,?,?,?)'
   ).run(loteId, tipo, usuario ?? null, JSON.stringify(detalle), now());
@@ -1369,6 +1375,10 @@ export function preparacionRouter(db, cfg) {
     else if (fecha) { where.push('(jornada_fecha = ? OR (p.canal = \'web\' AND jornada_fecha IS NULL))'); params.push(fecha); }
     if (estado) { where.push('d.estado = ?'); params.push(estado); }
     if (canal) { where.push('p.canal = ?'); params.push(canal); }
+    // Decisión de José 2026-10-02: Andreani retira los pedidos web, el viaje es solo ML. Un web con
+    // seguimiento ya confirmado cierra su ciclo al escanear: no figura pendiente en Despacho.
+    // El soporte de lotes web sigue; solo se deja de exigir.
+    where.push(SQL_NO_WEB_CONFIRMADO);
     if (q) {
       where.push(`(lower(d.grupo_clave) LIKE ? OR lower(COALESCE(p.numero_pedido, '')) LIKE ?
         OR lower(COALESCE(p.clave, '')) LIKE ?)`);
@@ -1392,7 +1402,8 @@ export function preparacionRouter(db, cfg) {
     const rows = db.prepare(`${base}${where.length ? ` HAVING ${where.join(' AND ')}` : ''} ORDER BY jornada_fecha IS NULL, jornada_fecha DESC, d.creado_en DESC`).all(...params);
     const jornada = fecha || 'sin_fecha';
     const allParams = fecha === 'sin_fecha' ? [] : fecha ? [fecha] : [];
-    const summaryRows = db.prepare(`${base}${fecha === 'sin_fecha' ? ' HAVING jornada_fecha IS NULL' : fecha ? " HAVING (jornada_fecha = ? OR (p.canal = 'web' AND jornada_fecha IS NULL))" : ''}`).all(...allParams);
+    const filtroResumen = fecha === 'sin_fecha' ? 'jornada_fecha IS NULL' : fecha ? "(jornada_fecha = ? OR (p.canal = 'web' AND jornada_fecha IS NULL))" : '';
+    const summaryRows = db.prepare(`${base} HAVING ${filtroResumen ? `${filtroResumen} AND ` : ''}${SQL_NO_WEB_CONFIRMADO}`).all(...allParams);
     const resumen = { total: summaryRows.length, pendientes: 0, escaneados: 0, confirmados: 0 };
     for (const row of summaryRows) resumen[row.estado === 'pendiente' ? 'pendientes' : `${row.estado}s`] += 1;
     return res.json({ ok: true, jornada: { fecha: jornada, zona_horaria: 'America/Argentina/Buenos_Aires' }, resumen, data: rows });
@@ -1837,6 +1848,13 @@ export function preparacionRouter(db, cfg) {
         const fila = {
           wc_order_id: order.id,
           envio: normalizarEnvio(order, prep?.direccion_confirmada_fuente || null),
+          items: (order.line_items || []).map((item) => ({
+            sku: item.sku || '',
+            nombre: item.name || '',
+            cantidad: Number(item.quantity || 0),
+            product_id: item.product_id || null,
+            variation_id: item.variation_id || null,
+          })),
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
         };
@@ -1915,12 +1933,22 @@ export function preparacionRouter(db, cfg) {
     const tracking = String(req.body?.tracking || '').trim();
     if (!tracking) return res.status(400).json({ ok: false, error: 'tracking requerido' });
     if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    if (seguimientosEnCurso.has(wcOrderId)) {
+      return res.status(409).json({
+        ok: false,
+        error: 'ya se está cargando el seguimiento de este pedido',
+        code: 'EN_CURSO',
+      });
+    }
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
     // Cargar el tracking es una acción de despacho: Administración puede resolverla aunque no
     // haya tomado la preparación. Un operario de preparación sigue necesitando su claim vigente
     // para no usurpar la tarea de otro.
     if (prepExistente && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
 
+    // Se marca recién acá (sin await entre el has() de arriba y este add): un rechazo previo por claim o un
+    // error síncrono no deja el pedido trabado con EN_CURSO. El finally del try libera la marca.
+    seguimientosEnCurso.add(wcOrderId);
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
       const statusActual = actual.data?.status;
@@ -2074,6 +2102,8 @@ export function preparacionRouter(db, cfg) {
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
+    } finally {
+      seguimientosEnCurso.delete(wcOrderId);
     }
   });
 
