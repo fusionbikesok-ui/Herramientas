@@ -334,12 +334,13 @@ describe('el flujo de seguimiento no se borra con repintados tardíos del detall
     real.VISTA = 'detalle';
     real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete', fallida: true };
     real.api = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+    real.flash = vi.fn();
     let esperas = 0;
     real.setTimeout = (fn) => { esperas++; fn(); return 1; };
     await real.completar();
-    expect(esperas).toBeLessThanOrEqual(1); // solo el timer de limpieza del flash; ninguna espera de 300 ms
+    expect(esperas).toBe(0);
     expect(real.api).not.toHaveBeenCalled();
-    expect(real.document.getElementById('flash').textContent).toContain('1 foto sin subir');
+    expect(real.flash).toHaveBeenCalledWith('bad', expect.stringContaining('1 foto sin subir'));
   });
 
   it('un doble toque en Finalizar hace un solo /completar', async () => {
