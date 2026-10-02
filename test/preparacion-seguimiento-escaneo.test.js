@@ -328,4 +328,43 @@ describe('el flujo de seguimiento no se borra con repintados tardíos del detall
     expect(ticks).toBeGreaterThanOrEqual(2);
     expect(llamadas).toContain('/493/completar');
   });
+
+  it('una subida fallida corta de inmediato con aviso claro, sin esperar ni llamar /completar', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete', fallida: true };
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+    let esperas = 0;
+    real.setTimeout = (fn) => { esperas++; fn(); return 1; };
+    await real.completar();
+    expect(esperas).toBeLessThanOrEqual(1); // solo el timer de limpieza del flash; ninguna espera de 300 ms
+    expect(real.api).not.toHaveBeenCalled();
+    expect(real.document.getElementById('flash').textContent).toContain('1 foto sin subir');
+  });
+
+  it('un doble toque en Finalizar hace un solo /completar', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete' };
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true, estado: 'pendiente_deposito', data: prep() } }));
+    let ticks = 0;
+    real.setTimeout = (fn) => { ticks++; if (ticks === 2) delete real.SUBIDAS_PENDIENTES['tmp-1']; fn(); return 1; };
+    await Promise.all([real.completar(), real.completar()]);
+    expect(real.api.mock.calls.filter((c) => c[0] === '/493/completar')).toHaveLength(1);
+  });
+
+  it('si el operario cambia de pedido durante la espera, no completa el pedido equivocado', async () => {
+    real.PREP = prep();
+    real.VISTA = 'detalle';
+    real.SUBIDAS_PENDIENTES['tmp-1'] = { itemId: null, tipo: 'paquete' };
+    real.api = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+    let ticks = 0;
+    real.setTimeout = (fn) => {
+      ticks++;
+      if (ticks === 2) { delete real.SUBIDAS_PENDIENTES['tmp-1']; real.PREP = { ...prep(), id: 777 }; }
+      fn(); return 1;
+    };
+    await real.completar();
+    expect(real.api).not.toHaveBeenCalled();
+  });
 });

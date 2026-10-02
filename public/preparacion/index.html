@@ -2314,6 +2314,7 @@ async function reconciliarSubida(uploadId){
 }
 
 function marcarSubidaFallida(tempId,detalle){
+  if(SUBIDAS_PENDIENTES[tempId])SUBIDAS_PENDIENTES[tempId].fallida=true; // ya no está en vuelo: queda esperando reintento manual
   var texto=detalle||'No se pudo confirmar la subida por un problema de red.';
   flash('bad',texto+' La foto no quedó guardada en el servidor. Reintentá cuando tengas señal.');
   anunciarFoto(texto+' La foto sigue disponible en pantalla para reintentar.');
@@ -2478,18 +2479,34 @@ function anunciarFoto(msg){
 }
 
 // Subidas de foto en vuelo: /completar con una foto sin terminar la deja fuera del cierre y su respuesta
-// tardía repinta el detalle. Se espera (hasta 45 s) a que terminen antes de cerrar la preparación.
+// tardía repinta el detalle. Se espera (hasta 45 s) solo a las que están en vuelo; una subida fallida
+// (esperando el ↻ del operario) no se espera: se corta al instante con un aviso claro.
+function subidasFoto(){
+  var ids=Object.keys(SUBIDAS_PENDIENTES||{});
+  var fallidas=ids.filter(function(k){return SUBIDAS_PENDIENTES[k]&&SUBIDAS_PENDIENTES[k].fallida;}).length;
+  return {enVuelo:ids.length-fallidas,fallidas:fallidas};
+}
 async function esperarSubidasFoto(){
-  var limite=Date.now()+45000;
-  while(Object.keys(SUBIDAS_PENDIENTES||{}).length&&Date.now()<limite){
-    flash('warn','Esperando que terminen de subir las fotos…');
+  var limite=Date.now()+45000,avisado=false;
+  while(subidasFoto().enVuelo&&Date.now()<limite){
+    if(!avisado){flash('warn','Esperando que terminen de subir las fotos…');avisado=true;}
     await new Promise(function(r){setTimeout(r,300);});
   }
-  return !Object.keys(SUBIDAS_PENDIENTES||{}).length;
+  return subidasFoto();
 }
+var COMPLETANDO=false;
 async function completar(){
-  if(!(await esperarSubidasFoto())){flash('bad','Hay fotos que no terminaron de subir. Revisá la conexión y reintentá.');return;}
+  if(COMPLETANDO)return;
+  COMPLETANDO=true;
+  try{await completarPreparacion();}finally{COMPLETANDO=false;}
+}
+async function completarPreparacion(){
   if(!PREP)return;
+  var idPedido=PREP.id;
+  var sub=await esperarSubidasFoto();
+  if(sub.fallidas){flash('bad','Hay '+sub.fallidas+' foto'+(sub.fallidas===1?'':'s')+' sin subir. Tocá ↻ para reintentarla o descartala antes de finalizar.');return;}
+  if(sub.enVuelo){flash('bad','Las fotos siguen subiendo. Revisá la conexión y volvé a tocar Finalizar.');return;}
+  if(!PREP||PREP.id!==idPedido||VISTA!=='detalle')return;
   var r=await api('/'+PREP.id+'/completar',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
   if(r.status===400&&r.body.faltantes){
     flash('bad','Falta: '+r.body.faltantes.map(function(f){return (f.nombre||f.sku)+' ('+(f.motivo==='fotos'?'fotos':'sin verificar')+')';}).join(' · '));
