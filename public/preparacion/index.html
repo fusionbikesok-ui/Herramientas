@@ -2597,7 +2597,7 @@ async function abrirFlujoTracking(opciones){
   var wcOrderId=opciones.wcOrderId!=null?opciones.wcOrderId:(PREP&&PREP.wc_order_id);
   TRACKING_FLUJO={activo:true,paso:'escaneo',tracking:'',fila:opciones.fila||null,cliente:opciones.cliente||{},items:opciones.items||((PREP&&PREP.items)||[]),wcOrderId:wcOrderId,origen:opciones.origen||'preparacion',enviando:false,error:'',duplicado:false,reintentar:false,resultadoIncierto:false};
   renderTrackingEscaneo();
-  if(typeof navigator!=='undefined'&&navigator.mediaDevices&&((navigator.maxTouchPoints||0)>0||'ontouchstart' in window))abrirCamaraTracking();
+  if(!TRK_CAM_DENEGADA&&typeof navigator!=='undefined'&&navigator.mediaDevices&&((navigator.maxTouchPoints||0)>0||'ontouchstart' in window))abrirCamaraTracking();
   if(!TRACKING_FLUJO.fila){
     try{
       var r=await api('/seguimientos');
@@ -2632,7 +2632,7 @@ function renderTrackingConfirmacion(tracking,fila){
 // Cámara del flujo de seguimiento: reusa el modal y el lector de Seguimientos (Scanner, mode single).
 // Sin `formats` el lector acepta todos (BarcodeDetector sin argumentos / ZXing multi-formato), incluido
 // Code 128 de la etiqueta Andreani.
-var TRK_CAM_ABIERTA=false;
+var TRK_CAM_ABIERTA=false,TRK_CAM_DENEGADA=false; // denegada/sin cámara: no se vuelve a auto-abrir (el botón sigue disponible)
 function abrirCamaraTracking(){
   if(!window.Scanner){TRACKING_FLUJO.error='No se pudo cargar el lector. Escribí el número.';renderTrackingEscaneo();return;}
   if(TRACKING_FLUJO.enviando||!flujoTrackingAbierto()||TRACKING_FLUJO.paso!=='escaneo')return;
@@ -2642,7 +2642,7 @@ function abrirCamaraTracking(){
   var t=document.getElementById('seg-cam-target');if(t)t.textContent='Seguimiento del pedido #'+((PREP&&PREP.numero_pedido)||TRACKING_FLUJO.wcOrderId);
   var m=document.getElementById('seg-cam-msg');if(m)m.textContent='Apuntá al código de barras de la etiqueta. Se completa solo apenas lo reconoce.';
   modal.classList.add('open');
-  window.Scanner.open({video:video,mode:'single',onCode:function(v){onCodigoTracking(v);},onError:function(msg){var mm=document.getElementById('seg-cam-msg');if(mm)mm.textContent=msg;}});
+  window.Scanner.open({video:video,mode:'single',onCode:function(v){onCodigoTracking(v);},onError:function(msg){TRK_CAM_DENEGADA=true;var mm=document.getElementById('seg-cam-msg');if(mm)mm.textContent=msg;}});
 }
 function cerrarCamaraTracking(){
   if(!TRK_CAM_ABIERTA)return;

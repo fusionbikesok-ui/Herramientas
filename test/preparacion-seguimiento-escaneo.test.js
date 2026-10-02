@@ -511,6 +511,13 @@ describe('escaneo por cámara en "Escaneá el seguimiento"', () => {
     expect(cuerpo.innerHTML).toContain('pistola');
   });
 
+  it('si la cámara falló (permiso denegado) no se vuelve a auto-abrir', async () => {
+    await real.abrirFlujoTracking();
+    scanner.open.mock.calls[0][0].onError('No se pudo acceder a la cámara: denegado');
+    await real.abrirFlujoTracking();
+    expect(scanner.open).toHaveBeenCalledTimes(1);
+  });
+
   it('sin pantalla táctil no abre la cámara sola', async () => {
     real.navigator.maxTouchPoints = 0;
     await real.abrirFlujoTracking();
