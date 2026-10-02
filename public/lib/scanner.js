@@ -12,6 +12,7 @@ const ROI_W = 0.92;
 const ROI_H = 0.30;
 
 let stream = null;
+let generacion = 0;     // se incrementa en cada stopAll(): un open() pendiente que vea otro valor fue cancelado (close u otro open)
 let detectTimer = null;
 let zxingReader = null;
 let zxingLoadPromise = null;
@@ -153,6 +154,7 @@ function hideRoiOverlay() {
 }
 
 function stopAll() {
+  generacion++;
   if (detectTimer) { clearInterval(detectTimer); detectTimer = null; }
   if (zxingReader) { try { zxingReader.reset(); } catch (_e) { /* ya estaba detenido */ } zxingReader = null; }
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
@@ -243,7 +245,9 @@ function startZxingLoop(gate, onCode) {
 }
 
 async function openWithZXing(video, gate, onCode) {
+  const g = generacion;
   await loadZXing();
+  if (g !== generacion) return; // cancelado mientras cargaba ZXing: no arrancar lector ni loop
   zxingReader = new window.ZXing.BrowserMultiFormatReader();
   zxingCtx = { gate, onCode, video };
   startZxingLoop(gate, onCode);
@@ -255,6 +259,8 @@ export async function open({ video, mode, onCode, onError, dropoutMs }) {
     onError('Este navegador no soporta escaneo por cámara. Usá el lector físico o tipeá el código.');
     return;
   }
+  const miGeneracion = generacion;
+  const cancelado = () => generacion !== miGeneracion;
   const gate = mode === 'continuous' ? createContinuousGate({ dropoutMs }) : null;
 
   zoomLevel = 1;
@@ -267,16 +273,22 @@ export async function open({ video, mode, onCode, onError, dropoutMs }) {
   try {
     // Pedimos mayor resolución nativa para que el recorte del zoom conserve nitidez.
     // `ideal` degrada solo si el dispositivo no lo soporta, no hace falta try/catch extra.
-    stream = await navigator.mediaDevices.getUserMedia({
+    const nuevo = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
     });
+    // Si hubo close() u otro open() mientras el navegador mostraba el prompt de permiso, este stream
+    // ya no tiene dueño: apagarlo acá, si no la cámara queda encendida sin modal hasta recargar.
+    if (cancelado()) { nuevo.getTracks().forEach((t) => t.stop()); return; }
+    stream = nuevo;
   } catch (e) {
+    if (cancelado()) return; // el error pertenece a un open ya cancelado; no tocar el estado del vigente
     onError('No se pudo acceder a la cámara: ' + e.message);
     stopAll(); // si no, las bandas oscuras del overlay quedan colgadas sobre el recuadro negro
     return;
   }
   video.srcObject = stream;
   try { await video.play(); } catch (_e) { /* algunos navegadores requieren gesto; el autoplay/attr cubre el resto */ }
+  if (cancelado()) return; // stopAll() ya apagó el stream asignado
 
   try {
     if ('BarcodeDetector' in window) {
@@ -285,6 +297,7 @@ export async function open({ video, mode, onCode, onError, dropoutMs }) {
       await openWithZXing(video, gate, onCode);
     }
   } catch (e) {
+    if (cancelado()) return;
     onError('No se pudo iniciar el lector de códigos: ' + e.message);
     stopAll();
   }
