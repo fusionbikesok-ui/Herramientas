@@ -937,6 +937,8 @@ Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es da
 - Response 500: `{ "ok": false, "error": "..." }` si falla la consulta a Woo.
 
 ### POST /api/preparacion/seguimientos/:wcOrderId (ronda de revisión I1/I2, resto sin cambios)
+
+Un segundo POST para el mismo `wcOrderId` mientras hay uno en curso responde `409 {code:'EN_CURSO'}` sin tocar Woo. La marca se toma después de validar claim/permiso, así que un rechazo previo no la deja trabada.
 El fail-closed por estado, el salteo del paso 1 en el reintento (para no reenviar el mail) y
 `marcarPreparacionEnviada` (ver `despachada_sin_verificar` más arriba) **no cambian**.
 
@@ -3225,6 +3227,10 @@ derivarse de los schemas, no de respuestas inventadas por cada pantalla.
 `America/Argentina/Buenos_Aires`; si ambos faltan se clasifica como `sin_fecha`. No usa
 `creado_en` como sustituto. La respuesta incluye `jornada`, `resumen` con total y conteos
 por estado, y `data` con controles enriquecidos y confirmados incluidos.
+
+Los pedidos web con seguimiento ya confirmado (tracking cargado, paso 2 de Woo sin pendientes y
+pedido enviado) no aparecen en `data` ni cuentan en `resumen` (Andreani los retira; el viaje es solo
+ML). Aplica con y sin `fecha`. Los lotes web (`POST /despacho/lotes`) siguen soportados.
 
 Las mutaciones de escaneo y confirmación requieren permiso `preparacion` de escritura, toma
 vigente y conservan los códigos `409` e idempotencia documentados en el contrato existente.

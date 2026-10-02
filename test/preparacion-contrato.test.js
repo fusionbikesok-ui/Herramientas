@@ -691,6 +691,24 @@ describe('permisos de despacho sobre el tracking (decisión del usuario, 2026-09
     expect(res.status).not.toBe(409);
   });
 
+  it('un rechazo por claim no deja el pedido trabado en EN_CURSO: el POST válido posterior pasa', async () => {
+    let usuario = OPERARIO;
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.user = usuario; next(); });
+    app.use('/api/preparacion', preparacionRouter(db, CFG));
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: CFG.andreaniStatus, meta_data: [], billing: {}, shipping: {} } });
+
+    const rechazado = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(rechazado.status).toBe(409);
+    expect(rechazado.body.code).not.toBe('EN_CURSO');
+
+    usuario = { username: 'tester', is_admin: 1 };
+    const valido = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(valido.status).not.toBe(409);
+  });
+
   it('un operario de preparación SIN la toma sigue sin poder cargarlo', async () => {
     const app = buildTestApp(db, OPERARIO);
     pedidoTomadoPorOtro();

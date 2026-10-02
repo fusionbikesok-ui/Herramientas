@@ -1930,13 +1930,15 @@ export function preparacionRouter(db, cfg) {
         code: 'EN_CURSO',
       });
     }
-    seguimientosEnCurso.add(wcOrderId);
     const prepExistente = db.prepare('SELECT * FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
     // Cargar el tracking es una acción de despacho: Administración puede resolverla aunque no
     // haya tomado la preparación. Un operario de preparación sigue necesitando su claim vigente
     // para no usurpar la tarea de otro.
     if (prepExistente && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
 
+    // Se marca recién acá (sin await entre el has() de arriba y este add): un rechazo previo por claim o un
+    // error síncrono no deja el pedido trabado con EN_CURSO. El finally del try libera la marca.
+    seguimientosEnCurso.add(wcOrderId);
     try {
       const actual = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
       const statusActual = actual.data?.status;

@@ -170,6 +170,13 @@ describe('control de despacho U0.B', () => {
     expect(response.body.resumen.pendientes).toBe(2);
     expect(response.body.data.map(row => row.numero_pedido)).not.toContain('68639');
     expect(response.body.data.map(row => row.numero_pedido)).toEqual(expect.arrayContaining(['68640', 'ML-HOJA-2']));
+    // El resumen usa otro HAVING: sin fecha y con sin_fecha también excluye al web confirmado.
+    const sinFiltro = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola');
+    expect(sinFiltro.body.resumen.pendientes).toBe(2);
+    expect(sinFiltro.body.resumen.total).toBe(2);
+    const sinFecha = await request(buildTestApp(db)).get('/api/preparacion/despacho/cola?fecha=sin_fecha');
+    expect(sinFecha.status).toBe(200);
+    expect(sinFecha.body.data.map(row => row.numero_pedido)).not.toContain('68639');
   });
   it('crea lote separado, congela miembros, escanea idempotente y cierra', async () => {
     const id = crearPreparacion(db, { canal: 'web', wcOrderId: 8701, numeroPedido: '8701', comprador: 'X', items: [] });
