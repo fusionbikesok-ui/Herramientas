@@ -134,3 +134,26 @@ describe('contradiccionDeClave', () => {
     expect(contradiccionDeClave(db, 'NO existe', 'SKU')).toEqual({ contradice: false, motivos: [] });
   });
 });
+
+describe('velocidades como conjunto (listas y rangos)', () => {
+  const c = (tituloMl, nombreWoo) => detectarContradiccion({ tituloMl, nombreWoo }).contradice;
+
+  it('una velocidad contenida en la lista del otro lado no contradice (casos reales FB-1550, FB-6490, FB-61159)', () => {
+    expect(c('Cassette 8V Shimano', 'Cassette 6V/7V/8V Shimano')).toBe(false);
+    expect(c('Cassette 7/8V Shimano', 'Cassette 6V/7V/8V Shimano')).toBe(false);
+    expect(c('Cadena 11V/12V Sram', 'Cadena 12V Sram')).toBe(false);
+  });
+  it('un rango cuenta todas sus velocidades', () => {
+    expect(c('Cassette 6-8 velocidades', 'Cassette 7 velocidades')).toBe(false);
+  });
+  it('conjuntos disjuntos sí contradicen', () => {
+    expect(c('Cassette 9V Shimano', 'Cassette 11V Shimano')).toBe(true);
+    expect(c('Cassette 6V/7V Shimano', 'Cassette 10V/11V Shimano')).toBe(true);
+  });
+  it('en un producto eléctrico la tensión no se lee como velocidades, aunque esté lejos de la palabra volt', () => {
+    expect(c('Bicicleta eléctrica ruta 12v/24v batería 10Ah', 'Bicicleta eléctrica ruta 36v 10 velocidades')).toBe(false);
+  });
+  it('velocidades explícitas siguen contradiciendo en un producto eléctrico', () => {
+    expect(c('Bicicleta eléctrica ruta 7 velocidades', 'Bicicleta eléctrica ruta 21 velocidades')).toBe(true);
+  });
+});
