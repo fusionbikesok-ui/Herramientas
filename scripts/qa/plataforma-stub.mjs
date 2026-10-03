@@ -105,6 +105,16 @@ export function crearFixture() {
         foto: null, atributos: {} },
       candidatos: [],
     },
+    { // Posible duplicado de otra publicación ya vinculada (grupo 3): prueba el aviso del encabezado.
+      id: id(7), tipo: 'sku_pendiente', estado: 'open', prioridad: 45, version: 1, abierto_en: '2026-10-01T17:00:00.000000Z', d5: false, grupo: 3, apartado: false,
+      confirmar: null, detalle: {},
+      publicacion: { recurso: 'MLA1000007', variacion: '', titulo: 'Cubierta Ruta 700x25 Negra Oferta', sku_observado: null, estado: 'active', stock: 3, precio: 37000, moneda: 'ARS',
+        foto: null, atributos: { color: 'Negro', medida: '700x25' },
+        posible_duplicado: { recurso: 'MLA1000002', sku: 'FB-2001' } },
+      candidatos: [
+        candidato(1, variante(204), [mk('color', 'coincide', 'Negro', 'Negro')], [mk('medida', 'coincide', '700x25', '700x25')]),
+      ],
+    },
   ];
 }
 
@@ -167,7 +177,8 @@ export function crearPlataformaStub({ claves, ahoraMs = () => Date.now(), origen
       cerrado_en: c.cerrado_en ?? null, motivo_cierre: c.motivo_cierre ?? null, detalle: c.detalle,
       publicacion: { recurso: c.publicacion.recurso, variacion: c.publicacion.variacion, titulo: c.publicacion.titulo, sku_observado: c.publicacion.sku_observado,
         estado: c.publicacion.estado, stock: c.publicacion.stock, precio: c.publicacion.precio, moneda: c.publicacion.moneda,
-        link_ml: linkMl(c.publicacion.recurso), foto: c.publicacion.foto, atributos: c.publicacion.atributos },
+        link_ml: linkMl(c.publicacion.recurso), foto: c.publicacion.foto, atributos: c.publicacion.atributos,
+        ...(c.publicacion.posible_duplicado ? { posible_duplicado: c.publicacion.posible_duplicado } : {}) },
       candidatos: c.candidatos,
       auto_sku_en_sombra: null,
       historial: c.historial ?? [],

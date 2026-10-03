@@ -61,22 +61,27 @@ describe('plataforma-stub (QA)', () => {
     it('cola: contadores, orden por grupo y forma exacta de cada caso', async () => {
       const r = await firmado(base, 'GET', '/internal/v1/identidad/casos');
       expect(r.status).toBe(200);
-      expect(r.body.casos.map((c) => c.grupo)).toEqual([1, 3, 3, 4, 5, 6]);
-      expect(r.body.contadores).toEqual({ conflictos: 0, d5: 1, sku_exacto: 0, activas_con_stock: 2, resto: 1, confirmable: 1, sin_titulo: 1, apartados: 0, no_decidibles: 0 });
+      expect(r.body.casos.map((c) => c.grupo)).toEqual([1, 3, 3, 3, 4, 5, 6]);
+      expect(r.body.contadores).toEqual({ conflictos: 0, d5: 1, sku_exacto: 0, activas_con_stock: 3, resto: 1, confirmable: 1, sin_titulo: 1, apartados: 0, no_decidibles: 0 });
       expect(r.body.siguiente).toBeNull();
       expect(r.body.casos[0]).toMatchObject({ d5: true, apartado: false, confirmar: null,
         publicacion: expect.objectContaining({ recurso: 'MLA1000002', link_ml: 'https://articulo.mercadolibre.com.ar/MLA-1000002' }) });
       const confirmable = r.body.casos.find((c) => c.grupo === 5);
       expect(confirmable.confirmar).toEqual({ variant_id: expect.any(String), sku: 'FB-3001' });
     });
+    it('un caso trae publicacion.posible_duplicado en el detalle', async () => {
+      const r = await firmado(base, 'GET', '/internal/v1/identidad/casos/00000000-0000-4000-8000-000000000007');
+      expect(r.status).toBe(200);
+      expect(r.body.publicacion.posible_duplicado).toEqual({ recurso: 'MLA1000002', sku: 'FB-2001' });
+    });
     it('pagina por cursor sin repetir ni saltear casos', async () => {
       const p1 = await firmado(base, 'GET', '/internal/v1/identidad/casos?limit=2');
       expect(p1.body.casos).toHaveLength(2);
       expect(p1.body.siguiente).toBeTruthy();
       const p2 = await firmado(base, 'GET', `/internal/v1/identidad/casos?limit=10&cursor=${p1.body.siguiente}`);
-      expect(p2.body.casos).toHaveLength(4);
+      expect(p2.body.casos).toHaveLength(5);
       const ids = [...p1.body.casos, ...p2.body.casos].map((c) => c.id);
-      expect(new Set(ids).size).toBe(6);
+      expect(new Set(ids).size).toBe(7);
     });
     it('valida la query y el cursor', async () => {
       expect((await firmado(base, 'GET', '/internal/v1/identidad/casos?limit=0')).body.code).toBe('invalid_query');
@@ -188,7 +193,7 @@ describe('plataforma-stub (QA)', () => {
     it('GET /casos ya no da 503: el proxy firma y el stub verifica', async () => {
       const r = await fetch(`${urlApp}/api/bandeja-identidad/casos`);
       expect(r.status).toBe(200);
-      expect((await r.json()).casos).toHaveLength(6);
+      expect((await r.json()).casos).toHaveLength(7);
     });
     it('detalle, variantes y decidir pasan por el proxy; el actor sale de la sesión', async () => {
       const det = await fetch(`${urlApp}/api/bandeja-identidad/casos/${UUID_CASO}`);
