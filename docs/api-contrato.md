@@ -22,6 +22,12 @@ Búsqueda acotada por SQL sobre catálogo y publicaciones ML. `q` debe contener 
 caracteres alfanuméricos después de normalizar; comodines sin texto, como `--` o `%%`, responden
 400. `limite` opcional admite 1–50.
 
+Respuesta: `{ ok:true, data:[...], sin_producto_woo:[...], total }`. `data` agrupa por producto Woo
+(unidad vendible) sus publicaciones ML, incluidas las hermanas ya vinculadas al mismo SKU, y también
+trae las coincidencias que solo existen en Woo (sin publicación). `sin_producto_woo` lista las
+publicaciones ML que coinciden con la búsqueda pero no tienen producto Woo vinculado; `total` es la
+cantidad de unidades devueltas en `data`.
+
 Los vínculos manuales que detecten atributos incompatibles responden 409:
 `{ ok:false, error:"contradiccion_titulo", motivos:[...] }`. El chequeo compara transmisión,
 velocidades, conjuntos de colores, rodado y talle sólo con contexto de bicicleta/indumentaria;
@@ -2646,6 +2652,14 @@ tampoco emite entrada si el ítem no tenía `sku`.
 - Mismo shape que `POST /api/recepciones/:id/confirmar`, agregado a la respuesta existente
   (`ok`, `aplicados`, `errores`, `resultados`).
 
+### Bloqueo por contradicción de título en el push de stock a ML
+`syncWcToMl` devuelve `{ omitido:false, bloqueados_contradiccion:N }`: `N` es la cantidad de claves a
+las que no se les empujó stock > 0 porque el título/atributos de la publicación ML contradicen al
+producto Woo vinculado (transmisión, velocidades —como conjunto: solo contradice si los conjuntos son
+disjuntos—, color, talle, rodado). Cada bloqueo queda en `sync_log` con `estado:'bloqueado_contradiccion'`
+y `error` = JSON de los motivos; las rutas puntuales (`syncSkuPuntual`, reactivar, reintentar) devuelven
+`{ estado:'bloqueado_contradiccion', bloqueado:true, motivos }`. El stock 0 nunca se bloquea.
+
 ### Shape de cada elemento de `sync_ml`
 - `sku`: identificador del producto.
 - `estado`:
@@ -3332,6 +3346,7 @@ completa de publicaciones y registra casos locales idempotentes.
 - `POST /api/guardia-ml/pedidos-retenidos/:orderId/liberar|cancelar` body `{ motivo }` → salida humana auditada; liberar permite reprocesar la venta y cancelar cierra su retención.
 - `GET /api/guardia-ml/stock-compartido` → consulta registro de SKUs compartidos entre múltiples publicaciones (histórico informativo, no bloquea escrituras).
 - `POST /api/guardia-ml/stock-compartido/:sku/confirmar` body `{ motivo }` → **DEPRECADO**: antes era obligatorio confirmar stock compartido para vincular. Ahora el compartir SKU es operación NORMAL: esta ruta queda como legado solo para auditoría y documentación de decisiones.
+- Vínculos manuales de Guardia (`vincular-clave`, `casos/:id/vincular` y los cierres que escriben SKU): si la clave tiene una decisión `omitir`, responden 409 `omitir_requiere_override` salvo que el body incluya `override_omitir:true`; si los atributos del título contradicen al producto Woo responden 409 `contradiccion_titulo` con `motivos`. Si un humano marca "No sincronizar" mientras la operación remota está en vuelo, el worker la deja `cancelada` (evento `operacion_cancelada_por_omitir`) y no pisa el `omitir`, tampoco con override.
 - `POST /api/guardia-ml/vincular-clave` body `{ clave, sku }` → vincula un SKU a una publicación que NO tiene caso abierto (el matcher puede usarlo directamente sin pasar por Guardia). Crea el caso al vuelo, asigna responsable automático y encolma la vinculación con auditoría completa. Requiere modo `acciones` habilitado. La clave debe existir en ML y el SKU debe ser único en Woo. Responde 202 (operación encolada) o 4xx/5xx en caso de error.
 
 La API nunca considera `omitir` o una marca histórica como cobertura. Las escrituras remotas de
