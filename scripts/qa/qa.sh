@@ -10,18 +10,20 @@
 set -euo pipefail
 
 REPO="/opt/fusionbikes/herramientas"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QA_DIR="${QA_DIR:-/opt/fusionbikes/qa}"
 QA_BUILD_DIR="$QA_DIR/build"
 PROD_DB="$REPO/data/fusion.sqlite"
 PROD_ENV="$REPO/.env"
 CLAVE_QA="/root/.config/fusion-qa/clave"
 COMPOSE=(docker compose -f "$REPO/deploy/qa/docker-compose.yml" -p fusion-qa)
-export QA_DIR QA_BUILD_DIR
+# El stub de la plataforma viaja con este script (no con la rama bajo prueba): se monta desde acá.
+export QA_DIR QA_BUILD_DIR QA_STUB_SCRIPT="$SCRIPT_DIR/plataforma-stub.mjs"
 
 log() { echo "[qa $(date -u '+%H:%M:%S')] $*"; }
 
 limpiar_archivos() {
-  rm -rf "$QA_BUILD_DIR" "$QA_DIR/data" "$QA_DIR/certs" "$QA_DIR/uploads" "$QA_DIR/qa.env"
+  rm -rf "$QA_BUILD_DIR" "$QA_DIR/data" "$QA_DIR/certs" "$QA_DIR/uploads" "$QA_DIR/keyring" "$QA_DIR/qa.env"
 }
 
 generar_certificados() {
@@ -39,6 +41,18 @@ generar_certificados() {
   chmod 644 "$d"/*.pem
 }
 
+# Keyring interno de QA para el stub de la plataforma: una clave aleatoria de 32 bytes, de un solo uso.
+# El legado (qa-app) la usa para firmar y el stub para verificar; nunca es la de producción.
+generar_keyring() {
+  local d="$QA_DIR/keyring"
+  mkdir -p "$d"
+  local umask_anterior; umask_anterior=$(umask)
+  umask 077
+  printf '{"activeKeyId":"qa-1","keys":{"qa-1":"%s"}}\n' "$(openssl rand -base64 32)" > "$d/keyring.json"
+  umask "$umask_anterior"
+  chmod 600 "$d/keyring.json"   # el keyring interno se rechaza si es legible por grupo u otros
+}
+
 generar_env() {
   local f="$QA_DIR/qa.env"
   local umask_anterior; umask_anterior=$(umask)
@@ -53,6 +67,8 @@ generar_env() {
     echo "WOO_CK=ck_qa_$(openssl rand -hex 12)"
     echo "WOO_CS=cs_qa_$(openssl rand -hex 12)"
     echo "APP_URL=http://127.0.0.1:3101"
+    echo "SOMBRA_PLATAFORMA_URL=http://qa-plataforma:3300"
+    echo "SOMBRA_KEYRING_FILE=/run/qa/keyring.json"
   } > "$f"
   chmod 600 "$f"   # lo lee docker compose como root; nunca entra al contexto de build
   umask "$umask_anterior"
@@ -115,10 +131,11 @@ cmd_up() {
   "
 
   generar_certificados
+  generar_keyring
   generar_env
   verificar_sin_credenciales_reales
   # Usuario node (uid 1000) del contenedor escribe base, sesiones y uploads.
-  chown -R 1000:1000 "$QA_DIR/data" "$QA_DIR/uploads"
+  chown -R 1000:1000 "$QA_DIR/data" "$QA_DIR/uploads" "$QA_DIR/keyring"
 
   log "build y arranque"
   "${COMPOSE[@]}" up -d --build 2>&1 | tail -3
@@ -128,7 +145,7 @@ cmd_up() {
   if [ -n "$ip" ] && curl -s -m 5 -o /dev/null "http://$ip:3101/healthz"; then
     log "ERROR: el puerto 3101 responde desde la IP pública; se baja"; cmd_down; exit 1
   fi
-  log "QA listo en http://127.0.0.1:3101 en $(( $(date +%s) - T0 )) s (usuarios: los de producción, clave en $CLAVE_QA). Se apaga solo en 8 h."
+  log "QA listo en http://127.0.0.1:3101 (bandeja de identidad contra el stub de plataforma, no la real) en $(( $(date +%s) - T0 )) s (usuarios: los de producción, clave en $CLAVE_QA). Se apaga solo en 8 h."
 }
 
 cmd_down() {
