@@ -16,14 +16,13 @@ import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
 import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { norm, tsr } from '../lib/matcherEngine.js';
-import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
+import { partirClaveMl, extraerErrorMl, tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { espera } from '../lib/esperas.js';
-import { tipoLogisticaMl } from '../lib/preparacion.js';
 import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
@@ -627,7 +626,12 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
         throw new Error(`ML respondió ${shipResp.status} al consultar /shipments/${orden.shipping.id}`);
       }
       const ship = shipResp.data;
-      const addr = ship?.receiver_address;
+      // En formato nuevo ML separa el nombre del receptor y la dirección dentro de
+      // destination. Solo el formato viejo usa receiver_address en la raíz.
+      const direccionNueva = ship?.destination?.shipping_address;
+      const addr = direccionNueva
+        ? { ...direccionNueva, receiver_name: direccionNueva.receiver_name || ship.destination.receiver_name }
+        : (!ship?.destination ? ship?.receiver_address : null);
       // Solo se arma `shipping` si hay al menos un dato real (nombre o calle) — si no, un
       // objeto shipping vacío deja al pedido con una dirección "declarada" pero en blanco,
       // y la preparación/etiqueta muestra un destinatario vacío en vez de dejar clara la
@@ -653,7 +657,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
           country: 'AR',
         };
       }
-      metodoEnvio = tipoLogisticaMl(ship) || ship?.shipping_option?.name || null;
+      metodoEnvio = ship?.lead_time?.shipping_method?.name
+        || ship?.lead_time?.shipping_method?.type
+        || tipoLogisticaMl(ship)
+        || ship?.shipping_option?.name || null;
     } catch (eShip) {
       // No aborta, no libera ni retiene la reserva: es solo un aviso para detectar el caso.
       logSync(db, {

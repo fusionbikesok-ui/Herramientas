@@ -12,8 +12,9 @@ import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
-  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio, tipoLogisticaMl,
+  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
 } from '../lib/preparacion.js';
+import { tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
@@ -21,7 +22,7 @@ import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
 const TRACKING_META_KEY = '_andreani_tracking';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
 import { claveGtin } from '../lib/gtin.js';
-import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment, calcularSlaPreparacion } from '../lib/horariosDespacho.js';
+import { calcularFechaDespacho, leerHorarios, leerVersionHorarios, asegurarEsquemaHorarios, sembrarHorarios, horaValida, DIAS_SEMANA, fechaEstimadaShipment, calcularSlaPreparacion, resolverSlaShipment } from '../lib/horariosDespacho.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -34,6 +35,15 @@ const PERFILES_VALIDOS = ['bici', 'kit_transmision', 'sellado'];
 // propósito — el objetivo es dejar rastro auditable, no dar una excusa en blanco.
 const MOTIVOS_CONFIRMACION_MANUAL = ['codigo_ilegible', 'sin_etiqueta', 'otro'];
 const MOTIVOS_DESPACHO_MANUAL = ['ya_despachado_sin_codigo'];
+const ML_GET_SPACING_MS = 300;
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function esperarEntreGetsMl(estado) {
+  const espera = Math.max(0, ML_GET_SPACING_MS - (Date.now() - estado.ultimoGet));
+  if (espera) await sleep(espera);
+  estado.ultimoGet = Date.now();
+}
 
 function imagenProductoPendiente(db, item) {
   const idWoo = item.variation_id || item.product_id;
@@ -3470,6 +3480,7 @@ async function pendientesMl(db, mlCfg) {
   let offset = 0;
   let hayMas = true;
   let resultados = [];
+  const ritmoGets = { ultimoGet: 0 };
   // Fail-closed: si una página después de la primera falla, se corta la paginación (no se
   // reintenta indefinidamente) y se marca el listado como no confiable -> el caller no poda
   // con un resultado parcial. Si falla la primera página, se aborta con throw como antes
@@ -3480,6 +3491,7 @@ async function pendientesMl(db, mlCfg) {
     // Si filtramos por paid, perdemos precisamente los paquetes que ya fueron
     // despachados. Consultamos el universo reciente y usamos el estado del shipment
     // como fuente de verdad logística.
+    await esperarEntreGetsMl(ritmoGets);
     const resp = await mlFetch(db, mlCfg, 'get',
       `/orders/search?seller=${mlCfg.userId}&sort=date_desc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limite}`);
     if (resp.status !== 200) {
@@ -3529,12 +3541,13 @@ async function pendientesMl(db, mlCfg) {
       if (edadMs < VIGENCIA_SHIPMENT_TERMINAL_MS) continue;
     }
 
+    await esperarEntreGetsMl(ritmoGets);
     const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${shipmentId}`, null, { headers: { 'x-format-new': 'true' } });
     if (shipResp.status !== 200) {
       fallosHttp.push(`${shipmentId}→${shipResp.status}`);
       continue;
     }
-    const envio = shipResp.data;
+    let envio = shipResp.data;
     // Un 200 sin `status` es un dato inservible, no un éxito: la columna es NOT NULL y
     // cachear NULL/vacío tira SqliteError, que sube sin capturar y le hace perder a
     // syncPedidosCache la sección ML entera de la corrida (ver revisión 2026-08-08). Se
@@ -3573,6 +3586,8 @@ async function pendientesMl(db, mlCfg) {
       if (elegibilidad.estado === 'inconcluso') clavesInconclusas.add(`ml:${orden.id}`);
       continue;
     }
+    envio = await resolverSlaShipment({ db, mlCfg, shipmentId, shipment: envio, logisticType,
+      beforeFetch: () => esperarEntreGetsMl(ritmoGets) });
     const sla = calcularSlaPreparacion({ canal: 'ml', logisticType, shipment: envio, ahora: new Date() });
     if (sla.estado === 'excluido') continue;
 
@@ -3893,6 +3908,7 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, logisticType);
     return;
   }
+  envio = await resolverSlaShipment({ db, mlCfg, shipmentId, shipment: envio, logisticType });
   const sla = calcularSlaPreparacion({ canal: 'ml', logisticType, shipment: envio, ahora: new Date() });
   if (sla.estado === 'excluido') return;
 

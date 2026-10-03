@@ -30,10 +30,27 @@ services:
     networks: [qa]
     # Sin puertos publicados: sólo lo alcanza qa-app por la red interna.
 
+  qa-plataforma:
+    <<: *seguridad
+    image: fusion-qa-app:local
+    # Stub de la API interna de la bandeja de identidad (scripts/qa/plataforma-stub.mjs): casos de fixture en
+    # memoria y verificación HMAC real. Se monta desde el checkout que corre qa.sh, no sale de la rama bajo prueba.
+    command: ["timeout", "8h", "node", "scripts/qa/plataforma-stub.mjs"]
+    environment:
+      STUB_KEYRING_FILE: /run/qa/keyring.json
+      STUB_PORT: "3300"
+    volumes:
+      - "${QA_STUB_SCRIPT}:/app/scripts/qa/plataforma-stub.mjs:ro"
+      - "${QA_DIR}/keyring/keyring.json:/run/qa/keyring.json:ro"
+    mem_limit: 128m
+    cpus: 0.25
+    networks: [qa]
+    # Sin puertos publicados: sólo lo alcanza qa-app por la red interna.
+
   qa-app:
     <<: *seguridad
     image: fusion-qa-app:local
-    depends_on: [qa-simulador]
+    depends_on: [qa-simulador, qa-plataforma]
     command: ["timeout", "8h", "node", "server.js"]
     env_file: ["${QA_DIR}/qa.env"]
     environment:
@@ -50,6 +67,7 @@ services:
       - "${QA_DIR}/data:/data"
       - "${QA_DIR}/uploads:/app/uploads"
       - "${QA_DIR}/certs/ca.pem:/certs/ca.pem:ro"
+      - "${QA_DIR}/keyring/keyring.json:/run/qa/keyring.json:ro"
     ports:
       - "127.0.0.1:3101:3101"
     mem_limit: 768m

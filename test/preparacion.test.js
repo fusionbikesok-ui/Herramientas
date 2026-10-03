@@ -10,6 +10,7 @@ import {
   clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
 } from '../lib/preparacion.js';
 import * as preparacionLib from '../lib/preparacion.js';
+import { tipoLogisticaMl } from '../lib/mlUtil.js';
 import { preparacionRouter, crearPreparacion, registrarEvento, purgarFotosBorradas } from '../routes/preparacion.js';
 // Las tablas de ubicaciones las crea el router de inventario al construirse (ensureTables).
 // En producción los dos routers conviven; acá se monta igual para que el test corra contra
@@ -33,9 +34,7 @@ describe('logística de envíos ML', () => {
     [{ logistic: { type: 'self_service', mode: 'me2', direction: 'forward' } }, 'self_service'],
     [{}, undefined],
   ])('resuelve el tipo de logística ML desde formato viejo, nuevo o ausente', (envio, esperado) => {
-    expect(preparacionLib.tipoLogisticaMl).toBeTypeOf('function');
-    if (typeof preparacionLib.tipoLogisticaMl !== 'function') return;
-    expect(preparacionLib.tipoLogisticaMl(envio)).toBe(esperado);
+    expect(tipoLogisticaMl(envio)).toBe(esperado);
   });
 
   it.each(tiposLocales)('clasifica %s como elegible en formato viejo y nuevo', (tipo) => {
@@ -3565,6 +3564,45 @@ describe('syncPedidoMlPuntual', () => {
       .toEqual({ fecha_despacho: '2026-09-02', fecha_despacho_limite: '2026-09-02T18:00:00.000Z' });
   });
 
+  it('sync puntual consulta el SLA nuevo y persiste su hora límite cuando el shipment no lo embebe', async () => {
+    const shipment = {
+      status: 'ready_to_ship',
+      logistic: { type: 'cross_docking', mode: 'me2', direction: 'forward' },
+      destination: { receiver_address: { receiver_name: 'Juan Pérez' } },
+      lead_time: { shipping_method: { id: 501, type: 'standard', name: 'Colecta' } },
+      // La forma de estos campos no está verificada contra una respuesta real de ML, confirmar con sonda cuando haya permisos.
+    };
+    mlFetch.mockResolvedValueOnce({ status: 200, data: {
+      id: 'ORD-SLA-NUEVO', status: 'paid', date_created: '2026-09-02T12:00:00Z',
+      buyer: { nickname: 'Comprador nuevo' }, order_items: [], shipping: { id: 77002 },
+    }}).mockResolvedValueOnce({ status: 200, data: shipment })
+      .mockResolvedValueOnce({ status: 200, data: {
+        status: 'on_time', service: 'xd_same_day', expected_date: '2026-09-02T18:30:00-03:00',
+        last_updated: '2026-09-02T17:00:00Z',
+      }});
+
+    await syncPedidoMlPuntual(db, MLCFG, 'ORD-SLA-NUEVO');
+
+    expect(mlFetch).toHaveBeenCalledWith(db, MLCFG, 'get', '/shipments/77002/sla', null,
+      { headers: { 'x-format-new': 'true' } });
+    expect(db.prepare('SELECT fecha_despacho_limite, logistic_type FROM pedidos_cache WHERE clave=?').get('ml:ORD-SLA-NUEVO'))
+      .toMatchObject({ fecha_despacho_limite: '2026-09-02T21:00:00.000Z', logistic_type: 'cross_docking' });
+  });
+
+  it('si falla /sla conserva el límite histórico como fallback fail-open', async () => {
+    mlFetch.mockResolvedValueOnce({ status: 200, data: {
+      id: 'ORD-SLA-FALLBACK', status: 'paid', buyer: { nickname: 'x' }, order_items: [], shipping: { id: 77003 },
+    }}).mockResolvedValueOnce({ status: 200, data: {
+      status: 'ready_to_ship', logistic_type: 'drop_off',
+      shipping_option: { estimated_handling_limit: { date: '2026-09-02T18:30:00Z' } },
+    }}).mockResolvedValueOnce({ status: 503, data: { message: 'SLA no disponible' } });
+
+    await syncPedidoMlPuntual(db, MLCFG, 'ORD-SLA-FALLBACK');
+
+    expect(db.prepare('SELECT fecha_despacho_limite FROM pedidos_cache WHERE clave=?').get('ml:ORD-SLA-FALLBACK'))
+      .toMatchObject({ fecha_despacho_limite: '2026-09-02T18:00:00.000Z' });
+  });
+
   it('POST /iniciar ML devuelve 409 y no crea preparación si el envío no es elegible', async () => {
     mlFetch.mockResolvedValueOnce({ status: 200, data: { id: 'ORD-14', status: 'paid', shipping: { id: 814 }, buyer: { nickname: 'x' } } })
       .mockResolvedValueOnce({ status: 200, data: { status: 'shipped', logistic_type: 'self_service' } });
@@ -3579,6 +3617,27 @@ describe('syncPedidoMlPuntual', () => {
     expect(res.status).toBe(409);
     expect(res.body.estado_elegibilidad).toBe('inconcluso');
     expect(db.prepare("SELECT * FROM preparaciones WHERE clave='ml:ORD-INCONCLUSA-2'").get()).toBeUndefined();
+  });
+
+  it('POST /iniciar ML no consulta /sla porque el resultado no participa del alta', async () => {
+    mlFetch.mockImplementation(async (_db, _cfg, _method, path) => {
+      if (path.endsWith('/sla')) throw new Error('no debe consultar SLA al iniciar manualmente');
+      if (path === '/orders/ORD-SIN-SLA') return {
+        status: 200,
+        data: {
+          id: 'ORD-SIN-SLA', status: 'paid', buyer: { nickname: 'x' }, shipping: { id: 815 },
+          order_items: [{ item: { id: 'SKU-815', title: 'Producto' }, seller_sku: 'SKU-815', quantity: 1 }],
+        },
+      };
+      if (path === '/shipments/815') return { status: 200, data: { status: 'ready_to_ship', logistic_type: 'cross_docking' } };
+      return { status: 200, data: {} };
+    });
+
+    const res = await request(buildTestApp(db)).post('/api/preparacion/iniciar')
+      .send({ canal: 'ml', id: 'ORD-SIN-SLA' });
+
+    expect(res.status).toBe(200);
+    expect(mlFetch.mock.calls.some(call => String(call[3]).endsWith('/sla'))).toBe(false);
   });
 
   it('trae SOLO la orden pedida (paid + ready_to_ship + envío local) y hace upsert inmediato', async () => {

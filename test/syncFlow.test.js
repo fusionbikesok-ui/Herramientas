@@ -648,6 +648,42 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
     expect(body.line_items).toEqual([{ quantity: 1, subtotal: '200.00', total: '200.00', product_id: 100 }]);
   });
 
+  it('payload completo nuevo usa destination.shipping_address y lead_time.shipping_method', async () => {
+    const orden = ordenConEnvio('ORD-SHIP-NUEVO', 556);
+    mlFetch.mockImplementation(async (d, cfg, method, path) => {
+      if (path.startsWith('/orders/search')) return { status: 200, data: { results: [orden] } };
+      if (path === '/shipments/556') return {
+        status: 200,
+        data: {
+          status: 'ready_to_ship',
+          logistic: { type: 'cross_docking', mode: 'me2', direction: 'forward' },
+          destination: { receiver_name: 'Ana María Díaz', shipping_address: {
+            street_name: 'San Martín', street_number: '123',
+            comment: 'Portero 4', city: { name: 'CABA' }, state: { name: 'Buenos Aires' }, zip_code: '1001',
+          } },
+          lead_time: { shipping_method: { id: 77, type: 'standard', name: 'Colecta AM' } },
+        },
+      };
+      return { status: 200, data: {} };
+    });
+    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
+      if (path === '/orders' && method === 'post') return { data: { id: 6002 } };
+      return { data: {} };
+    });
+
+    const p = syncMlToWc(db, CFG);
+    await vi.runAllTimersAsync();
+    await p;
+
+    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
+    expect(orderCall?.[3].shipping).toMatchObject({
+      first_name: 'Ana', last_name: 'María Díaz', address_1: 'San Martín 123',
+      address_2: 'Portero 4', city: 'CABA', state: 'Buenos Aires', postcode: '1001', country: 'AR',
+    });
+    const meta = Object.fromEntries(orderCall?.[3].meta_data.map(m => [m.key, m.value]));
+    expect(meta._ml_metodo_envio).toBe('Colecta AM');
+  });
+
   it('la consulta de shipments falla → FAIL-OPEN: el pedido se crea igual, sin datos de envío, reserva no queda retenida ni liberada de más', async () => {
     const orden = ordenConEnvio('ORD-SHIP-FALLA', 999);
     mlFetch.mockImplementation(async (d, cfg, method, path) => {
