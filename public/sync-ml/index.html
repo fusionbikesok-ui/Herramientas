@@ -139,6 +139,7 @@ async function cargar(){
     if(!d.ok)throw new Error(d.error||'error');
     cont.innerHTML=render(d);
     cargarReactivables();
+    cargarPausadas();
     cargarFrenadas();
     cargarCambiosFormato();
   }catch(err){
@@ -188,7 +189,7 @@ var LABELS_PRECIO={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:
    unidades por pack o su formato de venta) y el vigía pausó. Reactivar es siempre una
    decisión humana: el vigía nunca despausa solo. */
 // Avisos que el vigía dejó abiertos A PROPÓSITO sin pausar (migración de ML): no son un error de pausa.
-function esMotivoSinPausa(c){return !c.pausada&&/^migración de ML/.test(c.pausa_error||'');}
+function esMotivoSinPausa(c){return !c.pausada&&/^(migración de ML|catálogo nuevo|ya estaba pausada)/.test(c.pausa_error||'');}
 async function cargarCambiosFormato(){
   var caja=document.getElementById('cambios-formato');
   if(!caja)return;
@@ -259,9 +260,84 @@ async function revisarCambio(id, reactivar){
     try{ d=JSON.parse(texto); }catch(_e){ throw new Error('el servidor respondió '+r.status+' sin datos. Recargá la página y reintentá.'); }
     if(!d.ok)throw new Error(d.error||'error');
     if(d.pendiente_stock)alert('Aviso cerrado. La publicación no tiene stock en MercadoLibre: se va a reactivar sola cuando vuelva a haber stock.');
+    else if(d.oferta_reactivar){
+      if(confirm('Aviso cerrado. La publicación sigue pausada y hay '+d.oferta_reactivar.stock_woo+' en stock en la web.\n\n¿La reactivás ahora?'))await reactivarPausadas([d.oferta_reactivar.item_id],true);
+    }
     await cargarCambiosFormato();
     cargarReactivables();
   }catch(err){ alert('No se pudo: '+err.message); }
+}
+
+/* ── PAUSADAS CON STOCK EN LA WEB ── la reactivación acá es siempre manual, nunca automática. */
+var pausadasFiltro='';
+async function cargarPausadas(causa){
+  var box=document.getElementById('pausadas-box');
+  if(!box)return;
+  if(causa!==undefined)pausadasFiltro=causa;
+  try{
+    var r=await fetch('/api/sync/pausadas-con-stock'+(pausadasFiltro?'?causa='+encodeURIComponent(pausadasFiltro):''));
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    box.innerHTML=renderPausadas(d);
+  }catch(err){
+    box.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+' <button class="btn sec" onclick="cargarPausadas()">Reintentar</button></div>';
+  }
+}
+var NOMBRE_CAUSA={vigia:'Pausó el vigía',solo_local:'Solo local',sin_vinculo:'Sin vínculo',pausa_app:'Pausa desde la app',paused_by_seller:'Pausada por el vendedor',pausa_vieja:'Pausa vieja (sin motivo)',out_of_stock:'Sin stock en ML',otra:'Otra'};
+var MOTIVO_NO_REACT={solo_local:'Está en solo local: el stock se manda en 0',sin_vinculo:'No tiene SKU vinculado',aviso_abierto:'Tiene un aviso del vigía sin revisar',sin_stock_disponible:'Sin stock disponible para ML'};
+function renderPausadas(d){
+  var res=d.resumen||{};
+  var h='<div class="chips-header" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">';
+  h+='<button class="btn '+(pausadasFiltro?'sec':'')+'" onclick="cargarPausadas(\'\')">Todas ('+n(d.total)+')</button>';
+  Object.keys(NOMBRE_CAUSA).forEach(function(c){
+    if(!res[c])return;
+    h+='<button class="btn '+(pausadasFiltro===c?'':'sec')+'" onclick="cargarPausadas(\''+c+'\')">'+esc(NOMBRE_CAUSA[c])+' ('+n(res[c])+')</button>';
+  });
+  h+='</div>';
+  var pubs=d.data||[];
+  if(!pubs.length)return h+'<div class="card"><div class="lbl">No hay publicaciones pausadas con stock en la web'+(pausadasFiltro?' para esta causa':'')+'.</div></div>';
+  h+='<p class="sub" style="margin-bottom:10px">Pausadas en ML que tienen stock en la web. Nada de acá se reactiva solo: elegí cuáles reactivar.</p>';
+  h+='<div class="tbl-wrap"><table><thead><tr><th><input type="checkbox" onclick="toggleAllPausadas(this)" aria-label="Seleccionar todas las reactivables"></th><th>Publicación</th><th>Causa</th><th class="num">Stock web</th><th></th></tr></thead><tbody>';
+  pubs.forEach(function(p){
+    var det=p.detalle&&p.detalle.actor?(' · '+esc(p.detalle.actor)+(p.detalle.origen?' ('+esc(p.detalle.origen)+')':'')):'';
+    h+='<tr><td><input type="checkbox" class="chk-pausada" value="'+esc(p.item_id)+'" '+(p.reactivable?'':'disabled ')+'onclick="actualizarBtnPausadas()" aria-label="Seleccionar '+esc(p.item_id)+'"></td>';
+    h+='<td><div class="pub-txt"><div class="pub-tit">'+esc(p.titulo||p.item_id)+'</div><div class="pub-meta">'+esc(p.item_id)+'</div></div></td>';
+    h+='<td><span class="badge">'+esc(NOMBRE_CAUSA[p.causa]||p.causa)+'</span><div class="pub-meta">'+esc(p.texto_causa||'')+det+'</div></td>';
+    h+='<td class="num">'+n(p.stock_woo)+'</td>';
+    h+='<td>'+(p.reactivable?'<button class="btn sec" onclick="reactivarPausadas([\''+esc(p.item_id)+'\'])">Reactivar</button>'
+      :'<span class="pub-meta">'+esc(MOTIVO_NO_REACT[p.motivo_no_reactivable]||'No reactivable')+'</span>')+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  h+='<div class="acciones"><button class="btn" id="btn-react-pausadas" onclick="reactivarPausadas()" disabled>Reactivar seleccionadas (0)</button></div>';
+  h+='<div class="msg" id="pausadas-msg"></div>';
+  return h;
+}
+function actualizarBtnPausadas(){
+  var btn=document.getElementById('btn-react-pausadas');
+  if(!btn)return;
+  var k=document.querySelectorAll('.chk-pausada:checked').length;
+  btn.disabled=(k===0);
+  btn.textContent='Reactivar seleccionadas ('+k+')';
+}
+function toggleAllPausadas(cb){document.querySelectorAll('.chk-pausada:not(:disabled)').forEach(function(x){x.checked=cb.checked;});actualizarBtnPausadas();}
+async function reactivarPausadas(ids,yaConfirmado){
+  ids=ids||[...document.querySelectorAll('.chk-pausada:checked')].map(function(x){return x.value;});
+  if(!ids.length)return;
+  if(!yaConfirmado&&!confirm('Vas a reactivar '+ids.length+' publicación(es) en MercadoLibre.\n\nAlgunas las pausó el vendedor a propósito. Se les empuja el stock actual de la web y pasan a activas. ¿Confirmás?'))return;
+  var msg=document.getElementById('pausadas-msg');
+  var ok=0,fallos=[];
+  try{
+    for(var i=0;i<ids.length;i+=50){
+      var r=await fetch('/api/sync/pausadas-con-stock/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:ids.slice(i,i+50)})});
+      var d=await r.json();
+      if(!d.ok)throw new Error(d.error||'error');
+      (d.resultados||[]).forEach(function(x){if(x.ok)ok++;else fallos.push(x.item_id+': '+(x.error||'no se pudo'));});
+      (d.no_reactivables||[]).forEach(function(x){fallos.push(x+': no reactivable'); });
+    }
+  }catch(err){fallos.push(err.message);}
+  if(msg){msg.style.color=fallos.length?'var(--amber)':'var(--green,#4ADE80)';msg.textContent=ok+' reactivada(s)'+(fallos.length?'. Con problemas: '+fallos.join(' · '):'.');}
+  else if(fallos.length)alert('Con problemas: '+fallos.join(' · '));
+  cargarPausadas();cargarReactivables();
 }
 
 var yaScrolleFrenadas=false;
@@ -620,6 +696,12 @@ function render(d){
   // Reactivar pausadas por falta de stock (se llena aparte, async)
   h+='<div class="sec-title" id="reactivar">Reactivar publicaciones pausadas por falta de stock</div>';
   h+='<div id="reactivar-box"><div class="loading">Buscando publicaciones y verificando precios en ML (puede tardar unos segundos)…</div></div>';
+
+  // Pausadas con stock en Woo, con la causa (se llena aparte, async). Reactivar acá es siempre manual.
+  h+='<div class="sec-title" id="pausadas">Pausadas con stock en la web</div>';
+  var sl=d.solo_local||{};
+  if(sl.skus>0)h+='<div class="msg" style="color:var(--amber)">'+n(sl.skus)+' SKU(s) en <b>solo local</b> ('+n(sl.publicaciones)+' publicaciones): su stock se manda a ML como 0 a propósito.</div>';
+  h+='<div id="pausadas-box"><div class="loading">Buscando publicaciones pausadas con stock…</div></div>';
 
   // Frenadas por precio (se llena aparte, async)
   h+='<div class="sec-title" id="frenadas">Publicaciones frenadas por precio</div>';

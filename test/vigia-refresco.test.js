@@ -43,7 +43,7 @@ describe('vigía enganchado al refresco', () => {
 
   // El caso GP5000: segunda corrida, ahora atada a un producto de catálogo distinto.
   it('la segunda corrida con otro catalog_product_id detecta, pausa y asienta', async () => {
-    mockItems(null);
+    mockItems('MLA111');
     await refrescarPublicacionesMlAcotado(db, CFG, ['MLA1']);
     mockItems('MLA44441017');
     const r = await refrescarPublicacionesMlAcotado(db, CFG, ['MLA1']);
