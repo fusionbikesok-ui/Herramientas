@@ -127,6 +127,20 @@ describe('plataforma-stub (QA)', () => {
       expect((await firmado(base, 'POST', ruta, decision({ expected_version: 7 }), { headers: H('clave-v7-aa') })).body.code).toBe('version_conflict');
       expect((await firmado(base, 'POST', ruta, decision({ variant_id: '00000000-0000-4000-8000-0000000009ff' }), { headers: H('clave-var-aa') })).body.code).toBe('variante_invalida');
     });
+    it('deshacer (eleccion sin_candidato + revierte) reabre el caso y supera la decisión vigente', async () => {
+      stub.reiniciar();
+      const ruta = `/internal/v1/identidad/casos/${UUID_CASO}/decisiones`;
+      const a = await firmado(base, 'POST', ruta, decision(), { headers: H('clave-und-0001') });
+      const undo = { expected_version: 2, eleccion: 'sin_candidato', revierte: a.body.decision_id, actor: { usuario: 'ana', es_admin: false } };
+      expect((await firmado(base, 'POST', ruta, { ...undo, revierte: '00000000-0000-4000-8000-0000000009ee' }, { headers: H('clave-und-0002') })).body.code).toBe('revierte_invalido');
+      const r = await firmado(base, 'POST', ruta, undo, { headers: H('clave-und-0003') });
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ version: 3, vinculo: 'pendiente' });
+      const det = await firmado(base, 'GET', `/internal/v1/identidad/casos/${UUID_CASO}`);
+      expect(det.body.estado).toBe('open');
+      expect(det.body.historial.find((h) => h.id === a.body.decision_id).efecto).toBe('superada');
+      expect((await firmado(base, 'GET', '/internal/v1/identidad/casos')).body.casos.some((c) => c.id === UUID_CASO)).toBe(true);
+    });
     it('vincular cierra el caso y lo saca de la cola; repetir la misma clave devuelve lo mismo; otra clave sobre caso cerrado da 409', async () => {
       stub.reiniciar();
       const ruta = `/internal/v1/identidad/casos/${UUID_CASO}/decisiones`;

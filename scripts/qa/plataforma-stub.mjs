@@ -194,7 +194,20 @@ export function crearPlataformaStub({ claves, ahoraMs = () => Date.now(), origen
     const h = huella({ caso: c.id, d });
     if (previa) return previa.huella === h ? previa.respuesta : { status: 422, body: { code: 'idempotency_mismatch', message: 'No se pudo decidir: idempotency_mismatch.' } };
     let respuesta;
-    if (c.estado === 'closed') respuesta = { status: 409, body: { code: 'caso_cerrado', message: 'No se pudo decidir: caso_cerrado.' } };
+    const objetivo = d.revierte ? (c.historial ?? []).find((x) => x.id === d.revierte) : null;
+    if (d.revierte) {
+      // Deshacer: sólo se revierte la decisión vigente de un caso cerrado, con la versión actual; reabre el caso.
+      if (!objetivo || objetivo.efecto !== 'vigente' || c.estado !== 'closed') respuesta = { status: 409, body: { code: 'revierte_invalido', message: 'No se pudo decidir: revierte_invalido.' } };
+      else if (d.expected_version !== c.version) respuesta = { status: 409, body: { code: 'version_conflict', message: 'No se pudo decidir: version_conflict.' } };
+      else {
+        c.version += 1; c.estado = 'open'; c.cerrado_en = null; c.motivo_cierre = null;
+        const decisionId = id(secuencia++);
+        objetivo.efecto = 'superada'; objetivo.superada_en = new Date().toISOString();
+        c.historial.unshift({ id: decisionId, origen: 'humano', efecto: 'vigente', eleccion: d.eleccion, sku: null, actor: d.actor.usuario,
+          motivo: d.motivo ?? null, creado_en: objetivo.superada_en, superada_en: null, supersede_a: objetivo.id });
+        respuesta = { status: 200, body: { decision_id: decisionId, version: c.version, vinculo: 'pendiente' } };
+      }
+    } else if (c.estado === 'closed') respuesta = { status: 409, body: { code: 'caso_cerrado', message: 'No se pudo decidir: caso_cerrado.' } };
     else if (d.expected_version !== c.version) respuesta = { status: 409, body: { code: 'version_conflict', message: 'No se pudo decidir: version_conflict.' } };
     else if (d.eleccion === 'vincular' && !VARIANTES.some((v) => v.variant_id === d.variant_id)) {
       respuesta = { status: 422, body: { code: 'variante_invalida', message: 'No se pudo decidir: variante_invalida.' } };
