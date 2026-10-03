@@ -97,6 +97,36 @@ describe('API de vínculos del Matcher', () => {
     expect(db.prepare('SELECT accion FROM sku_matcher_decisiones WHERE clave=?').get('MLA-1|10').accion).toBe('omitir');
   });
 
+  it('con caso y operaciones de Identidad/Guardia abiertos cierra todo con estados que el esquema real permite', async () => {
+    seedCatalogo(db, { sku: 'FB-1', nombre: 'Casco Giro' });
+    seedPublicacion(db, { clave: 'MLA-ID|', sellerSku: 'FB-1' });
+    seedDecision(db, { clave: 'MLA-ID|', sku: 'FB-1', accion: 'asignar' });
+    const ts = ahora();
+    const caso = db.prepare(`INSERT INTO identidad_casos
+      (direccion,ml_key,clasificacion,estado,severidad,evidencia_fingerprint,primera_deteccion_en,ultima_deteccion_en)
+      VALUES ('ml_fusion','MLA-ID|','sin_vinculo','urgente','urgente','fp',?,?)`).run(ts, ts).lastInsertRowid;
+    db.prepare(`INSERT INTO identidad_operaciones
+      (operation_id,tipo,caso_id,ml_key,sku_objetivo,stock_objetivo,estado,iniciada_en,actualizada_en)
+      VALUES ('op-1','proteccion_woo',?,'MLA-ID|',NULL,0,'pendiente',?,?)`).run(caso, ts, ts);
+    const gcaso = db.prepare(`INSERT INTO guardia_ml_casos (clave,estado,severidad,motivo,bloquea_sync,creado_en,actualizado_en)
+      VALUES ('MLA-ID|','abierto','urgente','sin_cobertura',1,?,?)`).run(ts, ts).lastInsertRowid;
+    db.prepare(`INSERT INTO guardia_ml_operaciones (caso_id,tipo,sku,item_id,estado,proximo_intento_en,idempotencia,creado_en,actualizado_en)
+      VALUES (?,'vincular','FB-1','MLA-ID','pendiente',?,'idem-1',?,?)`).run(gcaso, ts, ts, ts);
+
+    const res = await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-ID|', expected_sku: 'FB-1' });
+
+    expect(res.status).toBe(200);
+    expect(db.prepare('SELECT estado FROM identidad_casos WHERE id=?').get(caso).estado).toBe('exceptuado');
+    expect(db.prepare('SELECT COUNT(*) n FROM identidad_excepciones WHERE caso_id=? AND activa=1').get(caso).n).toBe(1);
+    expect(db.prepare("SELECT estado FROM identidad_operaciones WHERE operation_id='op-1'").get().estado).toBe('fallida');
+    expect(db.prepare("SELECT estado FROM guardia_ml_operaciones WHERE idempotencia='idem-1'").get().estado).toBe('cancelada');
+    expect(db.prepare('SELECT accion FROM sku_matcher_decisiones WHERE clave=?').get('MLA-ID|').accion).toBe('omitir');
+    // idempotente: repetir no rompe la excepción única activa
+    const otra = await request(app).post('/api/matcher/vinculos/no-sincronizar').send({ clave: 'MLA-ID|', expected_sku: null });
+    expect(otra.status).toBe(200);
+    expect(db.prepare('SELECT COUNT(*) n FROM identidad_excepciones WHERE caso_id=? AND activa=1').get(caso).n).toBe(1);
+  });
+
   it('exige expected_sku para un vínculo activo y null explícito para una clave sin vínculo', async () => {
     seedPublicacion(db, { clave: 'MLA-EXPECT|', sellerSku: 'FB-1' });
     seedDecision(db, { clave: 'MLA-EXPECT|', sku: 'FB-1', accion: 'confirmar' });
