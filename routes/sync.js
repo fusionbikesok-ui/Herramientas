@@ -23,6 +23,7 @@ import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { espera } from '../lib/esperas.js';
+import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
 import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
@@ -1970,17 +1971,23 @@ export function reabrirAvisosSinStock(db) {
   return rows.length;
 }
 
-export function getReactivablesRows(db, itemIds = null) {
+/**
+ * `incluirPausasManuales` (sólo la reactivación manual de "Pausadas con stock en Woo"): además de las pausadas por
+ * out_of_stock, trae las que quedaron pausadas por el vendedor o sin sub_status. Los avisos del vigía sin revisar
+ * SIGUEN bloqueando: una pausa del vigía sólo se revierte revisando el cambio.
+ */
+export function getReactivablesRows(db, itemIds = null, { incluirPausasManuales = false } = {}) {
   reabrirAvisosSinStock(db);
+  const filtroSub = incluirPausasManuales ? '' : `
+      AND p.sub_status LIKE '%out_of_stock%'
+      AND p.sub_status NOT LIKE '%paused_by_seller%'`;
   let sql = `
     ${COMPUTED_STOCK_CTE}
     SELECT cm.clave, cm.sku, cm.stock_disponible_ml,
            p.item_id, p.variation_id, p.titulo, p.variations_texto, p.thumbnail
     FROM computed cm
     JOIN ml_publicaciones_cache p ON p.clave = cm.clave
-    WHERE p.status = 'paused'
-      AND p.sub_status LIKE '%out_of_stock%'
-      AND p.sub_status NOT LIKE '%paused_by_seller%'
+    WHERE p.status = 'paused'${filtroSub}
       AND cm.stock_disponible_ml > 0
       AND NOT EXISTS (
         SELECT 1 FROM ml_publicacion_cambios vc
@@ -2228,7 +2235,7 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, item, opts 
     // salga de la lista de reactivables y no se reintente en loop.
     return { omitido: true, motivo: 'Ya no está pausada en ML, se omitió', cacheStatus: item.status, cacheSubStatus: subStatus };
   }
-  if (subStatus.includes('paused_by_seller')) {
+  if (subStatus.includes('paused_by_seller') && !opts.incluirPausasManuales) {
     // El vendedor la pausó manualmente después de armar la lista: refrescar sub_status en el
     // caché para que getReactivablesRows deje de listarla (el filtro excluye paused_by_seller).
     return { omitido: true, motivo: 'Pausada manualmente por el vendedor, se omitió por seguridad', cacheStatus: 'paused', cacheSubStatus: subStatus };
@@ -2251,7 +2258,7 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, item, opts 
 export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
   const LOTE_MAX = 50;
   const aProcesar = itemIds.slice(0, LOTE_MAX);
-  const rows = getReactivablesRows(db, aProcesar);
+  const rows = getReactivablesRows(db, aProcesar, { incluirPausasManuales: opts.incluirPausasManuales === true });
 
   // Agrupar variaciones válidas por item
   const porItem = new Map();
@@ -3177,6 +3184,9 @@ export function syncRouter(db, cfg) {
       // está roto y no procesa nada". No requiere tocar public/: el front decide si lo muestra.
       stock: { sincronizadas, pendientes, pendientesPausadas, maxLlamadasPorCorrida: SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA },
       reactivables,
+      // Pausadas con stock en Woo (cualquier causa) y SKUs en solo_local: visibles en Sincronización.
+      pausadas_con_stock: (() => { try { return listarPausadasConStock(db).resumen; } catch (_) { return null; } })(),
+      solo_local: (() => { try { return resumenSoloLocal(db); } catch (_) { return null; } })(),
       pedidos: {
         total: pedidos.total ?? 0,
         cancelados: pedidos.cancelados ?? 0,
@@ -3262,7 +3272,16 @@ export function syncRouter(db, cfg) {
     const cerrados = db.prepare(`UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=?, bloquea_reactivador=0
       WHERE item_id=? AND campo=? AND valor_nuevo IS ? AND revisado_en IS NULL`)
       .run(new Date().toISOString(), req.user?.username || null, fila.item_id, fila.campo, fila.valor_nuevo).changes;
-    res.json({ ok: true, reactivada, pendiente_stock: pendienteStock, cerrados });
+    // Cerrado el aviso sin reactivar: si la publicación sigue pausada con stock en Woo, se ofrece reactivarla
+    // (un clic, siempre manual). Es sólo una oferta: no se reactiva nada acá.
+    let ofertaReactivar = null;
+    if (!reactivada && !pendienteStock) {
+      try {
+        const p = listarPausadasConStock(db).data.find((x) => x.item_id === fila.item_id && x.reactivable);
+        if (p) ofertaReactivar = { item_id: p.item_id, stock_woo: p.stock_woo };
+      } catch (_) { /* la oferta es opcional */ }
+    }
+    res.json({ ok: true, reactivada, pendiente_stock: pendienteStock, cerrados, oferta_reactivar: ofertaReactivar });
   });
 
   // Conteo rápido de reactivables (solo lee el caché local, sin consultar precios en ML).
@@ -3338,6 +3357,49 @@ export function syncRouter(db, cfg) {
     } finally {
       // Pase lo que pase (incluida una cancelación del cliente a mitad de camino) el candado
       // se libera acá, así el próximo lote no queda bloqueado por una reactivación fantasma.
+      _reactivarEnCurso = false;
+    }
+  });
+
+  // Publicaciones pausadas en ML con stock en Woo, con la causa de la pausa (Fase A de pausas con sentido).
+  // Sólo lectura sobre la caché local. `?causa=` filtra por una causa.
+  router.get('/pausadas-con-stock', (req, res) => {
+    try {
+      const causa = req.query.causa ? String(req.query.causa) : null;
+      if (causa && !CAUSAS_PAUSA.includes(causa)) {
+        return res.status(400).json({ ok: false, error: `causa debe ser una de: ${CAUSAS_PAUSA.join(', ')}` });
+      }
+      res.json({ ok: true, ...listarPausadasConStock(db, { causa }), solo_local: resumenSoloLocal(db) });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // Reactivación MANUAL de pausadas con stock: siempre la dispara una persona (nunca el sistema). Incluye las que
+  // pausó el vendedor o quedaron sin sub_status; las pausas del vigía sin revisar y las solo_local/sin vínculo no
+  // se reactivan por acá (se devuelven en `no_reactivables`). Comparte candado con /reactivar.
+  router.post('/pausadas-con-stock/reactivar', async (req, res) => {
+    if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+    const { itemIds } = req.body || {};
+    if (!Array.isArray(itemIds) || !itemIds.length || itemIds.length > 50 || itemIds.some((x) => typeof x !== 'string' || !x)) {
+      return res.status(400).json({ ok: false, error: 'itemIds requerido (1 a 50 ids de publicación)' });
+    }
+    if (_reactivarEnCurso) return res.status(409).json({ ok: false, error: 'Ya hay una reactivación en curso' });
+    _reactivarEnCurso = true;
+    try {
+      const reactivables = new Set(listarPausadasConStock(db).data.filter((p) => p.reactivable).map((p) => p.item_id));
+      const pedidos = [...new Set(itemIds)];
+      const validos = pedidos.filter((id) => reactivables.has(id));
+      const noReactivables = pedidos.filter((id) => !reactivables.has(id));
+      const actor = req.user?.username || 'desconocido';
+      const r = validos.length
+        ? await reactivarItems(db, mlCfg, validos, { manual: true, incluirPausasManuales: true })
+        : { procesados: 0, resultados: [] };
+      console.log(`[pausadas-con-stock] reactivación manual por ${actor}: ${validos.length} publicaciones`);
+      if (!res.writableEnded) res.json({ ok: true, actor, no_reactivables: noReactivables, ...r });
+    } catch (e) {
+      if (!res.writableEnded) res.status(500).json({ ok: false, error: e.message });
+    } finally {
       _reactivarEnCurso = false;
     }
   });
