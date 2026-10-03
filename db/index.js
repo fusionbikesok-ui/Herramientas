@@ -805,6 +805,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_override_omitir_118')").run();
     })();
   }
+  const mlPausasLogMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_pausas_log_119'").get();
+  if (!mlPausasLogMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '119_ml_pausas_log.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_pausas_log_119')").run();
+    })();
+  }
   const chatEventsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='chat_events_inbox_093'").get();
   if (!chatEventsMigration) {
     db.transaction(() => {

@@ -9,9 +9,14 @@ import { procesarCambios, UMBRAL_PAUSA_MASIVA } from '../lib/vigiaPausado.js';
 const TEST_DB = './test/vigia-pausado.sqlite';
 const CFG = { clientId: 'x', clientSecret: 'y', redirectUri: 'z' };
 
+// Cambio "real" básico: UNITS_PER_PACK cambia (no es ruido de catálogo ni requiere leer /products).
 function cambio(n, extra = {}) {
-  return { clave: `MLA${n}|`, item_id: `MLA${n}`, sku: `FB-${n}`, campo: 'catalog_product_id',
-    valor_anterior: null, valor_nuevo: 'MLA44441017', ...extra };
+  return { clave: `MLA${n}|`, item_id: `MLA${n}`, sku: `FB-${n}`, campo: 'UNITS_PER_PACK',
+    valor_anterior: '1', valor_nuevo: '6', ...extra };
+}
+// Catálogo: ML le asignó un producto a una publicación que no tenía ninguno (vacío → producto).
+function cambioCat(n, extra = {}) {
+  return cambio(n, { campo: 'catalog_product_id', valor_anterior: null, valor_nuevo: 'MLA44441017', ...extra });
 }
 
 describe('vigiaPausado', () => {
@@ -110,7 +115,7 @@ describe('vigiaPausado', () => {
     db.prepare(`INSERT INTO ml_publicacion_cambios
       (clave,item_id,campo,valor_anterior,valor_nuevo,detectado_en)
       VALUES ('OLD|','OLD','catalog_product_id','MLA1','MLA2',datetime('now'))`).run();
-    const r = await procesarCambios(db, CFG, [cambio(1, { valor_anterior: 'MLA1', valor_nuevo: 'MLA2' })]);
+    const r = await procesarCambios(db, CFG, [cambioCat(1, { valor_anterior: 'MLA1', valor_nuevo: 'MLA2' })]);
     expect(r).toMatchObject({ migraciones_sin_pausa: 1, pausadas: 0 });
     expect(mlFetch).not.toHaveBeenCalled();
     expect(db.prepare('SELECT * FROM ml_publicacion_cambios WHERE item_id=?').get('MLA1'))
@@ -133,7 +138,7 @@ describe('vigiaPausado', () => {
 
   it('migración por 404: el producto anterior fue borrado, se avisa sin pausar', async () => {
     productos({ 'MLA-OLD': producto(404) });
-    const r = await procesarCambios(db, CFG, [cambio(1, par)]);
+    const r = await procesarCambios(db, CFG, [cambioCat(1, par)]);
     expect(r).toMatchObject({ migraciones_sin_pausa: 1, pausadas: 0 });
     expect(mlFetch.mock.calls.filter((c) => c[2] === 'put')).toHaveLength(0);
     expect(db.prepare('SELECT pausada, revisado_en FROM ml_publicacion_cambios').get()).toMatchObject({ pausada: 0, revisado_en: null });
@@ -141,17 +146,17 @@ describe('vigiaPausado', () => {
 
   it('migración por fechas: viejo y nuevo modificados hace poco y a minutos entre sí', async () => {
     productos({ 'MLA-OLD': producto(200, ISO(10 * H)), 'MLA-NEW': producto(200, ISO(10 * H - 60e3)) });
-    expect(await procesarCambios(db, CFG, [cambio(1, par)])).toMatchObject({ migraciones_sin_pausa: 1, pausadas: 0 });
+    expect(await procesarCambios(db, CFG, [cambioCat(1, par)])).toMatchObject({ migraciones_sin_pausa: 1, pausadas: 0 });
   });
 
   it('no es migración si los dos productos se modificaron con horas de diferencia: pausa como hoy', async () => {
     productos({ 'MLA-OLD': producto(200, ISO(60 * H)), 'MLA-NEW': producto(200, ISO(2 * H)) });
-    expect(await procesarCambios(db, CFG, [cambio(1, par)])).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 1 });
+    expect(await procesarCambios(db, CFG, [cambioCat(1, par)])).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 1 });
   });
 
   it('caso GP5000: salto aislado a un producto nunca visto, sin señal de migración, pausa', async () => {
     productos({ 'MLA-OLD': producto(200, ISO(500 * H)), 'MLA-NEW': producto(200, ISO(400 * H)) });
-    const r = await procesarCambios(db, CFG, [cambio(1, par)]);
+    const r = await procesarCambios(db, CFG, [cambioCat(1, par)]);
     expect(r).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 1 });
     expect(mlFetch).toHaveBeenCalledWith(db, CFG, 'put', '/items/MLA1', { status: 'paused' });
   });
@@ -161,7 +166,7 @@ describe('vigiaPausado', () => {
       db.prepare('DELETE FROM ml_publicacion_cambios').run();
       vi.clearAllMocks();
       productos({ 'MLA-OLD': falla, 'MLA-NEW': falla });
-      expect(await procesarCambios(db, CFG, [cambio(1, par)])).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 1 });
+      expect(await procesarCambios(db, CFG, [cambioCat(1, par)])).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 1 });
     }
   });
 
@@ -169,25 +174,25 @@ describe('vigiaPausado', () => {
     productos({ 'MLA-OLD': producto(200, ISO(500 * H)), 'MLA-NEW': producto(200, ISO(400 * H)) });
     db.prepare(`INSERT INTO ml_publicacion_cambios (clave,item_id,campo,valor_anterior,valor_nuevo,detectado_en)
       VALUES ('MLA1|v2','MLA1','catalog_product_id','MLA-OLD','MLA-NEW',?)`).run(ISO(1 * H));
-    expect(await procesarCambios(db, CFG, [cambio(1, par)])).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 0, ignorados_por_ruido: 1 });
+    expect(await procesarCambios(db, CFG, [cambioCat(1, par)])).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 0, ignorados_por_ruido: 1 });
   });
 
   it('la ventana de 48 h: un par visto en otra publicación hace 60 h no cuenta', async () => {
     productos({ 'MLA-OLD': producto(200, ISO(500 * H)), 'MLA-NEW': producto(200, ISO(400 * H)) });
     db.prepare(`INSERT INTO ml_publicacion_cambios (clave,item_id,campo,valor_anterior,valor_nuevo,detectado_en)
       VALUES ('OTRA|','OTRA','catalog_product_id','MLA-OLD','MLA-NEW',?)`).run(ISO(60 * H));
-    expect(await procesarCambios(db, CFG, [cambio(1, par)])).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 1 });
+    expect(await procesarCambios(db, CFG, [cambioCat(1, par)])).toMatchObject({ migraciones_sin_pausa: 0, pausadas: 1 });
   });
 
   it('dos publicaciones con el mismo par en la misma corrida: migración sin llamar a ML', async () => {
-    const r = await procesarCambios(db, CFG, [cambio(1, par), cambio(2, par)]);
+    const r = await procesarCambios(db, CFG, [cambioCat(1, par), cambioCat(2, par)]);
     expect(r).toMatchObject({ migraciones_sin_pausa: 2, pausadas: 0 });
     expect(mlFetch).not.toHaveBeenCalled();
   });
 
   it('las lecturas de /products tienen tope por corrida; pasado el tope se pausa (fail-closed)', async () => {
     productos({});
-    const lista = Array.from({ length: 4 }, (_, i) => cambio(i + 1, { valor_anterior: `V${i}`, valor_nuevo: `N${i}` }));
+    const lista = Array.from({ length: 4 }, (_, i) => cambioCat(i + 1, { valor_anterior: `V${i}`, valor_nuevo: `N${i}` }));
     await procesarCambios(db, CFG, lista, { umbral: 50 });
     expect(mlFetch.mock.calls.filter((c) => c[2] === 'get').length).toBeLessThanOrEqual(10);
   });
@@ -199,13 +204,73 @@ describe('vigiaPausado', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM ml_publicacion_cambios WHERE pausada=1').get().n).toBe(2);
   });
 
+  describe('pausas con sentido (Fase A)', () => {
+    it('vacío → producto NO pausa: deja un aviso abierto, sin tocar ML', async () => {
+      const r = await procesarCambios(db, CFG, [cambioCat(1)]);
+      expect(r).toMatchObject({ pausadas: 0, avisos_sin_pausa: 1, errores: 0 });
+      expect(mlFetch).not.toHaveBeenCalled();
+      const f = db.prepare('SELECT pausada, revisado_en, pausa_error FROM ml_publicacion_cambios').get();
+      expect(f.pausada).toBe(0);
+      expect(f.revisado_en).toBeNull();
+      expect(f.pausa_error).toMatch(/^catálogo nuevo/);
+    });
+
+    it('el tope también vale por ventana de 24 h: lo ya pausado cuenta', async () => {
+      const primeras = Array.from({ length: UMBRAL_PAUSA_MASIVA }, (_, i) => cambio(i + 1));
+      expect((await procesarCambios(db, CFG, primeras)).pausadas).toBe(UMBRAL_PAUSA_MASIVA);
+      vi.clearAllMocks();
+      const r = await procesarCambios(db, CFG, [cambio(100)]);
+      expect(r).toMatchObject({ pausadas: 0, omitidos_por_umbral: 1 });
+      expect(mlFetch).not.toHaveBeenCalled();
+      expect(db.prepare("SELECT pausada FROM ml_publicacion_cambios WHERE item_id='MLA100'").get().pausada).toBe(0);
+    });
+
+    it('la ventana suma lo previo y lo nuevo; con margen sí pausa', async () => {
+      expect((await procesarCambios(db, CFG, [cambio(1), cambio(2), cambio(3)])).pausadas).toBe(3);
+      vi.clearAllMocks();
+      expect((await procesarCambios(db, CFG, [cambio(11), cambio(12), cambio(13)])).pausadas).toBe(0); // 3 + 3 > 5
+      vi.clearAllMocks();
+      expect((await procesarCambios(db, CFG, [cambio(21), cambio(22)])).pausadas).toBe(2); // 3 + 2 = 5
+    });
+
+    it('lo pausado hace más de 24 h no cuenta para la ventana', async () => {
+      const viejo = new Date(Date.now() - 25 * 3600e3).toISOString();
+      for (let i = 1; i <= UMBRAL_PAUSA_MASIVA; i++) {
+        db.prepare(`INSERT INTO ml_publicacion_cambios (clave,item_id,campo,valor_anterior,valor_nuevo,pausada,detectado_en)
+          VALUES (?,?,'UNITS_PER_PACK','1','2',1,?)`).run(`MLA${900 + i}|`, `MLA${900 + i}`, viejo);
+      }
+      expect((await procesarCambios(db, CFG, [cambio(1)])).pausadas).toBe(1);
+    });
+
+    it('una publicación ya pausada no se marca pausada=1 (no es una pausa del vigía) ni cuenta para el tope', async () => {
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,sub_status,available_quantity,actualizado_en)
+        VALUES ('MLA1|','MLA1','','x','paused','paused_by_seller',5,datetime('now'))`).run();
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r).toMatchObject({ pausadas: 0, errores: 0, ya_pausadas: 1 });
+      expect(mlFetch).not.toHaveBeenCalled();
+      const f = db.prepare('SELECT pausada, pausa_error, revisado_en FROM ml_publicacion_cambios').get();
+      expect(f.pausada).toBe(0);
+      expect(f.pausa_error).toMatch(/^ya estaba pausada/);
+      expect(f.revisado_en).toBeNull();
+      // No consume cupo: se pueden pausar UMBRAL publicaciones activas después.
+      const lote = Array.from({ length: UMBRAL_PAUSA_MASIVA }, (_, i) => cambio(50 + i));
+      expect((await procesarCambios(db, CFG, lote)).pausadas).toBe(UMBRAL_PAUSA_MASIVA);
+    });
+
+    it('registra quién pausó y desde dónde (vigía)', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      expect(db.prepare('SELECT item_id, actor, origen FROM ml_pausas_log').get())
+        .toEqual({ item_id: 'MLA1', actor: 'vigia', origen: 'vigia_formato' });
+    });
+  });
+
   describe('ruido de catalog_product_id', () => {
     const previo = (n, anterior, nuevo, hace = 3600e3) => db.prepare(`INSERT INTO ml_publicacion_cambios
       (clave,item_id,sku,campo,valor_anterior,valor_nuevo,pausada,detectado_en) VALUES (?,?,?,?,?,?,0,?)`)
       .run(`MLA${n}|`, `MLA${n}`, `FB-${n}`, 'catalog_product_id', anterior, nuevo, new Date(Date.now() - hace).toISOString());
 
     it('producto → vacío se asienta cerrado y no pausa', async () => {
-      const r = await procesarCambios(db, CFG, [cambio(1, { valor_anterior: 'MLA44441017', valor_nuevo: null })]);
+      const r = await procesarCambios(db, CFG, [cambioCat(1, { valor_anterior: 'MLA44441017', valor_nuevo: null })]);
       expect(r).toMatchObject({ pausadas: 0, ignorados_por_ruido: 1 });
       expect(mlFetch).not.toHaveBeenCalled();
       const f = db.prepare('SELECT * FROM ml_publicacion_cambios').get();
@@ -216,30 +281,31 @@ describe('vigiaPausado', () => {
 
     it('vacío → producto ya visto en 7 días no pausa', async () => {
       previo(1, 'MLA44441017', null);
-      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      const r = await procesarCambios(db, CFG, [cambioCat(1)]);
       expect(r).toMatchObject({ pausadas: 0, ignorados_por_ruido: 1 });
       expect(mlFetch).not.toHaveBeenCalled();
     });
 
     it('oscilación A→B→A no pausa', async () => {
       previo(1, 'MLA1', 'MLA44441017');
-      const r = await procesarCambios(db, CFG, [cambio(1, { valor_anterior: 'MLA44441017', valor_nuevo: 'MLA1' })]);
+      const r = await procesarCambios(db, CFG, [cambioCat(1, { valor_anterior: 'MLA44441017', valor_nuevo: 'MLA1' })]);
       expect(r.pausadas).toBe(0);
     });
 
-    it('un valor visto hace más de 7 días vuelve a pausar', async () => {
+    it('un valor visto hace más de 7 días ya no es oscilación: queda como aviso, sin pausar', async () => {
       previo(1, 'MLA44441017', null, 8 * 86400e3);
-      const r = await procesarCambios(db, CFG, [cambio(1)]);
-      expect(r.pausadas).toBe(1);
+      const r = await procesarCambios(db, CFG, [cambioCat(1)]);
+      expect(r).toMatchObject({ pausadas: 0, avisos_sin_pausa: 1 });
+      expect(mlFetch).not.toHaveBeenCalled();
     });
 
     it('el historial de OTRA publicación no cuenta', async () => {
       previo(2, 'MLA44441017', null);
-      expect((await procesarCambios(db, CFG, [cambio(1)])).pausadas).toBe(1);
+      expect(await procesarCambios(db, CFG, [cambioCat(1)])).toMatchObject({ pausadas: 0, avisos_sin_pausa: 1, ignorados_por_ruido: 0 });
     });
 
     it('el ruido no cuenta para el umbral de pausa masiva', async () => {
-      const ruido = Array.from({ length: UMBRAL_PAUSA_MASIVA + 3 }, (_, i) => cambio(100 + i, { valor_anterior: 'X', valor_nuevo: null }));
+      const ruido = Array.from({ length: UMBRAL_PAUSA_MASIVA + 3 }, (_, i) => cambioCat(100 + i, { valor_anterior: 'X', valor_nuevo: null }));
       const r = await procesarCambios(db, CFG, [...ruido, cambio(1)]);
       expect(r).toMatchObject({ pausadas: 1, omitidos_por_umbral: 0, ignorados_por_ruido: UMBRAL_PAUSA_MASIVA + 3 });
     });
@@ -250,18 +316,19 @@ describe('vigiaPausado', () => {
     });
 
     it('publicación creada hace poco: vacío → producto no pausa', async () => {
-      const r = await procesarCambios(db, CFG, [cambio(1, { creada_en: new Date(Date.now() - 3600e3).toISOString() })]);
+      const r = await procesarCambios(db, CFG, [cambioCat(1, { creada_en: new Date(Date.now() - 3600e3).toISOString() })]);
       expect(r).toMatchObject({ pausadas: 0, ignorados_por_ruido: 1 });
       expect(mlFetch).not.toHaveBeenCalled();
     });
 
-    it('publicación vieja: vacío → producto nuevo sigue pausando', async () => {
-      const r = await procesarCambios(db, CFG, [cambio(1, { creada_en: '2025-01-01T00:00:00.000Z' })]);
-      expect(r.pausadas).toBe(1);
+    it('publicación vieja: vacío → producto nuevo deja un aviso y NO pausa', async () => {
+      const r = await procesarCambios(db, CFG, [cambioCat(1, { creada_en: '2025-01-01T00:00:00.000Z' })]);
+      expect(r).toMatchObject({ pausadas: 0, avisos_sin_pausa: 1 });
+      expect(mlFetch).not.toHaveBeenCalled();
     });
 
     it('publicación nueva: salto entre dos productos sí pausa', async () => {
-      const r = await procesarCambios(db, CFG, [cambio(1, { valor_anterior: 'MLA1', creada_en: new Date().toISOString() })]);
+      const r = await procesarCambios(db, CFG, [cambioCat(1, { valor_anterior: 'MLA1', creada_en: new Date().toISOString() })]);
       expect(r.pausadas).toBe(1);
     });
   });

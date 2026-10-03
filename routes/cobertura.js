@@ -172,7 +172,7 @@ export function computarCruce(db) {
  * hermanas y el llamador no mandó `{ confirmado: true }`, corta con 409 y el conteo de
  * variaciones afectadas — nunca ejecuta el pausado "a ciegas". Devuelve { status, body }.
  */
-async function pausarConAdvertencia(db, mlCfg, clave, body) {
+async function pausarConAdvertencia(db, mlCfg, clave, body, actor = 'desconocido') {
   const { itemId, variationId } = partirClaveMl(clave);
   if (!itemId) return { status: 400, body: { ok: false, error: 'clave inválida' } };
   let variacionesAfectadas = 0;
@@ -198,7 +198,7 @@ async function pausarConAdvertencia(db, mlCfg, clave, body) {
   // código tenga que deducir cuál try/catch importa y cuál es cosmético.
   let resultado;
   try {
-    resultado = await pausarPublicacionMl(db, mlCfg, itemId);
+    resultado = await pausarPublicacionMl(db, mlCfg, itemId, { actor, origen: 'cobertura' });
   } catch (e) {
     resultado = { ok: false, error: e.message };
   }
@@ -1041,7 +1041,7 @@ export function coberturaRouter(db, cfg) {
   // excepciones — Joaco (no-admin) trabaja la cola completa pero no estas dos acciones. El
   // backend las rechaza con `requireAdmin`, no confía en que el frontend las esconda.
   router.post('/multi-publicacion/:clave/pausar', requireAdmin, async (req, res) => {
-    const r = await pausarConAdvertencia(db, mlCfg, req.params.clave, req.body);
+    const r = await pausarConAdvertencia(db, mlCfg, req.params.clave, req.body, req.user?.username || 'desconocido');
     res.status(r.status).json(r.body);
   });
 
@@ -1116,7 +1116,7 @@ export function coberturaRouter(db, cfg) {
   // dos excepciones — Joaco (no-admin) tiene acceso a toda la cola pero no a esta acción. El
   // backend la rechaza, no confía en que el frontend la esconda.
   router.post('/solo-ml/:clave/pausar', requireAdmin, async (req, res) => {
-    const r = await pausarConAdvertencia(db, mlCfg, req.params.clave, req.body);
+    const r = await pausarConAdvertencia(db, mlCfg, req.params.clave, req.body, req.user?.username || 'desconocido');
     res.status(r.status).json(r.body);
   });
 
