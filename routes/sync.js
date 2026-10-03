@@ -23,6 +23,7 @@ import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { espera } from '../lib/esperas.js';
+import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -212,6 +213,20 @@ export function buildMlStockUpdate(itemId, variationId, cantidad) {
     return { path: `/items/${itemId}/variations/${variationId}`, body: { available_quantity: cantidad } };
   }
   return { path: `/items/${itemId}`, body: { available_quantity: cantidad } };
+}
+
+/** Puerta única antes de cualquier PUT de available_quantity hacia ML. */
+export function bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior = null, cache = null } = {}) {
+  if (Number(cantidad) <= 0) return { bloqueado: false };
+  let contradiccion = cache?.get(clave);
+  if (contradiccion === undefined) {
+    contradiccion = contradiccionDeClave(db, clave, sku);
+    cache?.set(clave, contradiccion);
+  }
+  if (!contradiccion.contradice) return { bloqueado: false, contradiccion };
+  logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior, cantNueva: cantidad,
+    estado: 'bloqueado_contradiccion', error: JSON.stringify(contradiccion.motivos) });
+  return { bloqueado: true, contradiccion, cantidad };
 }
 
 // CTE compartido que calcula el stock disponible para ML por publicación mapeada
@@ -1128,6 +1143,8 @@ async function _empujarClaveMl(db, mlCfg, sku, diff) {
         return { clave, estado: 'sin_cambios', detalle: `Publicación ${status}, no se sincroniza` };
       }
 
+      const bloqueo = bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior: cantidad_ml });
+      if (bloqueo.bloqueado) return { clave, estado: 'bloqueado_contradiccion', bloqueado: true, motivos: bloqueo.contradiccion.motivos };
       const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
       const resp = await mlFetch(db, mlCfg, 'put', path, body);
 
@@ -1215,6 +1232,8 @@ export async function syncSkuPuntual(db, cfg, sku) {
     resultados.push(await _empujarClaveMl(db, mlCfg, sku, diff));
   }
 
+  const bloqueados = resultados.filter(r => r.bloqueado);
+  if (bloqueados.length > 0) return { sku, estado: 'bloqueado_contradiccion', bloqueado: true, resultados };
   const errores = resultados.filter(r => r.estado === 'error');
   if (errores.length > 0) {
     return { sku, estado: 'error', detalle: errores.map(r => r.detalle).join('; ').slice(0, 400) };
@@ -1263,8 +1282,8 @@ export async function syncWcToMl(db, cfg, opts = {}) {
   if (_wcToMlEnCurso) return { omitido: true };
   _wcToMlEnCurso = true;
   try {
-    await _syncWcToMl(db, cfg, opts);
-    return { omitido: false };
+    const bloqueos = await _syncWcToMl(db, cfg, opts);
+    return { omitido: false, bloqueados_contradiccion: bloqueos };
   } finally {
     _wcToMlEnCurso = false;
   }
@@ -1313,6 +1332,8 @@ async function _syncWcToMl(db, cfg, opts = {}) {
   // bloqueado, etc.) NO suman — ver comentario de la constante más arriba.
   let llamadasMl = 0;
   let cortadoPorTope = false;
+  let bloqueadosContradiccion = 0;
+  const contradicciones = new Map();
   try {
     const cacheStatus = db.prepare('SELECT DISTINCT item_id, status FROM ml_publicaciones_cache').all();
     for (const r of cacheStatus) {
@@ -1335,6 +1356,8 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     const cantidad = Math.max(0, Math.round(stock_disponible_ml));
 
     try {
+      const bloqueoStock = bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior: diff.cantidad_ml, cache: contradicciones });
+      if (bloqueoStock.bloqueado) { bloqueadosContradiccion++; continue; }
       if (!estadoItem.has(itemId)) {
         llamadasMl++;
         const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
@@ -1427,6 +1450,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     // grande, se retoma la próxima corrida)" de "cortó por 429" en el log.
     logSync(db, { direccion: 'wc_ml', clave: null, sku: null, estado: 'info', error: `Tope de ${maxLlamadas} llamadas a ML alcanzado — corte de corrida, se retoma en el próximo ciclo` });
   }
+  return bloqueadosContradiccion;
 }
 
 // ─── reconciliarStockMl ──────────────────────────────────────────────────────
@@ -2321,6 +2345,16 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
           return { item_id: itemId, ok: false, bloqueado: true, ...revalidacion.bloqueos[0], bloqueos: revalidacion.bloqueos };
         }
         return { item_id: itemId, ok: false, bloqueado: true, ...revalidacion };
+      }
+
+      const bloqueosContradiccion = variaciones.map((v) => ({
+        variacion: v,
+        bloqueo: bloquearStockPorContradiccion(db, { clave: v.clave, sku: v.sku,
+          cantidad: Math.max(0, Math.round(v.stock_disponible_ml)), cantAnterior: v.cantidad_ml }),
+      })).filter((x) => x.bloqueo.bloqueado);
+      if (bloqueosContradiccion.length) {
+        return { item_id: itemId, ok: false, bloqueado: true, motivo: 'contradiccion_titulo',
+          bloqueos: bloqueosContradiccion.map((x) => ({ clave: x.variacion.clave, motivos: x.bloqueo.contradiccion.motivos })) };
       }
 
       // 1) Empujar stock de cada variación con stock web disponible (en orden dentro del item)
@@ -3498,6 +3532,10 @@ export function syncRouter(db, cfg) {
     const { itemId, variationId } = partirClaveMl(clave);
     const cantidad = Math.max(0, Math.round(row.stock_disponible_ml));
     try {
+      const bloqueo = bloquearStockPorContradiccion(db, { clave, sku: row.sku, cantidad, cantAnterior: row.cantidad_ml });
+      if (bloqueo.bloqueado) {
+        return res.status(409).json({ ok: false, bloqueado: true, error: 'contradiccion_titulo', motivos: bloqueo.contradiccion.motivos });
+      }
       const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
       // manual: true — reintento puntual disparado a mano desde el panel.
       const resp = await mlFetch(db, mlCfg, 'put', path, body, { manual: true });

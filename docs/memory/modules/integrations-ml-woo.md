@@ -25,6 +25,18 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 
 ## Cuándo actualizar
 
+- **Bloqueo por contradicción de título (2026-10-01):** `lib/contradiccionTitulo.js` compara
+  transmisión, velocidades, color y talle entre `ml_publicaciones_cache` y `catalogo_cache`;
+  auto-vínculos, vínculos manuales, la decisión legacy y subidas positivas de stock quedan
+  bloqueados cuando ambos lados declaran atributos incompatibles. El stock cero sigue permitido
+  para proteger de sobreventa y el sync cachea el resultado por clave dentro de cada corrida.
+- **No sincronizar (2026-10-02):** `POST /api/matcher/vinculos/no-sincronizar` es la mutación UM1
+  permitida para registrar una decisión humana `omitir`. La ruta delega en
+  `marcarClaveNoSincroniza`, que escribe la decisión y la auditoría de identidad/`sync_log`; así
+  no queda una escritura directa sin historial y los automatismos no pueden revivirla. La vista
+  puede enviar `expected_sku` para obtener 409 `vista_vieja` si el vínculo cambió mientras estaba
+  abierta.
+
 ML distingue `elegible`, `no_elegible` e `inconcluso`: faltan `shipping.id` o
 `logistic_type` son inconclusos/fail-open; solo logística externa explícita permite
 invalidar/podar. El cron poda ausencias únicamente con listado confiable.
@@ -115,3 +127,9 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   FB-4746 y FB-10376 (jul–5 sep) era un `user_product` compartido entre productos Woo distintos
   (causa documentada en `UM1.1-cierre-sku-ml.md`). `conflictosDeBolsaCompartida` da 0 hoy; la
   reactivación de FB-32234 del 12-09 fue legítima (venta y reposición).
+- **Revisión matcher-vínculos (2026-10-02):** `contradiccionTitulo` sólo evalúa transmisión/velocidades
+  con rangos y contexto de bicicleta/transmisión, y talle/color/rodado con contexto de producto;
+  los talles numéricos no se convierten en rodado. `no-sincronizar` exige `expected_sku` (SKU actual
+  o `null` explícito), cancela operaciones durables pendientes y persiste `override_omitir` en las
+  sagas de Guardia/Identidad. La saga revalida contradicción antes de restaurar stock o activar una
+  identidad; en conflicto deja el caso abierto y registra historial.

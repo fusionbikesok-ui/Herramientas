@@ -123,6 +123,39 @@ describe('UM1 identidad de productos', () => {
     expect(db.prepare("SELECT origen FROM sku_matcher_decisiones WHERE clave='MLA8|'").get().origen).toBe('identidad_productos');
   });
 
+  it('mantiene abierto el caso y no activa identidad cuando título y Woo se contradicen', () => {
+    woo(db, { id: 801, sku: 'FB-801', stock: 2, nombre: 'Bicicleta Rodado 27 Talle M' });
+    ml(db, { clave: 'MLA801|', sku: 'FB-801', stock: 2 });
+    db.prepare("UPDATE ml_publicaciones_cache SET titulo='Bicicleta Rodado 29 Talle M' WHERE clave='MLA801|'").run();
+    const r = auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    expect(r.verificadas).toBe(0);
+    expect(db.prepare("SELECT estado,clasificacion FROM identidad_casos WHERE ml_key='MLA801|'").get())
+      .toMatchObject({ estado: 'urgente', clasificacion: 'contradiccion_titulo' });
+    expect(db.prepare("SELECT COUNT(*) n FROM identidades_canal WHERE external_key='MLA801|' AND activa=1").get().n).toBe(0);
+  });
+
+  it('rechaza una decisión manual de vincular con contradicción de título', () => {
+    woo(db, { id: 803, sku: 'FB-803', stock: 2, nombre: 'Bicicleta Rodado 27 Talle M' });
+    ml(db, { clave: 'MLA803|', sku: 'FB-803', stock: 2 });
+    db.prepare("UPDATE ml_publicaciones_cache SET titulo='Bicicleta Rodado 29 Talle M' WHERE clave='MLA803|'").run();
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    const caso = db.prepare("SELECT * FROM identidad_casos WHERE ml_key='MLA803|'").get();
+    const producto = db.prepare("SELECT * FROM productos_fusion WHERE primary_woo_id=803").get();
+    expect(decidirCasoIdentidad(db, caso.id, { tipo: 'vincular', product_id: producto.id,
+      operation_id: 'contradice-803', expected_version: caso.expected_version,
+      evidence_fingerprint: caso.evidencia_fingerprint }, 'ana')).toMatchObject({
+      ok: false, code: 'contradiccion_titulo', error: 'contradiccion_titulo',
+    });
+  });
+
+  it('no pisa una decisión omitir durante la auditoría automática', () => {
+    woo(db, { id: 802, sku: 'FB-802', stock: 2 });
+    ml(db, { clave: 'MLA802|', sku: 'FB-802', stock: 2 });
+    db.prepare("INSERT INTO sku_matcher_decisiones (clave,accion,actualizado_en,origen) VALUES ('MLA802|','omitir',?,'usuario')").run(ISO);
+    auditarIdentidadProductos(db, 'test', { lecturaConfiable: true, ahora: new Date(ISO) });
+    expect(db.prepare("SELECT accion FROM sku_matcher_decisiones WHERE clave='MLA802|'").get().accion).toBe('omitir');
+  });
+
   it('devuelve a urgente una operación shadow obsoleta antes de cualquier efecto remoto', () => {
     woo(db, { id: 51, sku: 'FB-51', stock: 2 });
     ml(db, { clave: 'MLA51|', sku: null, stock: 2 });

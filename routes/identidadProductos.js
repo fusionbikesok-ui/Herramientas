@@ -42,7 +42,8 @@ function exigir(nivel = 'read', admin = false) {
 function statusCode(result) {
   return ({ NOT_FOUND: 404, VERSION_CONFLICT: 409, EVIDENCE_CONFLICT: 409,
     CLAIM_CONFLICT: 409, SIBLING_IMPACT_CONFIRMATION_REQUIRED: 409,
-    ALREADY_EXISTS: 409, INVALID_STATE: 409, INVALID_INPUT: 422 }[result?.code] || 400);
+    ALREADY_EXISTS: 409, INVALID_STATE: 409, INVALID_INPUT: 422,
+    contradiccion_titulo: 409, omitir_requiere_override: 409 }[result?.code || result?.error] || 400);
 }
 
 function responder(res, result, created = false) {

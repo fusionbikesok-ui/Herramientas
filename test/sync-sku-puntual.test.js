@@ -99,6 +99,29 @@ describe('syncSkuPuntual', () => {
   });
 
   describe('sincronizado', () => {
+    it('sync masivo también bloquea la publicación contradictoria sin PUT', async () => {
+      seedMatcher(db, 'SKU-MASIVO', 'MLA-MASIVO', 'MLA-MASIVO');
+      seedCatalogo(db, 'SKU-MASIVO', 20);
+      db.prepare("UPDATE catalogo_cache SET nombre='Bici Rodado 27 Talle M' WHERE sku='SKU-MASIVO'").run();
+      db.prepare("INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,available_quantity,actualizado_en) VALUES ('MLA-MASIVO|','MLA-MASIVO','','Bici Rodado 29 Talle M','active',10,?)").run(new Date().toISOString());
+      db.prepare('INSERT INTO ml_stock_estado (clave,sku,cantidad_ml,actualizado_en) VALUES (?,?,?,?)').run('MLA-MASIVO|','SKU-MASIVO',10,new Date().toISOString());
+      const result = await syncWcToMl(db, CFG);
+      expect(result.bloqueados_contradiccion).toBe(1);
+      expect(mlFetch).not.toHaveBeenCalled();
+    });
+
+    it('bloquea el PUT puntual si el título contradice al SKU vinculado', async () => {
+      seedMatcher(db, 'SKU-CONTRA', 'MLA-CONTRA', 'MLA-CONTRA');
+      seedCatalogo(db, 'SKU-CONTRA', 20);
+      db.prepare("UPDATE catalogo_cache SET nombre='Bici Rodado 27 Talle M' WHERE sku='SKU-CONTRA'").run();
+      db.prepare("INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,available_quantity,actualizado_en) VALUES ('MLA-CONTRA|','MLA-CONTRA','','Bici Rodado 29 Talle M','active',10,?)").run(new Date().toISOString());
+      db.prepare('INSERT INTO ml_stock_estado (clave,sku,cantidad_ml,actualizado_en) VALUES (?,?,?,?)').run('MLA-CONTRA|','SKU-CONTRA',10,new Date().toISOString());
+      const result = await syncSkuPuntual(db, CFG, 'SKU-CONTRA');
+      expect(result).toMatchObject({ estado: 'bloqueado_contradiccion', bloqueado: true });
+      expect(mlFetch).not.toHaveBeenCalled();
+      expect(db.prepare("SELECT estado FROM sync_log WHERE clave='MLA-CONTRA|' ORDER BY id DESC LIMIT 1").get().estado).toBe('bloqueado_contradiccion');
+    });
+
     it('devuelve sincronizado cuando el PUT a ML tiene éxito', async () => {
       seedMatcher(db, 'SKU-003', 'MLA300', 'MLA300');
       seedCatalogo(db, 'SKU-003', 20);

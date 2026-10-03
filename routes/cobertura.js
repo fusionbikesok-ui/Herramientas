@@ -18,6 +18,7 @@ import { dispararRefrescoMl, estadoRefrescoMl } from './matcher.js';
 import { requireAdmin } from '../lib/auth.js';
 import { precioContado } from '../lib/mlPrecios.js';
 import { filasDeVinculos, cargarDescartes, senalesVigentes, logSync } from './sync.js';
+import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 import { FILTRO_MARKETPLACE } from '../lib/identidadProductos.js';
 
 /**
@@ -235,6 +236,8 @@ function confirmarDecisionCobertura(db, clave, sku, wcNombre, confirmadoPor) {
   if (!existePublicacion) {
     return { ok: false, status: 400, error: 'La publicación de ML ya no existe en caché (refrescá e intentá de nuevo)' };
   }
+  const contradiccion = contradiccionDeClave(db, clave, sku);
+  if (contradiccion.contradice) return { ok: false, status: 409, error: 'contradiccion_titulo', motivos: contradiccion.motivos };
   const existente = db.prepare(
     'SELECT sku, accion, wc_nombre, confirmado_por FROM sku_matcher_decisiones WHERE clave = ?'
   ).get(clave);
@@ -869,6 +872,8 @@ export function coberturaRouter(db, cfg) {
     if (!pub) return res.status(400).json({ ok: false, error: 'La clave no existe en el caché de publicaciones' });
     const prod = db.prepare("SELECT nombre FROM catalogo_cache WHERE sku = ? AND sku <> '' LIMIT 1").get(sku);
     if (!prod) return res.status(400).json({ ok: false, error: 'El SKU no existe en el catálogo' });
+    const contradiccion = contradiccionDeClave(db, clave, sku);
+    if (contradiccion.contradice) return res.status(409).json({ ok: false, error: 'contradiccion_titulo', motivos: contradiccion.motivos });
 
     // Control optimista explícito: expected_sku es el snapshot que vio el cliente (null si
     // no había decisión). Una decisión moderna SÍ puede cambiar deliberadamente cuando el

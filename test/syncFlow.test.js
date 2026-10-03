@@ -1611,7 +1611,7 @@ describe('syncWcToMl', () => {
     const r = await p;
 
     expect(mlFetch).not.toHaveBeenCalled();
-    expect(r).toEqual({ omitido: false });
+    expect(r).toEqual({ omitido: false, bloqueados_contradiccion: 0 });
   });
 
   it('caso normal (sin candado activo) → retorna omitido:false', async () => {
@@ -1622,7 +1622,7 @@ describe('syncWcToMl', () => {
     await vi.runAllTimersAsync();
     const r = await p;
 
-    expect(r).toEqual({ omitido: false });
+    expect(r).toEqual({ omitido: false, bloqueados_contradiccion: 0 });
   });
 
   it('sale sin credenciales ML → retorna omitido:true', async () => {
@@ -1654,7 +1654,7 @@ describe('syncWcToMl', () => {
 
     resolvePut();
     const r1 = await p1;
-    expect(r1).toEqual({ omitido: false });
+    expect(r1).toEqual({ omitido: false, bloqueados_contradiccion: 0 });
 
     expect(mlFetch.mock.calls.length).toBe(1);
   });

@@ -11,11 +11,12 @@ import {
 import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { escanearGuardiaMl } from '../lib/guardiaMl.js';
-import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl } from '../lib/identidadProductos.js';
+import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl, marcarClaveNoSincroniza } from '../lib/identidadProductos.js';
 import { detectarCambios } from '../lib/vigiaFormato.js';
 import { procesarCambios } from '../lib/vigiaPausado.js';
 import { espera } from '../lib/esperas.js';
 import { dispararAuditoriaPrecios } from '../lib/auditoriaPrecios.js';
+import { filasDeVinculos, cargarDescartes, senalesVigentes } from './sync.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
@@ -849,6 +850,153 @@ function candidatosApiCacheado(db, scope, { peek = false } = {}) {
 export function matcherRouter(db, cfg) {
   const router = Router();
   const mlCfg = cfg?.ml ?? cfg;
+
+  router.post('/vinculos/no-sincronizar', (req, res) => {
+    const clave = req.body?.clave;
+    if (typeof clave !== 'string' || !clave.trim()) {
+      return res.status(400).json({ ok: false, error: 'clave requerida' });
+    }
+    const usuario = req.user?.username;
+    if (!usuario) return res.status(401).json({ ok: false, error: 'usuario requerido' });
+    if (!db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave=?').get(clave)) {
+      return res.status(404).json({ ok: false, error: 'clave no encontrada' });
+    }
+
+    const expectedSkuProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'expected_sku');
+    const vinculo = db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave=? AND accion IN ('asignar','confirmar')").get(clave);
+    if (vinculo && !expectedSkuProvided) return res.status(400).json({ ok: false, error: 'expected_sku requerido para un vínculo activo' });
+    if (!vinculo && (!expectedSkuProvided || req.body.expected_sku !== null)) {
+      return res.status(400).json({ ok: false, error: 'expected_sku debe ser null explícito cuando no hay vínculo activo' });
+    }
+
+    const resultado = marcarClaveNoSincroniza(db, { clave, actor: usuario, expectedSku: req.body?.expected_sku, expectedSkuProvided });
+    if (!resultado.ok) return res.status(resultado.status || 400).json(resultado);
+    return res.json(resultado);
+  });
+
+  router.get('/productos/buscar', (req, res) => {
+    const q = String(req.query.q || '').trim();
+    const limiteRaw = req.query.limite === undefined ? 20 : Number(req.query.limite);
+    if (!Number.isInteger(limiteRaw) || limiteRaw < 1 || limiteRaw > 50) {
+      return res.status(400).json({ ok: false, error: 'limite debe estar entre 1 y 50' });
+    }
+
+    const normalizar = (valor) => String(valor || '').toLowerCase().normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const consulta = normalizar(q);
+    const palabras = consulta.split(' ').filter(Boolean);
+    if (palabras.join('').length < 2) return res.status(400).json({ ok: false, error: 'q debe tener al menos 2 caracteres alfanuméricos' });
+    const like = (valor) => `%${String(valor).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const sinTildes = (c) => `replace(replace(replace(replace(replace(replace(replace(lower(COALESCE(${c},'')),'á','a'),'é','e'),'í','i'),'ó','o'),'ú','u'),'ü','u'),'ñ','n')`;
+    const clausula = (columnas) => palabras.map(() => `(${columnas.map((c) => `${sinTildes(c)} LIKE ? ESCAPE '\\'`).join(' OR ')})`).join(' AND ');
+    const params = (columnas) => palabras.flatMap((p) => columnas.map(() => like(p)));
+    const contieneTodas = (valor) => {
+      const texto = normalizar(valor);
+      return palabras.every((palabra) => texto.includes(palabra));
+    };
+    const filaLimite = Math.max(50, limiteRaw * 10);
+    const catalogo = db.prepare(`SELECT sku, nombre, stock, precio, img, id_woo
+      FROM catalogo_cache
+      WHERE COALESCE(trim(sku),'')<>'' AND ${clausula(['sku', 'nombre'])}
+      ORDER BY stock ASC, id_woo ASC LIMIT ?`).all(...params(['sku', 'nombre']), filaLimite);
+    const productoPorSku = new Map();
+    for (const c of catalogo) if (!productoPorSku.has(c.sku)) productoPorSku.set(c.sku, c);
+    const skusCatalogo = [...productoPorSku.keys()];
+    const publicacionesIniciales = db.prepare(`SELECT p.*, d.sku AS decision_sku, d.accion,
+      d.confirmado_por FROM ml_publicaciones_cache p
+      LEFT JOIN sku_matcher_decisiones d ON d.clave=p.clave
+      WHERE ${clausula(['p.item_id', 'p.titulo', 'p.seller_sku'])}
+      ORDER BY p.clave LIMIT ?`).all(...params(['p.item_id', 'p.titulo', 'p.seller_sku']), filaLimite);
+    const publicaciones = [...publicacionesIniciales];
+    const skusVinculados = [...new Set([...publicaciones, ...catalogo]
+      .filter((p) => p.decision_sku && ['asignar', 'confirmar'].includes(p.accion))
+      .map((p) => p.decision_sku).concat(skusCatalogo))];
+    if (skusVinculados.length) {
+      const placeholders = skusVinculados.map(() => '?').join(',');
+      const vinculados = db.prepare(`SELECT sku, nombre, stock, precio, img, id_woo FROM catalogo_cache
+        WHERE sku IN (${placeholders}) ORDER BY stock ASC, id_woo ASC LIMIT ?`).all(...skusVinculados, filaLimite);
+      for (const c of vinculados) if (!productoPorSku.has(c.sku)) productoPorSku.set(c.sku, c);
+      const hermanas = db.prepare(`SELECT p.*, d.sku AS decision_sku, d.accion, d.confirmado_por
+        FROM ml_publicaciones_cache p JOIN sku_matcher_decisiones d ON d.clave=p.clave
+        WHERE d.sku IN (${placeholders}) AND d.accion IN ('asignar','confirmar')
+        ORDER BY p.clave LIMIT ?`).all(...skusVinculados, filaLimite);
+      const claves = new Set(publicaciones.map((p) => p.clave));
+      publicaciones.push(...hermanas.filter((p) => !claves.has(p.clave)));
+    }
+
+    const razonesPorSku = new Map();
+    const huerfanas = [];
+    const prioridad = new Map();
+    const sumarRazon = (sku, razon, peso) => {
+      if (!razonesPorSku.has(sku)) razonesPorSku.set(sku, new Set());
+      razonesPorSku.get(sku).add(razon);
+      prioridad.set(sku, Math.min(prioridad.get(sku) ?? 99, peso));
+    };
+    const prioridadPub = new Map();
+
+    for (const c of productoPorSku.values()) {
+      const sku = normalizar(c.sku);
+      if (sku === consulta || sku.startsWith(consulta) || sku.includes(consulta)) {
+        sumarRazon(c.sku, 'sku', sku === consulta ? 0 : 2);
+      }
+      if (contieneTodas(c.nombre)) sumarRazon(c.sku, 'nombre_woo', 2);
+    }
+
+    for (const p of publicaciones) {
+      const razones = new Set();
+      let peso = 99;
+      const item = normalizar(p.item_id);
+      if (item === consulta || item.includes(consulta)) { razones.add('mla'); peso = Math.min(peso, item === consulta ? 1 : 2); }
+      if (contieneTodas(p.titulo)) { razones.add('titulo_ml'); peso = Math.min(peso, 2); }
+      if (p.seller_sku && normalizar(p.seller_sku).includes(consulta)) { razones.add('sku'); peso = Math.min(peso, 2); }
+
+      if (razones.size) {
+        prioridadPub.set(p.clave, peso);
+        if (p.decision_sku && ['asignar', 'confirmar'].includes(p.accion) && productoPorSku.has(p.decision_sku)) {
+          for (const razon of razones) sumarRazon(p.decision_sku, razon, peso);
+        } else {
+          huerfanas.push(p);
+        }
+      }
+    }
+
+    const filas = filasDeVinculos(db);
+    const descartes = cargarDescartes(db);
+    const filaPorClave = new Map(filas.map((f) => [f.clave, f]));
+    const publicacion = (p, f = filaPorClave.get(p.clave)) => ({
+      clave: p.clave, item_id: p.item_id, variation_id: p.variation_id, titulo: p.titulo,
+      status: p.status, sub_status: p.sub_status, color: p.color, talle: p.talle,
+      variations_texto: p.variations_texto, seller_sku: p.seller_sku, thumbnail: p.thumbnail,
+      permalink: p.permalink, precio_ml: p.precio, stock_ml: p.available_quantity,
+      vinculo: {
+        estado: p.accion === 'omitir' ? 'no_sincroniza' : (f ? 'vinculada' : 'sin_vinculo'),
+        sku_vinculado: f?.sku || null, accion: p.accion || null, confirmado_por: p.confirmado_por || null,
+        senales: f ? senalesVigentes(f, descartes) : [],
+      },
+    });
+    const grupos = [...razonesPorSku.entries()].map(([sku, razones]) => {
+      const vinculadas = publicaciones.filter((p) => p.decision_sku === sku && ['asignar', 'confirmar'].includes(p.accion));
+      return {
+        sku,
+        woo: (() => { const c = productoPorSku.get(sku); return c ? { nombre: c.nombre, stock: c.stock, precio: c.precio, img: c.img } : null; })(),
+        publicaciones: vinculadas.map((p) => publicacion(p)),
+        coincidio_por: [...razones],
+        _prioridad: prioridad.get(sku) ?? 2,
+      };
+    });
+    const huerfanasSalida = huerfanas
+      .sort((a, b) => (prioridadPub.get(a.clave) ?? 2) - (prioridadPub.get(b.clave) ?? 2) || normalizar(a.titulo).localeCompare(normalizar(b.titulo)))
+      .map((p) => publicacion(p));
+    const unidades = [
+      ...grupos.map((grupo) => ({ tipo: 'producto', prioridad: grupo._prioridad, nombre: grupo.woo?.nombre, valor: grupo })),
+      ...huerfanasSalida.map((pub) => ({ tipo: 'huerfana', prioridad: prioridadPub.get(pub.clave) ?? 2, nombre: pub.titulo, valor: pub })),
+    ].sort((a, b) => a.prioridad - b.prioridad || normalizar(a.nombre).localeCompare(normalizar(b.nombre)));
+    const seleccionadas = unidades.slice(0, limiteRaw);
+    const datos = seleccionadas.filter((u) => u.tipo === 'producto').map((u) => u.valor);
+    const sinProducto = seleccionadas.filter((u) => u.tipo === 'huerfana').map((u) => u.valor);
+    grupos.forEach((g) => delete g._prioridad);
+    return res.json({ ok: true, data: datos, sin_producto_woo: sinProducto, total: unidades.length });
+  });
 
   router.get('/decisiones', (req, res) => {
     const rows = db.prepare('SELECT clave, sku, wc_nombre, accion FROM sku_matcher_decisiones').all();
