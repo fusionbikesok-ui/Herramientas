@@ -121,14 +121,27 @@ describe('autoVincularPorSellerSku (incidente 2026-08-27, FB-68055)', () => {
     expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA1|'").get()).toBeUndefined();
   });
 
-  it('NO vincula si ese SKU ya está vinculado a OTRA publicación (ambigüedad SKU-a-múltiples-claves)', () => {
+  it('SÍ vincula si ese SKU ya está vinculado a OTRA publicación cuando el producto Woo es único (Fase A, 2026-10-03)', () => {
     seedCatalogo(db, { sku: 'FB-COMPARTIDO', stock: 4 });
     seedDecision(db, { clave: 'MLA-VIEJA|', sku: 'FB-COMPARTIDO', accion: 'asignar' });
     seedCache(db, { clave: 'MLA-NUEVA|', itemId: 'MLA-NUEVA', sellerSku: 'FB-COMPARTIDO' });
 
     const n = autoVincularPorSellerSku(db);
 
-    expect(n).toBe(0);
+    expect(n).toBe(1);
+    expect(db.prepare("SELECT sku, accion, origen FROM sku_matcher_decisiones WHERE clave='MLA-NUEVA|'").get())
+      .toEqual({ sku: 'FB-COMPARTIDO', accion: 'asignar', origen: 'auto_seller_sku' });
+    // La publicación anterior no se toca.
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA-VIEJA|'").get().sku).toBe('FB-COMPARTIDO');
+  });
+
+  it('NO vincula un SKU ya vinculado a otra publicación si el producto Woo NO es único (SKU duplicado en catalogo_cache)', () => {
+    seedCatalogo(db, { sku: 'FB-COMPARTIDO', stock: 4 });
+    seedCatalogo(db, { sku: 'FB-COMPARTIDO', stock: 9 });
+    seedDecision(db, { clave: 'MLA-VIEJA|', sku: 'FB-COMPARTIDO', accion: 'asignar' });
+    seedCache(db, { clave: 'MLA-NUEVA|', itemId: 'MLA-NUEVA', sellerSku: 'FB-COMPARTIDO' });
+
+    expect(autoVincularPorSellerSku(db)).toBe(0);
     expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA-NUEVA|'").get()).toBeUndefined();
   });
 
