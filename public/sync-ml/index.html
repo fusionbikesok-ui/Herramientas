@@ -300,7 +300,7 @@ function renderStatus(){
   var ml=(D.ultimasSyncsOk||[]).filter(function(x){return x.direccion==='ml_wc'})[0];
   var wc=(D.ultimasSyncsOk||[]).filter(function(x){return x.direccion==='wc_ml'})[0];
   var st=D.stock||{}, big;
-  if(!tok)big='<span class="dot bad"></span><span>La conexión con ML venció<small>No se sincroniza nada hasta renovarla. <a href="/herramientas/config-ml/">Renovar conexión →</a></small></span>';
+  if(!tok)big='<span class="dot bad"></span><span>La conexión con ML venció<small>No se sincroniza nada hasta renovarla. <button class="btn" type="button" data-renovar>Renovar conexión →</button><span id="renovar-err" class="res bad" role="alert" hidden></span></small></span>';
   else if(!I.length)big='<span class="dot ok"></span><span>Todo sincronizando<small>'+n(st.sincronizadas)+' publicaciones al día</small></span>';
   else{
     var crit=I.some(function(i){return i.sev==='crit'});
@@ -491,6 +491,17 @@ var RUNS={
   'cancel':{url:'/api/sync/ml-cancelaciones',txt:'Procesando cancelaciones…',ok:'Cancelaciones procesadas.'},
   'muertas':{url:'/api/sync/limpiar-variaciones-muertas',txt:'Verificando publicaciones en ML…',ok:null}
 };
+async function renovarConexion(btn){
+  var err=$('#renovar-err'); err.hidden=true; btn.disabled=true;
+  try{
+    var d=await leerJson(await fetch('/api/sync/ml-auth-url'));
+    if(typeof d.url!=='string'||!/^https:\/\//i.test(d.url))throw new Error('el servidor no devolvió la dirección de autorización');
+    location.href=d.url; return;
+  }catch(e){
+    err.textContent='No se pudo iniciar la renovación: '+e.message+'. Probá de nuevo en un momento.'; err.hidden=false;
+  }
+  btn.disabled=false;
+}
 async function correr(k){
   var r=RUNS[k]; if(!r||corriendo)return;
   corriendo=true; $('#mbtn').disabled=true;
@@ -538,6 +549,7 @@ document.addEventListener('click',function(e){
   if(!t)return;
   var d=t.dataset;
   if(t.id==='mbtn'){var m=$('#menu');m.hidden=!m.hidden;t.setAttribute('aria-expanded',String(!m.hidden));if(!m.hidden)m.querySelector('button').focus();return}
+  if(d.renovar!==undefined){renovarConexion(t);return}
   if(d.run){cerrarMenu();correr(d.run);return}
   if(t.id==='refresh'||d.reload!==undefined){cargar();return}
   if(t.id==='bandx'){$('#band').hidden=true;return}

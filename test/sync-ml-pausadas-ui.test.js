@@ -57,6 +57,11 @@ describe('Sincronización ML rediseñada', () => {
   it('estado arriba y flujos reemplazan las píldoras', () => {
     expect(sync).toContain('La conexión con ML venció');
     expect(sync).toContain('Renovar conexión →');
+    expect(sync).toContain("fetch('/api/sync/ml-auth-url')");
+    expect(sync).toContain('location.href=d.url');
+    expect(sync).toContain('data-renovar');
+    expect(sync).not.toContain('config-ml');
+    expect(sync).toContain('No se pudo iniciar la renovación');
     expect(sync).toContain('Todo sincronizando');
     expect(sync).toContain('Ventas ML → web');
     expect(sync).toContain('Stock web → ML');
