@@ -1168,3 +1168,15 @@ una fila `persona`: devuelve `'respetada'`; bajar/promover una primaria cierra l
 - Vista previa completa en vivo ejecutada el 2026-09-29: 11/11 preparaciones abiertas consultadas, cero errores. ML `2000018214080180` (prep 238) figuraba `cancelled`; las diez órdenes Web abiertas (preps 307, 366, 393, 404, 430, 431, 454, 458, 459, 466) figuraban `enviadoandreani`.
 - Cron habilitado con `PREPARACION_RECONCILIACION_ACTIVA=true`; primer tick 23:58 UTC procesó las 11: prep 238 → `cancelada_sin_retiro_registrado`; las otras diez → `despachada_sin_verificar`. Cero errores, 11 intentos, cero abiertas. Cada transición tiene exactamente un evento; ítems, fotos y eventos anteriores/autores quedaron conservados. PM2 online y `/healthz` 200. Flag permanece activa para corridas acotadas cada 10 minutos.
 - La salida diagnóstica previa imprimió credenciales de autenticación de Woo. No hay evidencia de acceso de terceros; el usuario rotará la clave otro día y decidió que eso no bloquea esta operación. La vista previa y el tick consultaron los pedidos con la credencial vigente sin volver a imprimirla. Pedido 70312 (prep 446) quedó intacto y fuera del lote: sigue completado, con 0 ítems, 2 fotos y 10 eventos; requiere revisión separada de sus fotos/discrepancia de escaneo, sin inventar un escaneo.
+
+## Consolidación de herramientas: hallazgos operativos (2026-10-05)
+
+Fuente: `docs/superpowers/specs/2026-10-03-consolidacion-herramientas.md` (hechos verificados en sólo lectura el 2026-10-03). Decisión: PM-189 (Fases A y B = correcciones del legado; C y D en E3/E4; E en E1/E14).
+
+- **Canario de Identidad trabado:** 1 clave y lote 1 (`lib/identidadProductos.js:1932-1944`); 21 operaciones sin ejecutar desde el 05 y el 12/09 (15 no-op, la 128 mala, 104/126/127/130 reales). No tocar el canario sin decisión de José.
+- **Guardia en `modo=lectura` desde el 03/09:** `/vincular-clave` responde 409; hoy no se vincula a mano por ningún camino. La Bandeja E3 sólo escribe en Postgres (no mueve stock).
+- **Bug latente del Matcher:** confirma sobre `filteredItems[0]` y no sobre la publicación mirada (`public/matcher/index.html:443-447,573,586`); hoy no escribe porque Guardia responde 409. Corrección en la Fase B.
+- **75 publicaciones pausadas con vínculo y stock en Woo** (40 `paused_by_seller`, 16 `out_of_stock,paused_by_seller`, 12 sin `sub_status`, 7 `out_of_stock`) + 22 sin vínculo. El reactivador excluye `paused_by_seller` a propósito; la reactivación de esas es siempre manual. La Fase A está en la rama `fix/pausas-con-sentido` (sin desplegar; la UI de la lista se rediseña antes).
+- **~4.800 mensajes `pending` en `integrations.inbox_messages`** sin consumidor desde el 17–18/09 (corrientes en sombra); José decide en E1 si se consumen o se deja de guardarlos.
+- Bandeja E3 (`fix/integracion-0028`): despliegue en pausa; con la decisión de no llevar su UX al legado se replantea (posiblemente sólo la migración 0028 y correcciones de catálogo).
+

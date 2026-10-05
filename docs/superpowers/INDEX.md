@@ -15,6 +15,7 @@
 - [Línea base auditada](audit-baseline-2026-09-13.md): fotografía de Git, despliegue, esquema y volúmenes.
 - [Registro de decisiones](decisions/plan-maestro-decisions.md): motivos y decisiones de producto preservadas.
 - [SOP operativos](../operations/sops/README.md): procedimientos de operación.
+- [Consolidación de herramientas, pausas con sentido y eventos antes que crons (2026-10-03)](specs/2026-10-03-consolidacion-herramientas.md): Fases A y B como correcciones del legado (PM-189); C y D en E3/E4; E en E1/E14.
 - [Guía API Mercado Libre](specs/ml-api-guia.md): cómo llamar a ML y qué hacer con cada webhook; toda entrega que toque ML debe cumplirla.
 
 ## E1 activa

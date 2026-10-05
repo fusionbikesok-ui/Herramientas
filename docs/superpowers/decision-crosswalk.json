@@ -1738,6 +1738,12 @@
       "owner": "E1",
       "consumers": ["E2", "E3"],
       "basis": "E2 y E3 dependen del cierre de la campaña de 7 días verdes de PM-186, que T5 desbloquea; E3 además comparte directamente el bucket de cupo `items` con la relectura automática de SKU (spec T5 §2.8)."
+    },
+    {
+      "id": "PM-189",
+      "owner": "E3",
+      "consumers": ["E1", "E4", "E14"],
+      "basis": "Fases A y B de la consolidación como correcciones del legado (pausas del Vigía y bloqueo de vínculo); C y D se reparten entre E3 y E4, E entre E1 y E14."
     }
   ]
 }

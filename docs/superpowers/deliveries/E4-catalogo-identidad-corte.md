@@ -236,7 +236,22 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 **Decisiones abiertas que mantienen la ficha en borrador:** orden exacto de los 39 casos; tamaño de lote después del canario; dispositivos concretos de prueba.
 
+## Requisitos adicionales de la consolidación (2026-10-05)
+
+Origen: `specs/2026-10-03-consolidacion-herramientas.md` (Fase D) y PM-189. Se agregan; no reemplazan ningún requisito vigente.
+
+- **Pantalla única «Catálogo y vínculos»** con un único escritor (el motor de identidad), que lleva la UX de la Bandeja (`specs/2026-09-24-e3-bandeja-flujo-ux.md`: sin preselección, deshacer, teclado) más:
+  - cola ordenada por impacto (ventas en ML × stock en Woo);
+  - **matriz por atributo con veto rojo** (color, talle, rodado, transmisión, medida) y puntaje desglosado;
+  - **lote por familia**, sólo cuando todo está en verde;
+  - «Saltear» separado de «No sincronizar con motivo»;
+  - **estado real de la ejecución en cada caso** (encolada → aplicada en ML, o frenada);
+  - encabezado con cobertura, cola y trabadas.
+- Se retiran, con el corte, las tarjetas «Identidad de productos», «Guardia ML», «SKU Matcher» y «Bandeja».
+- Verificación: el recorrido de teclado de 11 pasos de la spec de la Bandeja y un vínculo real aplicado en ML y visible como «aplicada».
+- **Alternativa descartada:** construir esta pantalla en el legado y congelar la autoridad de la plataforma hasta E4 (José, 2026-10-05).
+
 ## Decisiones PM asignadas
 
 - **Dueña:** PM-036, PM-048, PM-050, PM-086, PM-089, PM-091, PM-094, PM-095, PM-097, PM-098, PM-099, PM-104, PM-125, PM-129, PM-153
-- **Consumidora:** PM-004, PM-029, PM-031, PM-032, PM-033, PM-034, PM-040, PM-044, PM-045, PM-046, PM-049, PM-054, PM-055, PM-059, PM-060, PM-064, PM-068, PM-069, PM-070, PM-073, PM-074, PM-075, PM-076, PM-078, PM-080, PM-081, PM-083, PM-084, PM-087, PM-090, PM-092, PM-093, PM-096, PM-101, PM-103, PM-105, PM-106, PM-107, PM-108, PM-110, PM-111, PM-113, PM-114, PM-115, PM-117, PM-119, PM-120, PM-121, PM-122, PM-123, PM-124, PM-126, PM-128, PM-130, PM-131, PM-132, PM-133, PM-134, PM-135, PM-136, PM-139, PM-140, PM-141, PM-142, PM-143, PM-144, PM-148, PM-149, PM-150, PM-151, PM-154, PM-156, PM-158, PM-159, PM-160, PM-164
+- **Consumidora:** PM-004, PM-029, PM-031, PM-032, PM-033, PM-034, PM-040, PM-044, PM-045, PM-046, PM-049, PM-054, PM-055, PM-059, PM-060, PM-064, PM-068, PM-069, PM-070, PM-073, PM-074, PM-075, PM-076, PM-078, PM-080, PM-081, PM-083, PM-084, PM-087, PM-090, PM-092, PM-093, PM-096, PM-101, PM-103, PM-105, PM-106, PM-107, PM-108, PM-110, PM-111, PM-113, PM-114, PM-115, PM-117, PM-119, PM-120, PM-121, PM-122, PM-123, PM-124, PM-126, PM-128, PM-130, PM-131, PM-132, PM-133, PM-134, PM-135, PM-136, PM-139, PM-140, PM-141, PM-142, PM-143, PM-144, PM-148, PM-149, PM-150, PM-151, PM-154, PM-156, PM-158, PM-159, PM-160, PM-164, PM-189

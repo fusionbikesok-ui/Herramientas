@@ -72,7 +72,15 @@
 - Esta ficha queda bloqueada si contiene decisiones abiertas, cifras sin consulta reproducible, interfaces supuestas o rollback genérico.
 - No registrar secretos, tokens, PII, volcados de producción ni razonamiento privado.
 
+## Requisitos adicionales de la consolidación (2026-10-05)
+
+Origen: `specs/2026-10-03-consolidacion-herramientas.md` (Fases B3 y E) y PM-189. El inventario es el primer paso del apagado reversible; nada se borra sin él.
+
+- **Inventario de los 31 crons**: función, frecuencia, tablas que escribe, evento que lo reemplaza y métrica de «diferencias encontradas». Meta orientativa 12–15 con función clara; los de cada minuto se agrupan en un bucle de trabajos; Guardia, la auditoría de Identidad y la reconciliación de stock (mismo universo) pasan a un solo barrido. Los crons se reducen, no se eliminan.
+- **Inventario de herramientas muertas o superpuestas** (~12 herramientas para 3 trabajos): Cobertura y Vínculos (410), Auditoría de publicaciones (2.868 filas «sin revisar»), `ml_vinculos_revisados`, `guardia_ml_aprendizajes` e `identidad_notas/_excepciones/_tareas_publicacion` (0 filas), `guardia_ml_operaciones` (sin actividad desde el 06/09), dos chips rotos del home, código muerto de `server.js:1121-1131`.
+- **Orden de retiro seguro (de la spec):** 1) Matcher en sólo lectura con redirección (Fase B); 2) Cobertura, Vínculos, endpoints y chips 410, Auditoría de publicaciones y código muerto; 3) tablas muertas, siempre con backup; 4) escaneo y worker de Guardia apagados con sus tablas 30 días en sólo lectura, luego se retira la página; 5) tarjetas «Identidad de productos», «Guardia ML», «SKU Matcher» y «Bandeja» al cortar E4. Cada paso es reversible y lleva el OK de José.
+
 ## Decisiones PM asignadas
 
 - **Dueña:** PM-160
-- **Consumidora:** ninguna
+- **Consumidora:** PM-189
