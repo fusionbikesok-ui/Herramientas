@@ -90,6 +90,7 @@ describe('db schema', () => {
       // Medición por minuto de llamadas a ML para el techo shadow de E1 T3 (106).
       'ml_llamadas_minuto',
       'ml_oauth_token',
+      'ml_pausas_log',
       'ml_precio_auditoria',
       'ml_precios_cache',
       'ml_productos_cache',
