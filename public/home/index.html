@@ -614,6 +614,9 @@ fetch('/api/auth/me').then(function(r) {
      Se muestran sólo a admin y con el estado a la vista — esconderlas es cómo llegamos a tener
      cuatro pantallas construidas que nadie podía alcanzar. */
   var GRUPOS = [
+    { titulo: 'Gestión en el VPS', color: 'control', adminOnly: true, tools: [
+      { tool: 'gestion-vps', href: 'gestion-vps', t: 'Gestión VPS — POS, Facturador y Taller', d: 'Consultá el historial copiado de presupuestos, comprobantes y trabajos. Todavía no se actualiza automáticamente; para operar, usá la web habitual.', tag: 'Presupuestos · Comprobantes · Taller', parcial: 'solo consulta' },
+    ]},
     { titulo: 'Vender y despachar', color: 'ingreso', tools: [
       { tool: 'preparacion', href: 'preparacion', t: 'Preparación de pedidos', d: 'Buscá los productos, escaneá cada unidad, embalá y dejá el pedido listo para despachar.', tag: 'Picking · Embalaje · Evidencia' },
       { tool: 'gestion-pedidos', href: 'gestion-pedidos', t: 'Gestión de pedidos', d: 'Todos los pedidos de la web y de MercadoLibre en un solo lugar, con su estado y su cliente.', tag: 'Woo · ML · Clientes' },
