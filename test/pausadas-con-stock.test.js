@@ -88,4 +88,18 @@ describe('lista "Pausadas con stock en Woo"', () => {
     db.prepare("INSERT INTO skus_config_ml (sku,nombre,modo,reserva,actualizado_en) VALUES ('FB-1','x','solo_local',0,?),('FB-2','y','reserva',1,?),('FB-9','z','solo_local',0,?)").run(ISO, ISO, ISO);
     expect(resumenSoloLocal(db)).toEqual({ skus: 2, publicaciones: 2 });
   });
+
+  it('trae foto, stock de ML, precio de contado por variación y plata en juego, ordenado por plata', () => {
+    db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,regular_price,actualizado_en) VALUES (1,'A','FB-A','simple',4,1000,1000,?)").run(ISO);
+    db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,regular_price,actualizado_en) VALUES (2,'B','FB-B','simple',2,5000,5000,?)").run(ISO);
+    pub(1, { sub: 'paused_by_seller', sku: 'FB-A' });
+    pub(2, { sub: 'paused_by_seller', sku: 'FB-B' });
+    db.prepare("UPDATE ml_publicaciones_cache SET thumbnail='http://x/t.jpg', available_quantity=0 WHERE item_id='MLA2'").run();
+    const r = listarPausadasConStock(db);
+    expect(r.data.map((x) => x.item_id)).toEqual(['MLA2', 'MLA1']); // 2 × 5000 > 4 × 1000 (con el descuento de contado)
+    const b = r.data[0];
+    expect(b).toMatchObject({ thumbnail: 'http://x/t.jpg', stock_ml: 0, stock_woo: 2, sin_precio: false });
+    expect(b.variaciones[0].precio_contado).toBeGreaterThan(0);
+    expect(b.en_juego).toBe(Math.round(2 * b.variaciones[0].precio_contado));
+  });
 });
