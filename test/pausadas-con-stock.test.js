@@ -98,8 +98,19 @@ describe('lista "Pausadas con stock en Woo"', () => {
     const r = listarPausadasConStock(db);
     expect(r.data.map((x) => x.item_id)).toEqual(['MLA2', 'MLA1']); // 2 × 5000 > 4 × 1000 (con el descuento de contado)
     const b = r.data[0];
-    expect(b).toMatchObject({ thumbnail: 'http://x/t.jpg', stock_ml: 0, stock_woo: 2, sin_precio: false });
+    expect(b).toMatchObject({ thumbnail: 'https://x/t.jpg', stock_ml: 0, stock_woo: 2, sin_precio: false });
     expect(b.variaciones[0].precio_contado).toBeGreaterThan(0);
     expect(b.en_juego).toBe(Math.round(2 * b.variaciones[0].precio_contado));
+  });
+
+  it('stock_ml es null si ML no informó (no 0) y thumbnail/permalink solo aceptan http(s)', () => {
+    db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,regular_price,actualizado_en) VALUES (1,'A','FB-A','simple',4,1000,1000,?)").run(ISO);
+    pub(1, { sub: 'paused_by_seller', sku: 'FB-A' });
+    db.prepare("UPDATE ml_publicaciones_cache SET available_quantity=NULL, thumbnail='javascript:alert(1)', permalink='//evil' WHERE item_id='MLA1'").run();
+    const a = listarPausadasConStock(db).data[0];
+    expect(a.stock_ml).toBeNull();
+    expect(a.variaciones[0].stock_ml).toBeNull();
+    expect(a.thumbnail).toBeNull();
+    expect(a.permalink).toBeNull();
   });
 });

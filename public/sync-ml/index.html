@@ -98,6 +98,7 @@
   .cf-ok{color:var(--green,#4ADE80);font-weight:700;}
   .cf-mal{color:var(--red,#F87171);font-weight:700;}
   @media(max-width:600px){.cf-acciones{margin-left:0;width:100%;}.cf-acciones .btn{flex:1;justify-content:center;}}
+.pausadas-linea a{display:inline-flex;align-items:center;min-height:44px}
 </style>
 </head>
 <body>
@@ -262,9 +263,10 @@ function cfAviso(d){
   var f=d.oferta_reactivar;
   if(d.pendiente_stock)cfMensaje('Aviso cerrado. La publicación no tiene stock en MercadoLibre: se reactiva sola cuando vuelva a haber stock.');
   else if(f)cfMensaje('Aviso cerrado. <b>Hay '+f.stock_woo+' en stock</b> y la publicación sigue pausada.',
-    '<button class="btn" type="button" onclick="cfReactivarAhora(this,\''+esc(f.item_id)+'\')">Reactivar ahora</button>'
+    '<button class="btn" type="button" data-cf-reactivar data-id="'+esc(f.item_id)+'">Reactivar ahora</button>'
     +'<a class="btn sec" href="/herramientas/sync-ml/pausadas/">Ver en Pausadas</a>');
 }
+document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-cf-reactivar]');if(b)cfReactivarAhora(b,b.getAttribute('data-id'));});
 async function cfReactivarAhora(btn,id){
   var fila=btn.closest('.cf-fila'),txt=fila.firstChild;
   btn.disabled=true;
@@ -655,7 +657,7 @@ function render(d){
 
   // Pausadas con stock en la web: el detalle vive en su propia vista; acá sólo el aviso.
   var pcs=Object.keys(d.pausadas_con_stock||{}).reduce(function(a,k){return a+(d.pausadas_con_stock[k]||0);},0);
-  if(pcs>0)h+='<p class="sub" id="pausadas-linea" style="margin:14px 0"><b>'+n(pcs)+'</b> pausadas con stock · <a href="/herramientas/sync-ml/pausadas/">Revisar →</a></p>';
+  if(pcs>0)h+='<p class="sub pausadas-linea" id="pausadas-linea" style="margin:14px 0"><b>'+n(pcs)+'</b> pausadas con stock · <a href="/herramientas/sync-ml/pausadas/">Revisar →</a></p>';
 
   // Frenadas por precio (se llena aparte, async)
   h+='<div class="sec-title" id="frenadas">Publicaciones frenadas por precio</div>';

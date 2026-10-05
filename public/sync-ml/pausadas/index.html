@@ -73,7 +73,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-label);background:var(--surface2)
 .row.is-error{background:var(--amber-bg);box-shadow:inset 3px 0 0 var(--amber)}
 .row .act .btn{background:transparent;border-color:transparent;color:var(--accent)}
 .row:hover .act .btn,.row.is-focus .act .btn,.row .act .btn:focus-visible{border-color:var(--border2);background:var(--surface2)}
-.row[aria-selected="true"] .act .btn{visibility:hidden}
+.row[aria-selected="true"]:not(.is-error) .act .btn{visibility:hidden}
 .row.is-done{opacity:.55;transition:opacity .2s}
 .cb{display:flex;align-items:center;justify-content:center;height:44px;cursor:pointer}
 .cb input,.gcb input{width:18px;height:18px;accent-color:var(--accent);cursor:pointer;margin:0}
@@ -89,7 +89,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-label);background:var(--surface2)
 .tt .err{font-size:var(--fs-meta);color:var(--amber);margin-top:.1rem;overflow-wrap:anywhere}
 .stk{font-size:var(--fs-meta);white-space:nowrap;text-align:right}
 .stk .lbl{color:var(--muted)}
-.stk .ne{color:var(--amber)}
+.stk .ne{color:var(--amber);white-space:nowrap}
 .stk .money{display:block;color:var(--muted)}
 .act{display:flex;justify-content:flex-end}
 .btn{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 .9rem;border-radius:8px;background:var(--surface2);border:1px solid var(--border2);cursor:pointer;white-space:nowrap;font-weight:600;font-size:.88rem;text-decoration:none;color:var(--txt)}
@@ -185,8 +185,10 @@ kbd{font-family:var(--mono);font-size:var(--fs-label);background:var(--surface2)
   .row .lockmsg a{min-height:var(--tap-min)}
   .row[aria-selected="true"]{box-shadow:none;background:transparent}
   .row[aria-selected="true"] .act .btn{visibility:visible}
-  .row--locked{grid-template-columns:56px minmax(0,1fr);grid-template-areas:"ph tt" "ph tt";padding:.55rem .75rem}
-  .row--locked .ph{width:56px;height:56px}
+  .row--locked{grid-template-columns:64px minmax(0,1fr);grid-template-areas:"ph tt" "ph tt";padding:.7rem .75rem}
+  .row--locked .ph{width:64px;height:64px}
+  .linkbtn{min-height:var(--tap-min)}
+  .crumb a{display:inline-flex;align-items:center;min-height:var(--tap-min)}
   .barbg{display:none!important}
   .band{padding-bottom:calc(.55rem + env(safe-area-inset-bottom))}
 }
@@ -304,7 +306,7 @@ function vis(){
     return hay.toLowerCase().indexOf(qq)>=0;
   });
 }
-function ordenar(a){return a.slice().sort(function(x,y){return (y.en_juego||0)-(x.en_juego||0)||String(x.titulo).localeCompare(String(y.titulo))})}
+/* El orden (plata en juego, luego título) lo define el servidor; acá se conserva tal cual llega. */
 
 /* ---------- carga ---------- */
 async function cargar(){
@@ -312,7 +314,7 @@ async function cargar(){
   try{
     var r=await fetch('/api/sync/pausadas-con-stock');
     var d=await r.json();
-    if(!r.ok||!d.ok)throw new Error(d.error||('HTTP '+r.status));
+    if(!r.ok||!d.ok)throw new Error('carga');
     items=d.data||[]; resumen=d.resumen||{}; cargadoEn=Date.now(); estado='lista';
     $('#loaderr').hidden=true;
     /* lo que ya no está en la lista (se reactivó por otro lado) sale de la selección */
@@ -322,8 +324,8 @@ async function cargar(){
   }catch(e){
     $('#loaderr').hidden=false;
     $('#loaderrmsg').textContent=items.length
-      ? '⚠ No se pudo actualizar la lista ('+e.message+'). Mostrando datos de '+hace(new Date(cargadoEn).toISOString())+'.'
-      : '⚠ No se pudo cargar la lista ('+e.message+').';
+      ? '⚠ No se pudo actualizar la lista. Mostrando datos de '+hace(new Date(cargadoEn).toISOString())+'.'
+      : '⚠ No se pudo actualizar la lista.';
     estado=items.length?'lista':'error';
   }
   render();
@@ -353,7 +355,7 @@ function detalle(i){
 }
 function row(i){
   var id=esc(i.item_id), t=esc(i.titulo||i.item_id);
-  var ph='<div class="ph" aria-hidden="true">'+(i.thumbnail?'<img src="'+esc(i.thumbnail)+'" alt="" loading="lazy" onerror="this.remove()">':imgSvg)+'</div>';
+  var ph='<div class="ph" aria-hidden="true">'+(i.thumbnail?'<img src="'+esc(i.thumbnail)+'" alt="" loading="lazy">':imgSvg)+'</div>';
   if(locked(i)){
     var L=lockInfo(i);
     return '<div class="row row--locked" data-id="'+id+'"><div class="lock" aria-hidden="true">🔒</div>'+ph
@@ -363,7 +365,7 @@ function row(i){
   var quien=quienTxt(i)||'<i>No sabemos quién la pausó</i>';
   var nv=i.variaciones.length;
   var varTxt=nv>1?nv+' variaciones':esc((i.variaciones[0]&&i.variaciones[0].variations_texto)||'1 variación');
-  var ne=i.stock_ml===0?' <span class="ne" title="ML sin stock">≠ ML 0</span>':' · <span class="lbl">ML</span> '+i.stock_ml;
+  var ne=i.stock_ml===0?' <span class="ne" title="ML sin stock">≠ ML 0</span>':' · <span class="lbl">ML</span> '+(i.stock_ml==null?'—':i.stock_ml);
   var dinero=i.en_juego>0?money(i.en_juego):(i.sin_precio?'sin precio':'—');
   var stk='<div class="stk num"><span class="lbl">Web</span> '+i.stock_woo+ne+'<span class="money">'+dinero+'</span></div>';
   var act;
@@ -393,12 +395,14 @@ function render(){
   }
   var V=vis();
   if(!V.length){
-    L.innerHTML='<div class="empty" role="status"><div class="big">Ninguna por esta causa'+(q?' con esa búsqueda':'')+'</div><button class="btn" data-f="todas" style="margin-top:.5rem">Ver todas</button></div>';
+    L.innerHTML=q
+      ? '<div class="empty" role="status"><div class="big">Ninguna con «'+esc($('#q').value.trim())+'»</div><button class="btn" data-limpiar="1" style="margin-top:.5rem">Limpiar búsqueda</button></div>'
+      : '<div class="empty" role="status"><div class="big">Ninguna por esta causa</div><button class="btn" data-f="todas" style="margin-top:.5rem">Ver todas</button></div>';
     bar();return;
   }
   var h='';
   ORDEN.forEach(function(c){
-    var g=ordenar(V.filter(function(i){return i.causa===c})); if(!g.length)return;
+    var g=V.filter(function(i){return i.causa===c}); if(!g.length)return;
     var C=CAUSAS[c], col=collapsed.has(c)&&filtro!==c, lim=shown[c]||PAGINA;
     var tot=g.reduce(function(a,i){return a+(i.en_juego||0)},0);
     var vv=g.slice(0,lim), react=vv.filter(function(i){return !locked(i)});
@@ -464,7 +468,7 @@ async function reactivar(ids){
   render();
   if(!malos.length)band('ok',okN===1?'Reactivada. Ya está a la venta en ML.':'Reactivaste '+okN+'. Ya están a la venta en ML.','');
   else if(fallaGeneral&&!okN)band('bad','No se reactivó ninguna: '+esc(fallaGeneral)+'.','<button class="linkbtn" id="vermalos">Ver '+(malos.length===1?'cuál':'las '+malos.length)+'</button>');
-  else band(okN?'warn':'bad','Reactivadas '+okN+' de '+ids.length+'. '+malos.length+' no se pudieron.','<button class="linkbtn" id="vermalos">Ver '+(malos.length===1?'cuál':'las '+malos.length)+'</button>');
+  else band(okN?'warn':'bad',ids.length===1?'No se pudo reactivar.':'Reactivadas '+okN+' de '+ids.length+'. '+malos.length+' no se pudieron.','<button class="linkbtn" id="vermalos">Ver '+(malos.length===1?'cuál':'las '+malos.length)+'</button>');
   /* las reactivadas se desvanecen y la lista se refresca desde el servidor; las fallidas quedan seleccionadas */
   setTimeout(function(){
     items=items.filter(function(i){return !okIds.has(i.item_id)});
@@ -477,11 +481,12 @@ async function reactivar(ids){
 document.addEventListener('click',function(e){
   var t=e.target.closest('button,input,a');if(!t)return;
   var d=t.dataset;
-  if(d.f!==undefined){filtro=d.f;render();return}
+  if(d.limpiar){q='';$('#q').value='';render();$('#q').focus();return}
+  if(d.f!==undefined){filtro=d.f;if(d.f==='todas'&&q){q='';$('#q').value='';}render();return}
   if(d.g){collapsed.has(d.g)?collapsed.delete(d.g):collapsed.add(d.g);render();return}
   if(d.more){shown[d.more]=(shown[d.more]||PAGINA)+PAGINA;render();return}
   if(d.gsel){
-    var grupo=ordenar(vis().filter(function(i){return i.causa===d.gsel&&!locked(i)})).slice(0,shown[d.gsel]||PAGINA);
+    var grupo=vis().filter(function(i){return i.causa===d.gsel&&!locked(i)}).slice(0,shown[d.gsel]||PAGINA);
     if(!t.checked){grupo.forEach(function(i){sel.delete(i.item_id)});render();return}
     grupo.forEach(function(i){if(sel.size<MAX_LOTE)sel.add(i.item_id)});render();return;
   }
@@ -542,6 +547,7 @@ document.addEventListener('keydown',function(e){
   else if(e.key==='?'){$('#helpbtn').click()}
 });
 addEventListener('resize',function(){clearTimeout(window._rz);window._rz=setTimeout(render,120)});
+document.addEventListener('error',function(e){var t=e.target;if(t&&t.tagName==='IMG'&&t.parentNode&&t.parentNode.classList.contains('ph'))t.parentNode.innerHTML=imgSvg},true);
 cargar();
 </script>
 </body>
