@@ -113,4 +113,10 @@ describe('Sincronización ML rediseñada', () => {
     expect(sync).toContain('.flows span{white-space:normal}');
     expect(sync).toContain('if(!cargaOk.fren)hay.fren=1');
   });
+
+  it('el aviso por pendiente_stock dice la causa real (Woo, otro aviso, solo_local, sin vínculo, ML)', () => {
+    expect(sync).toContain('No hay stock en la web (Woo)');
+    expect(sync).toContain('d.motivo_pendiente');
+    expect(sync).toContain('hasta que se pueda reactivar');
+  });
 });

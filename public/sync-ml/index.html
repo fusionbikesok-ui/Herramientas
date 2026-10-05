@@ -474,7 +474,14 @@ async function revisar(id,reactivar,btn){
   try{
     var d=await leerJson(await fetch('/api/sync/cambios-formato/'+id+'/revisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reactivar:!!reactivar})}));
     var f=d.oferta_reactivar;
-    if(d.pendiente_stock)band('ok','Aviso cerrado. La publicación no tiene stock en MercadoLibre: se reactiva sola cuando vuelva a haber stock.');
+    if(d.pendiente_stock){
+      var MP={sin_stock_woo:'No hay stock en la web (Woo): sigue pausada y se reactiva cuando vuelva a haber stock.',
+        ml_sin_stock:'La publicación no tiene stock en MercadoLibre: se reactiva sola cuando vuelva a haber stock.',
+        otro_aviso:'Sigue pausada: hay otro aviso abierto de esta publicación que hay que revisar antes.',
+        solo_local:'Sigue pausada: su SKU está en «solo local» en Config ML, que fuerza el stock a 0.',
+        sin_vinculo:'Sigue pausada: no está vinculada a un producto de Woo.'};
+      band('ok','Aviso cerrado. '+(MP[d.motivo_pendiente]||'La publicación sigue pausada hasta que se pueda reactivar.'));
+    }
     else if(f)band('ok','Aviso cerrado. <b>Hay '+f.stock_woo+' en stock</b> y la publicación sigue pausada.',
       '<button class="btn btn--pri" type="button" data-cf-reactivar data-id="'+esc(f.item_id)+'">Reactivar ahora</button><a class="btn" href="/herramientas/sync-ml/pausadas/">Ver en Pausadas</a>');
     else band('ok',reactivar?'Aviso cerrado y publicación reactivada.':'Aviso cerrado. La publicación queda pausada.');
