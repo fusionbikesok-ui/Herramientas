@@ -65,3 +65,11 @@ de pruebas UI.
 `scripts/qa/bandeja-real/levantar.mjs` emite la forma real (`marca`, valores normalizados y originales) y
 siembra atributos persistidos para `otros_atributos`. La estación usa scroll interno de diferencias y no
 scroll de página; queda pendiente validación visual responsive autorizada.
+
+- La portada `/herramientas/home/` ofrece primero a administradores la tarjeta «Gestión VPS — POS, Facturador y Taller», enlazada a `/herramientas/gestion-vps/`. Indica «solo consulta» y que el historial copiado no se actualiza automáticamente; la operación sigue en la web habitual. Reutiliza tarjetas/estados y responsive de Home, sin alterar permisos ni el Taller previo.
+
+- Gestión VPS usa los tokens `theme.css`/`components.css` de Herramientas y `integrations/management-migration/assets/management.css` para entrada y envoltorios. Resultados de catálogo son tarjetas de consulta con cantidad registrada, SKU/GTIN, fecha por fila y precio web de referencia. Los JS adaptados existen sólo en el VPS; no se habilita agregar estos datos incompletos a ventas/facturas.
+
+- Gestión VPS tiene directorio compartido `/herramientas/gestion-vps/directory/`: búsqueda local de clientes registrados/invitados y pedidos históricos, origen Woo/espejo ML, fecha y cobertura de sincronización. Usa tokens existentes y controles de 44 px. Accesos desde inicio de Gestión y banners POS/ARCA/Taller. Los GET de clientes POS/Taller usan IDs de la tienda; no habilitar escrituras hasta mapearlos con las identidades del runtime.
+
+- Directorio: carga histórica y actualización incremental verificadas el 2026-10-05. La carga inicial concilió 1.593 cuentas customer y 13.888 pedidos desde 2023-03-09; el primer delta incorporó dos pedidos (13.890), con dos GET. 434 pedidos tienen marca de copia ML. UI probada: clientes POS, búsquedas por SKU y pedido exacto (#6115), detalle histórico y compras por ID de cliente. No hay mapeo de escritura ni selector fiscal ARCA; directorio compartido de consulta. No interpretar las fichas por pedido sin cuenta sincronizada como clientes únicos. El importador legado que acumula contactos repetidos no se modificó ni alimenta este índice.

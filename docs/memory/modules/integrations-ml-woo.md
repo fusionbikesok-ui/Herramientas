@@ -133,3 +133,35 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   o `null` explícito), cancela operaciones durables pendientes y persiste `override_omitir` en las
   sagas de Guardia/Identidad. La saga revalida contradicción antes de restaurar stock o activar una
   identidad; en conflicto deja el caso abierto y registra historial.
+
+## Puente de lectura WordPress (2026-10-04)
+
+- Master Control queda expresamente fuera de la migración: conservar su código,
+  configuración, administración y lógica de precios en la tienda. POS y Taller
+  deben consumir ese motor; no publicar reglas nuevas ni reemplazarlo.
+- Plugin `fusion-herramientas-bridge` activo en WordPress (actualizado a 0.2.0, ver abajo). Fuente:
+  `integrations/wordpress/fusion-herramientas-bridge/`. Dos GET autenticados bajo
+  `/wc/v3/fusion-herramientas`: `status` y `commercial-products?ids=...` (máximo 25).
+- Reutiliza autenticación Woo, HTTPS y `manage_woocommerce`; no crea credenciales,
+  tablas, cron ni escrituras comerciales. Usa DataService/PricingEngine originales.
+- No usar los precios REST estándar como base del POS: Master Control transforma
+  esa representación con `forceApiPrices`. La lectura comercial tiene contrato propio.
+- El snapshot cubre contado y financiación de una unidad; excluye carrito, cupón,
+  envío, impuestos, USD y reserva de stock. Revalidar la operación en checkout;
+  no multiplicar unidades ya redondeadas para cotizar varias cantidades.
+- POS, Chat, Taller y Facturador aún no fueron migrados. El puente solo es preparación;
+  no se ha medido reducción de carga. El checkout permanece en WooCommerce.
+
+## Copia de consulta de módulos en VPS (2026-10-04)
+
+- Puente de lectura actualizado a 0.2.0; agrega inventario/exportación por recursos permitidos y páginas de 50 filas con permiso adicional de administrador. No exporta claves fiscales, contraseñas ni sales. Código y 61 comprobaciones en `integrations/wordpress/`.
+- POS, ARCA y Taller conservan sus paquetes originales en un WordPress/Woo privado del VPS. Consulta autenticada en `/herramientas/gestion-vps/`; historial importado y conciliado, con escrituras/emisión/envíos bloqueados. Detalle y límites en `integrations/management-migration/README.md` y memoria `operations-vps.md`.
+- El catálogo, clientes, pedidos, precios/dólares, checkout e identidades no están conectados todavía. Cinco borradores POS se conservan sin asignar; no equiparar usuarios locales con IDs WordPress. Credenciales fiscales y OAuth/WhatsApp pendientes de transferencia segura.
+- Master Control y checkout siguen íntegros en la tienda. Originales activos como autoridad; no duplicar escritores, stock ni emisor ARCA al completar el corte. Esta copia no acredita migración operativa ni ahorro medido de carga.
+
+
+- Gestión VPS consulta `catalogo_cache` por `/api/woo/catalogo` y el contado por el lector local existente `/api/consulta-precios/buscar`, con identidad de producto validada, caché RAM 5 s y sesión/admin en cada solicitud. No usa listas ML ni consulta Woo por búsqueda. `precio` REST es proyectado: para FB-70394 era 6.675.000 (18 cuotas), mientras contado era 4.450.000, comprobado contra web y puente Master Control el 2026-10-04. Se reutiliza el criterio de Consulta de Precios (oferta vigente incluida), sin copiar coeficientes. Si no hay precio local válido se muestra faltante; no fallback a precio REST ni vencido. Sigue pendiente la paridad comercial completa del POS antes de cobrar. Imágenes HTTPS del catálogo, con fallback a padre; solicitudes estáticas, sin API Woo. Archivo ML visible en modo consulta, acotado a entorno/CUIT y único seller importado; OAuth y sincronización activa aún pendientes.
+
+- Índice reconstruible `directory-cache/directory.sqlite` en el runtime privado de migración: clientes Woo con rol customer y pedidos Woo, JSON con lista explícita de campos, sin contraseñas/roles/credenciales ni metadatos arbitrarios. Invitados vinculados por pedido, nunca por nombre. Una copia Woo de ML queda marcada con `_ml_order_id`; no sumar como segunda venta. Consentimiento comercial desconocido. Las consultas no llaman a Woo. POS/Taller comparten GET clientes; ARCA accede al directorio. Esto no sustituye los escritores originales, los leads del chat ni la captura de carritos. Panel de ventas requiere detalle de devoluciones por ítem y taxonomías para equivalencia completa.
+
+- Directorio: carga histórica y actualización incremental verificadas el 2026-10-05. La carga inicial concilió 1.593 cuentas customer y 13.888 pedidos desde 2023-03-09; el primer delta incorporó dos pedidos (13.890), con dos GET. 434 pedidos tienen marca de copia ML. UI probada: clientes POS, búsquedas por SKU y pedido exacto (#6115), detalle histórico y compras por ID de cliente. No hay mapeo de escritura ni selector fiscal ARCA; directorio compartido de consulta. No interpretar las fichas por pedido sin cuenta sincronizada como clientes únicos. El importador legado que acumula contactos repetidos no se modificó ni alimenta este índice.

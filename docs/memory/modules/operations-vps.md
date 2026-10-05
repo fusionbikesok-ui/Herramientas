@@ -3,6 +3,7 @@
 ## Hechos durables
 
 - Ajuste E1 contra 429 de ML desplegado el 2026-09-30: worker en imagen `fusion-plataforma:e1-ml429-20260930T031014Z` y gateway legado recargado en PM2; sin migraciones ni cambios de RPM. API y scheduler no se recrearon. Rollback e IDs de imagen constan en `docs/superpowers/evidence/e1/2026-09-30-E1-429-api-fix-deploy.md`. La medición Tarea 0 de 24–48 horas todavía decide la calibración y el inicio de PM-186; el despliegue no equivale a aceptación E1.
+- Preparaciones desplegadas el 2026-09-29: commits 7678096a-57272c22 en conteo-confiable; migraciones 115-116 aplicadas tras el respaldo `/opt/fusionbikes/backups/db/predeploy-preparacion-20260929T200500Z.sqlite` (`quick_check` e `integrity_check`: ok). Vista previa en vivo de 11 preparaciones: diez Web enviadas y una ML cancelada, sin errores. Cron activo (`PREPARACION_RECONCILIACION_ACTIVA=true`); primer tick 23:58 UTC procesó las 11 con cero errores: diez `despachada_sin_verificar`, una `cancelada_sin_retiro_registrado`, cero abiertas, once intentos y un evento de transición por prep. PM2 online, `/healthz` 200; ítems, fotos y auditoría conservados. El usuario rotará preventivamente la credencial Woo otro día; esa rotación no bloquea la operación. Prep 446 / pedido 70312 sigue fuera del lote y sin reparación; revisar su evidencia por separado.
 
 - El VPS `/opt/fusionbikes/herramientas` es producción real y sirve la rama
   `conteo-confiable`; cualquier referencia histórica que lo llame staging está obsoleta.
@@ -249,3 +250,47 @@ docker exec fusion-pg-pg-1 psql -U postgres -d plataforma -c \
 
 - El VPS no tiene el binario `sqlite3`: el backup previo a un deploy se hace con `better-sqlite3` (`db.backup()`) desde Node, y el deploy no sigue si el backup no existe.
 - Las credenciales de testing `auditor`/`Auditor2026!` no autentican en la base de producción (verificado 2026-10-05); valen para QA.
+
+## Preparación de integración WordPress (2026-10-04)
+
+- Puente WordPress independiente `fusion-herramientas-bridge` instalado y activo (actualizado a 0.2.0 abajo)
+  desde la sesión de administración autorizada. No se modificaron los cinco plugins
+  originales ni el runtime de Herramientas, ni se reiniciaron sus servicios.
+- Fuente y prueba conservadas en `integrations/wordpress/`; especificación y plan
+  `docs/superpowers/{specs,plans}/2026-10-04-puente-wordpress-lectura.md`.
+- Prueba PHP aislada sin red: 44 comprobaciones con servicios originales de Master
+  Control. Lectura real desde VPS: anónimo 401, autenticado 200, cotización 200,
+  IDs duplicados 400. Estado habilitado de pasarelas y versiones de plugins originales
+  conservados. No se realizaron transacciones ni se enviaron mensajes.
+- Retirada: desactivar solamente `Fusion Herramientas — Puente de lectura` en WP.
+  No borra datos ni requiere restaurar la base. Los módulos principales siguen en WP.
+- Master Control debe permanecer íntegro por instrucción explícita del usuario.
+
+## Chat nativo: ensayo aislado del 2026-10-04
+
+- Proyecto independiente `/opt/fusion-chat-migration-qa`, Compose `fusion-chat-migration-qa`: API/worker con bot simulado, PostgreSQL y Redis propios. Sólo datos ficticios; no es producción ni una migración terminada.
+- Red Docker interna sin puertos publicados ni salida a Internet; vista `/qa/` por túnel SSH ligado a loopback local. `qa.env` privado, nunca copiarlo al repositorio. Límites de memoria/CPU definidos por servicio.
+- Fuente mantenida en `integrations/chat-migration-qa/`; allí están contratos, límites, reproducción de pruebas y comandos de inicio/parada. Plan: `docs/superpowers/plans/2026-10-04-chat-migracion-qa.md`.
+- Respaldo previo del bot (código/configuración y dump PostgreSQL): `/opt/fusionbikes/backups/chat-migration/20261004T220310Z`; archivo e índice verificados, restauración completa pendiente.
+- Los procesos, código y tráfico del bot original/Herramientas no se trasladaron. Master Control, checkout y plugins originales permanecen en su ubicación. No atribuir ahorro de carga de WordPress a este ensayo.
+- Pendiente antes del corte: integración con sesión/permisos Herramientas, widget completo, datos/historial, leads y carrito abandonado, configuración/aprendizaje, WhatsApp/IA reales, notificaciones/retención y reversión. Diferencia previa entre test y lógica de derivación a Taller documentada en el README; no habilitar tráfico real asumiendo suite original verde.
+
+## POS, Facturador y Taller: consulta en VPS (2026-10-04)
+
+- Runtime independiente `/opt/fusion-management-migration`, WordPress 7.1.2/WooCommerce 11.1.2/PHP 8.2 con SOAP y los tres ZIP actuales. Master Control no se instaló ni modificó. Fuente propia en `integrations/management-migration/`; plan `docs/superpowers/plans/2026-10-04-pos-arca-taller-vps.md`.
+- Entrada `/herramientas/gestion-vps/`, sesión vigente de Herramientas y administrador en cada solicitud. Gateway systemd `fusion-management-validation.service`, 127.0.0.1:8212, firma HMAC interna. PHP/DB en red interna Docker, sin puertos publicados; escrituras HTTP, cron, correo y salida externa bloqueados. Requiere actualizar IP de PHP con `ops/start-gateway.py` si se recrea su red/contenedor.
+- Historial copiado y conciliado por página/hash y por columna: 153 comprobantes, 14 series, 221 estados ML y 6 estados WhatsApp; 27 presupuestos; 1 trabajo y 1 modelo de Taller, 2 constancias, 0 recordatorios. Cinco borradores conservados para mapear operadores, todavía no asignados. No se copiaron contraseñas, sales ni certificados fiscales.
+- Origen privado: `data/2026-10-04T23-06-05-446Z`; respaldo destino previo a importación `backups/20261005T004328Z/before-import.sql`; respaldo Nginx previo al nuevo location `backups/20261005T004439Z/herramientas.nginx.conf`, todos dentro del runtime. No se ensayó restauración completa ni se obtuvo snapshot de corte con origen bloqueado.
+- Puente WordPress actualizado a 0.2.0. Los dos GET de exportación/inventario exigen `manage_options` además del permiso Woo y HTTPS; recursos fijados, 50 filas/página, sin credenciales. 61 comprobaciones PHP. Gateway: tres pruebas HTTP integradas y comprobación real de sesión, firma vencida, bloqueo de métodos y acceso anónimo. Tienda y Herramientas respondieron 200. No se reinició la app principal.
+- Las pantallas originales permiten consultar Taller, comprobantes y presupuestos con la sesión de Herramientas. Se adaptaron navegación y tabla móvil de Taller sólo en el envoltorio del VPS. La copia permite buscar el catálogo sincronizado local con cantidad y fecha; faltan campos comerciales/clientes/pedidos para operar y sus controles de negocio están bloqueados. No atribuirle un corte productivo ni ahorro medido de carga.
+- Pendientes: completar campos comerciales del catálogo, clientes/pedidos e identidades; precios de Master Control/dólares; checkout POS original e idempotencia; configuración/certificados ARCA y conexiones ML/WhatsApp; documentos y recordatorios; corte con un solo escritor/emisor y rollback ensayado. Se consultó por SSH/SFTP del hosting para transferir certificados por canal privado. Los módulos originales continúan como autoridad y Chat sigue en QA.
+
+<!-- end management validation memory -->
+
+- Acceso a Gestión VPS añadido a `public/home/index.html` el 2026-10-04 (Argentina), sólo como navegación de administradores. Publicación estática sin reinicio ni migraciones; conservar permisos pero actualizar mtime al publicar HTML para que If-Modified-Since reciba la versión nueva. Respaldo y candidato en `/opt/fusion-management-migration/home-navigation/{before,candidate}.html`; suite completa ejecutada en copia aislada sin red ni datos/credenciales de producción. Revertir sólo si el hash vigente sigue coincidiendo con `home-navigation/result.json`.
+
+- Catálogo local y estética de Gestión VPS publicados el 2026-10-04 (Argentina). Respaldo final: `/opt/fusion-management-migration/backups/catalog-20261005T025118Z`. Sólo se reinició `fusion-management-validation.service`; app principal, sincronizadores, tienda y Master Control sin cambios. Fuente en `integrations/management-migration`; once pruebas HTTP/unitarias y lint PHP/JS. Cantidad local, contado de Consulta de Precios y miniaturas verificados en navegador. Archivo ML: 221 registros visibles, paginación/filtro y bloqueo de escrituras probados. Falta OAuth/sincronización ML activa, validación comercial y corte operativo.
+
+- Directorio compartido publicado 2026-10-05. Respaldo `/opt/fusion-management-migration/backups/directory-20261005T143651Z`; sólo se reinició gateway de validación. `fusion-management-directory-sync.service` hace GET con credenciales Woo preexistentes; timer cada 15 min para pedidos modificados con solapamiento 10 min, clientes cada 24 h y conciliación completa semanal. Descarga histórica con checkpoints privados y reanudación; primero publica clientes y marca pedidos incompletos, luego publica historial completo atómicamente. Gateway DynamicUser lee mediante grupo limitado `fusion-management-read`; credenciales siguen fuera. Última copia válida ante fallo. Pruebas 17 Node y 5 Python (incluye interrupción/reanudación), sintaxis JS y control de lectura bajo cuenta del gateway. Ver `directory-cache/status.json` para cobertura actual; no inferir fin de carga de la publicación de UI.
+
+- Directorio: carga histórica y actualización incremental verificadas el 2026-10-05. La carga inicial concilió 1.593 cuentas customer y 13.888 pedidos desde 2023-03-09; el primer delta incorporó dos pedidos (13.890), con dos GET. 434 pedidos tienen marca de copia ML. UI probada: clientes POS, búsquedas por SKU y pedido exacto (#6115), detalle histórico y compras por ID de cliente. No hay mapeo de escritura ni selector fiscal ARCA; directorio compartido de consulta. No interpretar las fichas por pedido sin cuenta sincronizada como clientes únicos. El importador legado que acumula contactos repetidos no se modificó ni alimenta este índice.
