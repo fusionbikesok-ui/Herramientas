@@ -89,6 +89,8 @@ h2.sec{font-size:var(--fs-label);text-transform:uppercase;letter-spacing:.06em;c
 .btn:disabled{opacity:.5;cursor:default}
 .btn--pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent,#04121A)}.btn--pri:hover{color:var(--on-accent,#04121A);filter:brightness(.9)}
 .note{color:var(--muted);font-size:var(--fs-meta);margin:0 0 .5rem}
+.note--pie{margin:.6rem 0 0}
+.ok-line--warn{color:var(--amber)}
 .plan{margin-top:.75rem;padding:.75rem;border:1px solid var(--border2);border-radius:8px;background:var(--surface2);font-size:var(--fs-meta)}
 .plan table{width:100%;border-collapse:collapse;table-layout:fixed}
 .plan th{color:var(--muted);font-weight:500;text-align:left;padding:.25rem .4rem .25rem 0}
@@ -131,6 +133,8 @@ details.orders summary::-webkit-details-marker{display:none}
 .sk{height:64px;border-top:1px solid var(--border);background:linear-gradient(90deg,var(--surface),var(--surface2),var(--surface));background-size:200% 100%;animation:sh 1.2s infinite}
 .sk:first-child{border-top:0}
 .sk--st{height:62px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1.5rem}
+.sk--st.sk--lleno{width:100%;margin:0;border:0}
+.sk.sk--kpi{height:70px}
 @keyframes sh{to{background-position:-200% 0}}
 .errbox{padding:1rem;display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;justify-content:space-between;color:var(--red)}
 
@@ -294,7 +298,7 @@ function oks(I){
 /* ---------- estado arriba ---------- */
 function renderStatus(){
   var el=$('#status');
-  if(estado==='cargando'){el.innerHTML='<div class="sk--st sk" style="width:100%;margin:0;border:0"></div>';return}
+  if(estado==='cargando'){el.innerHTML='<div class="sk sk--st sk--lleno"></div>';return}
   if(estado==='error'){el.innerHTML='<div class="big"><span class="dot bad"></span><span>No se pudo cargar el estado<small>Revisá la conexión y reintentá. <button class="btn" type="button" data-reload>Reintentar</button></small></span></div>';return}
   var I=incidencias(), tok=!!(D.token&&D.token.vigente);
   var ml=(D.ultimasSyncsOk||[]).filter(function(x){return x.direccion==='ml_wc'})[0];
@@ -317,7 +321,7 @@ function renderInc(){
   var box=$('#inc');
   if(estado==='cargando'){box.innerHTML=[1,2,3,4].map(function(){return '<div class="sk"></div>'}).join('');return}
   if(estado==='error'){box.innerHTML='<div class="errbox"><span>No se pudo cargar la lista.</span><button class="btn" type="button" data-reload>Reintentar</button></div>';return}
-  var I=incidencias(), fallo=(!cargaOk.fren||!cargaOk.form)?'<div class="ok-line" style="color:var(--amber)">No se pudo consultar '+(!cargaOk.fren&&!cargaOk.form?'las frenadas ni los cambios de producto':!cargaOk.fren?'las frenadas por precio':'los cambios de producto')+'. <button class="btn" type="button" data-reload>Reintentar</button></div>':'';
+  var I=incidencias(), fallo=(!cargaOk.fren||!cargaOk.form)?'<div class="ok-line ok-line--warn">No se pudo consultar '+(!cargaOk.fren&&!cargaOk.form?'las frenadas ni los cambios de producto':!cargaOk.fren?'las frenadas por precio':'los cambios de producto')+'. <button class="btn" type="button" data-reload>Reintentar</button></div>':'';
   if(!I.length){
     box.innerHTML='<div class="allok"><span class="dot ok"></span>Nada para resolver</div>'+fallo+'<div class="ok-line">'+oks(I).map(function(x){return '<span>'+x+'</span>'}).join('')+'</div>';
     return;
@@ -434,7 +438,7 @@ function bodyForm(){
       +(c.campo==='catalog_product_id'?'<button class="btn" type="button" data-comp="'+c.id+'">Comparar productos</button>':'')+'</div>'
       +'<div class="comp" id="comp-'+c.id+'" hidden></div></div>';
   }).join('');
-  return h+'<p class="note" style="margin:.6rem 0 0">Si no es lo mismo, corregila en ML. Mientras tanto no se le toca el stock.</p>';
+  return h+'<p class="note note--pie">Si no es lo mismo, corregila en ML. Mientras tanto no se le toca el stock.</p>';
 }
 function cfProducto(etq,p){
   p=p||{};
@@ -518,7 +522,7 @@ async function correr(k){
 /* ---------- ventas ---------- */
 function renderVentas(){
   var pe=(D&&D.pedidos)||{};
-  if(estado!=='lista'){$('#sales').innerHTML='<div class="kpi sk" style="height:70px"></div><div class="kpi sk" style="height:70px"></div>';$('#ordersbox').hidden=true;return}
+  if(estado!=='lista'){$('#sales').innerHTML='<div class="kpi sk sk--kpi"></div><div class="kpi sk sk--kpi"></div>';$('#ordersbox').hidden=true;return}
   $('#sales').innerHTML='<div class="kpi"><div class="n num">'+n(pe.total)+'</div><div class="l">pedidos creados desde ventas de ML</div></div><div class="kpi"><div class="n num">'+n(pe.cancelados)+'</div><div class="l">cancelados, con el stock devuelto</div></div>';
   var u=(pe.ultimos||[]).slice(0,5);
   $('#ordersbox').hidden=!u.length;

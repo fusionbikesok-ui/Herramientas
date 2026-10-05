@@ -71,7 +71,7 @@ describe('Sincronización ML rediseñada', () => {
     expect(sync).not.toContain('reactivar-box');
     expect(sync).not.toContain('/api/sync/reactivables');
     expect(sync).not.toMatch(/\b(confirm|alert|prompt)\(/);
-    expect(sync).not.toMatch(/\sonclick=|\sonerror=/);
+    expect(sync).not.toMatch(/\sonclick=|\sonerror=|\sstyle="/);
   });
   it('Correr ahora conserva las 4 acciones manuales y el resultado va a la franja inferior', () => {
     for (const u of ['/api/sync/ml-wc', '/api/sync/wc-ml', '/api/sync/ml-cancelaciones', '/api/sync/limpiar-variaciones-muertas']) expect(sync).toContain(u);

@@ -325,7 +325,7 @@ async function cargar(){
     $('#loaderr').hidden=false;
     $('#loaderrmsg').textContent=items.length
       ? '⚠ No se pudo actualizar la lista. Mostrando datos de '+hace(new Date(cargadoEn).toISOString())+'.'
-      : '⚠ No se pudo actualizar la lista.';
+      : '⚠ No se pudo cargar la lista.';
     estado=items.length?'lista':'error';
   }
   render();

@@ -123,6 +123,29 @@ describe('el reactivador respeta las pausas del vigía', () => {
     expect(db.prepare('SELECT revisado_en FROM ml_publicacion_cambios WHERE id=?').get(info.lastInsertRowid).revisado_en).toBeTruthy();
   });
 
+  it('reactivar sin stock en Woo: no llama a ML, cierra el aviso como pendiente_stock', async () => {
+    sembrarPausada(db);
+    db.prepare('UPDATE catalogo_cache SET stock = 0').run();
+    const info = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|','MLA1','SALE_FORMAT','Unidad','Pack',1,datetime('now'))`).run();
+    const r = await request(app).post(`/api/sync/cambios-formato/${info.lastInsertRowid}/revisar`).send({ reactivar: true });
+    expect(r.body).toMatchObject({ ok: true, reactivada: false, pendiente_stock: true });
+    expect(mlFetch).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT revisado_en FROM ml_publicacion_cambios WHERE id=?').get(info.lastInsertRowid).revisado_en).toBeTruthy();
+  });
+
+  it('reactivar con otro aviso abierto que traba al reactivador: no llama a ML y el otro aviso sigue abierto', async () => {
+    sembrarPausada(db);
+    const a = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+      VALUES ('MLA1|','MLA1','SALE_FORMAT','Unidad','Pack',1,datetime('now'))`).run().lastInsertRowid;
+    const b = db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, campo, valor_anterior, valor_nuevo, pausada, bloquea_reactivador, detectado_en)
+      VALUES ('MLA1|','MLA1','catalog_product_id','MLA1','MLA2',1,1,datetime('now'))`).run().lastInsertRowid;
+    const r = await request(app).post(`/api/sync/cambios-formato/${a}/revisar`).send({ reactivar: true });
+    expect(r.body).toMatchObject({ ok: true, reactivada: false, pendiente_stock: true });
+    expect(mlFetch).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT revisado_en FROM ml_publicacion_cambios WHERE id=?').get(b).revisado_en).toBeNull();
+  });
+
   it('ML rechaza por otro motivo: 409 con el mensaje de ML (nunca 502) y el aviso sigue abierto', async () => {
     sembrarPausada(db);
     mlFetch

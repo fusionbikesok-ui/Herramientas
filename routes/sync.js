@@ -3246,7 +3246,20 @@ export function syncRouter(db, cfg) {
       // Convención de este router: mlCfgOk valida el CONTENEDOR (`cfg`, con cfg.ml adentro) y
       // mlFetch recibe el cliente ya desestructurado. Ver el patrón de la línea 276.
       if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+      // Antes del PUT: si la publicación sigue pausada pero ya no hay stock en Woo, o el reactivador la tiene
+      // trabada por otra razón (otro aviso abierto, solo_local, sin vínculo), el aviso se cierra sin reactivar.
+      let noCorresponde = false;
       try {
+        const pausada = db.prepare("SELECT 1 FROM ml_publicaciones_cache WHERE item_id = ? AND status = 'paused' LIMIT 1").get(fila.item_id);
+        if (pausada) {
+          const p = listarPausadasConStock(db).data.find((x) => x.item_id === fila.item_id);
+          const otroAviso = db.prepare(`SELECT 1 FROM ml_publicacion_cambios WHERE item_id = ? AND revisado_en IS NULL AND solo_aviso = 0
+            AND bloquea_reactivador = 1 AND NOT (campo = ? AND valor_nuevo IS ?) LIMIT 1`).get(fila.item_id, fila.campo, fila.valor_nuevo);
+          noCorresponde = !p || !(p.stock_woo > 0) || !!otroAviso || p.motivo_no_reactivable === 'solo_local' || p.motivo_no_reactivable === 'sin_vinculo';
+        }
+      } catch (_) { /* si la verificación falla, se sigue con el camino de siempre (ML rechaza lo que no se puede) */ }
+      if (noCorresponde) pendienteStock = true;
+      else try {
         const r = await mlFetch(db, cfg.ml, 'put', `/items/${fila.item_id}`, { status: 'active' });
         if (r.status >= 200 && r.status < 300) {
           reactivada = true;
