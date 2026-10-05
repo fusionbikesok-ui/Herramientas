@@ -467,3 +467,15 @@ verificación). No hay contraste nuevo que verificar porque no hay color nuevo.
 - Ningún estado descrito en este documento depende solo de color: todos tienen icono de
   forma distinta y/o texto explícito como mínimo un canal adicional (ver tablas de §1, §2 y
   §7).
+
+## Sincronización ML y Pausadas con stock (2026-10-05)
+
+Referencia: `docs/superpowers/prototipos/2026-10-05-sincronizacion-ml.html` y `…-pausadas-con-stock.html`. Sólo tokens existentes (`--surface`, `--surface2`, `--border`, `--accent`, `--green/--amber/--red` y sus `-bg/-bd`); ningún color nuevo.
+
+- **Fila densa con foto de 56 px** (40/48 px en móvil): foto · título en una línea con elipsis (2 líneas en móvil) · dato secundario · valor/acción a la derecha. Altura mínima 64 px; si no hay foto o falla (`error`), placeholder con ícono, nunca un cuadro vacío.
+- **Barra de lote con segundo clic**: «Reactivar N»; desde 10 elementos el primer clic pide confirmar (4 s) en el mismo botón. Un fallo parcial deja las filas fallidas seleccionadas y el botón pasa a «Reintentar N». Sin `confirm()`.
+- **Franja inferior persistente** (`.band`): fija abajo, ancho de página, con ✕; es el único lugar de resultados de acciones (ok verde, atención ámbar, error rojo, prefijo ✓/⚠/✗ para no depender del color) y puede llevar botones (p. ej. «Reactivar ahora»). `role="status"`; respeta `safe-area-inset-bottom`.
+- **Hoja inferior móvil**: en ≤640 px el detalle y la acción de una fila abren una hoja (`role="dialog"`) con foco atrapado y Esc; botones de 56 px.
+- **Lista «Para resolver» por gravedad**: una sola lista ordenada crítico > atención > info; cada fila = barra de color de 4 px (rojo/ámbar/cian) + número grande + título + frase + acción. Las filas con `aria-expanded` se abren in situ; las que llevan a otra pantalla son enlaces. Lo que está en 0 no ocupa fila: una línea «✓ …» al pie; vacía, «Nada para resolver».
+- **Menú «Correr ahora»**: botón con menú (`aria-haspopup="menu"`), cada ítem con título y descripción de una línea; en móvil queda sólo el ícono (44 px). Esc lo cierra y devuelve el foco.
+- Piso común: controles ≥24 px en PC y ≥44 px en móvil, sin scroll horizontal de 320 a 1600 px, esqueleto al cargar, y ningún `confirm`/`alert`/`prompt`.

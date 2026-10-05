@@ -65,3 +65,14 @@ de pruebas UI.
 `scripts/qa/bandeja-real/levantar.mjs` emite la forma real (`marca`, valores normalizados y originales) y
 siembra atributos persistidos para `otros_atributos`. La estación usa scroll interno de diferencias y no
 scroll de página; queda pendiente validación visual responsive autorizada.
+
+## Sincronización ML rediseñada y Pausadas con stock (2026-10-05)
+
+Prototipos aprobados por José (fuente de layout, responsive, estados y copy; al implementar se usan los tokens de `theme.css`/`components.css`, no los hex):
+[`docs/superpowers/prototipos/2026-10-05-sincronizacion-ml.html`](../../superpowers/prototipos/2026-10-05-sincronizacion-ml.html) y [`2026-10-05-pausadas-con-stock.html`](../../superpowers/prototipos/2026-10-05-pausadas-con-stock.html).
+
+- `/herramientas/sync-ml/`: estado arriba en una línea (reemplaza las píldoras) + «Para resolver», una sola lista por gravedad (crítico > atención > info) con barra de color, número, frase y acción; las filas de frenadas y de cambios de producto se expanden in situ. Lo que está en 0 no ocupa fila: queda una línea «✓ …» al pie. Las 4 acciones manuales viven en el menú «Correr ahora» (sólo ícono en móvil); todo resultado va a una franja inferior persistente con ✕. Ventas ML: 2 KPIs y los últimos 5 pedidos plegados.
+- `/herramientas/sync-ml/pausadas/`: lista por causa con foto de 56 px, lote con segundo clic, resultado por fila y hoja inferior en móvil; atajos j/k/x/Enter/r/Shift+R/?.
+- Regla: **cero `confirm`/`alert`/`prompt` y ningún handler inline** en estas dos pantallas; la confirmación es un segundo clic o el propio plan previo.
+- Enlaces antiguos vivos: `/sync-ml/#reactivar` redirige a Pausadas; `#frenadas` y `#cambios-formato` abren y centran la fila.
+- Criterio de aceptación: sin scroll horizontal ni texto cortado en 320, 390, 600, 768, 900, 1024, 1280 y 1600 px; controles ≥24 px en PC y ≥44 px en móvil.

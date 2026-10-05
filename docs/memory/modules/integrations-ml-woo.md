@@ -133,3 +133,13 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   o `null` explícito), cancela operaciones durables pendientes y persiste `override_omitir` en las
   sagas de Guardia/Identidad. La saga revalida contradicción antes de restaurar stock o activar una
   identidad; en conflicto deja el caso abierto y registra historial.
+
+## Pausas con sentido (Fase A, 2026-10-05)
+
+- **Vigía de formato** (`lib/vigiaPausado.js`): sólo pausa cambios reales. **Vacío → producto no pausa**: casi siempre es ML asignando catálogo; queda como aviso abierto (`aviso_catalogo`, `solo_aviso=1`) para que una persona lo mire y **no bloquea al reactivador**. Tampoco pausan `desaparece`, `oscila`, `alta_reciente` ni `migracion` (migración de ML). El texto informativo de un aviso sin pausa va en `ml_publicacion_cambios.nota`; `pausada=1` sólo si el vigía pausó de verdad.
+- **Tope**: `UMBRAL_PAUSA_MASIVA` (5) por corrida y también en una ventana de 24 h; si se supera, el vigía no pausa más y deja avisos.
+- **`ml_pausas_log`** (migración 119) registra quién y desde dónde pausó cada publicación (`actor`, `origen`, fecha): permite decir «pausada por Fernando desde Cobertura hace 3 días».
+- **Pausadas con stock** (`lib/pausadasConStock.js`, `GET /api/sync/pausadas-con-stock`): lista las publicaciones pausadas en ML con stock en Woo, agrupadas por causa (`vigia`, `solo_local`, `sin_vinculo`, `pausa_app`, `paused_by_seller`, `pausa_vieja`, `out_of_stock`, `otra`). Cada una trae `reactivable` y `motivo_no_reactivable` (`solo_local`, `sin_vinculo`, `aviso_abierto`, `sin_stock_disponible`), stock Woo/ML (`stock_ml` es `null` si ML no informó, nunca 0 inventado), precio de contado por variación y `en_juego` (plata); el orden lo define el servidor.
+- **Reactivación siempre manual** (`POST /api/sync/pausadas-con-stock/reactivar`, máx. 50 por pedido, un pedido a la vez → 409 si ya hay uno en curso): sólo reactiva lo que la lista marca `reactivable`; se apoya en `reactivarItems(..., {manual:true, incluirPausasManuales:true})`, que sigue siendo fail-closed ante el precio. Una pausa del vendedor o de la app jamás se despausa sola.
+- **`solo_local` visible**: los SKUs con `modo='solo_local'` (stock forzado a 0 por Config ML) se muestran en la vista Pausadas como grupo bloqueado con link a Config ML, y su conteo viaja en `GET /api/sync/dashboard` (`solo_local: {skus, publicaciones}`).
+- Permiso: la vista y sus endpoints cuelgan de `sync-ml` (no hay herramienta nueva).

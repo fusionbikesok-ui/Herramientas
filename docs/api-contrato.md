@@ -3646,3 +3646,23 @@ Devuelve `{ ok, viejo, nuevo, diferencias[], veredicto: coincide|no_coincide|sin
 Proxy firmado (HMAC) a la plataforma; el actor sale de la sesión.
 - `GET /casos/:id`: `publicacion.foto` (URL de la primera imagen vigente de ML en `catalog.model_images`, o `null`) y `tipo` (tipo del caso).
 - `GET /variantes?q=<texto>[&caso_id=<uuid>]`: búsqueda manual (SKU exacto primero, luego título, máx. 20; cada variante trae `foto`, `precio`, `stock`). Con `caso_id` agrega `explicacion` (`atributos`, `otros_atributos`) contra la publicación ML del caso. Errores: 400 `caso_id` no-UUID, 404 caso de otra empresa o inexistente, 422 `caso_sin_publicacion`.
+
+### GET /api/sync/pausadas-con-stock
+Publicaciones pausadas en ML con stock en Woo, agrupables por causa. Permiso `sync-ml`.
+
+- Query opcional: `?causa=<causa>` (`vigia`, `solo_local`, `sin_vinculo`, `pausa_app`, `paused_by_seller`, `pausa_vieja`, `out_of_stock`, `otra`).
+- Response 200: `{ "ok": true, "total": N, "resumen": { "<causa>": n, ... }, "data": [ ... ] }`. Cada elemento: `item_id`, `titulo`, `thumbnail` y `permalink` (sólo `http(s)`; la miniatura siempre `https`, si no `null`), `status`, `sub_status`, `causa`, `texto_causa`, `detalle: { actor, origen, desde } | null` (de `ml_pausas_log`), `stock_woo`, `stock_ml` (`null` si ML no informó), `en_juego` (unidades × precio de contado, ARS), `sin_precio`, `reactivable`, `motivo_no_reactivable` (`solo_local` | `sin_vinculo` | `aviso_abierto` | `sin_stock_disponible` | `null`) y `variaciones: [{ clave, variation_id, variations_texto, sku, vinculado, stock_woo, stock_ml, stock_disponible_ml, precio_contado, aviso_abierto }]`.
+- Orden: `en_juego` descendente y luego título; **el cliente conserva ese orden**.
+
+### POST /api/sync/pausadas-con-stock/reactivar
+Reactivación manual de publicaciones de la lista anterior. Nunca corre sola.
+
+- Request: `{ "itemIds": ["MLA123", ...] }`, 1 a 50 ids; si no, 400.
+- Sólo se procesan las `reactivable`; el resto vuelve en `no_reactivables`. Corre de a un pedido: otro en curso responde 409.
+- Response 200: `{ "ok": true, "actor", "no_reactivables": [...], "procesados": N, "resultados": [{ "item_id", "ok", "error"?, "omitido"?, "motivo"? }] }`. Fail-closed ante el precio: sin precio web o neto bajo, la publicación no se reactiva y trae `error`.
+
+### Cambios para la pantalla Sincronización ML (2026-10-05)
+- `GET /api/sync/dashboard` suma `pausadas_con_stock` (el `resumen` por causa) y `solo_local: { skus, publicaciones }`.
+- `GET /api/sync/cambios-formato` devuelve además `nota` (texto informativo de un aviso sin pausa) y los avisos con `solo_aviso=1` no bloquean al reactivador.
+- `POST /api/sync/cambios-formato/:id/revisar` puede devolver `oferta_reactivar: { item_id, stock_woo }` cuando se cierra un aviso y hay stock: la pantalla la ofrece en línea («Reactivar ahora» llama al POST de arriba).
+- La pantalla ya no llama a `GET /api/sync/reactivables` ni a `/reactivables/conteo` (siguen existiendo; los cubre Pausadas). Siguen en uso `/frenadas`, `/frenadas/forzar`, `/reactivar`, `/api/precios/objetivo`, `/api/precios/actualizar-precio`, `/ml-wc`, `/wc-ml`, `/ml-cancelaciones` y `/limpiar-variaciones-muertas`.
