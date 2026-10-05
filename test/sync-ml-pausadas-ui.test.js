@@ -43,24 +43,60 @@ describe('Pausadas con stock: vista propia (/sync-ml/pausadas)', () => {
   });
 });
 
-describe('Sincronización ML: la caja vieja se reemplaza por una línea', () => {
-  it('queda sólo "N pausadas con stock · Revisar →" hacia la vista nueva', () => {
-    expect(sync).toContain('pausadas con stock · <a href="/herramientas/sync-ml/pausadas/">Revisar →</a>');
-    expect(sync).not.toContain('id="pausadas-box"');
-    expect(sync).not.toContain('reactivarPausadas');
+describe('Sincronización ML rediseñada', () => {
+  it('una sola lista "Para resolver" ordenada por gravedad, con Pausadas y detalle como filas', () => {
+    expect(sync).toContain('Para resolver');
+    expect(sync).toContain("var SEV={crit:0,warn:1,info:2}");
+    expect(sync).toContain('/herramientas/sync-ml/pausadas/');
+    expect(sync).toContain('/herramientas/sync-detalle/?cat=errores');
+    expect(sync).toContain('/herramientas/sync-detalle/?cat=sin_mapeo');
+    expect(sync).toContain('/herramientas/sync-detalle/?cat=remapeo_requerido');
+    expect(sync).toContain('/herramientas/sync-detalle/?cat=requiere_atencion_ml');
+    expect(sync).toContain('Nada para resolver');
   });
-  it('trata los avisos sin pausa como no-error y la oferta de reactivar apunta a la vista', () => {
+  it('estado arriba y flujos reemplazan las píldoras', () => {
+    expect(sync).toContain('La conexión con ML venció');
+    expect(sync).toContain('Renovar conexión →');
+    expect(sync).toContain('Todo sincronizando');
+    expect(sync).toContain('Ventas ML → web');
+    expect(sync).toContain('Stock web → ML');
+    expect(sync).not.toContain('class="pills"');
+  });
+  it('sin la sección vieja de reactivar y sin confirm/alert/prompt ni handlers inline', () => {
+    expect(sync).not.toContain('reactivar-box');
+    expect(sync).not.toContain('/api/sync/reactivables');
+    expect(sync).not.toMatch(/\b(confirm|alert|prompt)\(/);
+    expect(sync).not.toMatch(/\sonclick=|\sonerror=/);
+  });
+  it('Correr ahora conserva las 4 acciones manuales y el resultado va a la franja inferior', () => {
+    for (const u of ['/api/sync/ml-wc', '/api/sync/wc-ml', '/api/sync/ml-cancelaciones', '/api/sync/limpiar-variaciones-muertas']) expect(sync).toContain(u);
+    expect(sync).toContain('Correr ahora');
+    expect(sync).toContain('id="bandx"');
+  });
+  it('frenadas: plan con checkboxes y mismo endpoint de aplicar; cambios de producto con Es lo mismo / Dejar pausada', () => {
+    expect(sync).toContain('/api/precios/objetivo');
+    expect(sync).toContain('/api/precios/actualizar-precio');
+    expect(sync).toContain('/api/sync/reactivar');
+    expect(sync).toContain('/api/sync/frenadas/forzar');
+    expect(sync).toContain('Ver precios nuevos');
+    expect(sync).toContain('Es lo mismo');
+    expect(sync).toContain('Dejar pausada');
+    expect(sync).toContain('Comparar productos');
+  });
+  it('trata los avisos sin pausa como no-error y ofrece reactivar en línea (Reactivar ahora / Ver en Pausadas)', () => {
     expect(sync).toContain('c.nota||c.pausa_error');
     expect(sync).toContain('d.oferta_reactivar');
+    expect(sync).toContain('Reactivar ahora');
+    expect(sync).toContain('Ver en Pausadas');
+    expect(sync).toContain('data-cf-reactivar');
   });
-});
-
-describe('Sincronización: oferta de reactivar inline', () => {
-  const html = fs.readFileSync(new URL('../public/sync-ml/index.html', import.meta.url), 'utf8');
-  it('no usa alert para la oferta; la ofrece en línea con Reactivar ahora y link a Pausadas', () => {
-    const fn = html.slice(html.indexOf('async function revisarCambio('), html.indexOf('var yaScrolleFrenadas'));
-    expect(fn).not.toMatch(/alert\(/);
-    expect(html).toContain('Reactivar ahora');
-    expect(html).toContain('/herramientas/sync-ml/pausadas/');
+  it('ventas: 2 KPIs y los últimos 5 pedidos en un details plegado', () => {
+    expect(sync).toContain('<details class="orders"');
+    expect(sync).toContain('slice(0,5)');
+  });
+  it('mantiene los enlaces antiguos #reactivar, #frenadas y #cambios-formato', () => {
+    expect(sync).toContain("'#reactivar'");
+    expect(sync).toContain("'#frenadas'");
+    expect(sync).toContain("'#cambios-formato'");
   });
 });
