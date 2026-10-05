@@ -246,3 +246,6 @@ docker exec fusion-pg-pg-1 psql -U postgres -d plataforma -c \
   'select count(*), max(nombre) from core.schema_migrations'
 ```
 
+
+- El VPS no tiene el binario `sqlite3`: el backup previo a un deploy se hace con `better-sqlite3` (`db.backup()`) desde Node, y el deploy no sigue si el backup no existe.
+- Las credenciales de testing `auditor`/`Auditor2026!` no autentican en la base de producción (verificado 2026-10-05); valen para QA.
