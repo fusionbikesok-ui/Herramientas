@@ -161,6 +161,7 @@ details.orders summary::-webkit-details-marker{display:none}
   .or .num,.or .who,.or .when{grid-column:1}
   .or .tag{grid-row:1 / span 3;grid-column:2}
   .flows{flex-direction:column}
+  .flows span{white-space:normal}
   .plan thead{display:none}
   .plan table,.plan tbody{display:block}
   .plan tr{display:grid;grid-template-columns:1fr 1fr;padding:.4rem 0;border-top:1px solid var(--border)}
@@ -196,7 +197,7 @@ details.orders summary::-webkit-details-marker{display:none}
   <section class="status" id="status" aria-live="polite"><div class="big"><span class="dot"></span><span>Revisando…<small>Consultando ML y la web</small></span></div></section>
   <h2 class="sec" id="inch">Para resolver</h2>
   <section class="inc" id="inc" aria-labelledby="inch"></section>
-  <h2 class="sec">Ventas de ML en la web</h2>
+  <h2 class="sec" id="ventash">Ventas de ML en la web</h2>
   <div class="sales" id="sales"></div>
   <details class="orders" id="ordersbox" hidden><summary>Ver los últimos 5 pedidos</summary><div id="orders"></div></details>
 </main>
@@ -210,7 +211,7 @@ var $=function(s){return document.querySelector(s)};
 var SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="16" r="4"/><circle cx="18" cy="16" r="4"/><path d="M6 16l4-8h5l3 8M10 8l-1-2H7"/></svg>';
 var CHEV='<svg class="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" fill="none"/></svg>';
 var SEV={crit:0,warn:1,info:2};
-var D=null, frenadas=[], formato=[], estado='cargando', cargaOk={fren:false,form:false};
+var D=null, frenadas=[], formato=[], estado='cargando', sinPermiso=false, cargaOk={fren:false,form:false};
 var open=new Set(), selFr=new Set(), planPrecios=null, corriendo=false, confirmaForzar=false;
 
 /* ---------- helpers ---------- */
@@ -238,6 +239,7 @@ function venceEl(iso){
 }
 function sumResumen(r){return Object.keys(r||{}).reduce(function(a,k){return a+(r[k]||0)},0)}
 async function leerJson(r){
+  if(r.status===403){var pe=new Error('No tenés permiso para ver esto.');pe.permiso=true;throw pe}
   var t=await r.text(),d;
   try{d=JSON.parse(t)}catch(_e){throw new Error('el servidor respondió '+r.status+' sin datos')}
   if(!d||!d.ok)throw new Error((d&&d.error)||('HTTP '+r.status));
@@ -260,7 +262,7 @@ async function cargar(){
   try{
     var d=await leerJson(await fetch('/api/sync/dashboard'));
     D=d; estado='lista';
-  }catch(e){ if(!D)estado='error'; }
+  }catch(e){ sinPermiso=!!e.permiso; if(!D)estado='error'; }
   var res=await Promise.all([
     fetch('/api/sync/frenadas').then(leerJson).then(function(d){frenadas=d.data||[];return true},function(){return false}),
     fetch('/api/sync/cambios-formato').then(leerJson).then(function(d){formato=d.data||[];return true},function(){return false})
@@ -291,6 +293,8 @@ function incidencias(){
 }
 function oks(I){
   var hay={};I.forEach(function(i){hay[i.k]=1});
+  if(!cargaOk.fren)hay.fren=1;
+  if(!cargaOk.form)hay.form=1;
   var t=[['err','Errores'],['foto','Exceso de fotos'],['paus','Pausadas con stock'],['map','Ventas sin producto'],['remap','Variaciones a re-mapear'],['fren','Frenadas por precio'],['form','Cambios de producto']];
   return t.filter(function(x){return !hay[x[0]]}).map(function(x){return x[1]});
 }
@@ -299,7 +303,9 @@ function oks(I){
 function renderStatus(){
   var el=$('#status');
   if(estado==='cargando'){el.innerHTML='<div class="sk sk--st sk--lleno"></div>';return}
-  if(estado==='error'){el.innerHTML='<div class="big"><span class="dot bad"></span><span>No se pudo cargar el estado<small>Revisá la conexión y reintentá. <button class="btn" type="button" data-reload>Reintentar</button></small></span></div>';return}
+  if(estado==='error'){el.innerHTML=sinPermiso
+    ?'<div class="big"><span class="dot bad"></span><span>No tenés permiso para ver esto.</span></div>'
+    :'<div class="big"><span class="dot bad"></span><span>No se pudo cargar el estado<small>Revisá la conexión y reintentá. <button class="btn" type="button" data-reload>Reintentar</button></small></span></div>';return}
   var I=incidencias(), tok=!!(D.token&&D.token.vigente);
   var ml=(D.ultimasSyncsOk||[]).filter(function(x){return x.direccion==='ml_wc'})[0];
   var wc=(D.ultimasSyncsOk||[]).filter(function(x){return x.direccion==='wc_ml'})[0];
@@ -320,7 +326,6 @@ function renderStatus(){
 function renderInc(){
   var box=$('#inc');
   if(estado==='cargando'){box.innerHTML=[1,2,3,4].map(function(){return '<div class="sk"></div>'}).join('');return}
-  if(estado==='error'){box.innerHTML='<div class="errbox"><span>No se pudo cargar la lista.</span><button class="btn" type="button" data-reload>Reintentar</button></div>';return}
   var I=incidencias(), fallo=(!cargaOk.fren||!cargaOk.form)?'<div class="ok-line ok-line--warn">No se pudo consultar '+(!cargaOk.fren&&!cargaOk.form?'las frenadas ni los cambios de producto':!cargaOk.fren?'las frenadas por precio':'los cambios de producto')+'. <button class="btn" type="button" data-reload>Reintentar</button></div>':'';
   if(!I.length){
     box.innerHTML='<div class="allok"><span class="dot ok"></span>Nada para resolver</div>'+fallo+'<div class="ok-line">'+oks(I).map(function(x){return '<span>'+x+'</span>'}).join('')+'</div>';
@@ -531,7 +536,13 @@ function renderVentas(){
     return '<div class="or"><span class="num">#'+esc(o.wc_order_id)+'</span><span class="who">'+esc(nick(o.comprador_json))+'</span><span class="when">'+hace(o.creado_en)+'</span><span class="tag '+(c?'canc':'ok')+'">'+(c?'Cancelado':'Activo')+'</span></div>';
   }).join('');
 }
-function render(){renderStatus();renderInc();renderVentas()}
+function render(){
+  var err=estado==='error';
+  ['#inch','#inc','#ventash','#sales'].forEach(function(q){$(q).hidden=err});
+  if(err)$('#ordersbox').hidden=true;
+  renderStatus();
+  if(!err){renderInc();renderVentas()}
+}
 
 /* ---------- enlaces antiguos (#frenadas, #reactivar, #cambios-formato) ---------- */
 var hashHecho=false;

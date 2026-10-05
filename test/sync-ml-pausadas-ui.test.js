@@ -104,4 +104,13 @@ describe('Sincronización ML rediseñada', () => {
     expect(sync).toContain("'#frenadas'");
     expect(sync).toContain("'#cambios-formato'");
   });
+
+  it('defensa en profundidad: el cliente sólo acepta http(s) en permalink/thumbnail, y 403 muestra texto llano sin Reintentar', () => {
+    expect(vista).toContain('urlSegura(i.permalink)');
+    expect(vista).toContain("urlSegura(i.thumbnail,true)");
+    expect(vista).toContain('No tenés permiso para ver esto.');
+    expect(sync).toContain('No tenés permiso para ver esto.');
+    expect(sync).toContain('.flows span{white-space:normal}');
+    expect(sync).toContain('if(!cargaOk.fren)hay.fren=1');
+  });
 });
