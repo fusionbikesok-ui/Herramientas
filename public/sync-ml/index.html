@@ -119,6 +119,7 @@
     <h2>Publicaciones que cambiaron de formato</h2>
     <p class="cf-sub">MercadoLibre cambió qué dice que estás vendiendo en estas publicaciones.
       Se pausaron para que no vendan mal. Revisá el antes y el después antes de reactivarlas.</p>
+    <div id="cf-resultado" role="status" aria-live="polite" style="display:flex;flex-direction:column;gap:8px"></div>
     <div id="cambios-formato-lista"></div>
   </div>
 
@@ -248,6 +249,37 @@ async function compararProductos(id,btn){
   btn.disabled=false;
 }
 
+function cfMensaje(html,acciones){
+  var box=document.getElementById('cf-resultado');
+  var d=document.createElement('div');
+  d.className='cf-fila';
+  d.innerHTML='<div style="min-width:0">'+html+'</div>'+(acciones?'<div class="cf-acciones">'+acciones+'</div>':'')
+    +'<div class="cf-acciones"><button class="btn sec" type="button" onclick="this.closest(\'.cf-fila\').remove()">Cerrar</button></div>';
+  box.appendChild(d);
+  return d;
+}
+function cfAviso(d){
+  var f=d.oferta_reactivar;
+  if(d.pendiente_stock)cfMensaje('Aviso cerrado. La publicación no tiene stock en MercadoLibre: se reactiva sola cuando vuelva a haber stock.');
+  else if(f)cfMensaje('Aviso cerrado. <b>Hay '+f.stock_woo+' en stock</b> y la publicación sigue pausada.',
+    '<button class="btn" type="button" onclick="cfReactivarAhora(this,\''+esc(f.item_id)+'\')">Reactivar ahora</button>'
+    +'<a class="btn sec" href="/herramientas/sync-ml/pausadas/">Ver en Pausadas</a>');
+}
+async function cfReactivarAhora(btn,id){
+  var fila=btn.closest('.cf-fila'),txt=fila.firstChild;
+  btn.disabled=true;
+  try{
+    var r=await fetch('/api/sync/pausadas-con-stock/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:[id]})});
+    var d=await r.json();
+    if(!d.ok)throw new Error(d.error||'error');
+    if((d.no_reactivables||[]).indexOf(id)>=0)throw new Error('ya no se puede reactivar desde acá');
+    var x=(d.resultados||[]).filter(function(y){return y.item_id===id})[0];
+    if(!x||!x.ok)throw new Error((x&&x.error)||'ML no la dejó');
+    txt.innerHTML='<span class="cf-ok">Reactivada.</span>';
+    btn.remove();
+  }catch(e){ txt.innerHTML+='<div class="cf-mal">No se pudo reactivar: '+esc(e.message)+'</div>'; btn.disabled=false; }
+}
+
 async function revisarCambio(id, reactivar){
   if(reactivar && !confirm('Vas a reactivar esta publicación en MercadoLibre.\n\n¿Verificaste que el formato ahora es el correcto?'))return;
   try{
@@ -258,11 +290,10 @@ async function revisarCambio(id, reactivar){
     var texto=await r.text(), d;
     try{ d=JSON.parse(texto); }catch(_e){ throw new Error('el servidor respondió '+r.status+' sin datos. Recargá la página y reintentá.'); }
     if(!d.ok)throw new Error(d.error||'error');
-    if(d.pendiente_stock)alert('Aviso cerrado. La publicación no tiene stock en MercadoLibre: se va a reactivar sola cuando vuelva a haber stock.');
-    else if(d.oferta_reactivar)alert('Aviso cerrado. La publicación sigue pausada y hay '+d.oferta_reactivar.stock_woo+' en stock en la web. Si querés reactivarla, hacelo desde Pausadas con stock (Sincronización ML → Revisar).');
+    cfAviso(d);
     await cargarCambiosFormato();
     cargarReactivables();
-  }catch(err){ alert('No se pudo: '+err.message); }
+  }catch(err){ cfMensaje('<span class="cf-mal">No se pudo: '+esc(err.message)+'</span>'); }
 }
 
 var yaScrolleFrenadas=false;

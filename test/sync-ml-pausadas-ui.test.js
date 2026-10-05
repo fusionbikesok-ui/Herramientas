@@ -54,3 +54,13 @@ describe('Sincronización ML: la caja vieja se reemplaza por una línea', () => 
     expect(sync).toContain('d.oferta_reactivar');
   });
 });
+
+describe('Sincronización: oferta de reactivar inline', () => {
+  const html = fs.readFileSync(new URL('../public/sync-ml/index.html', import.meta.url), 'utf8');
+  it('no usa alert para la oferta; la ofrece en línea con Reactivar ahora y link a Pausadas', () => {
+    const fn = html.slice(html.indexOf('async function revisarCambio('), html.indexOf('var yaScrolleFrenadas'));
+    expect(fn).not.toMatch(/alert\(/);
+    expect(html).toContain('Reactivar ahora');
+    expect(html).toContain('/herramientas/sync-ml/pausadas/');
+  });
+});
