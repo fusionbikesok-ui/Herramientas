@@ -16,7 +16,7 @@ describe('Sincronización: pausadas con stock (UI)', () => {
   });
   it('muestra el contador solo_local y trata los avisos sin pausa como no-error', () => {
     expect(html).toContain('solo local');
-    expect(html).toContain('(migración de ML|catálogo nuevo|ya estaba pausada)');
+    expect(html).toContain('c.nota||c.pausa_error');
   });
   it('ofrece reactivar al cerrar un aviso cuando el backend lo propone', () => {
     expect(html).toContain('d.oferta_reactivar');

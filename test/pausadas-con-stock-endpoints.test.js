@@ -92,4 +92,20 @@ describe('Pausadas con stock en Woo: endpoints', () => {
     expect(r.body.oferta_reactivar).toEqual({ item_id: 'MLA1', stock_woo: 5 });
     expect(mlFetch).not.toHaveBeenCalled();
   });
+
+  it('un aviso de catálogo (vacío→producto, solo_aviso) NO bloquea al reactivador ni a la lista', async () => {
+    sembrar(db, 1, { sub: 'out_of_stock' });
+    db.prepare(`INSERT INTO ml_publicacion_cambios (clave,item_id,sku,campo,valor_anterior,valor_nuevo,pausada,pausa_error,detectado_en,solo_aviso)
+      VALUES ('MLA1|','MLA1','FB-1','catalog_product_id',NULL,'MLA9',0,'catálogo nuevo: no se pausa, revisar',datetime('now'),1)`).run();
+    const { getReactivablesRows } = await import('../routes/sync.js');
+    expect(getReactivablesRows(db).map((x) => x.item_id)).toContain('MLA1');
+    const r = await request(app).get('/api/sync/pausadas-con-stock');
+    expect(r.body.data[0]).toMatchObject({ item_id: 'MLA1', reactivable: true });
+    // El mismo aviso sin la marca sí bloquea (comportamiento previo para pausas reales del vigía).
+    db.prepare('UPDATE ml_publicacion_cambios SET solo_aviso=0').run();
+    expect(getReactivablesRows(db).map((x) => x.item_id)).not.toContain('MLA1');
+    // y el aviso sigue visible para revisar
+    db.prepare('UPDATE ml_publicacion_cambios SET solo_aviso=1').run();
+    expect((await request(app).get('/api/sync/cambios-formato')).body.total).toBe(1);
+  });
 });

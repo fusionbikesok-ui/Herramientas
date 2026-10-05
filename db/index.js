@@ -957,6 +957,13 @@ export function openDb(dbPath) {
   try { db.exec('ALTER TABLE ml_publicacion_cambios ADD COLUMN bloquea_reactivador INTEGER NOT NULL DEFAULT 0'); } catch (e) {
     if (!String(e.message || e).includes('duplicate column name')) throw e;
   }
+  // solo_aviso=1: aviso visible que NO bloquea al reactivador (vacío→producto de catálogo, no se pausó).
+  // nota: texto informativo del vigía que no es un error de pausa (p. ej. "ya estaba pausada").
+  for (const col of ['solo_aviso INTEGER NOT NULL DEFAULT 0', 'nota TEXT']) {
+    try { db.exec(`ALTER TABLE ml_publicacion_cambios ADD COLUMN ${col}`); } catch (e) {
+      if (!String(e.message || e).includes('duplicate column name')) throw e;
+    }
+  }
   // E1 T3 C1: ciclo de vida de la copia de sombra sobre integration_events. Las columnas se agregan
   // una por una según PRAGMA para que una base con la migración a medio aplicar se complete sola; los
   // índices del .sql son idempotentes. Ninguna columna lleva CHECK: SQLite no puede agregar

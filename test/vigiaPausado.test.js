@@ -209,10 +209,11 @@ describe('vigiaPausado', () => {
       const r = await procesarCambios(db, CFG, [cambioCat(1)]);
       expect(r).toMatchObject({ pausadas: 0, avisos_sin_pausa: 1, errores: 0 });
       expect(mlFetch).not.toHaveBeenCalled();
-      const f = db.prepare('SELECT pausada, revisado_en, pausa_error FROM ml_publicacion_cambios').get();
+      const f = db.prepare('SELECT pausada, revisado_en, pausa_error, solo_aviso FROM ml_publicacion_cambios').get();
       expect(f.pausada).toBe(0);
       expect(f.revisado_en).toBeNull();
       expect(f.pausa_error).toMatch(/^catálogo nuevo/);
+      expect(f.solo_aviso).toBe(1);
     });
 
     it('el tope también vale por ventana de 24 h: lo ya pausado cuenta', async () => {
@@ -248,9 +249,10 @@ describe('vigiaPausado', () => {
       const r = await procesarCambios(db, CFG, [cambio(1)]);
       expect(r).toMatchObject({ pausadas: 0, errores: 0, ya_pausadas: 1 });
       expect(mlFetch).not.toHaveBeenCalled();
-      const f = db.prepare('SELECT pausada, pausa_error, revisado_en FROM ml_publicacion_cambios').get();
+      const f = db.prepare('SELECT pausada, pausa_error, nota, revisado_en FROM ml_publicacion_cambios').get();
       expect(f.pausada).toBe(0);
-      expect(f.pausa_error).toMatch(/^ya estaba pausada/);
+      expect(f.pausa_error).toBeNull();
+      expect(f.nota).toMatch(/^ya estaba pausada/);
       expect(f.revisado_en).toBeNull();
       // No consume cupo: se pueden pausar UMBRAL publicaciones activas después.
       const lote = Array.from({ length: UMBRAL_PAUSA_MASIVA }, (_, i) => cambio(50 + i));

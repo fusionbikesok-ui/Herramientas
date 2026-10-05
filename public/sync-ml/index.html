@@ -189,7 +189,7 @@ var LABELS_PRECIO={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:
    unidades por pack o su formato de venta) y el vigía pausó. Reactivar es siempre una
    decisión humana: el vigía nunca despausa solo. */
 // Avisos que el vigía dejó abiertos A PROPÓSITO sin pausar (migración de ML): no son un error de pausa.
-function esMotivoSinPausa(c){return !c.pausada&&/^(migración de ML|catálogo nuevo|ya estaba pausada)/.test(c.pausa_error||'');}
+function esMotivoSinPausa(c){return !c.pausada&&(!!c.nota||/^(migración de ML|catálogo nuevo)/.test(c.pausa_error||''));}
 async function cargarCambiosFormato(){
   var caja=document.getElementById('cambios-formato');
   if(!caja)return;
@@ -208,7 +208,7 @@ async function cargarCambiosFormato(){
         +'<div style="min-width:0">'
         +'<div><b>'+esc(c.titulo||c.item_id)+'</b>'+(c.sku?' · '+esc(c.sku):'')+(c.variaciones>1?' · '+c.variaciones+' variaciones':'')+'</div>'
         +'<div class="cf-cambio">'+esc(c.campo)+': <span class="cf-antes">'+esc(antes)+'</span> → <span class="cf-despues">'+esc(despues)+'</span></div>'
-        +(esMotivoSinPausa(c)?'<div style="font-size:12px;color:var(--amber,#F5B942)">'+esc(c.pausa_error)+'. Revisalo igual.</div>'
+        +(esMotivoSinPausa(c)?'<div style="font-size:12px;color:var(--amber,#F5B942)">'+esc(c.nota||c.pausa_error)+'. Revisalo igual.</div>'
           :(c.pausada?'':'<div style="font-size:12px;color:var(--amber,#F5B942)">No se pausó (freno de mano o error).</div>')
           +(c.pausa_error?'<div style="font-size:12px;color:var(--red,#F87171)">No se pudo pausar: '+esc(c.pausa_error)+'</div>':''))
         +'</div>'

@@ -1991,7 +1991,7 @@ export function getReactivablesRows(db, itemIds = null, { incluirPausasManuales 
       AND cm.stock_disponible_ml > 0
       AND NOT EXISTS (
         SELECT 1 FROM ml_publicacion_cambios vc
-        WHERE vc.clave = p.clave AND (vc.revisado_en IS NULL OR vc.bloquea_reactivador = 1)
+        WHERE vc.clave = p.clave AND vc.solo_aviso = 0 AND (vc.revisado_en IS NULL OR vc.bloquea_reactivador = 1)
       )`;
   const params = [];
   if (Array.isArray(itemIds) && itemIds.length) {
@@ -3211,7 +3211,7 @@ export function syncRouter(db, cfg) {
   router.get('/cambios-formato', (_req, res) => {
     const data = db.prepare(`
       SELECT MIN(c.id) id, json_group_array(c.id) ids, COUNT(DISTINCT c.clave) variaciones, MIN(c.clave) clave, c.item_id, MIN(c.sku) sku, c.campo, c.valor_anterior, c.valor_nuevo,
-             MAX(c.pausada) pausada, MAX(c.pausa_error) pausa_error, MAX(c.detectado_en) detectado_en, p.titulo, p.thumbnail, p.permalink
+             MAX(c.pausada) pausada, MAX(c.pausa_error) pausa_error, MAX(c.nota) nota, MAX(c.detectado_en) detectado_en, p.titulo, p.thumbnail, p.permalink
       FROM ml_publicacion_cambios c
       LEFT JOIN ml_publicaciones_cache p ON p.clave = c.clave
       WHERE c.revisado_en IS NULL
