@@ -79,3 +79,6 @@ Prototipos aprobados por José (fuente de layout, responsive, estados y copy; al
 
 ## Deuda: handlers `onclick` inline previos (2026-10-06)
 Ticket pendiente, anterior a Fase B (no lo introdujo): quedan `onclick` inline en `public/matcher/index.html` (≈ líneas 540, 558, 608) y `public/home/index.html` (≈ 528, 756). Migrarlos a `addEventListener`/delegación, como pide la regla de «ningún handler inline» de arriba.
+
+## Deuda: targets táctiles < 44 px en móvil (2026-10-06)
+Detectada en el E2E de Fase B; no es de esa rama. Controles por debajo de 44 px en móvil: «Salir» y «Abrir bandeja en Mercado…» (home), «← Home», y el link MLA de la tabla del matcher. Llevarlos a ≥ 44 px (criterio de aceptación de arriba).
