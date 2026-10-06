@@ -343,7 +343,13 @@ async function cargar(){
     if(r.status===403){var pe=new Error('permiso');pe.permiso=true;throw pe}
     var d=await r.json();
     if(!r.ok||!d.ok)throw new Error('carga');
-    items=(d.data||[]).map(function(i){i.permalink=urlSegura(i.permalink);i.thumbnail=urlSegura(i.thumbnail,true);return i}); resumen=d.resumen||{}; cargadoEn=Date.now(); estado='lista';
+    items=(d.data||[]).map(function(i){i.permalink=urlSegura(i.permalink);i.thumbnail=urlSegura(i.thumbnail,true);return i}); resumen=d.resumen||{};
+    /* El bloqueo por neto bajo sobrevive a la recarga: viene de ml_reactivacion_frenada. Lo que se marcó acá por reintentar tiene prioridad. */
+    items.forEach(function(i){
+      var cl=i.frenada_neto_claves, e0=errs[i.item_id];
+      if(cl&&cl.length){if(!e0||e0.deFrenada)errs[i.item_id]={prefijo:'',texto:PausadasPrecio.ERR_NETO,neto:cl,deFrenada:true};}
+      else if(e0&&e0.deFrenada)delete errs[i.item_id];
+    }); cargadoEn=Date.now(); estado='lista';
     $('#loaderr').hidden=true;$('#retry').hidden=false;
     /* lo que ya no está en la lista (se reactivó por otro lado) sale de la selección */
     var ids=new Set(items.map(function(i){return i.item_id}));
@@ -516,32 +522,33 @@ async function reactivar(ids){
    y se confirme; si el precio nuevo es menor al actual se marca. Reusa /api/precios/* y la reactivación existente. */
 function selNeto(){return Array.from(sel).filter(function(x){return errs[x]&&errs[x].neto&&!busy.has(x)}).slice(0,MAX_LOTE)}
 function itemPorId(id){return items.filter(function(i){return i.item_id===id})[0]}
-async function llamar(url,body){
+async function llamar(url,body,sinPermiso){
   var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   var txt=await r.text(), d=null;
   try{d=JSON.parse(txt)}catch(_e){}
-  if(r.status===403)throw new Error('No tenés permiso para cambiar precios');
+  if(r.status===403)throw new Error(sinPermiso||'No tenés permiso para hacer esto');
   if(!d)throw new Error('el servidor respondió '+r.status+' sin datos');
   return {r:r,d:d};
 }
 async function abrirPrecio(ids){
   ids=Array.from(new Set(ids)).filter(function(x){return errs[x]&&errs[x].neto}).slice(0,MAX_LOTE);
   if(!ids.length||pp)return;
+  var clavesDe={};ids.forEach(function(x){clavesDe[x]=errs[x].neto.slice()});
   pp={ids:ids,estado:'calculando',planes:[],resultados:null,error:null,opener:document.activeElement};
   var v=document.createElement('div');v.className='veil';v.id='pveil';
   var s2=document.createElement('div');s2.className='psheet';s2.id='psheet';s2.setAttribute('role','dialog');s2.setAttribute('aria-modal','true');s2.setAttribute('aria-label','Calcular precio y reactivar');
   v.onclick=function(){if(pp&&pp.estado!=='aplicando')cerrarPrecio()};
   document.body.append(v,s2);renderPrecio();
   try{
-    var claves=[];ids.forEach(function(x){errs[x].neto.forEach(function(c){claves.push(c)})});
+    var claves=[];ids.forEach(function(x){clavesDe[x].forEach(function(c){claves.push(c)})});
     var mapa={};
     var lotes=PausadasPrecio.tandas(claves);
     for(var k=0;k<lotes.length;k++){
-      var o=await llamar('/api/precios/objetivo',{claves:lotes[k]});
+      var o=await llamar('/api/precios/objetivo',{claves:lotes[k]},'No tenés permiso para calcular precios');
       if(!o.r.ok||!o.d.ok)throw new Error(o.d.error||('HTTP '+o.r.status));
       (o.d.resultados||[]).forEach(function(x){mapa[x.clave]=x});
     }
-    pp.planes=ids.map(function(x){return PausadasPrecio.planItem(x,errs[x].neto,mapa)});
+    pp.planes=ids.map(function(x){return PausadasPrecio.planItem(x,clavesDe[x],mapa)});
     pp.estado='listo';
   }catch(e){pp.estado='error';pp.error=e.message}
   renderPrecio();
@@ -559,7 +566,8 @@ function pFila(p){
   var cab='<div class="pt"><b>'+t+'</b><span>'+(p.variaciones?p.variaciones+(p.variaciones===1?' variación':' variaciones')+' · ':'')+esc(p.itemId)+'</span></div>';
   if(!p.ok)return '<div class="pr pr--no">'+cab+'<div class="pn">No se puede calcular: '+esc(p.motivos.join(' · '))+'. No se cambia nada en esta publicación.</div></div>';
   var pv='<div class="pv num">'+(p.actual!=null?moneyFull(p.actual):'sin precio')+' <span aria-hidden="true">→</span> <b>'+moneyFull(p.nuevo)+'</b>'
-    +(p.baja?' <span class="pbaja">⬇ baja el precio</span>':!p.cambia?' <span class="pn">sin cambio, solo se reactiva</span>':'')+'</div>';
+    +(p.baja?' <span class="pbaja">⬇ baja el precio</span>':!p.cambia?' <span class="pn">sin cambio, solo se reactiva</span>':'')+'</div>'
+    +(p.cruzaEnvio?'<div class="pn pbaja">⚠ Con este precio cambia el costo de envío (cruza el umbral de envío gratis de ML).</div>':'');
   var pn='<div class="pn num">Neto resultante '+(p.neto!=null?moneyFull(p.neto):'—')+' · precio web '+(p.precioWeb!=null?moneyFull(p.precioWeb):'—')+'</div>';
   var res='',cls=p.baja?' pr--baja':'';
   if(r){
@@ -609,12 +617,12 @@ async function confirmarPrecio(){
   var deps={
     putPrecio:async function(itemId,precio){
       try{
-        var o=await llamar('/api/precios/actualizar-precio-item',{itemId:itemId,precio:precio});
+        var o=await llamar('/api/precios/actualizar-precio-item',{itemId:itemId,precio:precio},'No tenés permiso para cambiar precios');
         return o.r.ok&&o.d.ok?{ok:true}:{ok:false,error:o.d.error||('HTTP '+o.r.status)};
       }catch(e){return {ok:false,error:e.message}}
     },
     reactivar:async function(itemIds){
-      var o=await llamar('/api/sync/pausadas-con-stock/reactivar',{itemIds:itemIds});
+      var o=await llamar('/api/sync/pausadas-con-stock/reactivar',{itemIds:itemIds},'No tenés permiso para reactivar');
       if(!o.d.ok)throw new Error(o.d.error||('HTTP '+o.r.status));
       var mapa={};
       (o.d.resultados||[]).forEach(function(x){mapa[x.item_id]=x});
@@ -635,6 +643,17 @@ async function confirmarPrecio(){
   pp.estado='resultado';
   renderPrecio();render();
 }
+/* Focus trap: con el panel abierto, Tab y Shift+Tab ciclan dentro de él. */
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Tab'||!pp)return;
+  var s2=$('#psheet');if(!s2)return;
+  var f=Array.prototype.filter.call(s2.querySelectorAll('button,a[href],input,select,textarea,[tabindex]'),function(x){return !x.disabled&&x.tabIndex>=0&&x.offsetParent!==null});
+  if(!f.length){e.preventDefault();s2.setAttribute('tabindex','-1');s2.focus();return}
+  var a=document.activeElement, i=f.indexOf(a);
+  if(!s2.contains(a)){e.preventDefault();f[0].focus();return}
+  if(e.shiftKey&&i<=0){e.preventDefault();f[f.length-1].focus()}
+  else if(!e.shiftKey&&i===f.length-1){e.preventDefault();f[0].focus()}
+});
 document.addEventListener('click',function(e){
   var t=e.target.closest('button');if(!t)return;
   if(t.id==='pcancel'){cerrarPrecio();return}

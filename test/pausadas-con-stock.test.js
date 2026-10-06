@@ -39,6 +39,22 @@ describe('lista "Pausadas con stock en Woo"', () => {
     expect(r.resumen).toMatchObject({ paused_by_seller: 2, pausa_vieja: 1, out_of_stock: 1, sin_vinculo: 1, solo_local: 1, vigia: 0 });
   });
 
+  it('expone qué variaciones están frenadas por neto bajo (sobrevive a recargar la pantalla)', () => {
+    woo('FB-1', 3); woo('FB-2', 3);
+    pub(1, { sub: 'paused_by_seller', sku: 'FB-1' });
+    pub(2, { sub: 'paused_by_seller', sku: 'FB-2' });
+    const ins = db.prepare('INSERT INTO ml_reactivacion_frenada (clave,sku,motivo,neto,precio_contado,deficit_pct,detectado_en) VALUES (?,?,?,?,?,?,?)');
+    ins.run('MLA1|', 'FB-1', 'El neto de ML queda por debajo del precio web', 80000, 90000, 11, ISO);
+    ins.run('MLA2|', 'FB-2', 'otro motivo cualquiera', null, null, null, ISO); // no es neto bajo: no cuenta
+    const r = listarPausadasConStock(db);
+    const por = Object.fromEntries(r.data.map((x) => [x.item_id, x]));
+    expect(por.MLA1.frenada_neto_claves).toEqual(['MLA1|']);
+    expect(por.MLA1.variaciones[0].frenada_neto).toBe(true);
+    expect(por.MLA2.frenada_neto_claves).toEqual([]);
+    db.prepare("DELETE FROM ml_reactivacion_frenada WHERE clave='MLA1|'").run(); // el precio se corrigió
+    expect(listarPausadasConStock(db).data.find((x) => x.item_id === 'MLA1').frenada_neto_claves).toEqual([]);
+  });
+
   it('pausa del vigía (aviso sin revisar con pausada=1) se rotula vigia y NO es reactivable hasta revisar', () => {
     woo('FB-1', 3);
     pub(1, { sub: 'paused_by_seller', sku: 'FB-1' });

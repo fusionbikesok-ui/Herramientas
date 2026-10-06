@@ -48,6 +48,7 @@
       baja: actual != null && nuevo < actual,
       neto: det.neto == null ? null : r2(det.neto),
       precioWeb: det.contado == null ? null : r2(det.contado),
+      cruzaEnvio: filas.some(function (f) { return !!f.cruza_umbral_envio; }),
       variaciones: filas.length
     };
   }

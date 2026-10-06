@@ -49,6 +49,11 @@ describe('Calcular precio y reactivar: lógica', () => {
     it('una clave que /objetivo no devolvió cuenta como sin cálculo', () => {
       expect(PP.planItem('MLA9', ['MLA9|'], {}).ok).toBe(false);
     });
+    it('propaga el aviso de que el precio cruza el umbral de envío (de cualquier variación)', () => {
+      const p = PP.planItem('A', ['A|', 'A|2'], { 'A|': fila('A|', 110000), 'A|2': fila('A|2', 120000, { cruza_umbral_envio: true }) });
+      expect(p.cruzaEnvio).toBe(true);
+      expect(PP.planItem('A', ['A|'], { 'A|': fila('A|', 110000) }).cruzaEnvio).toBe(false);
+    });
     it('marca la baja y el precio sin cambio', () => {
       expect(PP.planItem('A', ['A|'], { 'A|': fila('A|', 90000) })).toMatchObject({ baja: true, cambia: true });
       expect(PP.planItem('A', ['A|'], { 'A|': fila('A|', 100000) })).toMatchObject({ baja: false, cambia: false });
@@ -171,6 +176,28 @@ describe('Calcular precio y reactivar: pantalla de Pausadas', () => {
   it('el panel se cierra con Escape salvo mientras aplica, y frena los atajos de la lista', () => {
     expect(pagina).toContain("if(pp){if(pp.estado!=='aplicando')cerrarPrecio();return}");
     expect(pagina).toContain('if(sheetEl||pp)return;');
+  });
+  it('el 403 dice qué permiso falta según el endpoint (no siempre «cambiar precios»)', () => {
+    expect(pagina).toContain("'No tenés permiso para calcular precios'");
+    expect(pagina).toContain("'No tenés permiso para cambiar precios'");
+    expect(pagina).toContain("'No tenés permiso para reactivar'");
+    expect(pagina).toContain('throw new Error(sinPermiso||');
+  });
+  it('lee las claves ANTES del await: una recarga durante «Calculando» no rompe', () => {
+    const i = pagina.indexOf('async function abrirPrecio');
+    const cuerpo = pagina.slice(i, pagina.indexOf('function cerrarPrecio'));
+    const antes = cuerpo.slice(0, cuerpo.indexOf('await '));
+    expect(antes).toContain('clavesDe[x]=errs[x].neto.slice()');
+    expect(cuerpo.slice(cuerpo.indexOf('await ')).includes('errs[x].neto')).toBe(false);
+  });
+  it('el panel tiene focus trap con Tab', () => {
+    expect(pagina).toContain("if(e.key!=='Tab'||!pp)return;");
+    expect(pagina).toContain('f[f.length-1].focus()');
+  });
+  it('recupera el bloqueo de neto al cargar (frenada_neto_claves) y avisa si cruza el umbral de envío', () => {
+    expect(pagina).toContain('i.frenada_neto_claves');
+    expect(pagina).toContain('deFrenada:true');
+    expect(pagina).toContain('cambia el costo de envío');
   });
   it('el script de la página y el módulo son JavaScript válido', () => {
     const js = [...pagina.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
