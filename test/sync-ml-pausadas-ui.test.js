@@ -122,7 +122,21 @@ describe('Sincronización ML rediseñada', () => {
   it('muestra en "Para resolver" las correcciones de identidad encoladas sin ejecutar', () => {
     expect(sync).toContain('D.identidad_encoladas');
     expect(sync).toContain("k:'idq'");
-    expect(sync).toContain('Llevan más de 2 horas esperando');
+    expect(sync).toContain('más de 2 horas esperando');
     expect(sync).toContain('fuera del canario');
+  });
+  it('el ítem cuenta también las trabadas en proceso y distingue ambos conteos', () => {
+    expect(sync).toContain('iq.procesando_vencidas');
+    expect(sync).toContain('nIdq=nEnc+nTrab');
+    expect(sync).toContain('encoladas sin ejecutar');
+    expect(sync).toContain('trabadas en proceso');
+  });
+  it('el chip del home usa n + procesando_vencidas y apunta al mismo destino que el ítem', () => {
+    const home = fs.readFileSync('./public/home/index.html', 'utf8');
+    expect(home).toContain('idq.procesando_vencidas');
+    expect(home).toContain('peChip(idEnc + idTrab, idEtiqueta');
+    expect(home).toContain("'/herramientas/identidad-productos/', 'matcher'");
+    expect(home).not.toContain("encoladas sin ejecutar (más de 2 h)', 'warn', '/herramientas/sync-ml/'");
+    expect(sync).toContain("href:'/herramientas/identidad-productos/'");
   });
 });

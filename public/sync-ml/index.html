@@ -279,14 +279,15 @@ async function cargar(){
 function incidencias(){
   var at=(D&&D.atencion)||{};
   var nPaus=sumResumen(D&&D.pausadas_con_stock);
-  var iq=(D&&D.identidad_encoladas)||{}, nIdq=iq.n||0;
-  var nIdqD='Llevan más de 2 horas esperando'+(iq.mas_vieja_horas?' (la más vieja, '+iq.mas_vieja_horas+' h)':'')+(iq.fuera_de_canario?'; '+iq.fuera_de_canario+' fuera del canario, que el sistema no va a tomar solo':'')+'.';
+  var iq=(D&&D.identidad_encoladas)||{}, nEnc=iq.n||0, nTrab=iq.procesando_vencidas||0, nIdq=nEnc+nTrab;
+  var nIdqD=[nEnc?nEnc+' encoladas sin ejecutar (más de 2 horas esperando'+(iq.mas_vieja_horas?'; la más vieja, '+iq.mas_vieja_horas+' h':'')+(iq.fuera_de_canario?'; '+iq.fuera_de_canario+' fuera del canario, que el sistema no va a tomar solo':'')+')':'',
+    nTrab?nTrab+' trabadas en proceso (el paso quedó a medias y venció)':''].filter(Boolean).join(' · ')+'.';
   var nFren=cargaOk.fren?frenadas.length:((D&&D.frenadas)||0);
   var nForm=cargaOk.form?formato.length:0;
   return [
     {k:'err',sev:'crit',n:at.errores_reales||0,t:'Errores que no se resolvieron solos',d:'ML rechazó la actualización de stock y no se arregló con el reintento automático.',go:'Ver y reintentar',href:'/herramientas/sync-detalle/?cat=errores'},
     {k:'foto',sev:'crit',n:at.requiere_atencion_ml||0,t:'Exceso de fotos en ML',d:'ML no deja actualizar estas publicaciones hasta bajar la cantidad de fotos en tu cuenta de ML.',go:'Ver detalle',href:'/herramientas/sync-detalle/?cat=requiere_atencion_ml'},
-    {k:'idq',sev:'warn',n:nIdq,t:'Correcciones de SKU encoladas sin ejecutar',d:nIdqD,go:'Ver',href:'/herramientas/identidad-productos/'},
+    {k:'idq',sev:'warn',n:nIdq,t:'Correcciones de SKU encoladas o trabadas',d:nIdqD,go:'Ver',href:'/herramientas/identidad-productos/'},
     {k:'paus',sev:'warn',n:nPaus,t:'Pausadas con stock en la web',d:'Pausadas en ML con stock para vender.',go:'Revisar',href:'/herramientas/sync-ml/pausadas/'},
     {k:'map',sev:'warn',n:at.sin_mapeo||0,t:'Ventas sin producto de la web',d:'Se vendieron en ML sin estar unidas a un producto: el stock no se descontó.',go:'Resolver',href:'/herramientas/sync-detalle/?cat=sin_mapeo'},
     {k:'remap',sev:'warn',n:at.remapeo_requerido||0,t:'Variaciones a re-mapear',d:'Cambiaron en ML (se editó la publicación). Volvé a asignarles el producto.',go:'Resolver',href:'/herramientas/sync-detalle/?cat=remapeo_requerido'},
