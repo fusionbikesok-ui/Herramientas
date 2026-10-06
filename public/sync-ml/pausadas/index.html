@@ -161,6 +161,26 @@ kbd{font-family:var(--mono);font-size:var(--fs-label);background:var(--surface2)
 .sheet .acts .btn{min-height:var(--tap-comfort,56px)}
 
 /* responsive */
+/* confirmación de precio (Calcular precio y reactivar) */
+.psheet{position:fixed;left:0;right:0;bottom:0;z-index:31;background:var(--surface);border-top:1px solid var(--border2);border-radius:var(--radius-lg) var(--radius-lg) 0 0;max-height:88vh;overflow:auto;padding:.75rem 1rem calc(1rem + env(safe-area-inset-bottom))}
+@media (min-width:700px){.psheet{left:50%;right:auto;bottom:auto;top:50%;transform:translate(-50%,-50%);width:min(780px,calc(100vw - 2rem));border:1px solid var(--border2);border-radius:var(--radius-lg)}}
+.psheet h2{font-size:1rem;margin:0 0 .25rem;overflow-wrap:anywhere}
+.psheet .pnote{color:var(--muted);font-size:var(--fs-meta);margin:0 0 .75rem}
+.pr{display:grid;gap:.15rem;padding:.6rem .7rem;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:.5rem;min-width:0}
+.pr .pt{display:flex;gap:.5rem;align-items:baseline;flex-wrap:wrap;min-width:0}
+.pr .pt b{overflow-wrap:anywhere}
+.pr .pt span,.pr .pn{color:var(--muted);font-size:var(--fs-meta)}
+.pr .pv{display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap}
+.pr .pv b{color:var(--txt)}
+.pr .pbaja{color:var(--amber);font-weight:700}
+.pr--baja{border-color:var(--amber);background:var(--amber-bg)}
+.pr--no{background:var(--surface2)}
+.pr .pres{font-weight:600}
+.pr--ok .pres{color:var(--green)}.pr--bad .pres{color:var(--red)}.pr--warn .pres{color:var(--amber)}
+.psheet .ptot{display:flex;gap:.75rem;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-meta);margin:.5rem 0 0}
+.psheet .acts{display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap;justify-content:flex-end}
+.psheet .acts .btn{min-height:var(--tap-min)}
+.row .act{gap:.4rem;flex-wrap:wrap}
 @media (max-width:640px){
   .head{align-items:stretch}
   .tools{flex-basis:100%}
@@ -241,10 +261,12 @@ kbd{font-family:var(--mono);font-size:var(--fs-label);background:var(--surface2)
     <span class="n" id="barn"></span><span class="cap">máximo 50 por vez</span><span class="sp"></span>
     <span class="max" id="barmax" hidden>Llegaste al máximo de 50</span>
     <button class="btn" id="barcancel">Cancelar</button>
+    <button class="btn" id="barprecio" hidden></button>
     <button class="btn btn--pri" id="bargo"></button></div></div>
 </div>
 
 <script src="../../lib/api.js"></script>
+<script src="precio.js"></script>
 <script>
 Api.installAuth();
 
@@ -273,6 +295,7 @@ var MOTIVO={
 var items=[], resumen={}, cargadoEn=null, estado='cargando';
 var filtro='todas', q='', sel=new Set(), open=new Set(), errs={}, busy=new Set(), okIds=new Set();
 var collapsed=new Set(['vigia','solo_local','sin_vinculo']), shown={}, focusId=null, confirmT=null, sheetEl=null;
+var puedePrecio=false, pp=null;
 
 var $=function(s){return document.querySelector(s)};
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -377,7 +400,8 @@ function row(i){
   var act;
   if(okIds.has(i.item_id))act='<span class="ok">✓ Activa</span>';
   else if(busy.has(i.item_id))act='<button class="btn" disabled aria-busy="true">Reactivando…</button>';
-  else act='<button class="btn" data-go="'+id+'" aria-label="'+(e?'Reintentar':'Reactivar')+' '+t+'">'+(e?'Reintentar':'Reactivar')+'</button>';
+  else act=(e&&e.neto&&puedePrecio?'<button class="btn" data-calc="'+id+'" aria-label="Calcular precio de '+t+'">Calcular precio</button>':'')
+    +'<button class="btn" data-go="'+id+'" aria-label="'+(e?'Reintentar':'Reactivar')+' '+t+'">'+(e?'Reintentar':'Reactivar')+'</button>';
   return '<div class="row'+(e?' is-error':'')+(okIds.has(i.item_id)?' is-done':'')+(focusId===i.item_id?' is-focus':'')+'" data-id="'+id+'" aria-selected="'+s+'">'
     +'<label class="cb"><input type="checkbox" '+(s?'checked':'')+' data-sel="'+id+'" aria-label="Seleccionar '+t+'"></label>'+ph
     +'<div class="tt"><button class="title" data-open="'+id+'" aria-expanded="'+o+'" title="'+t+'">'+t+'</button>'
@@ -432,6 +456,9 @@ function bar(){
   if(!n||narrow()){w.hidden=true;return}
   w.hidden=false;$('#barn').textContent=n===1?'1 seleccionada':n+' seleccionadas';
   $('#barmax').hidden=n<MAX_LOTE;
+  var nNeto=selNeto().length, bp=$('#barprecio');
+  bp.hidden=!(puedePrecio&&nNeto);
+  if(!bp.hidden)bp.textContent='Calcular precio de '+nNeto;
   var b=$('#bargo');
   if(!confirmT){
     b.className='btn btn--pri';
@@ -468,7 +495,7 @@ async function reactivar(ids){
     if(res&&res.ok){okIds.add(x);sel.delete(x);okN++;}
     else{
       var texto=fallaGeneral?fallaGeneral:noReact.has(x)?'Ya no se puede reactivar desde acá':(res&&res.error)||'no se pudo';
-      errs[x]={prefijo:(res&&res.bloqueado)||noReact.has(x)||fallaGeneral?'':'ML no la dejó: ',texto:texto};
+      errs[x]={prefijo:(res&&res.bloqueado)||noReact.has(x)||fallaGeneral?'':'ML no la dejó: ',texto:texto,neto:PausadasPrecio.clavesBloqueoNeto(res)};
       sel.add(x);malos.push(x);
     }
   });
@@ -483,6 +510,136 @@ async function reactivar(ids){
     render();cargar();
   },1500);
 }
+
+/* ---------- Calcular precio y reactivar ----------
+   Solo para las publicaciones que la reactivación frenó por neto bajo. Nada se cambia sin que se vea el precio
+   y se confirme; si el precio nuevo es menor al actual se marca. Reusa /api/precios/* y la reactivación existente. */
+function selNeto(){return Array.from(sel).filter(function(x){return errs[x]&&errs[x].neto&&!busy.has(x)}).slice(0,MAX_LOTE)}
+function itemPorId(id){return items.filter(function(i){return i.item_id===id})[0]}
+async function llamar(url,body){
+  var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  var txt=await r.text(), d=null;
+  try{d=JSON.parse(txt)}catch(_e){}
+  if(r.status===403)throw new Error('No tenés permiso para cambiar precios');
+  if(!d)throw new Error('el servidor respondió '+r.status+' sin datos');
+  return {r:r,d:d};
+}
+async function abrirPrecio(ids){
+  ids=Array.from(new Set(ids)).filter(function(x){return errs[x]&&errs[x].neto}).slice(0,MAX_LOTE);
+  if(!ids.length||pp)return;
+  pp={ids:ids,estado:'calculando',planes:[],resultados:null,error:null,opener:document.activeElement};
+  var v=document.createElement('div');v.className='veil';v.id='pveil';
+  var s2=document.createElement('div');s2.className='psheet';s2.id='psheet';s2.setAttribute('role','dialog');s2.setAttribute('aria-modal','true');s2.setAttribute('aria-label','Calcular precio y reactivar');
+  v.onclick=function(){if(pp&&pp.estado!=='aplicando')cerrarPrecio()};
+  document.body.append(v,s2);renderPrecio();
+  try{
+    var claves=[];ids.forEach(function(x){errs[x].neto.forEach(function(c){claves.push(c)})});
+    var mapa={};
+    var lotes=PausadasPrecio.tandas(claves);
+    for(var k=0;k<lotes.length;k++){
+      var o=await llamar('/api/precios/objetivo',{claves:lotes[k]});
+      if(!o.r.ok||!o.d.ok)throw new Error(o.d.error||('HTTP '+o.r.status));
+      (o.d.resultados||[]).forEach(function(x){mapa[x.clave]=x});
+    }
+    pp.planes=ids.map(function(x){return PausadasPrecio.planItem(x,errs[x].neto,mapa)});
+    pp.estado='listo';
+  }catch(e){pp.estado='error';pp.error=e.message}
+  renderPrecio();
+}
+function cerrarPrecio(){
+  if(!pp)return;
+  var op=pp.opener, hecho=pp.estado==='resultado';
+  var a=$('#pveil'),b=$('#psheet');if(a)a.remove();if(b)b.remove();
+  pp=null;
+  if(hecho){items=items.filter(function(i){return !okIds.has(i.item_id)});okIds.clear();render();cargar();}
+  if(op&&op.focus&&document.contains(op))op.focus();
+}
+function pFila(p){
+  var i=itemPorId(p.itemId)||{}, t=esc(i.titulo||p.itemId), r=pp.resultados&&pp.resultados[p.itemId];
+  var cab='<div class="pt"><b>'+t+'</b><span>'+(p.variaciones?p.variaciones+(p.variaciones===1?' variación':' variaciones')+' · ':'')+esc(p.itemId)+'</span></div>';
+  if(!p.ok)return '<div class="pr pr--no">'+cab+'<div class="pn">No se puede calcular: '+esc(p.motivos.join(' · '))+'. No se cambia nada en esta publicación.</div></div>';
+  var pv='<div class="pv num">'+(p.actual!=null?moneyFull(p.actual):'sin precio')+' <span aria-hidden="true">→</span> <b>'+moneyFull(p.nuevo)+'</b>'
+    +(p.baja?' <span class="pbaja">⬇ baja el precio</span>':!p.cambia?' <span class="pn">sin cambio, solo se reactiva</span>':'')+'</div>';
+  var pn='<div class="pn num">Neto resultante '+(p.neto!=null?moneyFull(p.neto):'—')+' · precio web '+(p.precioWeb!=null?moneyFull(p.precioWeb):'—')+'</div>';
+  var res='',cls=p.baja?' pr--baja':'';
+  if(r){
+    if(r.estado==='ok'){cls=' pr--ok';res='<div class="pres">✓ '+(r.precioAplicado!=null?'Precio actualizado y reactivada':'Reactivada')+'</div>'}
+    else if(r.estado==='fallo_precio'){cls=' pr--bad';res='<div class="pres">✕ Falló el precio, no se reactivó: '+esc(r.error)+'</div>'}
+    else if(r.estado==='fallo_reactivacion'){cls=' pr--warn';res='<div class="pres">⚠ Precio actualizado a '+moneyFull(r.precioAplicado!=null?r.precioAplicado:p.nuevo)+'. Falló la reactivación: '+esc(r.error)+'</div>'}
+    else if(r.estado==='omitida'){cls=' pr--bad';res='<div class="pres">✕ '+esc(r.error)+'</div>'}
+  }
+  return '<div class="pr'+cls+'">'+cab+pv+pn+res+'</div>';
+}
+function renderPrecio(){
+  var s2=$('#psheet');if(!s2||!pp)return;
+  var uno=pp.ids.length===1, i0=itemPorId(pp.ids[0])||{};
+  var h='<h2>'+(uno?esc(i0.titulo||pp.ids[0]):'Calcular precio de '+pp.ids.length)+'</h2>';
+  var acts='';
+  if(pp.estado==='calculando'){
+    h+='<p class="pnote" role="status" aria-busy="true">Calculando el precio que iguala el neto de ML al precio web…</p>';
+    acts='<button class="btn" id="pcancel">Cancelar</button>';
+  }else if(pp.estado==='error'){
+    h+='<p class="pnote" role="alert">⚠ No se pudo calcular: '+esc(pp.error)+'. No se cambió nada.</p>';
+    acts='<button class="btn" id="pcancel">Cerrar</button>';
+  }else{
+    var R=PausadasPrecio.resumen(pp.planes);
+    h+='<p class="pnote">'+(pp.estado==='resultado'?'Resultado por publicación.':'Precio actual de ML → precio nuevo, para que el neto iguale al precio web. No se cambia nada hasta que confirmes.')+'</p>';
+    h+=pp.planes.map(pFila).join('');
+    h+='<div class="ptot num"><span>'+R.confirmables+' a procesar</span>'+(R.sinCambio?'<span>'+R.sinCambio+' sin cambio de precio</span>':'')+(R.bajan?'<span class="pbaja">'+R.bajan+' bajan el precio</span>':'')+(R.sinCalculo?'<span>'+R.sinCalculo+' sin cálculo</span>':'')
+      +(R.cambian?'<span>Diferencia total '+(R.diferencia>0?'+':'')+moneyFull(R.diferencia)+'</span>':'')+'</div>';
+    if(pp.estado==='listo'){
+      acts='<button class="btn" id="pcancel">Cancelar</button>'+(R.confirmables?'<button class="btn btn--pri" id="pconfirm">'+(uno?(pp.planes[0].cambia?'Actualizar precio y reactivar':'Reactivar (el precio no cambia)'):'Confirmar '+R.confirmables)+'</button>':'');
+    }else if(pp.estado==='aplicando'){
+      acts='<button class="btn btn--pri" disabled aria-busy="true">Aplicando…</button>';
+    }else{
+      acts='<button class="btn btn--pri" id="pcancel">Cerrar</button>';
+    }
+  }
+  var foco=document.activeElement&&document.activeElement.id;
+  s2.innerHTML=h+'<div class="acts">'+acts+'</div>';
+  var f=s2.querySelector('#pconfirm')||s2.querySelector('#pcancel');
+  if(f&&(!foco||pp.estado!=='aplicando'))f.focus();
+}
+async function confirmarPrecio(){
+  if(!pp||pp.estado!=='listo')return;
+  pp.estado='aplicando';
+  var ids=pp.planes.filter(function(p){return p.ok}).map(function(p){return p.itemId});
+  ids.forEach(function(x){busy.add(x)});
+  renderPrecio();render();
+  var deps={
+    putPrecio:async function(itemId,precio){
+      try{
+        var o=await llamar('/api/precios/actualizar-precio-item',{itemId:itemId,precio:precio});
+        return o.r.ok&&o.d.ok?{ok:true}:{ok:false,error:o.d.error||('HTTP '+o.r.status)};
+      }catch(e){return {ok:false,error:e.message}}
+    },
+    reactivar:async function(itemIds){
+      var o=await llamar('/api/sync/pausadas-con-stock/reactivar',{itemIds:itemIds});
+      if(!o.d.ok)throw new Error(o.d.error||('HTTP '+o.r.status));
+      var mapa={};
+      (o.d.resultados||[]).forEach(function(x){mapa[x.item_id]=x});
+      (o.d.no_reactivables||[]).forEach(function(x){mapa[x]={ok:false,error:'Ya no se puede reactivar desde acá'}});
+      return mapa;
+    }
+  };
+  var res=await PausadasPrecio.ejecutar(pp.planes,deps);
+  pp.resultados={};
+  res.forEach(function(r){pp.resultados[r.itemId]=r});
+  res.forEach(function(r){
+    var x=r.itemId, previo=errs[x];
+    busy.delete(x);
+    if(r.estado==='ok'){okIds.add(x);sel.delete(x);delete errs[x]}
+    else if(r.estado==='fallo_reactivacion'){errs[x]={prefijo:'',texto:'El precio ya se actualizó'+(r.precioAplicado!=null?' a '+moneyFull(r.precioAplicado):'')+'. '+r.error,neto:null};sel.add(x)}
+    else if(r.estado==='fallo_precio'||r.estado==='omitida'){errs[x]={prefijo:'',texto:'No se pudo actualizar el precio: '+r.error,neto:(previo&&previo.neto)||null};sel.add(x)}
+  });
+  pp.estado='resultado';
+  renderPrecio();render();
+}
+document.addEventListener('click',function(e){
+  var t=e.target.closest('button');if(!t)return;
+  if(t.id==='pcancel'){cerrarPrecio();return}
+  if(t.id==='pconfirm'){confirmarPrecio();return}
+});
 
 /* ---------- eventos ---------- */
 document.addEventListener('click',function(e){
@@ -500,6 +657,8 @@ document.addEventListener('click',function(e){
   if(d.sel){var x=d.sel;if(t.checked){if(sel.size>=MAX_LOTE){t.checked=false;$('#barmax').hidden=false;return}sel.add(x)}else sel.delete(x);render();return}
   if(d.open){var it=items.filter(function(i){return i.item_id===d.open})[0];if(!it)return;focusId=it.item_id;if(narrow()){abrirHoja(it);return}open.has(it.item_id)?open.delete(it.item_id):open.add(it.item_id);render();return}
   if(d.go){reactivar([d.go]);return}
+  if(d.calc){abrirPrecio([d.calc]);return}
+  if(t.id==='barprecio'){abrirPrecio(selNeto());return}
   if(t.id==='bargo'){
     var n=sel.size;
     if(n>CONFIRMAR_DESDE&&!confirmT){t.className='btn btn--confirm';t.textContent='Confirmar: reactivar '+n;confirmT=setTimeout(function(){confirmT=null;bar()},4000);return}
@@ -533,13 +692,14 @@ document.addEventListener('keydown',function(e){
   if(e.ctrlKey||e.metaKey||e.altKey)return;
   if(e.target.matches('input[type=search]')){if(e.key==='Escape')e.target.blur();return}
   if(e.key==='Escape'){
+    if(pp){if(pp.estado!=='aplicando')cerrarPrecio();return}
     if(sheetEl){cerrarHoja();return}
     if(confirmT){clearTimeout(confirmT);confirmT=null;bar();return}
     if(!$('#help').hidden){$('#helpbtn').click();return}
     if(sel.size){sel.clear();render()}
     return;
   }
-  if(sheetEl)return;
+  if(sheetEl||pp)return;
   var ids=Array.prototype.map.call(document.querySelectorAll('.row:not(.row--locked)'),function(r){return r.dataset.id});
   var k=ids.indexOf(focusId);
   if(e.key==='j'||e.key==='k'){
@@ -555,6 +715,7 @@ document.addEventListener('keydown',function(e){
 });
 addEventListener('resize',function(){clearTimeout(window._rz);window._rz=setTimeout(render,120)});
 document.addEventListener('error',function(e){var t=e.target;if(t&&t.tagName==='IMG'&&t.parentNode&&t.parentNode.classList.contains('ph'))t.parentNode.innerHTML=imgSvg},true);
+fetch('/api/auth/me').then(function(r){return r.ok?r.json():null}).then(function(me){puedePrecio=PausadasPrecio.puedeEscribirPrecios(me);render()}).catch(function(){});
 cargar();
 </script>
 </body>
