@@ -1308,12 +1308,6 @@ components:
       in: query
       required: false
       schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: true
-      schema: { type: string, format: uuid }
-      description: UUID nuevo por intención de mutación; repetirlo devuelve el mismo resultado.
 
   responses:
     Conflict:
