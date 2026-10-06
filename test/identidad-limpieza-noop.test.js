@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { openDb } from '../db/index.js';
-import { buscarOperacionesNoOpIdentidad, cancelarOperacionesNoOpIdentidad } from '../lib/identidadLimpieza.js';
+import { buscarOperacionesNoOpIdentidad, cancelarOperacionesIdentidadPorIds, cancelarOperacionesNoOpIdentidad } from '../lib/identidadLimpieza.js';
 
 const FILE = './test/tmp-identidad-limpieza.sqlite';
 const ISO = '2026-10-06T12:00:00.000Z';
@@ -69,5 +69,44 @@ describe('limpieza de operaciones no-op de identidad', () => {
       .toMatchObject({ estado: 'fallida', ultimo_error: expect.stringContaining('no-op') });
     expect(db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(b).estado).toBe('procesando');
     expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento='operacion_noop_cancelada' AND entidad_id=?").get(a).n).toBe(1);
+  });
+});
+
+describe('cancelación explícita por ids', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya cerrada */ }
+    for (const suffix of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${suffix}`)) fs.unlinkSync(`${FILE}${suffix}`);
+  });
+
+  it('simula por defecto y no escribe', () => {
+    const a = op(db, { clave: 'MLA20|', skuAnt: 'FB-A', skuObj: 'FB-B', stockObj: 0, stockMl: 50 });
+    const r = cancelarOperacionesIdentidadPorIds(db, { ids: [a] });
+    expect(r).toMatchObject({ simulado: true, cancelaria: [a], canceladas: [] });
+    expect(db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(a).estado).toBe('pendiente');
+  });
+
+  it('cancela con motivo e historial, incluida una bloqueada_impacto', () => {
+    const a = op(db, { clave: 'MLA21|', skuAnt: 'FB-A', skuObj: 'FB-B', stockObj: 0, stockMl: 50 });
+    const b = op(db, { clave: 'MLA22|', skuAnt: 'REM', skuObj: 'FB-C', stockObj: 1, stockMl: 1, estado: 'bloqueada_impacto' });
+    const r = cancelarOperacionesIdentidadPorIds(db, { ids: [a, b], motivo: 'decisión de José', simular: false });
+    expect(r.canceladas).toEqual([a, b]);
+    expect(db.prepare('SELECT estado,ultimo_error FROM identidad_operaciones WHERE id=?').get(b))
+      .toMatchObject({ estado: 'fallida', ultimo_error: 'cancelada: decisión de José' });
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento='operacion_cancelada_explicita'").get().n).toBe(2);
+  });
+
+  it('no toca completadas, en curso ni inexistentes: las reporta', () => {
+    const c = op(db, { clave: 'MLA23|', skuAnt: 'FB-A', skuObj: 'FB-B', stockObj: 1, stockMl: 1, estado: 'completada' });
+    const p = op(db, { clave: 'MLA24|', skuAnt: 'FB-A', skuObj: 'FB-B', stockObj: 1, stockMl: 1, estado: 'procesando' });
+    const r = cancelarOperacionesIdentidadPorIds(db, { ids: [c, p, 99999], simular: false });
+    expect(r.canceladas).toEqual([]);
+    expect(r.omitidas.map((o) => o.id)).toEqual([c, p, 99999]);
+    expect(db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(c).estado).toBe('completada');
+  });
+
+  it('exige ids', () => {
+    expect(() => cancelarOperacionesIdentidadPorIds(db, { ids: [] })).toThrow('ids requeridos');
   });
 });

@@ -60,5 +60,8 @@ La 135 no entra al script porque comparte clave con la 128.
 ## Para ejecutar en producción (no se hizo)
 1. Backup de la base con `better-sqlite3` (el VPS no tiene `sqlite3`).
 2. OK de José.
-3. `node scripts/identidad-cancelar-noop.mjs --apply --backup-ok [--incluir-stock-obsoleto]`.
-4. Las 104, 130, 128 y 135 se cancelan a mano o con una extensión del script si se decide así.
+3. `--db` es obligatorio y absoluto (el `DB_PATH` relativo de pm2 ya causó problemas). Ejemplos, todos en dry-run hasta agregar `--apply --backup-ok`:
+   - No-op puras: `node scripts/identidad-cancelar-noop.mjs --db <ruta>/fusion.sqlite`
+   - No-op incluyendo las de stock obsoleto: `... --incluir-stock-obsoleto`
+   - Cancelación explícita: `... --ids 104,128,130,135 --motivo "decisión de José"`
+4. Las 126 y 127 no se tocan con estos comandos.
