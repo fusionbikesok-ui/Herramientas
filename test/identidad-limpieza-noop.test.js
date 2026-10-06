@@ -109,4 +109,40 @@ describe('cancelación explícita por ids', () => {
   it('exige ids', () => {
     expect(() => cancelarOperacionesIdentidadPorIds(db, { ids: [] })).toThrow('ids requeridos');
   });
+
+  describe('reconciliación del caso al cancelar', () => {
+    const casoDe = (id) => db.prepare('SELECT c.estado, c.resuelto_en FROM identidad_casos c JOIN identidad_operaciones o ON o.caso_id=c.id WHERE o.id=?').get(id);
+    const histCaso = (id) => db.prepare("SELECT detalle_json FROM identidad_historial WHERE evento='caso_reconciliado_tras_cancelar' AND entidad_id=(SELECT caso_id FROM identidad_operaciones WHERE id=?)").all(id);
+
+    it('no-op: el SKU de ML ya es el objetivo -> el caso queda resuelto, con historial', () => {
+      const id = op(db, { clave: 'MLA20|', skuAnt: 'FB-20', skuObj: 'FB-20', stockObj: 2, stockMl: 2 });
+      cancelarOperacionesNoOpIdentidad(db, { simular: false });
+      expect(casoDe(id)).toMatchObject({ estado: 'resuelto' });
+      expect(casoDe(id).resuelto_en).toBeTruthy();
+      expect(histCaso(id)).toHaveLength(1);
+    });
+
+    it('--ids: si el SKU de ML no es el objetivo, el caso vuelve a la cola como urgente', () => {
+      const id = op(db, { clave: 'MLA21|', skuAnt: 'FB-X', skuObj: 'FB-21', stockObj: 2, stockMl: 2 });
+      cancelarOperacionesIdentidadPorIds(db, { ids: [id], motivo: 'prueba', simular: false });
+      expect(casoDe(id)).toMatchObject({ estado: 'urgente', resuelto_en: null });
+      expect(JSON.parse(histCaso(id)[0].detalle_json)).toMatchObject({ estado_previo: 'pendiente', estado_nuevo: 'urgente' });
+    });
+
+    it('--ids: si ML ya tiene el objetivo, resuelto', () => {
+      const id = op(db, { clave: 'MLA22|', skuAnt: 'FB-22', skuObj: 'FB-22', stockObj: 2, stockMl: 2 });
+      cancelarOperacionesIdentidadPorIds(db, { ids: [id], simular: false });
+      expect(casoDe(id).estado).toBe('resuelto');
+    });
+
+    it('no toca el caso si queda otra operación viva sobre él', () => {
+      const a = op(db, { clave: 'MLA23|', skuAnt: 'FB-A', skuObj: 'FB-23', stockObj: 1, stockMl: 1 });
+      const caso = db.prepare('SELECT caso_id, decision_id, producto_id FROM identidad_operaciones WHERE id=?').get(a);
+      db.prepare(`INSERT INTO identidad_operaciones (operation_id,tipo,caso_id,decision_id,producto_id,ml_key,sku_anterior,sku_objetivo,stock_objetivo,estado,iniciada_en,actualizada_en)
+        VALUES ('otra','correccion_sku',?,?,?,'MLA23|','FB-A','FB-23',1,'pendiente',?,?)`).run(caso.caso_id, caso.decision_id, caso.producto_id, ISO, ISO);
+      cancelarOperacionesIdentidadPorIds(db, { ids: [a], simular: false });
+      expect(casoDe(a).estado).toBe('pendiente');
+      expect(histCaso(a)).toHaveLength(0);
+    });
+  });
 });

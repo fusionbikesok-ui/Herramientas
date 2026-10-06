@@ -53,6 +53,14 @@ describe('canario de identidad', () => {
       expect(encoladasSinEjecutar(db, { ahora })).toMatchObject({ n: 0, mas_vieja_horas: 0, ids: [] });
     });
 
+    it('cuenta aparte las operaciones en procesando con el claim vencido', () => {
+      const vencida = publicar(db, { id: 708 });
+      const vigente = publicar(db, { id: 709 });
+      db.prepare("UPDATE identidad_operaciones SET estado='procesando',claim_hasta=? WHERE id=?").run('2026-10-06T14:00:00.000Z', vencida.id);
+      db.prepare("UPDATE identidad_operaciones SET estado='procesando',claim_hasta=? WHERE id=?").run('2026-10-06T16:00:00.000Z', vigente.id);
+      expect(encoladasSinEjecutar(db, { ahora })).toMatchObject({ n: 0, procesando_vencidas: 1 });
+    });
+
     it('sin canario configurado no marca nada como fuera de canario', () => {
       publicar(db, { id: 707 });
       db.prepare("UPDATE identidad_operaciones SET estado='pendiente',iniciada_en='2026-10-06T10:00:00.000Z'").run();
@@ -93,6 +101,20 @@ describe('canario de identidad', () => {
       expect(op.estado).toBe('intervencion');
       expect(op.ultimo_error).toContain('NO se pudo devolver el stock');
       expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento='stock_no_devuelto_por_contradiccion' AND entidad_id=?").get(id).n).toBe(1);
+    });
+
+    it('si la op ya no estaba procesando (se canceló durante el paso), no devuelve stock', async () => {
+      const id = enRestore(804);
+      // Simula la cancelación concurrente justo cuando el catch de la contradicción marca el paso como
+      // fallido: la op queda `fallida` y el UPDATE a `intervencion` ya no aplica.
+      db.exec(`CREATE TEMP TRIGGER cancela_concurrente AFTER UPDATE OF estado ON identidad_operacion_pasos WHEN NEW.estado='fallido' AND NEW.operacion_id=${id}
+        BEGIN UPDATE identidad_operaciones SET estado='fallida',ultimo_error='cancelada' WHERE id=${id}; END`);
+      const adapter = { setStock: vi.fn(async () => ({ ok: true })), clearSku: vi.fn(), writeSku: vi.fn(), read: vi.fn() };
+      const r = await procesarPasoOperacionIdentidad(db, id, adapter, { allowRemoteWrites: true });
+      expect(r.ok).toBe(false);
+      expect(adapter.setStock).not.toHaveBeenCalled();
+      expect(db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(id).estado).toBe('fallida');
+      expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento LIKE 'stock_%' AND entidad_id=?").get(id).n).toBe(0);
     });
 
     it('si la saga nunca bajó el stock (sin_cero=1) no escribe stock', async () => {

@@ -76,3 +76,6 @@ Prototipos aprobados por José (fuente de layout, responsive, estados y copy; al
 - Regla: **cero `confirm`/`alert`/`prompt` y ningún handler inline** en estas dos pantallas; la confirmación es un segundo clic o el propio plan previo.
 - Enlaces antiguos vivos: `/sync-ml/#reactivar` redirige a Pausadas; `#frenadas` y `#cambios-formato` abren y centran la fila.
 - Criterio de aceptación: sin scroll horizontal ni texto cortado en 320, 390, 600, 768, 900, 1024, 1280 y 1600 px; controles ≥24 px en PC y ≥44 px en móvil.
+
+## Deuda: handlers `onclick` inline previos (2026-10-06)
+Ticket pendiente, anterior a Fase B (no lo introdujo): quedan `onclick` inline en `public/matcher/index.html` (≈ líneas 540, 558, 608) y `public/home/index.html` (≈ 528, 756). Migrarlos a `addEventListener`/delegación, como pide la regla de «ningún handler inline» de arriba.

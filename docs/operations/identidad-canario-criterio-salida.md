@@ -27,6 +27,9 @@ Quién decide: José, con los números de arriba. Cada paso queda en `identidad_
 
 ## Alarma «encoladas sin ejecutar > 2 h»
 - `lib/identidadAlarmas.js`: cuenta operaciones `pendiente`, 0 intentos, sin pasos, de más de 2 h. `shadow` no cuenta (es intencional).
+  **Límite:** la alarma `n` cuenta solo `intentos=0` y sin pasos. Una operación que ya intentó (con pasos o con intentos) y quedó
+  trabada no entra ahí. Para ese caso hay un segundo contador, `procesando_vencidas`: operaciones en `procesando` con el `claim_hasta`
+  vencido (el worker murió o el paso se colgó a mitad). Las `intervencion` y `fallida` se ven en la bandeja de Identidad, no en esta alarma.
 - Informa también cuántas están **fuera del canario**: esas el worker no las toma nunca; hay que cancelarlas o ampliar el canario.
 - Visible en `/api/sync/dashboard` (`identidad_encoladas`), en «Para resolver» de Sincronización ML y en los chips de Atención del home.
 
