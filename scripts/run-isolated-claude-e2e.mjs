@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import { validateTask, authoritativeGitState } from './agent-pipeline-policy.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const controller = path.join(root, 'scripts', 'orchestrate-claude.mjs');
@@ -29,13 +30,10 @@ Opciones:
   --task-file <archivo>      Tarea base, con Tarea, Rama y Worktree.
   --handoff-file <archivo>  Salida (default: /tmp/claude-to-codex-handoff.json).
   --port <puerto>            Puerto aislado (default: 3199).
+  --empty-db                 Usar una base SQLite temporal vacía.
   --playwright-session <id>  Sesión Playwright (default: entrega2e2e).
   --permission-mode <modo>   Permisos Claude (default: acceptEdits; la tarea prohíbe editar).
   --help                     Mostrar esta ayuda.`);
-}
-
-function field(text, label) {
-  return text.match(new RegExp(`^${label}:\\s*(.+)$`, 'mi'))?.[1]?.trim() || '';
 }
 
 function git(command, cwd) {
@@ -89,6 +87,13 @@ function logTail() {
   return lines.slice(-12).join('\n');
 }
 
+function enrichTask(task, fields) {
+  const labels = Object.keys(fields); const matcher = new RegExp(`^(?:${labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}):`, 'i');
+  const kept = task.split(/\r?\n/).filter((line) => !matcher.test(line));
+  return `${kept.join('\n').trim()}\n\n${Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join('\n')}\n`;
+}
+function safeEnv(suffix, port) { return { PATH: process.env.PATH || '/usr/bin:/bin', NODE_PATH: process.env.NODE_PATH || '', LANG: process.env.LANG || 'C.UTF-8', TZ: process.env.TZ || 'UTC', TMPDIR: process.env.TMPDIR || '/tmp', DB_PATH: dbCopy, DISABLE_CRONS: 'true', PORT: String(port), SESSION_SECRET: `claude-e2e-${suffix}`, MOBILE_JWT_SECRET: `claude-e2e-mobile-${suffix}-0123456789abcdef`, DOTENV_CONFIG_PATH: '/dev/null', WOO_URL: '', WOO_CK: '', WOO_CS: '', GEMINI_KEY: '', ML_CLIENT_ID: '', ML_CLIENT_SECRET: '', ML_USER_ID: '' }; }
+
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.includes('--help')) return usage();
@@ -96,6 +101,7 @@ async function main() {
   if (!taskFile || !fs.existsSync(taskFile)) throw new Error('--task-file inexistente');
   const handoffFile = argValue(argv, '--handoff-file', '/tmp/claude-to-codex-handoff.json');
   const port = Number(argValue(argv, '--port', '3199'));
+  const emptyDb = argv.includes('--empty-db');
   const playwrightSession = argValue(argv, '--playwright-session', 'entrega2e2e');
   const permissionMode = argValue(argv, '--permission-mode', 'acceptEdits');
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('--port inválido');
@@ -103,41 +109,38 @@ async function main() {
   await assertPortFree(port);
 
   const task = fs.readFileSync(taskFile, 'utf8');
-  const worktree = field(task, 'Worktree');
-  if (!worktree || !path.isAbsolute(worktree) || !fs.existsSync(worktree)) throw new Error('Worktree absoluto e inexistente');
+  const { worktree, base: taskBase, head: taskHead } = validateTask(task, { role: 'probador-e2e' });
+  if (!path.isAbsolute(worktree) || !fs.existsSync(worktree)) throw new Error('Worktree absoluto e inexistente');
+  if (!taskBase || !taskHead) throw new Error('E2E requiere Base y HEAD solicitados');
   const sourceDb = path.join(root, 'data', 'fusion.sqlite');
-  if (!fs.existsSync(sourceDb)) throw new Error('no existe la base fuente');
+  if (!emptyDb && !fs.existsSync(sourceDb)) throw new Error('no existe la base fuente');
   const suffix = `${process.pid}-${Date.now()}`;
   tempDir = path.join('/tmp', `fusion-claude-e2e-${suffix}`);
   fs.mkdirSync(tempDir, { recursive: true, mode: 0o700 });
   dbCopy = path.join(tempDir, 'fusion.sqlite');
   logFile = path.join(tempDir, 'server.log');
-  fs.copyFileSync(sourceDb, dbCopy);
+  if (emptyDb) fs.closeSync(fs.openSync(dbCopy, 'w', 0o600));
+  else fs.copyFileSync(sourceDb, dbCopy);
   const db = new Database(dbCopy);
   if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ml_oauth_token'").get()) {
     db.prepare('DELETE FROM ml_oauth_token').run();
   }
   db.close();
 
-  const head = git(['rev-parse', 'HEAD'], worktree);
-  const base = git(['rev-parse', 'HEAD^'], worktree);
-  const env = {
-    ...process.env,
-    DB_PATH: dbCopy,
-    DISABLE_CRONS: 'true',
-    PORT: String(port),
-    SESSION_SECRET: `claude-e2e-${suffix}`,
-    DOTENV_CONFIG_PATH: '/dev/null',
-    WOO_URL: '', WOO_CK: '', WOO_CS: '', GEMINI_KEY: '',
-    ML_CLIENT_ID: '', ML_CLIENT_SECRET: '', ML_USER_ID: '',
-  };
+  const gitState = authoritativeGitState(worktree, { base: taskBase, head: taskHead });
+  const { head, base } = gitState;
+  const currentHead = git(['rev-parse', '--verify', 'HEAD'], worktree);
+  if (currentHead !== head) throw new Error('HEAD actual no coincide con el HEAD solicitado');
+  const env = safeEnv(suffix, port);
   server = spawn('node', ['server.js'], { cwd: worktree, env, stdio: ['ignore', 'pipe', 'pipe'] });
   logStream = fs.createWriteStream(logFile, { mode: 0o600 });
   server.stdout.pipe(logStream);
   server.stderr.pipe(logStream);
   await waitForHttp(`http://127.0.0.1:${port}/login/`, 15_000);
 
-  const enrichedTask = `${task.trim()}\n\nEntorno: local-aislado\nURL exacta: http://127.0.0.1:${port}/login/\nRama/worktree servido: ${worktree}\nHEAD/base: ${head} / ${base}\nDB temporal: ${dbCopy}\nDISABLE_CRONS=true: sí\nPuerto: ${port}\nSesión Playwright: ${playwrightSession}\nDirectorio de artefactos: ${path.join(root, 'output', 'playwright')}\nPID/sesión del servidor: ${server.pid}\nAcciones autorizadas: solo lectura y datos de prueba aislados\n`;
+  const enrichedTask = enrichTask(task, { Entorno: 'local-aislado', 'URL exacta': `http://127.0.0.1:${port}/login/`, 'Rama/worktree servido': worktree, Base: base, HEAD: head, 'DB temporal': dbCopy, 'DISABLE_CRONS=true': 'sí', Puerto: port, 'Sesión Playwright': playwrightSession, // La etiqueta es 'PID/sesión' exacta: validateTask la busca con ^PID/sesión: y taskField
+// no hace match parcial, así que 'PID/sesión del servidor' hacía fallar SIEMPRE el E2E.
+'Directorio de artefactos': path.join(root, 'output', 'playwright'), 'PID/sesión': server.pid, 'Acciones autorizadas': 'solo lectura y datos de prueba aislados' });
   const enrichedFile = `/tmp/codex-to-claude-e2e-${suffix}.md`;
   fs.writeFileSync(enrichedFile, `${enrichedTask}\n`, { mode: 0o600 });
 

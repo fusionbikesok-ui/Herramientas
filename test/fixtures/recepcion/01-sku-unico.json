@@ -1,0 +1,15 @@
+{
+  "caso": "SKU único - matchea automáticamente al único producto con ese SKU",
+  "items": [
+    {
+      "linea_id": "1",
+      "nombre_doc": "Casco Alpha",
+      "codigo_proveedor": "CASCO-ALPHA-001",
+      "variacion": "",
+      "cantidad": 5,
+      "marca": "Marca A",
+      "talle": null,
+      "color": null
+    }
+  ]
+}

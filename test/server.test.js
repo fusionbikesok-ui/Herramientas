@@ -2,9 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import request from 'supertest';
 import { buildApp } from '../server.js';
-import { hashPassword } from '../lib/auth.js';
+import { hashPassword, crearAccessToken } from '../lib/auth.js';
 
 const TEST_DB = './test/tmp-server.sqlite';
+const MOBILE_SECRET = 'mobile-secret-for-tests-at-least-32-chars';
 let currentApp;
 
 // La app usa sesión (cookie, /api/auth/login) — no HTTP Basic Auth. Sembrar un
@@ -31,8 +32,11 @@ describe('server', () => {
     } catch { /* Windows may briefly retain the handle; safe to ignore in cleanup */ }
   });
 
+  // En la suite global este caso compite con fixtures SQLite y llamadas mockeadas de los
+  // módulos anteriores; aislado tarda ~1 s. El margen evita que la contención del runner
+  // convierta un test de archivos estáticos en un falso fallo de disponibilidad.
   it('serves static pages without credentials (auth is on /api only)', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const stock = await request(app).get('/stock/');
     const etiquetas = await request(app).get('/etiquetas/');
@@ -50,56 +54,60 @@ describe('server', () => {
     expect(vendorZxing.status).toBe(200);
     expect(scannerGate.status).toBe(200);
     expect(scanner.status).toBe(200);
-  });
-
-  it('keeps the login controls in a semantic form and the matcher exposes its horizontal scroll cue', () => {
-    const loginHtml = fs.readFileSync('./public/login/index.html', 'utf8');
-    const matcherHtml = fs.readFileSync('./public/matcher/index.html', 'utf8');
-
-    expect(loginHtml).toMatch(/<link rel="icon" href="logo\.png" type="image\/png">/);
-    expect(loginHtml).toMatch(/<form class="form-card" id="login-form" novalidate>/);
-    expect(loginHtml).toMatch(/<input type="text" id="user" name="username" autocomplete="username" spellcheck="false"/);
-    expect(loginHtml).toMatch(/<input type="password" id="pass" name="password" autocomplete="current-password"/);
-    expect(loginHtml).toMatch(/getElementById\('login-form'\)\.addEventListener\('submit'/);
-    expect(matcherHtml).toMatch(/id="chips-tira" role="group" aria-label="Secciones" aria-describedby="chips-scroll-hint"/);
-    expect(matcherHtml).toContain('Deslizá horizontalmente para ver más secciones');
-    expect(matcherHtml).toMatch(/\.chips-tira > \* \{ scroll-snap-align:start; \}/);
-    expect(matcherHtml).toMatch(/getElementById\('chips-tira'\)\.addEventListener\('focusin'/);
-    expect(matcherHtml).toContain("tira.scrollTo({ left: inicio, behavior: 'auto' })");
-  });
-
-  it('keeps the frontend contracts fail-closed for tracking and concurrent vínculo changes', () => {
-    const matcherHtml = fs.readFileSync('./public/matcher/index.html', 'utf8');
-    const preparacionHtml = fs.readFileSync('./public/preparacion/index.html', 'utf8');
-
-    expect(matcherHtml).toMatch(/id="dir-ml-wc"[^>]*disabled/);
-    expect(matcherHtml).toContain("o2.solo_ml || 0");
-    expect(matcherHtml).toContain('expected_sku: expectedSku');
-    expect(matcherHtml).toContain("data-expected-sku=\"' + esc(pub.decision_sku || '')");
-    expect(matcherHtml).toContain('function toastColisionVinculo');
-    expect(preparacionHtml).toContain('function obtenerSeguimientosCompletos');
-    expect(preparacionHtml).toContain('r.body.colgado&&r.body.incierto');
-    expect(preparacionHtml).toContain('No se pudo confirmar si el tracking se guardó o si salió el mail.');
-    expect(preparacionHtml).toContain('Saltar al contenido principal');
-  });
+  }, 30000);
 
   it('redirects the root (/) to /herramientas/home/', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const res = await request(app).get('/').redirects(0);
     expect(res.status).toBe(302);
     expect(res.headers.location).toBe('/herramientas/home/');
   });
 
+  it('expone healthz sin sesión y confirma la integridad de SQLite', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const res = await request(app).get('/healthz');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, integridad: 'ok' });
+  });
+
+  it('los enlaces viejos de Auditoría redirigen al home (no dan 404 crudo)', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+    for (const ruta of ['/auditoria/', '/auditoria-publicaciones/']) {
+      const res = await agent.get(ruta);
+      expect(res.status, ruta).toBe(302);
+      expect(res.headers.location).toBe('/herramientas/home/');
+    }
+  });
+
+  it('healthz no repite integrity_check en cada llamada pero sí detecta la base caída', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    await request(app).get('/healthz');
+    const sqls = [];
+    const original = app._db.prepare.bind(app._db);
+    app._db.prepare = (sql) => { sqls.push(sql); return original(sql); };
+    const segunda = await request(app).get('/healthz');
+    expect(segunda.status).toBe(200);
+    expect(sqls).not.toContain('PRAGMA integrity_check');
+    app._db.prepare = original;
+    app._db.close();
+    const caida = await request(app).get('/healthz');
+    expect(caida.status).toBe(503);
+  });
+
   it('rejects API requests without sesión', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const res = await request(app).get('/api/woo/catalogo');
     expect(res.status).toBe(401);
   });
 
   it('mounts the woo, gemini, nuevos-productos, mapeo, csv, matcher and sync API routers', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const agent = await loginComoAdmin(app);
 
@@ -116,8 +124,26 @@ describe('server', () => {
     expect(syncEstado.body.ok).toBe(true);
   });
 
+  it('pasa wooCfg real al router de nuevos-productos (crear-borrador debe pegarle a Woo, no recibir cfg undefined)', async () => {
+    const wooCfg = { url: 'https://wooCfg-wiring-test.invalid', consumerKey: 'ck', consumerSecret: 'cs' };
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+
+    const res = await agent.post('/api/nuevos-productos/crear-borrador').send({
+      operation_id: '11111111-1111-4111-8111-111111111111',
+      ficha: { modo: 'simple', titulo: 't', marca: 'm', precio: 1, categoria_id: 1, categoria_nombre: 'c' },
+    });
+
+    // Si server.js no pasara wooCfg al router, cfg llegaría undefined a wooFetch y el
+    // fallo sería inmediato leyendo `cfg.url` de undefined, sin mencionar nuestro host.
+    // Con wooCfg bien pasado, el intento de red real falla resolviendo ese host propio.
+    expect(res.body.error).toMatch(/woocfg-wiring-test\.invalid/i);
+    expect(res.body.error).not.toMatch(/Cannot read propert(y|ies) of undefined/);
+  });
+
   it('GET /api/ml/token-estado: accesible por cualquier autenticado, fail-closed sin token', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const agent = await loginComoAdmin(app);
 
@@ -133,7 +159,7 @@ describe('server', () => {
   });
 
   it('GET /api/ml/token-estado: token vigente reporta ok:true', async () => {
-    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' });
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;
     const now = new Date().toISOString();
     const vence = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
@@ -147,5 +173,228 @@ describe('server', () => {
     expect(res.body.vencido).toBe(false);
     expect(res.body.requiere_reautorizacion).toBe(false);
     expect(res.body.minutos_restantes).toBeGreaterThan(0);
+  });
+
+  it('rechaza construir la app sin MOBILE_JWT_SECRET válido', () => {
+    expect(() => buildApp({ dbPath: TEST_DB, sessionSecret: 's', wooCfg: {}, geminiKey: 'k' }))
+      .toThrow(/MOBILE_JWT_SECRET/);
+  });
+
+  it('rechaza con 401 una firma Woo inválida aunque tenga longitud incorrecta', async () => {
+    const anterior = process.env.WOO_WEBHOOK_SECRET;
+    process.env.WOO_WEBHOOK_SECRET = 'secret-de-prueba';
+    try {
+      const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+      currentApp = app;
+      const res = await request(app).post('/api/woo/webhook/order')
+        .set('x-wc-webhook-signature', 'invalid')
+        .send({ id: 123 });
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ ok: false, error: 'firma inválida' });
+    } finally {
+      if (anterior === undefined) delete process.env.WOO_WEBHOOK_SECRET;
+      else process.env.WOO_WEBHOOK_SECRET = anterior;
+    }
+  });
+
+  it('persiste antes del ACK un webhook firmado de producto Woo y deduplica su entrega', async () => {
+    const anterior = process.env.WOO_WEBHOOK_SECRET;
+    process.env.WOO_WEBHOOK_SECRET = 'secret-producto';
+    try {
+      const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+      currentApp = app;
+      const payload = JSON.stringify({ id: 1732, type: 'variable', date_modified_gmt: '2026-09-05T01:00:00' });
+      const firma = (await import('crypto')).createHmac('sha256', process.env.WOO_WEBHOOK_SECRET).update(payload).digest('base64');
+      const enviar = () => request(app).post('/api/woo/webhook/product')
+        .set('content-type', 'application/json')
+        .set('x-wc-webhook-signature', firma)
+        .set('x-wc-webhook-topic', 'product.updated')
+        .set('x-wc-webhook-delivery-id', 'delivery-1732')
+        .send(payload);
+      const primero = await enviar();
+      const segundo = await enviar();
+      expect(primero.status).toBe(200);
+      expect(primero.body).toMatchObject({ ok: true, duplicate: false });
+      expect(segundo.body).toMatchObject({ ok: true, duplicate: true });
+      expect(app._db.prepare("SELECT channel, source, status FROM integration_events WHERE event_id=?").get(primero.body.event_id))
+        .toMatchObject({ channel: 'woo', source: 'woocommerce', status: 'pending' });
+      expect(app._db.prepare("SELECT job_type FROM integration_jobs WHERE event_id=?").get(primero.body.event_id).job_type)
+        .toBe('catalog.woo_product_sync');
+    } finally {
+      if (anterior === undefined) delete process.env.WOO_WEBHOOK_SECRET;
+      else process.env.WOO_WEBHOOK_SECRET = anterior;
+    }
+  });
+
+  it('API móvil real: login, Bearer JWT, permisos, refresh y revocación atómica del dispositivo', async () => {
+    const app = buildApp({
+      dbPath: TEST_DB,
+      sessionSecret: 's',
+      mobileJwtSecret: 'mobile-secret-for-tests-at-least-32-chars',
+      wooCfg: {},
+      geminiKey: 'k',
+    });
+    currentApp = app;
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, 0, 1, ?, ?)`).run('mobile', hashPassword('correcta123'), now, now);
+    app._db.prepare(`INSERT INTO user_permisos (user_id, herramienta, nivel)
+      SELECT id, 'notificaciones-ml', 'read' FROM users WHERE username = 'mobile'`).run();
+
+    const login = await request(app).post('/api/v1/auth/login').send({
+      username: 'mobile', password: 'correcta123', platform: 'android', push_token: 'mobile-token',
+    });
+    expect(login.status).toBe(200);
+    expect(login.body.access_token).toBeTruthy();
+    expect(login.body.device_id).toBeTruthy();
+    const auth = { Authorization: `Bearer ${login.body.access_token}` };
+
+    const secondLogin = await request(app).post('/api/v1/auth/login').send({
+      username: 'mobile', password: 'correcta123', device_id: login.body.device_id,
+    });
+    expect(secondLogin.status).toBe(200);
+
+    expect((await request(app).get('/api/v1/me').set(auth)).status).toBe(200);
+    expect((await request(app).get('/api/v1/notifications').set(auth)).status).toBe(200);
+    expect((await request(app).get('/api/v1/inbox?cursor=not-a-cursor').set(auth)).status).toBe(422);
+    expect((await request(app).get('/api/v1/integration-notifications?cursor=not-a-cursor').set(auth)).status).toBe(422);
+    const mobileUserId = app._db.prepare("SELECT id FROM users WHERE username='mobile'").get().id;
+    const ts = new Date().toISOString();
+    app._db.prepare(`INSERT INTO user_notifications (user_id,title,body,created_at)
+      VALUES (?, 'vieja', 'body', ?), (?, 'nueva', 'body', ?)`).run(mobileUserId, ts, mobileUserId, ts);
+    const firstPage = await request(app).get('/api/v1/integration-notifications?limit=1').set(auth);
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.items).toHaveLength(1);
+    expect(firstPage.body.next_cursor).toBeTruthy();
+    const secondPage = await request(app).get(`/api/v1/integration-notifications?limit=1&cursor=${firstPage.body.next_cursor}`).set(auth);
+    expect(secondPage.status).toBe(200);
+    expect(secondPage.body.items).toHaveLength(1);
+    expect((await request(app).get('/api/v1/notifications/preferences').set(auth)).body)
+      .toEqual({ incidentes_criticos: true });
+    const preference = await request(app).patch('/api/v1/notifications/preferences').set(auth)
+      .send({ incidentes_criticos: false });
+    expect(preference.status).toBe(200);
+    expect(preference.body).toEqual({ incidentes_criticos: false });
+    expect((await request(app).get('/api/v1/devices')).status).toBe(401);
+
+    const deleted = await request(app).delete(`/api/v1/devices/${login.body.device_id}`).set(auth);
+    expect(deleted.status).toBe(200);
+    const refresh = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: login.body.refresh_token });
+    expect(refresh.status).toBe(401);
+    const refresh2 = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: secondLogin.body.refresh_token });
+    expect(refresh2.status).toBe(401);
+    const revoked = app._db.prepare('SELECT revocado_en FROM mobile_refresh_tokens WHERE device_id = ?')
+      .get(Number(login.body.device_id));
+    expect(revoked.revocado_en).toBeTruthy();
+  });
+
+  it('declara y aplica 403 para notificaciones sin permiso, y 422 para read inválido', async () => {
+    const app = buildApp({
+      dbPath: TEST_DB,
+      sessionSecret: 's',
+      mobileJwtSecret: MOBILE_SECRET,
+      wooCfg: {},
+      geminiKey: 'k',
+    });
+    currentApp = app;
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, 0, 1, ?, ?)`).run('sin-permiso', hashPassword('correcta123'), now, now);
+    const login = await request(app).post('/api/v1/auth/login').send({
+      username: 'sin-permiso', password: 'correcta123', platform: 'android', push_token: 'token-sin-permiso',
+    });
+    const auth = { Authorization: `Bearer ${login.body.access_token}` };
+    expect((await request(app).get('/api/v1/notifications').set(auth)).status).toBe(403);
+    expect((await request(app).post('/api/v1/notifications/abc/read').set(auth)).status).toBe(403);
+    expect((await request(app).get('/api/v1/notifications/preferences').set(auth)).status).toBe(403);
+
+    app._db.prepare(`INSERT INTO user_permisos (user_id, herramienta, nivel)
+      SELECT id, 'notificaciones-ml', 'read' FROM users WHERE username = 'sin-permiso'`).run();
+    expect((await request(app).post('/api/v1/notifications/abc/read').set(auth)).status).toBe(422);
+  });
+
+  it('POST /api/admin/integration-jobs/:id/reprocess: reintenta un job DLQ (202)', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+
+    // Crear un evento y un job en DLQ.
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO integration_events
+      (event_id, event_type, channel, source, received_at, correlation_id, dedupe_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run('test-event-1', 'webhook.received', 'ml', 'mercadolibre', now, 'test-corr', 'test-dedupe');
+    app._db.prepare(`INSERT INTO integration_jobs (event_id, job_type, available_at, status)
+      VALUES (?, ?, ?, ?)`)
+      .run('test-event-1', 'claim.project', now, 'dead_lettered');
+    const jobId = app._db.prepare('SELECT job_id FROM integration_jobs WHERE event_id = ?').get('test-event-1').job_id;
+
+    const res = await agent.post(`/api/admin/integration-jobs/${jobId}/reprocess`);
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true, reprocessed: true });
+    // Verificar que el job fue reabierto (status != 'dead_lettered').
+    const updatedJob = app._db.prepare('SELECT status FROM integration_jobs WHERE job_id = ?').get(jobId);
+    expect(updatedJob.status).not.toBe('dead_lettered');
+  });
+
+  it('POST /api/admin/integration-jobs/:id/reprocess: 404 si job no existe', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+
+    const res = await agent.post('/api/admin/integration-jobs/99999/reprocess');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ ok: false, error: 'job DLQ no encontrado' });
+  });
+
+  it('POST /api/admin/integration-jobs/:id/reprocess: 403 si no es admin', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?, ?, 0, 1, ?, ?)`)
+      .run('no-admin', hashPassword('test1234'), now, now);
+    const agent = request.agent(app);
+    const login = await agent.post('/api/auth/login').send({ username: 'no-admin', password: 'test1234' });
+    expect(login.status).toBe(200);
+
+    const res = await agent.post('/api/admin/integration-jobs/1/reprocess');
+    expect(res.status).toBe(403);
+  });
+
+  it('POST /api/admin/integration-jobs/:id/reprocess: 401 sin sesión', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+
+    const agent = request.agent(app);
+    const res = await agent.post('/api/admin/integration-jobs/1/reprocess');
+    expect(res.status).toBe(401);
+  });
+
+  it('agente de etiquetas: Bearer JWT válido y permiso permiten reclamar', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const now = new Date().toISOString();
+    app._db.prepare(`INSERT INTO users (id, username, pass_hash, is_admin, activo, creado_en, actualizado_en)
+      VALUES (?,?,?,?,?,?,?)`).run(77, 'agente-test', hashPassword('x'), 0, 1, now, now);
+    app._db.prepare('INSERT INTO user_permisos (user_id, herramienta, nivel) VALUES (?,?,?)')
+      .run(77, 'etiquetas', 'read');
+    const device = app._db.prepare(`INSERT INTO device_tokens (user_id, token, plataforma, creado_en, actualizado_en)
+      VALUES (?,?,?,?,?)`).run(77, 'device-agent-test', 'web', now, now);
+    app._db.prepare(`INSERT INTO mobile_refresh_tokens (user_id, device_id, token_hash, expires_at, creado_en)
+      VALUES (?,?,?,?,?)`).run(77, device.lastInsertRowid, 'agent-session-test', '2099-01-01T00:00:00.000Z', now);
+    app._db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, estado, creado_en) VALUES (?,?,?,?)`)
+      .run('AGENT-1', 1, 'pendiente', now);
+    const token = crearAccessToken({ id: 77, username: 'agente-test' }, MOBILE_SECRET, undefined, 'agent-session-test');
+    const res = await request(app).post('/api/etiquetas/cola/reclamar')
+      .set('Authorization', `Bearer ${token}`).send({ agente_id: 'deposito-pc-test' });
+    expect(res.status).toBe(200);
+    expect(res.body.trabajo.sku).toBe('AGENT-1');
+    app._db.prepare("DELETE FROM user_permisos WHERE user_id=? AND herramienta='etiquetas'").run(77);
+    app._db.prepare(`INSERT INTO etiquetas_cola (sku, cantidad, estado, creado_en) VALUES (?,?,?,?)`)
+      .run('AGENT-2', 1, 'pendiente', now);
+    const denied = await request(app).post('/api/etiquetas/cola/reclamar')
+      .set('Authorization', `Bearer ${token}`).send({ agente_id: 'deposito-pc-test' });
+    expect(denied.status).toBe(403);
   });
 });

@@ -1,0 +1,4 @@
+-- SLA operativo E1: conserva el límite original del shipment y el estado de despacho.
+-- Las columnas se agregan condicionalmente por db/index.js porque SQLite no admite
+-- ALTER TABLE ... ADD COLUMN IF NOT EXISTS. El archivo es el marcador documental de
+-- la migración 044; su aplicación es idempotente mediante sla_operativo_preparacion_044.

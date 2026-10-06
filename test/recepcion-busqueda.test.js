@@ -1,159 +1,158 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import vm from 'node:vm';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { extraerScriptPrincipal } from './_helpers/extraerScriptInline.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'fs';
+import express from 'express';
+import request from 'supertest';
+import { openDb } from '../db/index.js';
+import { recepcionesRouter } from '../routes/recepciones.js';
 
-// Cubre el fix de public/recepcion/index.html: buscarWC() filtraba solo por nombre
-// (no se podía buscar/asignar por SKU). Ahora matchea sku + nombre + gtin (gtin solo
-// exacto/prefijo, para no dar falsos positivos por substring arbitrario en medio del
-// código), con campos precalculados _skuNorm/_gtinNorm/_busq y sort que prioriza SKU
-// exacto/prefijo.
+// GET /api/recepciones/catalogo?q=... — el combobox de recepción busca acá (no contra Woo en
+// vivo). P1.3 exige: SKU exacto/prefijo, GTIN exacto/prefijo, nombre por tokens, excluir padres
+// variables (tipo='variable', nunca se recibe/vende directo), límite 20, y catálogo completo con
+// q vacío.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const HTML_PATH = path.join(__dirname, '..', 'public', 'recepcion', 'index.html');
+const cfg = { url: 'https://fusionbikes.com.ar', ck: 'ck', cs: 'cs' };
+const DB = './test/tmp-recep-busqueda.sqlite';
 
-function fakeElement() {
-  return {
-    style: {},
-    innerHTML: '',
-    textContent: '',
-    value: '',
-    dataset: {},
-    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener() {},
-    appendChild() {},
-  };
+function makeApp(db) {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/recepciones', recepcionesRouter(db, cfg));
+  return app;
 }
 
-function flushPromises() {
-  return new Promise((resolve) => setImmediate(resolve));
+function abrirApp() {
+  if (fs.existsSync(DB)) fs.unlinkSync(DB);
+  const db = openDb(DB);
+  const app = makeApp(db);
+  return { db, app };
 }
 
-function crearContexto(fetchImpl) {
-  const sandbox = {
-    window: {},
-    document: {
-      getElementById: () => fakeElement(),
-      querySelectorAll: () => [],
-      createElement: () => fakeElement(),
-      head: { appendChild() {} },
-    },
-    location: { pathname: '/herramientas/recepcion/', search: '' },
-    Api: { installAuth() {} },
-    esc: (s) => String(s == null ? '' : s),
-    fetch: fetchImpl || (() => Promise.reject(new Error('fetch no esperado en este test'))),
-    console,
-    setTimeout,
-    clearTimeout,
-    setInterval,
-    clearInterval,
-    Date,
-    Math,
-    JSON,
-    Object,
-    Array,
-    Number,
-    String,
-    Boolean,
-    RegExp,
-    Set,
-    isNaN,
-    parseInt,
-    parseFloat,
-    URLSearchParams,
-  };
-  vm.createContext(sandbox);
-  vm.runInContext(extraerScriptPrincipal(HTML_PATH), sandbox);
-  return sandbox;
+function insertarProducto(db, { id_woo, nombre, sku, tipo = 'simple', id_padre = null, stock = 5, gtin = null }) {
+  db.prepare(
+    'INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,id_padre,stock,gtin,actualizado_en) VALUES (?,?,?,?,?,?,?,?)'
+  ).run(id_woo, nombre, sku, tipo, id_padre, stock, gtin, new Date().toISOString());
 }
 
-const CATALOGO_FIXTURE = [
-  { id_woo: 1, sku: 'ABC123', nombre: 'Bicicleta Trek Rodado 27', gtin: '7791234567890', stock: 5 },
-  { id_woo: 2, sku: 'DEF999', nombre: 'Casco MTB Talle M', gtin: '1112223334445', stock: 2 },
-  { id_woo: 3, sku: null, nombre: 'Producto sin código', gtin: null, stock: 1 },
-];
+afterEach(() => {
+  if (fs.existsSync(DB)) fs.unlinkSync(DB);
+});
 
-async function cargarCatalogoFixture(ctx) {
-  ctx.fetch = () => Promise.resolve({ json: () => Promise.resolve({ ok: true, data: CATALOGO_FIXTURE }) });
-  ctx.cargarCatalogo();
-  await flushPromises();
-  await flushPromises();
-}
+describe('GET /api/recepciones/catalogo — SKU', () => {
+  it('SKU exacto: devuelve la fila con relevancia máxima', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 1, nombre: 'Casco MTB', sku: 'CASCO-001' });
+    insertarProducto(db, { id_woo: 2, nombre: 'Otro producto', sku: 'CASCO-001-XL' });
 
-function ddFake() {
-  const dd = fakeElement();
-  return dd;
-}
-
-describe('recepcion/index.html — buscarWC() (búsqueda/match por SKU + nombre + GTIN)', () => {
-  let ctx;
-  let dd;
-
-  beforeEach(async () => {
-    ctx = crearContexto();
-    await cargarCatalogoFixture(ctx);
-    dd = ddFake();
-    ctx.document.getElementById = (id) => (id === 'dd-item1' ? dd : fakeElement());
+    const res = await request(app).get('/api/recepciones/catalogo?q=CASCO-001');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.data[0].id_woo).toBe(1); // exacto antes que prefijo
+    expect(res.body.data.map(r => r.id_woo)).toContain(2);
   });
 
-  it('SKU exacto devuelve el producto correspondiente', () => {
-    ctx.buscarWC({ value: 'ABC123' }, 'item1');
-    expect(dd.innerHTML).toContain('Bicicleta Trek Rodado 27');
-    expect(dd.innerHTML).not.toContain('Casco MTB');
+  it('SKU por prefijo: encuentra sin coincidencia exacta', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 1, nombre: 'Casco MTB', sku: 'CASCO-001-XL' });
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=CASCO-001');
+    expect(res.body.data.map(r => r.id_woo)).toEqual([1]);
   });
 
-  it('SKU por prefijo también devuelve el producto (no hace falta el código completo)', () => {
-    ctx.buscarWC({ value: 'ABC' }, 'item1');
-    expect(dd.innerHTML).toContain('Bicicleta Trek Rodado 27');
+  it('búsqueda insensible a mayúsculas/acentos (normalización)', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 1, nombre: 'Cámara de Aire 26"', sku: 'CAM-26' });
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=camara');
+    expect(res.body.data.map(r => r.id_woo)).toEqual([1]);
+  });
+});
+
+describe('GET /api/recepciones/catalogo — GTIN', () => {
+  it('GTIN exacto: encuentra el producto por su código de barras', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 1, nombre: 'Casco MTB', sku: 'CASCO-001', gtin: '7791234567890' });
+    insertarProducto(db, { id_woo: 2, nombre: 'Otro', sku: 'OTRO-1', gtin: '7799999999999' });
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=7791234567890');
+    expect(res.body.data.map(r => r.id_woo)).toEqual([1]);
   });
 
-  it('GTIN exacto devuelve el producto', () => {
-    ctx.buscarWC({ value: '7791234567890' }, 'item1');
-    expect(dd.innerHTML).toContain('Bicicleta Trek Rodado 27');
+  it('GTIN por prefijo: encuentra con solo una parte del código', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 1, nombre: 'Casco MTB', sku: 'CASCO-001', gtin: '7791234567890' });
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=779123');
+    expect(res.body.data.map(r => r.id_woo)).toEqual([1]);
   });
 
-  it('GTIN por prefijo devuelve el producto', () => {
-    ctx.buscarWC({ value: '779123' }, 'item1');
-    expect(dd.innerHTML).toContain('Bicicleta Trek Rodado 27');
+  it('un producto sin GTIN cargado no rompe la búsqueda por GTIN de otro', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 1, nombre: 'Sin gtin', sku: 'SG-1', gtin: null });
+    insertarProducto(db, { id_woo: 2, nombre: 'Con gtin', sku: 'CG-1', gtin: '1112223334445' });
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=1112223334445');
+    expect(res.body.data.map(r => r.id_woo)).toEqual([2]);
+  });
+});
+
+describe('GET /api/recepciones/catalogo — nombre por tokens', () => {
+  it('encuentra un nombre con las palabras de la búsqueda en cualquier orden', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 1, nombre: 'Casco MTB Negro Talle M', sku: 'CASCO-N-M' });
+    insertarProducto(db, { id_woo: 2, nombre: 'Zapatilla Running Negra', sku: 'ZAP-N' });
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=negro casco');
+    expect(res.body.data.map(r => r.id_woo)).toEqual([1]);
   });
 
-  it('GTIN por substring arbitrario (no prefijo) NO da falso positivo', () => {
-    // '234567' está en medio del gtin de Trek ('7791234567890') pero no es prefijo.
-    ctx.buscarWC({ value: '234567' }, 'item1');
-    expect(dd.innerHTML).not.toContain('Bicicleta Trek Rodado 27');
-    expect(dd.innerHTML).toContain('Sin resultados');
+  it('exige TODAS las palabras (AND, no OR)', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 1, nombre: 'Casco MTB Rojo', sku: 'CASCO-R' });
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=casco azul');
+    expect(res.body.data).toEqual([]);
+  });
+});
+
+describe('GET /api/recepciones/catalogo — excluye padres variables', () => {
+  it('un producto tipo "variable" (padre de familia) nunca aparece, ni en listado general ni en búsqueda', async () => {
+    const { db, app } = abrirApp();
+    insertarProducto(db, { id_woo: 500, nombre: 'Casco Familia', sku: null, tipo: 'variable' });
+    insertarProducto(db, { id_woo: 501, nombre: 'Casco Familia Talle M', sku: 'CASCO-FAM-M', tipo: 'variation', id_padre: 500 });
+
+    const listado = await request(app).get('/api/recepciones/catalogo');
+    expect(listado.body.data.map(r => r.id_woo)).toEqual([501]);
+
+    const busqueda = await request(app).get('/api/recepciones/catalogo?q=casco familia');
+    expect(busqueda.body.data.map(r => r.id_woo)).toEqual([501]);
+  });
+});
+
+describe('GET /api/recepciones/catalogo — límite y catálogo vacío', () => {
+  it('nunca devuelve más de 20 resultados aunque haya más coincidencias', async () => {
+    const { db, app } = abrirApp();
+    for (let i = 1; i <= 25; i++) {
+      insertarProducto(db, { id_woo: i, nombre: `Casco modelo ${i}`, sku: `CASCO-${i}` });
+    }
+
+    const res = await request(app).get('/api/recepciones/catalogo?q=casco');
+    expect(res.body.data).toHaveLength(20);
   });
 
-  it('búsqueda por nombre sigue funcionando', () => {
-    ctx.buscarWC({ value: 'casco' }, 'item1');
-    expect(dd.innerHTML).toContain('Casco MTB Talle M');
-    expect(dd.innerHTML).not.toContain('Bicicleta Trek');
+  it('q vacío devuelve el catálogo completo (sin límite de 20)', async () => {
+    const { db, app } = abrirApp();
+    for (let i = 1; i <= 25; i++) {
+      insertarProducto(db, { id_woo: i, nombre: `Producto ${i}`, sku: `SKU-${i}` });
+    }
+
+    const res = await request(app).get('/api/recepciones/catalogo');
+    expect(res.body.data).toHaveLength(25);
   });
 
-  it('un producto sin sku/gtin no rompe la búsqueda y no aparece en búsquedas ajenas', () => {
-    expect(() => ctx.buscarWC({ value: 'casco' }, 'item1')).not.toThrow();
-    expect(dd.innerHTML).not.toContain('Producto sin código');
-  });
-
-  it('un producto sin sku/gtin SÍ aparece cuando se lo busca por su nombre', () => {
-    ctx.buscarWC({ value: 'sin codigo' }, 'item1');
-    expect(dd.innerHTML).toContain('Producto sin código');
-  });
-
-  it('una query que se parte en fragmentos de 1 carácter NO devuelve el catálogo entero', () => {
-    // Regresión: normalizar() parte "A-1" por el guión y el filtro descartaba los
-    // fragmentos de 1 carácter, dejando `palabras` vacío. Un every() sobre un array
-    // vacío da true, así que devolvía TODO el catálogo (resultados sin relación con
-    // lo buscado, el síntoma que reportó el usuario).
-    ctx.buscarWC({ value: 'A-1' }, 'item1');
-    expect(dd.innerHTML).not.toContain('Casco MTB Talle M');
-    expect(dd.innerHTML).not.toContain('Producto sin código');
-  });
-
-  it('query corta (<2 caracteres) limpia el dropdown sin buscar', () => {
-    dd.innerHTML = 'algo previo';
-    ctx.buscarWC({ value: 'a' }, 'item1');
-    expect(dd.innerHTML).toBe('');
+  it('catálogo vacío: responde ok con data vacía, no un error', async () => {
+    const { app } = abrirApp();
+    const res = await request(app).get('/api/recepciones/catalogo?q=cualquiercosa');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, data: [] });
   });
 });

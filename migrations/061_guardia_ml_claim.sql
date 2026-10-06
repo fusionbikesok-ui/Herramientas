@@ -1,0 +1,3 @@
+-- La columna claim_hasta se agrega de forma compatible en db/index.js porque
+-- SQLite no permite ALTER TABLE IF NOT EXISTS para columnas. Este archivo queda
+-- como marcador versionado e idempotente de la migración 061.

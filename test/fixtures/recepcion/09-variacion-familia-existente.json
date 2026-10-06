@@ -1,0 +1,21 @@
+{
+  "caso": "Variación de familia existente - agregar una variación nueva a una familia que ya existe",
+  "items": [
+    {
+      "linea_id": "9",
+      "nombre_doc": "Zapatilla Base Negro",
+      "codigo_proveedor": "ZAPA-BASE-SK",
+      "variacion": "Talle 42, Color Negro",
+      "cantidad": 4,
+      "marca": "Marca B",
+      "talle": "42",
+      "color": "Negro"
+    }
+  ],
+  "esperado_accion": "crear_variacion_existente",
+  "datos_variacion": {
+    "familia_nombre": "Zapatilla Base",
+    "nuevo_talle": "42",
+    "nuevo_color": "Negro"
+  }
+}

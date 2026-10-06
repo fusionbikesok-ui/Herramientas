@@ -1,0 +1,9 @@
+{
+  "$comment": "Base común, no se pasa directo a --output-schema. Cada handoff-<rol>.json extiende estos campos. La validación estricta de qué campo es obligatorio según el estado (APROBADO/BLOQUEADO/WAITING_FOR_ORCHESTRATOR) la sigue haciendo validateHandoff en JS, no este schema. El proveedor de Codex exige additionalProperties:false con TODOS los campos en required — por eso los campos condicionales van con type nullable (['string','null']) en vez de ausentes: el modelo debe escribir null cuando no aplican, no omitirlos.",
+  "estado": { "type": "string", "enum": ["APROBADO", "BLOQUEADO", "WAITING_FOR_ORCHESTRATOR"] },
+  "base": { "type": "string" },
+  "head": { "type": "string" },
+  "diff_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+  "codigo_bloqueo": { "type": ["string", "null"], "enum": ["FALTA_ENTORNO", "FALTA_DATOS", "FALTA_DECISION", "PERMISO", "FALLO_REPRODUCIBLE", null] },
+  "siguiente_accion": { "type": ["string", "null"] }
+}

@@ -1,0 +1,333 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+
+function extraerScript(html) {
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  return scripts.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+function documentoFake() {
+  const elementos = new Map();
+  return {
+    getElementById(id) {
+      if (!elementos.has(id)) elementos.set(id, {
+        innerHTML: '', textContent: '', style: {}, classList: { toggle() {}, add() {}, remove() {} },
+        addEventListener() {}, removeEventListener() {}, focus() {}, contains() { return false; },
+        querySelector() { return { classList: { toggle() {}, add() {}, remove() {} } }; },
+      });
+      return elementos.get(id);
+    },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+}
+
+let ctx;
+
+beforeEach(() => {
+  const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+  const document = documentoFake();
+  const sandbox = {
+    document, window: null, console, Date, Math, JSON, setTimeout, clearTimeout,
+    setInterval() { return 1; }, clearInterval() {},
+    sessionStorage: { getItem() { return null; }, setItem() {} },
+    location: { href: '', pathname: '/preparacion/', search: '' },
+    // ok:false → Api.requirePermiso() redirige y queda con una promesa que nunca resuelve
+    // (ver public/lib/api.js). Así el auto-init de la página (Api.requirePermiso(...).then(
+    // cargarPendientes + iniciarPollingPendientes) en la última <script> del HTML) no dispara
+    // solo, y no compite por microtasks con las llamadas explícitas que hace cada test.
+    fetch: vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: false }) })),
+    alert() {}, confirm() { return true; },
+    addEventListener() {}, removeEventListener() {},
+  };
+  sandbox.window = sandbox;
+  ctx = vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/format.js'), 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../public/lib/api.js'), 'utf8'), ctx);
+  vm.runInContext(extraerScript(html), ctx, { filename: 'preparacion-inline.js' });
+  ctx.PEND_BASELINE_LISTA = false;
+  ctx.PEND_NUEVOS = {};
+  ctx.PEND_CACHE = [];
+});
+
+describe('preparacion/index.html — render de pedidos nuevos', () => {
+  it('ofrece recarga explícita cuando guardar horarios recibe VERSION_CONFLICT', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain("r.status===409 && r.body.code==='VERSION_CONFLICT'");
+    expect(html).toContain("recargar.textContent='Recargar horarios'");
+    expect(html).toContain('recargar.onclick=cargarHorarios');
+  });
+  it('no marca la carga inicial y marca un pedido aparecido en el polling con tiempo transcurrido', () => {
+    const pedido = { canal: 'web', wc_order_id: 901, numero_pedido: '901', comprador: 'Ana', fecha: '2026-08-28T12:00:00Z', items: [] };
+    ctx.registrarPendientesNuevos([pedido], false);
+    ctx.PEND_CACHE = [pedido];
+    expect(ctx.cardPendiente(pedido, 0)).not.toContain('NUEVO');
+
+    ctx.PEND_CACHE = [];
+    ctx.registrarPendientesNuevos([pedido], true);
+    const html = ctx.cardPendiente(pedido, 0);
+    expect(html).toContain('class="ped nuevo"');
+    expect(html).toContain('NUEVO · hace menos de 1 min');
+    expect(html).toContain('aria-label="Pedido nuevo, ingresado menos de 1 min"');
+  });
+
+  it('conserva el estado nuevo por clave y elimina pedidos que ya no están en la cola', () => {
+    const pedido = { canal: 'ml', ml_order_id: 'ML-1', numero_pedido: 'ML-1', items: [] };
+    ctx.registrarPendientesNuevos([], false);
+    ctx.PEND_CACHE = [];
+    ctx.registrarPendientesNuevos([pedido], true);
+    expect(ctx.PEND_NUEVOS['ml:ML-1']).toBeTypeOf('number');
+    ctx.PEND_CACHE = [pedido];
+    ctx.registrarPendientesNuevos([], true);
+    expect(ctx.PEND_NUEVOS['ml:ML-1']).toBeUndefined();
+  });
+  it('mantiene error visible y ofrece reintento en vez de presentar cola vacía', () => {
+    ctx.PEND_STATUS = 'error';
+    ctx.PEND_CACHE = [];
+    ctx.renderPendientes();
+    const html = ctx.document.getElementById('cuerpo').innerHTML;
+    expect(html).toContain('No se pudo cargar la cola');
+    expect(html).toContain('cargarPendientes()');
+  });
+  it('abre por clave estable y conserva controles de accesibilidad de la jornada', () => {
+    const pedido = { canal: 'ml', ml_order_id: 'ML-9', numero_pedido: 'ML-9', items: [] };
+    expect(ctx.cardPendiente(pedido)).toContain("prepararClave('ml:ML-9')");
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('min-height:44px');
+  });
+  it('muestra la lista consolidada con cantidades e imágenes', () => {
+    const pedidos = [
+      { canal:'ml', ml_order_id:'1', items:[{sku:'CASCO-1',nombre:'Casco',cantidad:2,imagen:'https://img.example/casco.jpg'}] },
+      { canal:'web', wc_order_id:2, items:[{sku:'CASCO-1',nombre:'Casco',cantidad:1,imagen:'https://img.example/casco.jpg'}] },
+    ];
+    const html = ctx.renderListaRecoleccion(pedidos);
+    expect(html).toContain('Lista de recolección');
+    expect(html).toContain('https://img.example/casco.jpg');
+    expect(html).toContain('>3<small>unidades</small>');
+    expect(html).toContain('2 pedidos');
+  });
+  it('muestra un fallback explícito cuando el producto no tiene imagen', () => {
+    const html = ctx.renderListaRecoleccion([{canal:'web',wc_order_id:2,items:[{sku:'X',nombre:'Producto X',cantidad:1}]}]);
+    expect(html).toContain('Producto sin imagen');
+    expect(html).toContain('Sin imagen');
+  });
+  it('conserva foco visible para los controles de la cola', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('.jornada-panel button:focus-visible');
+  });
+  it('muestra ambos límites para ML/Andreani sin inventar horarios', () => {
+    const pedido = { canal: 'ml', logistic_type: 'cross_docking', shipment_limite_original: '2026-09-02T15:30:00-03:00', fecha_despacho_limite: '2026-09-02T15:00:00-03:00', estado_despacho: 'activo', items: [] };
+    const html = ctx.cardPendiente(pedido);
+    expect(html).toContain('Entrega en acopio:');
+    expect(html).toContain('Límite interno:');
+    expect(html).not.toContain('17:00');
+    expect(ctx.cardPendiente({ canal: 'ml', logistic_type: 'cross_docking', estado_despacho: 'activo', items: [] })).not.toContain('Límite interno:');
+    expect(html).toContain('02/09/2026, 15:30');
+  });
+  it('explica que Andreani retira los pedidos web y que Despacho queda para ML', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('Andreani retira los pedidos web');
+    expect(html).toContain('Despacho aplica a MercadoLibre');
+  });
+  it('muestra las reglas operativas de Flex y Web y el diferimiento', () => {
+    expect(ctx.cardPendiente({ canal: 'ml', logistic_type: 'self_service', estado_despacho: 'activo', items: [] })).toContain('Salida máxima Flex: 17:00');
+    expect(ctx.cardPendiente({ canal: 'web', estado_despacho: 'activo', items: [] })).toContain('Preparar antes de las 15:00');
+    const diferido = ctx.cardPendiente({ canal: 'ml', estado_despacho: 'diferido', despacho_motivo: 'SLA_SHIPMENT_HORA_FALTANTE', items: [] });
+    expect(diferido).toContain('Despacho diferido');
+    expect(diferido).toContain('MercadoLibre no informó una hora límite');
+    expect(diferido).toContain('Ver código para diagnóstico');
+    expect(diferido).toContain('SLA_SHIPMENT_HORA_FALTANTE');
+    expect(diferido).toContain('Queda para el siguiente día');
+    expect(ctx.cardPendiente({ canal: 'ml', estado_despacho: 'diferido', despacho_motivo: 'MARGEN_30_MIN_SUPERADO', items: [] })).toContain('margen operativo de 30 minutos');
+    expect(ctx.cardPendiente({ canal: 'ml', logistic_type: 'self_service', estado_despacho: 'diferido', despacho_motivo: 'FLEX_SALIDA_17:00_SUPERADA', items: [] })).toContain('salida máxima de Flex');
+  });
+  it('actualiza la cola en segundo plano sin consultar jornadas ni olas', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    const silencioso = html.match(/async function cargarPendientesSilencioso\(\)\{([\s\S]*?)\n\}/)?.[1] || '';
+    expect(silencioso).not.toContain('renderPendientes()');
+    expect(html).toContain('async function cargarDatosSilenciosos()');
+    expect(html).toContain("var pr=await api('/pendientes')");
+    expect(html).toContain('document.getElementById(foco.id)');
+    expect(html).toContain('setSelectionRange(seleccion.inicio,seleccion.fin)');
+    expect(html).toContain('--focus-ring:#67e8f9');
+  });
+});
+
+describe('preparacion/index.html — estabilidad ante touch reciente', () => {
+  it('mantiene variable ULTIMA_INTERACCION_LISTA para rastrear tocadas recientes', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('ULTIMA_INTERACCION_LISTA');
+    expect(html).toContain('touchstart');
+    expect(html).toContain('touchmove');
+    expect(html).toContain('scroll');
+  });
+
+  it('implementa debeLockearRefreshPendientes para congelar en ventana reciente', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('function debeLockearRefreshPendientes()');
+    expect(html).toContain('10000'); // 10s en ms
+  });
+
+  it('muestra aviso de pedidos nuevos si cambian durante ventana de interacción', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('pedidos nuevos');
+    expect(html).toContain('actualizar');
+  });
+});
+
+describe('preparacion/index.html — buscador de pendientes', () => {
+  it('renderiza un buscador en la lista de pendientes', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('type="search"');
+    expect(html).toContain('PEND_FILTRO');
+    expect(html).toContain('pend-buscador');
+  });
+
+  it('agrega data-search a las tarjetas para filtrar en cliente', () => {
+    const pedidos = [
+      { canal: 'ml', ml_order_id: '12345', pack_id: '12345', numero_pedido: '12345', comprador: 'Ana', fecha: '2026-08-28T12:00:00Z', items: [] },
+    ];
+    ctx.PEND_CACHE = pedidos;
+    ctx.PEND_STATUS = 'ready';
+    ctx.PEND_NUEVOS = {};
+    ctx.PEND_META = { actualizado_en: '2026-08-28T12:05:00Z', sync_error: null };
+    ctx.PEND_FILTRO = '';
+
+    ctx.renderPendientes();
+    const html = ctx.document.getElementById('cuerpo').innerHTML;
+
+    expect(html).toContain('data-search=');
+  });
+
+  it('aplica el filtro después de cada render automático', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    expect(html).toContain('aplicarFiltroPendientes');
+  });
+});
+
+describe('preparacion/index.html — refresco de fondo no toca la lista bajo el dedo', () => {
+  function mockPendientes(pedidos) {
+    ctx.fetch = vi.fn((url) => {
+      if (String(url).includes('/api/preparacion/pendientes')) {
+        return Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true, data: pedidos, actualizado_en: '2026-09-24T12:00:00Z' }) });
+      }
+      return Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true, data: [] }) });
+    });
+  }
+  const pA = { canal: 'ml', ml_order_id: 'A', pack_id: 'A', numero_pedido: 'A', comprador: 'Ana', fecha: '2026-09-24T10:00:00Z', items: [] };
+  const pB = { canal: 'ml', ml_order_id: 'B', pack_id: 'B', numero_pedido: 'B', comprador: 'Beto', fecha: '2026-09-24T09:00:00Z', items: [] };
+
+  it('con el mismo conjunto de pedidos reordenado, no reescribe el DOM mientras hay touch reciente', async () => {
+    ctx.PEND_CACHE = [pA, pB];
+    ctx.PEND_STATUS = 'ready';
+    ctx.ULTIMA_INTERACCION_LISTA = Date.now();
+    const cuerpo = ctx.document.getElementById('cuerpo');
+    cuerpo.innerHTML = '<div class="ped-grid"><div class="ped" data-search="A">A</div><div class="ped" data-search="B">B</div></div>';
+    mockPendientes([pB, pA]); // mismo conjunto, orden invertido
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toBe('<div class="ped-grid"><div class="ped" data-search="A">A</div><div class="ped" data-search="B">B</div></div>');
+  });
+
+  it('con un pedido nuevo y touch reciente, el aviso es un nodo aparte que no toca #cuerpo ni le saca el foco a nada', async () => {
+    ctx.PEND_CACHE = [pA];
+    ctx.PEND_STATUS = 'ready';
+    ctx.ULTIMA_INTERACCION_LISTA = Date.now();
+    const cuerpo = ctx.document.getElementById('cuerpo');
+    const listaOriginal = '<div class="ped-grid"><div class="ped" data-search="A">A</div></div>';
+    cuerpo.innerHTML = listaOriginal;
+    // Simula foco en el buscador: si mostrarAvisoNuevosPendientes tocara #cuerpo con innerHTML,
+    // esta referencia quedaría "colgada" de un nodo que ya no está en el documento.
+    const buscador = ctx.document.getElementById('pend-buscador-simulado');
+    buscador.focus = vi.fn();
+    mockPendientes([pA, pB]); // entra un pedido nuevo
+    await ctx.cargarDatosSilenciosos();
+    // #cuerpo no se tocó en absoluto — ni un carácter, no sólo "sigue conteniendo lo mismo".
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toBe(listaOriginal);
+    expect(buscador.focus).not.toHaveBeenCalled();
+    const aviso = ctx.document.getElementById('pend-aviso-nuevos');
+    expect(aviso.hidden).toBe(false);
+    expect(aviso.textContent).toContain('1 pedido nuevo');
+    expect(ctx.PEND_CACHE).toEqual([pA]); // el cache visible no cambia hasta que el operario toca el aviso
+  });
+
+  it('sin interacción reciente, sí actualiza y re-renderiza normalmente', async () => {
+    ctx.PEND_CACHE = [pA];
+    ctx.PEND_STATUS = 'ready';
+    ctx.ULTIMA_INTERACCION_LISTA = 0; // sin touch reciente
+    mockPendientes([pA, pB]);
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.PEND_CACHE).toEqual([pA, pB]);
+  });
+
+  it('el aviso mostrado se apaga en cualquier render completo, y puede volver a dispararse después', async () => {
+    ctx.PEND_CACHE = [pA];
+    ctx.PEND_STATUS = 'ready';
+    ctx.ULTIMA_INTERACCION_LISTA = Date.now();
+    ctx.document.getElementById('cuerpo').innerHTML = '<div class="ped-grid"><div class="ped" data-search="A">A</div></div>';
+    mockPendientes([pA, pB]);
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(false);
+
+    // Refresco normal (sin lock): renderPendientes() se ejecuta completo y apaga el aviso.
+    ctx.ULTIMA_INTERACCION_LISTA = 0;
+    mockPendientes([pA, pB]);
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(true);
+
+    // Nueva alta bajo un lock nuevo: el aviso tiene que poder volver a mostrarse.
+    ctx.ULTIMA_INTERACCION_LISTA = Date.now();
+    const pC = { canal: 'ml', ml_order_id: 'C', pack_id: 'C', numero_pedido: 'C', comprador: 'Caro', fecha: '2026-09-24T11:00:00Z', items: [] };
+    mockPendientes([pA, pB, pC]);
+    await ctx.cargarDatosSilenciosos();
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(false);
+  });
+
+  it('registra la interacción con listeners en window (pointerdown/touch/scroll), no en #cuerpo', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    const bloque = html.slice(html.indexOf('function iniciarPollingPendientes'), html.indexOf('function iniciarPollingPendientes') + 1000);
+    expect(bloque).toContain('window.addEventListener(\'touchstart\'');
+    expect(bloque).toContain('window.addEventListener(\'pointerdown\'');
+    expect(bloque).toContain('window.addEventListener(\'scroll\'');
+    expect(bloque).toContain('passive:true');
+  });
+
+  it('cambiar de vista con ir() apaga el aviso, aunque estuviera visible', () => {
+    ctx.document.getElementById('pend-aviso-nuevos').hidden = false;
+    ctx.PEND_CAMBIOS_PENDIENTES = [pB];
+    ctx.ir('recoleccion');
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(true);
+  });
+
+  it('abrir el detalle de un pedido apaga el aviso, aunque no se haya pasado por ir()', async () => {
+    ctx.document.getElementById('pend-aviso-nuevos').hidden = false;
+    ctx.fetch = vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({
+      ok: true, data: { id: 999, estado: 'en_preparacion', canal: 'ml', items: [], eventos: [] },
+    }) }));
+    await ctx.abrirDetalle(999, false);
+    expect(ctx.document.getElementById('pend-aviso-nuevos').hidden).toBe(true);
+    expect(ctx.VISTA).toBe('detalle');
+  });
+
+  it('tocar el aviso fuera de la vista de pendientes no reemplaza la pantalla actual', () => {
+    ctx.VISTA = 'detalle';
+    ctx.PEND_CAMBIOS_PENDIENTES = [pA, pB];
+    const cuerpo = ctx.document.getElementById('cuerpo');
+    const detalleActual = '<h1>Pedido #999</h1>';
+    cuerpo.innerHTML = detalleActual;
+    ctx.actualizarPendientesDesdeCambios();
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toBe(detalleActual);
+    expect(ctx.PEND_CAMBIOS_PENDIENTES).toEqual([pA, pB]); // no se consumió: el toque no contaba
+  });
+});
+
+describe('preparacion/index.html — header visible a 360px', () => {
+  it('mantiene el número de pedido y comprador visibles sin scroll inicial', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/preparacion/index.html'), 'utf8');
+    // Debe haber estilos que reducen tamaños/márgenes para viewport estrecho
+    expect(html).toContain('@media');
+    expect(html).toContain('360px');
+  });
+});

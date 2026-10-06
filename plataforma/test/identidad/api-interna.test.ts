@@ -1,0 +1,604 @@
+/*
+ * test/identidad/api-interna.test.ts — E3 corte 1 tarea 5: la API interna de la bandeja, por HTTP y con firma real.
+ * Mismo patrón que test/catalogo/api-interna.test.ts.
+ */
+import { randomBytes, randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { crearApi } from '../../src/api/app.ts';
+import { PREFIJO_IDENTIDAD } from '../../src/api/identidad-interna.ts';
+import type { Canal } from '../../src/api/senales.ts';
+import { crearLogger } from '../../src/comun/logger.ts';
+import { crearPool } from '../../src/db/pool.ts';
+import { crearOrigenes, firmar } from '../../src/seguridad/interna.ts';
+import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
+
+const clave = randomBytes(32);
+const keyring = { activeKeyId: 'k1', keys: { k1: clave } };
+
+describe('E3-API-01 API interna de la bandeja de identidad', () => {
+  let base: BaseDePrueba; let pool: ReturnType<typeof crearPool>; let admin: ReturnType<typeof crearPool>;
+  let cuentas: Map<Canal, string>; let empresa: string; let ml: string;
+  const api = (bandejaCatalogo = true) => crearApi({
+    pool, logger: crearLogger('test'), estadoPgDir: '/nada',
+    senales: { keyring, origenes: crearOrigenes('127.0.0.1/32'), cuentas }, bandejaCatalogo,
+  });
+  const cabeceras = (metodo: string, path: string, cuerpo: string, nonce = randomBytes(16).toString('base64url'), extra: Record<string, string> = {}) => {
+    const ts = String(Math.floor(Date.now() / 1000));
+    return { 'content-type': 'application/json', 'x-fusion-key-id': 'k1', 'x-fusion-timestamp': ts, 'x-fusion-nonce': nonce,
+      'x-fusion-signature': firmar(clave, ts, nonce, metodo, path, Buffer.from(cuerpo)), ...extra };
+  };
+  /** GET firmado: el legado firma la URL completa, con la query. */
+  const get = async (url: string, o: { nonce?: string; firmar?: boolean } = {}) => {
+    const h = o.firmar === false ? {} : cabeceras('GET', url, '', o.nonce);
+    const r = await api().inject({ method: 'GET', url, headers: h, remoteAddress: '127.0.0.1' });
+    return { status: r.statusCode, body: r.json() as any, texto: r.body };
+  };
+  const post = async (path: string, cuerpo: unknown, o: { idem?: string | null; bandeja?: boolean; corr?: string } = {}) => {
+    const texto = JSON.stringify(cuerpo);
+    const extra: Record<string, string> = {};
+    if (o.idem !== null) extra['idempotency-key'] = o.idem ?? randomUUID();
+    if (o.corr) extra['x-correlation-id'] = o.corr;
+    const r = await api(o.bandeja ?? true).inject({ method: 'POST', url: path, payload: texto, headers: cabeceras('POST', path, texto, undefined, extra), remoteAddress: '127.0.0.1' });
+    return { status: r.statusCode, body: r.json() as any };
+  };
+  const del = async (path: string, cuerpo: unknown, o: { idem?: string | null; bandeja?: boolean } = {}) => {
+    const texto = JSON.stringify(cuerpo);
+    const extra: Record<string, string> = {};
+    if (o.idem !== null) extra['idempotency-key'] = o.idem ?? randomUUID();
+    const r = await api(o.bandeja ?? true).inject({ method: 'DELETE', url: path, payload: texto, headers: cabeceras('DELETE', path, texto, undefined, extra), remoteAddress: '127.0.0.1' });
+    return { status: r.statusCode, body: r.json() as any };
+  };
+  const actor = { usuario: 'jose', es_admin: false };
+
+  beforeAll(async () => {
+    base = await crearBaseDePrueba(); pool = crearPool(base.urlApp); admin = crearPool(base.urlAdmin);
+    empresa = (await admin.query<{ id: string }>("insert into core.companies(legal_name) values ('F') returning id")).rows[0]!.id;
+    ml = (await admin.query<{ id: string }>("insert into core.channel_accounts(company_id,channel,external_account) values ($1,'mercadolibre','x') returning id", [empresa])).rows[0]!.id;
+    cuentas = new Map([['mercadolibre', ml]]);
+  });
+  beforeEach(async () => {
+    await admin.query(`TRUNCATE catalog.identity_cases, catalog.identity_decisions, catalog.identity_candidates, catalog.identity_evidence,
+      catalog.model_attributes, catalog.model_images, catalog.external_representations, catalog.sellable_variants, catalog.product_models CASCADE`);
+  });
+  afterAll(async () => { await pool.end(); await admin.end(); await base.borrar(); });
+
+  async function variante(titulo: string, sku: string | null = null, archivada = false) {
+    const modelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'ml_simple', $3, $4) RETURNING id`, [empresa, ml, randomUUID(), titulo])).rows[0]!.id;
+    const v = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.sellable_variants (company_id, model_id, sku, archivado_en, motivo_archivo)
+       VALUES ($1, $2, $3, ${archivada ? 'now()' : 'NULL'}, ${archivada ? "'test'" : 'NULL'}) RETURNING id`, [empresa, modelo, sku])).rows[0]!.id;
+    return { modelo, variante: v };
+  }
+  /** Una publicación de ML con su variante pendiente y un caso abierto que cuelga de la variante (como el motor real). */
+  async function caso(recurso: string, o: { estado?: string; detalle?: object; activa?: boolean; abierto?: string } = {}) {
+    const { modelo, variante: v } = await variante(`Bici ${recurso}`);
+    await admin.query(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, estado_remoto, stock_canal)
+       VALUES ($1, $2, 'mercadolibre', 'vendible', $3, '', $4, NULL, $5, $6)`, [empresa, ml, recurso, v, o.activa ? 'active' : 'paused', o.activa ? 3 : 0]); // model_id NULL como en producción
+    const id = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.identity_cases (company_id, tipo, variant_id, estado, detalle, abierto_en)
+       VALUES ($1, 'sku_pendiente', $2, $3, $4::jsonb, $5::timestamptz) RETURNING id`,
+      [empresa, v, o.estado ?? 'actionable', JSON.stringify(o.detalle ?? {}), o.abierto ?? new Date().toISOString()])).rows[0]!.id;
+    return { id, variante: v, modelo };
+  }
+
+  it('sin firma: 401', async () => {
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos`, { firmar: false })).status).toBe(401);
+  });
+
+  it('un nonce repetido se rechaza (401)', async () => {
+    const nonce = randomBytes(16).toString('base64url');
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos`, { nonce })).status).toBe(200);
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos`, { nonce })).status).toBe(401);
+  });
+
+  it('la query va firmada: cambiarla después de firmar invalida la firma', async () => {
+    const h = cabeceras('GET', `${PREFIJO_IDENTIDAD}/casos?limit=1`, '');
+    const r = await api().inject({ method: 'GET', url: `${PREFIJO_IDENTIDAD}/casos?limit=200`, headers: h, remoteAddress: '127.0.0.1' });
+    expect(r.statusCode).toBe(401);
+  });
+
+  it('la cola sale en orden de prioridad (conflicto → D5 → auto_sku en sombra → activa con stock → resto) y se pagina por cursor', async () => {
+    // Se crean en orden inverso al de prioridad, con abierto_en creciente: el orden sólo puede venir de la prioridad.
+    const resto = await caso('MLA5', { abierto: '2026-01-01T00:00:00Z' });
+    const activa = await caso('MLA4', { activa: true, abierto: '2026-01-02T00:00:00Z' });
+    const conSombra = await caso('MLA3', { abierto: '2026-01-03T00:00:00Z' });
+    await admin.query(
+      `INSERT INTO catalog.identity_decisions (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
+       VALUES ($1, $2, $3, 'MLA3', '', 'vincular', $4, 'auto_sku', 'motor', 'sombra')`, [empresa, conSombra.id, ml, (await variante('Destino', 'FB-9')).variante]);
+    const d5 = await caso('MLA2', { detalle: { d5: true }, abierto: '2026-01-04T00:00:00Z' });
+    const conflicto = await caso('MLA1', { estado: 'conflict', abierto: '2026-01-05T00:00:00Z' });
+    const esperado = [conflicto.id, d5.id, conSombra.id, activa.id, resto.id];
+
+    const todo = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(todo.status).toBe(200);
+    expect(todo.body.casos.map((c: any) => c.id)).toEqual(esperado);
+    expect(todo.body.casos.map((c: any) => c.grupo)).toEqual([0, 1, 2, 3, 4]);
+    expect(todo.body.casos[0].publicacion).toMatchObject({ recurso: 'MLA1', link_ml: 'https://articulo.mercadolibre.com.ar/MLA-1' });
+    expect(todo.body.siguiente).toBeNull();
+    expect(todo.body.contadores).toEqual({ conflictos: 1, d5: 1, sku_exacto: 1, activas_con_stock: 1, resto: 1, confirmable: 0, sin_titulo: 0, apartados: 0, no_decidibles: 0 });
+
+    const juntas: string[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 5; i++) {
+      const p = await get(`${PREFIJO_IDENTIDAD}/casos?limit=2${cursor ? `&cursor=${cursor}` : ''}`);
+      juntas.push(...p.body.casos.map((c: any) => c.id));
+      cursor = p.body.siguiente;
+      if (!cursor) break;
+    }
+    expect(juntas).toEqual(esperado);
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos?cursor=basura`)).status).toBe(422);
+    // Filtro por grupo (chips de la pantalla): sólo ese grupo, contadores intactos, y grupo inválido → 422.
+    const soloD5 = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=1`);
+    expect(soloD5.body.casos.map((c: any) => c.id)).toEqual([d5.id]);
+    expect(soloD5.body.contadores.resto).toBe(1);
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos?grupo=9`)).status).toBe(422);
+  });
+
+  it('confirmable: un caso con variant_id ya vinculado a una variante viva va al fondo, después de resto con título, y trae la variante para confirmar sin candidatos', async () => {
+    // "resto" (con título) tiene que seguir adelante del confirmable: José pidió los decidibles primero.
+    const resto = await caso('MLA20', { abierto: '2026-01-01T00:00:00Z' });
+    const confirmable = await caso('MLA21', { abierto: '2026-01-02T00:00:00Z' });
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-2845', confirmable.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos.map((c: any) => c.id)).toEqual([resto.id, confirmable.id]);
+    expect(r.body.casos.map((c: any) => c.grupo)).toEqual([4, 5]);
+    expect(r.body.contadores).toMatchObject({ resto: 1, confirmable: 1 });
+    const filaConfirmable = r.body.casos[1];
+    expect(filaConfirmable.confirmar).toMatchObject({ variant_id: confirmable.variante, sku: 'FB-2845' });
+
+    // Filtro por el nuevo grupo (chip propio).
+    const soloConfirmable = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=5`);
+    expect(soloConfirmable.body.casos.map((c: any) => c.id)).toEqual([confirmable.id]);
+  });
+
+  it('confirmable no le gana a conflicto ni D5: esos siguen en su propio grupo aunque tengan variant_id vinculado', async () => {
+    const conflicto = await caso('MLA22', { estado: 'conflict', abierto: '2026-01-01T00:00:00Z' });
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-1', conflicto.variante]);
+    const d5 = await caso('MLA23', { detalle: { d5: true }, abierto: '2026-01-02T00:00:00Z' });
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-2', d5.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos.map((c: any) => c.grupo)).toEqual([0, 1]);
+    expect(r.body.contadores).toMatchObject({ conflictos: 1, d5: 1, confirmable: 0 });
+  });
+
+  it('sin_titulo: un caso sin fuente de título ML va al fondo de todos, en su propio grupo y chip', async () => {
+    const conTitulo = await caso('MLA24', { abierto: '2026-01-01T00:00:00Z' });
+    // Publicación sin título ML observable: mismo patrón que el test de "título ML" (variante con modelo woo_*,
+    // sin representación de contenedor/variante con título propio).
+    const sinTitulo = await caso('MLA25', { abierto: '2026-01-02T00:00:00Z' });
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W25', 'Título Woo') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, sinTitulo.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos.map((c: any) => c.id)).toEqual([conTitulo.id, sinTitulo.id]);
+    expect(r.body.casos.map((c: any) => c.grupo)).toEqual([4, 6]);
+    expect(r.body.contadores).toMatchObject({ resto: 1, sin_titulo: 1 });
+    expect(r.body.casos[1].publicacion.titulo).toBeNull();
+
+    const soloSinTitulo = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=6`);
+    expect(soloSinTitulo.body.casos.map((c: any) => c.id)).toEqual([sinTitulo.id]);
+  });
+
+  it('sin_titulo y confirmable ganan a "activa con stock": ese grupo no es un comodín para saltarse la regla de José', async () => {
+    // Activa con stock, pero sin título: tiene que caer en 6 igual, no en 3 (hallazgo HIGH de opt-16 sobre a8bda579).
+    const activaSinTitulo = await caso('MLA30', { activa: true, abierto: '2026-01-01T00:00:00Z' });
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W30', 'Título Woo') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, activaSinTitulo.variante]);
+    // Activa con stock, y ya confirmable (SKU vinculado): tiene que caer en 5, no en 3.
+    const activaConfirmable = await caso('MLA31', { activa: true, abierto: '2026-01-02T00:00:00Z' });
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-3000', activaConfirmable.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    const porId = (id: string) => r.body.casos.find((c: any) => c.id === id);
+    expect(porId(activaSinTitulo.id).grupo).toBe(6);
+    expect(porId(activaConfirmable.id).grupo).toBe(5);
+    expect(r.body.contadores).toMatchObject({ activas_con_stock: 0, sin_titulo: 1, confirmable: 1 });
+  });
+
+  it('E3 punto B: con titulo_observado, un caso sin modelo ml_* NO cae en sin_titulo (usa el título de la representación)', async () => {
+    // Misma situación que "sin_titulo" (variante ya vinculada a woo_*, sin modelo ml_* propio/contenedor), pero
+    // la representación trae titulo_observado (lo que aplicar.ts guarda desde E3 punto B en vez de crear un
+    // ml_simple nuevo). Grupo esperado: 4 (resto), no 6, y el título sale del fallback.
+    const c = await caso('MLA26', { abierto: '2026-01-01T00:00:00Z' });
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W26', 'Título Woo') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, c.variante]);
+    await admin.query('UPDATE catalog.external_representations SET titulo_observado = $1 WHERE variant_id = $2', ['Título observado de ML', c.variante]);
+
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    const fila = r.body.casos.find((x: any) => x.id === c.id);
+    expect(fila.grupo).toBe(4);
+    expect(fila.publicacion.titulo).toBe('Título observado de ML');
+    expect(r.body.contadores).toMatchObject({ resto: 1, sin_titulo: 0 });
+  });
+
+  it('confirmar: 422 confirmar_invalido si eleccion no es vincular', async () => {
+    const c = await caso('MLA32');
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-4000', c.variante]);
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 1, eleccion: 'omitir', actor, confirmar: true });
+    expect(r).toMatchObject({ status: 422, body: { code: 'confirmar_invalido' } });
+  });
+
+  it('confirmar: 422 confirmar_invalido si el variant_id no coincide con el ya vinculado al caso (no se puede confirmar otra cosa)', async () => {
+    const c = await caso('MLA33');
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-5000', c.variante]);
+    const otra = await variante('Otra bici', 'FB-6000');
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 1, eleccion: 'vincular', variant_id: otra.variante, actor, confirmar: true });
+    expect(r).toMatchObject({ status: 422, body: { code: 'confirmar_invalido' } });
+  });
+
+  it('confirmar: un POST con eleccion vincular al variant_id ya asociado no busca candidatos y marca el motivo', async () => {
+    const c = await caso('MLA26');
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-2845', c.variante]);
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 1, eleccion: 'vincular', variant_id: c.variante, actor, confirmar: true });
+    expect(r.status).toBe(200);
+    const decision = (await admin.query<{ motivo: string }>('SELECT motivo FROM catalog.identity_decisions WHERE id = $1', [r.body.decision_id])).rows[0];
+    expect(decision!.motivo).toMatch(/^confirmar:/);
+  });
+
+  it('confirmar con motivo propio: se antepone el prefijo, no se reemplaza', async () => {
+    const c = await caso('MLA27');
+    await admin.query('UPDATE catalog.sellable_variants SET sku = $1 WHERE id = $2', ['FB-9000', c.variante]);
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 1, eleccion: 'vincular', variant_id: c.variante, actor, confirmar: true, motivo: 'chequeado con José' });
+    expect(r.status).toBe(200);
+    const decision = (await admin.query<{ motivo: string }>('SELECT motivo FROM catalog.identity_decisions WHERE id = $1', [r.body.decision_id])).rows[0];
+    expect(decision!.motivo).toBe('confirmar: chequeado con José');
+  });
+
+  it('un caso abierto sin publicación única no sale en la cola pero se cuenta en no_decidibles', async () => {
+    const { variante: v } = await variante('Huérfana');
+    await admin.query(`INSERT INTO catalog.identity_cases (company_id, tipo, variant_id) VALUES ($1, 'sku_pendiente', $2)`, [empresa, v]);
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos).toEqual([]);
+    expect(r.body.contadores).toMatchObject({ no_decidibles: 1, resto: 0 });
+  });
+
+  it('un caso con representation_id hacia una representación archivada no sale en la cola y suma en no_decidibles', async () => {
+    const { modelo, variante: v } = await variante('Archivada');
+    const rep = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, archivado_en, motivo_archivo)
+       VALUES ($1, $2, 'mercadolibre', 'vendible', 'MLA99', '', $3, $4, now(), 'test') RETURNING id`, [empresa, ml, v, modelo])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.identity_cases (company_id, tipo, representation_id) VALUES ($1, 'sku_pendiente', $2)`, [empresa, rep]);
+    const r = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(r.body.casos).toEqual([]);
+    expect(r.body.contadores).toMatchObject({ no_decidibles: 1, resto: 0 });
+  });
+
+  it('una cuenta configurada que no existe en la base: 409 cuenta_no_configurada (no 500)', async () => {
+    const url = `${PREFIJO_IDENTIDAD}/casos`;
+    const app = crearApi({ pool, logger: crearLogger('test'), estadoPgDir: '/nada', bandejaCatalogo: true,
+      senales: { keyring, origenes: crearOrigenes('127.0.0.1/32'), cuentas: new Map([['mercadolibre', randomUUID()]]) } });
+    const r = await app.inject({ method: 'GET', url, headers: cabeceras('GET', url, ''), remoteAddress: '127.0.0.1' });
+    expect(r.statusCode).toBe(409);
+    expect(r.json()).toMatchObject({ code: 'cuenta_no_configurada' });
+  });
+
+  it('el detalle trae publicación, top-3 con la marca por atributo, historial y version; NUNCA el puntaje', async () => {
+    const c = await caso('MLA7');
+    const cand = await variante('Casco Bell Negro', 'FB-77');
+    const run = randomUUID();
+    await admin.query(
+      `INSERT INTO catalog.identity_candidates (case_id, run_id, variant_id, rank, puntaje, explicacion, engine_version)
+       VALUES ($1, $2, $3, 1, 0.91, $4::jsonb, 'v1')`,
+      [c.id, run, cand.variante, JSON.stringify({ atributos: [{ nombre: 'color', marca: 'coincide', valorMl: 'negro', valorCandidato: 'negro' }] })]);
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, 'marca', 'Bell', now() FROM catalog.external_representations r WHERE r.recurso = 'MLA7'`, [c.modelo]);
+    const d = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(d.status).toBe(200);
+    expect(d.body).toMatchObject({ id: c.id, version: 1, tipo: 'sku_pendiente', publicacion: { recurso: 'MLA7', titulo: 'Bici MLA7' } });
+    expect(d.body.candidatos).toHaveLength(1);
+    expect(d.body.candidatos[0]).toMatchObject({ rank: 1, sku: 'FB-77', titulo: 'Casco Bell Negro',
+      explicacion: { atributos: [{ nombre: 'color', marca: 'coincide' }], otros_atributos: [{ nombre: 'marca', marca: 'difiere', valorMl: 'Bell', valorCandidato: '' }] } });
+    expect(d.texto).not.toContain('puntaje');
+    expect(d.body.historial).toEqual([]);
+    expect(d.body.auto_sku_en_sombra).toBeNull();
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${randomUUID()}`)).status).toBe(404);
+  });
+
+  it('el detalle devuelve la primera foto vigente de la representación ML, o null si no existe', async () => {
+    const conFoto = await caso('MLA_FOTO');
+    const sinFoto = await caso('MLA_SIN_FOTO');
+    const vencida = await caso('MLA_FOTO_VENCIDA');
+    await admin.query(
+      `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en)
+       SELECT $1, r.id, x.url, x.orden, now() - interval '1 hour'
+       FROM catalog.external_representations r
+       CROSS JOIN (VALUES ('https://img/vigente.jpg', 2), ('https://img/primera.jpg', 1)) x(url, orden)
+       WHERE r.recurso = 'MLA_FOTO'`,
+      [conFoto.modelo],
+    );
+    await admin.query(
+      `INSERT INTO catalog.model_images (model_id, representation_id, url, orden, observado_en, vigente_hasta)
+       SELECT $1, r.id, 'https://img/vencida.jpg', 1, now() - interval '2 hours', now() - interval '1 hour'
+       FROM catalog.external_representations r WHERE r.recurso = 'MLA_FOTO_VENCIDA'`, [vencida.modelo],
+    );
+
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${conFoto.id}`)).body.publicacion.foto).toBe('https://img/primera.jpg');
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${sinFoto.id}`)).body.publicacion.foto).toBeNull();
+    expect((await get(`${PREFIJO_IDENTIDAD}/casos/${vencida.id}`)).body.publicacion.foto).toBeNull();
+  });
+
+  /*
+   * Bug reportado por opt-16 (2026-09-24, revisión de las decisiones de José): sin título ML (representación
+   * ya colgada de una variante woo_*, sin ml_simple/ml_clasico propio ni titulo_observado), el motor no
+   * calcula candidatos (paso 1 de correrMotor necesita itemMlDe) pero SÍ resuelve sku_observado a una única
+   * variante viva y anota la auto_sku en sombra (paso 2, independiente del título). El bug es que esa
+   * variante nunca llega a `candidatos`: la UI sólo usa auto_sku_en_sombra para marcar una fila que YA esté
+   * en candidatos por SKU — si candidatos está vacío, José nunca ve la opción, aunque el sistema la haya
+   * resuelto. José reportó justo esto: "no se veía" (sin título/foto) y hasta omitió publicaciones cuyo SKU
+   * resolvía único a una variante viva de Woo.
+   */
+  it('sin candidatos del motor (sin título ML) pero con auto_sku en sombra: la variante de la sombra aparece igual como opción, con datos de Woo', async () => {
+    const c = await caso('MLA_SIN_TITULO');
+    // La representación queda sin fuente de título ML: su variante pasa a colgar de un modelo woo_simple
+    // (no ml_*), como en producción cuando ya no tiene modelo propio ni contenedor ni titulo_observado.
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'woo_simple', 'W-SIN-TITULO', 'Bici Sin Título ML (no debería mostrarse)') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, c.variante]);
+
+    // La variante destino que sku_observado resuelve — tiene SKU, título y precio de Woo (evidencia real
+    // disponible aunque el ML no traiga título).
+    const destino = await variante('Casco Bell Rojo Talle M', 'FB-2654');
+    await admin.query(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, model_id, precio, moneda)
+       VALUES ($1, $2, 'woocommerce', 'vendible', 'W-2654', '', $3, $4, 45000, 'ARS')`, [empresa, ml, destino.variante, destino.modelo]);
+    await admin.query(
+      `INSERT INTO catalog.identity_decisions (company_id, case_id, channel_account_id, recurso, variacion_normalizada, eleccion, variant_id, origen, actor, efecto)
+       VALUES ($1, $2, $3, 'MLA_SIN_TITULO', '', 'vincular', $4, 'auto_sku', 'motor', 'sombra')`,
+      [empresa, c.id, ml, destino.variante]);
+
+    const d = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(d.status).toBe(200);
+    expect(d.body.publicacion.titulo).toBeNull(); // el caso sigue sin título ML: eso no se inventa
+    expect(d.body.auto_sku_en_sombra).toMatchObject({ sku: 'FB-2654' });
+    expect(d.body.candidatos).toHaveLength(1);
+    expect(d.body.candidatos[0]).toMatchObject({
+      variant_id: destino.variante, sku: 'FB-2654', titulo: 'Casco Bell Rojo Talle M', precio: '45000.00', moneda: 'ARS',
+    });
+  });
+
+  it('el título de la publicación es el observado de ML (contenedor), nunca el de la variante woo_* vinculada', async () => {
+    const c = await caso('MLA8');
+    const woo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'woo_simple', 'W8', 'Título NUESTRO de Woo') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query('UPDATE catalog.sellable_variants SET model_id = $1 WHERE id = $2', [woo, c.variante]);
+    let d = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(d.body.publicacion.titulo).toBeNull(); // sin fuente ML: no se inventa con el título de Woo
+    await admin.query("UPDATE catalog.external_representations SET variacion_normalizada = '55' WHERE recurso = 'MLA8'"); // producción: la vendible lleva el id de variación; el contenedor ''
+    const cont = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo) VALUES ($1, $2, 'ml_clasico', 'C8', 'Título que muestra ML') RETURNING id`, [empresa, ml])).rows[0]!.id;
+    await admin.query(`INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, model_id)
+                       VALUES ($1, $2, 'mercadolibre', 'contenedor', 'MLA8', '', $3)`, [empresa, ml, cont]);
+    d = await get(`${PREFIJO_IDENTIDAD}/casos/${c.id}`);
+    expect(d.body.publicacion.titulo).toBe('Título que muestra ML');
+  });
+
+  it('POST sin Idempotency-Key: 422', async () => {
+    const c = await caso('MLA8');
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, { expected_version: 1, eleccion: 'omitir', actor }, { idem: null });
+    expect(r).toMatchObject({ status: 422, body: { code: 'idempotency_key_requerida' } });
+  });
+
+  it('POST con un campo de más (zod strict): 422', async () => {
+    const c = await caso('MLA8');
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, { expected_version: 1, eleccion: 'omitir', actor, extra: 1 });
+    expect(r.status).toBe(422);
+  });
+
+  it('POST con una versión vieja: 409 version_conflict con la versión actual y el correlation_id', async () => {
+    const c = await caso('MLA9');
+    const corr = randomUUID();
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, { expected_version: 99, eleccion: 'omitir', actor }, { corr });
+    expect(r).toMatchObject({ status: 409, body: { code: 'version_conflict', correlation_id: corr, details: { version_actual: 1 } } });
+  });
+
+  it('POST con el flag apagado: 503 bandeja_apagada', async () => {
+    const c = await caso('MLA10');
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, { expected_version: 1, eleccion: 'omitir', actor }, { bandeja: false });
+    expect(r).toMatchObject({ status: 503, body: { code: 'bandeja_apagada' } });
+  });
+
+  it('POST decide de verdad: omitir → 200, la versión sube y el reintento con la misma clave devuelve lo mismo', async () => {
+    const c = await caso('MLA11');
+    const idem = randomUUID();
+    const cuerpo = { expected_version: 1, eleccion: 'omitir', actor };
+    const a = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, cuerpo, { idem });
+    expect(a.status).toBe(200);
+    expect(a.body.version).toBe(2);
+    const b = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, cuerpo, { idem });
+    expect(b).toMatchObject({ status: 200, body: { decision_id: a.body.decision_id, version: 2 } });
+    const otro = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, { ...cuerpo, motivo: 'distinto' }, { idem });
+    expect(otro).toMatchObject({ status: 422, body: { code: 'idempotency_mismatch' } });
+  });
+
+  it('revertir sin ser admin lo de otro: 403 solo_admin', async () => {
+    const c = await caso('MLA12');
+    const a = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`, { expected_version: 1, eleccion: 'omitir', actor });
+    expect(a.status).toBe(200);
+    const r = await post(`${PREFIJO_IDENTIDAD}/casos/${c.id}/decisiones`,
+      { expected_version: 2, eleccion: 'sin_candidato', revierte: a.body.decision_id, actor: { usuario: 'maria', es_admin: false } });
+    expect(r).toMatchObject({ status: 403, body: { code: 'solo_admin' } });
+  });
+
+  it('buscar otra variante: SKU exacto primero, luego por título; sin archivadas; escapa los comodines', async () => {
+    await variante('Bicicleta Rodado 29', 'FB-100');
+    await variante('Casco FB-100 edición', 'FB-200');
+    await variante('Bicicleta archivada', 'FB-300', true);
+    await variante('Cubierta 100% goma', 'FB-400');
+    const exacto = await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-100`);
+    expect(exacto.body.variantes.map((v: any) => v.sku)).toEqual(['FB-100', 'FB-200']);
+    const porTitulo = await get(`${PREFIJO_IDENTIDAD}/variantes?q=bicicleta`);
+    expect(porTitulo.body.variantes.map((v: any) => v.sku)).toEqual(['FB-100']);
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=%25`)).body.variantes.map((v: any) => v.sku)).toEqual(['FB-400']);
+    // E: el SKU exacto se normaliza (upper/trim), como en el plan.
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=%20fb-100%20`)).body.variantes[0].sku).toBe('FB-100');
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes`)).status).toBe(422);
+  });
+
+  it('buscar otra variante con caso_id agrega la explicación contra la publicación ML del caso', async () => {
+    const c = await caso('MLA_BUSQUEDA_EXPLICADA');
+    const cand = await variante('Casco Bell Negro', 'FB-7777');
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, 'marca', 'negro', now() FROM catalog.external_representations r WHERE r.recurso = 'MLA_BUSQUEDA_EXPLICADA'`, [c.modelo],
+    );
+    await admin.query(
+      `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, estado_remoto)
+       VALUES ($1, $2, 'woocommerce', 'vendible', 'WOO_BUSQ_EXPLICADA', '', $3, 'publish')`, [empresa, ml, cand.variante]);
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, 'marca', 'rojo', now() FROM catalog.external_representations r WHERE r.recurso = 'WOO_BUSQ_EXPLICADA'`, [cand.modelo]);
+
+    const conCaso = await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-7777&caso_id=${c.id}`);
+    expect(conCaso.status).toBe(200);
+    expect(conCaso.body.variantes[0]).toMatchObject({ sku: 'FB-7777', explicacion: {
+      atributos: [],
+      otros_atributos: [{ nombre: 'marca', marca: 'difiere', valorMl: 'negro', valorCandidato: 'rojo' }],
+    } });
+
+    const sinCaso = await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-7777`);
+    expect(sinCaso.body.variantes[0]).not.toHaveProperty('explicacion');
+  });
+
+  it('buscar otra variante rechaza caso_id inválido con el único contrato de validación 422', async () => {
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-100&caso_id=no-es-uuid`)).status).toBe(422);
+  });
+
+  it('buscar otra variante obtiene los atributos de todos los candidatos con una consulta real agrupada', async () => {
+    const c = await caso('MLA_CONTEO_CONSULTAS');
+    const candidatos = [
+      await variante('Casco Bell Negro', 'FB-8101'),
+      await variante('Casco Bell Negro', 'FB-8102'),
+      await variante('Casco Bell Negro', 'FB-8103'),
+    ];
+    await admin.query(
+      `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+       SELECT $1, r.id, 'marca', 'negro', now() FROM catalog.external_representations r WHERE r.recurso = 'MLA_CONTEO_CONSULTAS'`, [c.modelo],
+    );
+    for (const [i, candidato] of candidatos.entries()) {
+      const recurso = `WOO_CONTEO_CONSULTAS_${i}`;
+      await admin.query(
+        `INSERT INTO catalog.external_representations (company_id, channel_account_id, canal, tipo, recurso, variacion_normalizada, variant_id, estado_remoto)
+         VALUES ($1, $2, 'woocommerce', 'vendible', $3, '', $4, 'publish')`, [empresa, ml, recurso, candidato.variante],
+      );
+      await admin.query(
+        `INSERT INTO catalog.model_attributes (model_id, representation_id, nombre_normalizado, valor, observado_en)
+         SELECT $1, r.id, 'marca', 'rojo', now() FROM catalog.external_representations r WHERE r.recurso = $2`, [candidato.modelo, recurso],
+      );
+    }
+
+    const consultas = vi.spyOn(pool, 'query');
+    consultas.mockClear();
+    const resultado = await get(`${PREFIJO_IDENTIDAD}/variantes?q=Casco&caso_id=${c.id}`);
+    const consultasDeAtributos = consultas.mock.calls.filter(([sql]) => typeof sql === 'string' && sql.includes('catalog.model_attributes'));
+    consultas.mockRestore();
+
+    expect(resultado.status).toBe(200);
+    expect(resultado.body.variantes).toHaveLength(3);
+    // Una consulta carga los atributos de la publicación ML y una segunda agrupa los tres modelos Woo.
+    expect(consultasDeAtributos).toHaveLength(2);
+    expect(consultasDeAtributos.some(([sql]) => String(sql).includes('model_id = ANY($1::uuid[])'))).toBe(true);
+  });
+
+  it('buscar otra variante rechaza con 404 un caso de otra empresa', async () => {
+    const otra = (await admin.query<{ id: string }>("INSERT INTO core.companies(legal_name) VALUES ('Otra') RETURNING id")).rows[0]!.id;
+    const modelo = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.product_models (company_id, channel_account_id, origen, clave_origen, titulo)
+       VALUES ($1, $2, 'woo_simple', $3, 'Otra') RETURNING id`, [otra, ml, randomUUID()])).rows[0]!.id;
+    const v = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.sellable_variants (company_id, model_id, sku) VALUES ($1, $2, 'FB-9001') RETURNING id`, [otra, modelo])).rows[0]!.id;
+    const ajeno = (await admin.query<{ id: string }>(
+      `INSERT INTO catalog.identity_cases (company_id, tipo, variant_id) VALUES ($1, 'sku_pendiente', $2) RETURNING id`, [otra, v])).rows[0]!.id;
+    expect((await get(`${PREFIJO_IDENTIDAD}/variantes?q=FB-100&caso_id=${ajeno}`)).status).toBe(404);
+  });
+
+  it('apartados: van a su propio grupo 7, se cuentan en contadores.apartados y no aparecen filtrando por otro grupo', async () => {
+    const normal = await caso('MLA30', { abierto: '2026-01-01T00:00:00Z' });
+    const conflicto = await caso('MLA31', { estado: 'conflict', abierto: '2026-01-02T00:00:00Z' });
+    // Aparta el de conflicto: aunque su estado sea 'conflict', apartado_en manda y va al grupo 7, no al 0.
+    await admin.query('UPDATE catalog.identity_cases SET apartado_en = now(), apartado_por = $2 WHERE id = $1', [conflicto.id, 'jose']);
+
+    const todo = await get(`${PREFIJO_IDENTIDAD}/casos`);
+    expect(todo.body.casos.map((c: any) => c.id)).toEqual([normal.id, conflicto.id]);
+    expect(todo.body.casos.map((c: any) => c.grupo)).toEqual([4, 7]);
+    expect(todo.body.casos.map((c: any) => c.apartado)).toEqual([false, true]);
+    expect(todo.body.contadores.apartados).toBe(1);
+
+    const soloApartados = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=7`);
+    expect(soloApartados.body.casos.map((c: any) => c.id)).toEqual([conflicto.id]);
+    const sinApartados = await get(`${PREFIJO_IDENTIDAD}/casos?grupo=4`);
+    expect(sinApartados.body.casos.map((c: any) => c.id)).toEqual([normal.id]);
+  });
+
+  describe('POST/DELETE .../apartar', () => {
+    const ruta = (id: string) => `${PREFIJO_IDENTIDAD}/casos/${id}/apartar`;
+
+    it('apartar y desapartar por HTTP: 200, y el caso deja/vuelve a la cola normal', async () => {
+      const c = await caso('MLA40');
+      const r1 = await post(ruta(c.id), { expected_version: 1, actor });
+      expect(r1.status).toBe(200);
+      expect(r1.body.version).toBe(2);
+      expect((await get(`${PREFIJO_IDENTIDAD}/casos?grupo=7`)).body.casos.map((x: any) => x.id)).toEqual([c.id]);
+
+      const r2 = await del(ruta(c.id), { expected_version: 2, actor });
+      expect(r2.status).toBe(200);
+      expect(r2.body.version).toBe(3);
+      expect((await get(`${PREFIJO_IDENTIDAD}/casos?grupo=7`)).body.casos).toEqual([]);
+    });
+
+    it('sin firma: 401; sin Idempotency-Key: 422', async () => {
+      const c = await caso('MLA41');
+      const sinFirma = await (async () => {
+        const texto = JSON.stringify({ expected_version: 1, actor });
+        const r = await api().inject({ method: 'POST', url: ruta(c.id), payload: texto, headers: { 'content-type': 'application/json', 'idempotency-key': randomUUID() }, remoteAddress: '127.0.0.1' });
+        return r.statusCode;
+      })();
+      expect(sinFirma).toBe(401);
+      expect((await post(ruta(c.id), { expected_version: 1, actor }, { idem: null })).status).toBe(422);
+    });
+
+    it('version_conflict (409) con expected_version vieja', async () => {
+      const c = await caso('MLA42');
+      expect((await post(ruta(c.id), { expected_version: 99, actor })).status).toBe(409);
+    });
+
+    it('caso_inexistente (404) para un id ajeno o de otra empresa', async () => {
+      expect((await post(ruta(randomUUID()), { expected_version: 1, actor })).status).toBe(404);
+    });
+
+    it('no_apartado (409) al desapartar uno que no está apartado', async () => {
+      const c = await caso('MLA43');
+      expect((await del(ruta(c.id), { expected_version: 1, actor })).status).toBe(409);
+    });
+
+    it('reintento con la misma Idempotency-Key: mismo resultado, no sube versión dos veces', async () => {
+      const c = await caso('MLA44');
+      const clave = randomUUID();
+      const a = await post(ruta(c.id), { expected_version: 1, actor }, { idem: clave });
+      const b = await post(ruta(c.id), { expected_version: 1, actor }, { idem: clave });
+      expect(b.body).toEqual(a.body);
+    });
+
+    it('la misma clave usada para apartar OTRO caso no devuelve un resultado ajeno', async () => {
+      const c1 = await caso('MLA45'); const c2 = await caso('MLA46');
+      const clave = randomUUID();
+      const r1 = await post(ruta(c1.id), { expected_version: 1, actor }, { idem: clave });
+      const r2 = await post(ruta(c2.id), { expected_version: 1, actor }, { idem: clave });
+      expect(r1.status).toBe(200); expect(r2.status).toBe(200);
+      expect(r2.body.version).toBe(2); // no repitió el resultado de c1: subió su propia versión
+    });
+  });
+});

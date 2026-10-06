@@ -1,29 +1,79 @@
 import axios from 'axios';
 import express from 'express';
 import multer from 'multer';
+import path from 'path';
 import { guardarArchivo } from '../utils/storage.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent';
+const urlModelo = (m) => `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
+// 2026-09-24: gemini-3.1-flash-lite quedó devolviendo 503 sostenido (medido: 3 cargas de stock seguidas
+// fallidas) mientras gemini-2.5-flash-lite respondía 200 con la misma clave. Si el principal agota sus
+// reintentos por un error transitorio, se prueba el de respaldo antes de rendirse.
+const MODELOS_GEMINI = ['gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
+
+// BUG5 (piloto Pedalar #205): dos 503 seguidos de Gemini tiraban abajo la extracción entera sin
+// reintento. Solo se reintentan errores transitorios (5xx/429 y errores de red sin response, p.
+// ej. ECONNRESET) — nunca un 4xx de payload (400/401/403), que es un error real del request.
+const ESTADOS_REINTENTABLES = new Set([429, 500, 502, 503, 504]);
+const REINTENTOS_GEMINI = [1000, 3000]; // delays entre intentos: 3 intentos por modelo
+
+function esperar(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 export async function llamarGemini(key, payload) {
+  let ultimo;
+  for (const modelo of MODELOS_GEMINI) {
+    try { return await llamarModelo(modelo, key, payload); }
+    catch (err) {
+      ultimo = err;
+      if (!err.transitorio) throw err; // 4xx o safety filter: otro modelo no lo arregla
+    }
+  }
+  throw ultimo;
+}
+
+async function llamarModelo(modelo, key, payload) {
   const body = {
     ...payload,
     generationConfig: { ...payload.generationConfig, responseMimeType: 'application/json' }
   };
-  const resp = await axios.post(`${GEMINI_URL}?key=${key}`, body, {
-    headers: { 'Content-Type': 'application/json' },
-    validateStatus: () => true
-  });
-  if (resp.status !== 200) {
-    throw new Error(`Gemini API error ${resp.status}`);
+  let ultimoError;
+  for (let intento = 0; intento <= REINTENTOS_GEMINI.length; intento++) {
+    try {
+      const resp = await axios.post(`${urlModelo(modelo)}?key=${key}`, body, {
+        headers: { 'Content-Type': 'application/json' },
+        validateStatus: () => true
+      });
+      if (resp.status !== 200) {
+        if (ESTADOS_REINTENTABLES.has(resp.status) && intento < REINTENTOS_GEMINI.length) {
+          ultimoError = new Error(`Gemini API error ${resp.status}`);
+          await esperar(REINTENTOS_GEMINI[intento]);
+          continue;
+        }
+        // Al agotar los reintentos de un error transitorio, el mensaje le dice al operador qué hacer. Conserva el
+        // prefijo "Gemini API error <status>" porque el catch de abajo lo usa para no reintentar de nuevo.
+        if (ESTADOS_REINTENTABLES.has(resp.status)) {
+          throw Object.assign(new Error(`Gemini API error ${resp.status}: el servicio de Google está saturado. Probá de nuevo en un minuto; no se grabó nada.`), { transitorio: true });
+        }
+        throw new Error(`Gemini API error ${resp.status}`);
+      }
+      const candidate = resp.data?.candidates?.[0];
+      if (!candidate) {
+        throw new Error('Gemini no devolvió candidatos — posible bloqueo por safety filter');
+      }
+      return candidate.content.parts[0].text;
+    } catch (err) {
+      const esErrorDeRed = !err.message?.startsWith('Gemini API error') && err.message !== 'Gemini no devolvió candidatos — posible bloqueo por safety filter';
+      if (esErrorDeRed && intento < REINTENTOS_GEMINI.length) {
+        ultimoError = err;
+        await esperar(REINTENTOS_GEMINI[intento]);
+        continue;
+      }
+      if (esErrorDeRed) err.transitorio = true;
+      throw err;
+    }
   }
-  const candidate = resp.data?.candidates?.[0];
-  if (!candidate) {
-    throw new Error('Gemini no devolvió candidatos — posible bloqueo por safety filter');
-  }
-  return candidate.content.parts[0].text;
+  throw ultimoError;
 }
 
 export function parseJsonArrayText(text) {
@@ -36,6 +86,7 @@ export function parseJsonArrayText(text) {
 
 // Retorna el objeto completo incluyendo campos extra (proveedor, numero_pedido, etc.)
 const TIPOS_DOC_VALIDOS = new Set(['factura', 'remito', 'orden_compra', 'otro']);
+const EXTENSIONES_TEXTO = new Set(['.csv', '.xml', '.txt']);
 
 function parseJsonFull(text) {
   const cleaned = text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
@@ -69,12 +120,17 @@ export function geminiRouter(geminiKey) {
     try {
       const { prompt, importador, numero_pedido: numPed } = req.body;
       const mimeType = req.file.mimetype;
-      const base64 = req.file.buffer.toString('base64');
-      const text = await llamarGemini(geminiKey, {
-        contents: [{ parts: [
+      const extension = path.extname(req.file.originalname).toLowerCase();
+      const esTexto = EXTENSIONES_TEXTO.has(extension);
+      const contenido = esTexto ? req.file.buffer.toString('utf8') : null;
+      const parts = contenido !== null
+        ? [{ text: `${prompt}\n\nContenido del archivo:\n${contenido}` }]
+        : [
           { text: prompt },
-          { inline_data: { mime_type: mimeType, data: base64 } }
-        ] }]
+          { inline_data: { mime_type: mimeType, data: req.file.buffer.toString('base64') } }
+        ];
+      const text = await llamarGemini(geminiKey, {
+        contents: [{ parts }]
       });
       const { items, proveedor, numero_pedido, tipo_documento } = parseJsonFull(text);
 

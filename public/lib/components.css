@@ -1,0 +1,131 @@
+/*
+ * Capa de componentes compartida de Herramientas.
+ *
+ * Por qué existe: cada pantalla venía redefiniendo los mismos componentes en su propio
+ * <style>. Medido el 2026-09-05 sobre 27 pantallas: `.btn` estaba redefinido en 13,
+ * `.card` en 11, `.modal` en 6, `.tag` en 4. Arreglar foco, contraste o blanco de toque
+ * significaba hacerlo trece veces — o, más realista, hacerlo en una y que las otras doce
+ * quedaran distintas.
+ *
+ * Es la idea de shadcn/ui sin React ni build: componentes propios, construidos sobre los
+ * tokens que ya existen en theme.css, que cada pantalla importa en vez de reinventar.
+ *
+ * Uso:  <link rel="stylesheet" href="../lib/theme.css">
+ *       <link rel="stylesheet" href="../lib/components.css">
+ *
+ * Reglas de la capa:
+ *  - Sólo tokens de theme.css. Ningún color literal.
+ *  - `--accent` es EXCLUSIVAMENTE interactivo: botones, enlaces, foco, pestaña activa.
+ *    Nunca decora una etiqueta. Si algo es cian, se toca.
+ *  - Blanco de toque mínimo 44px (--tap-min), 56px en acciones de ancho completo.
+ *  - Una pantalla puede extender una clase, no redefinirla.
+ */
+
+/* ── Escala tipográfica ──────────────────────────────────────────────────────
+   Cinco escalones reales. La escala vieja (1.08 / .88 / .8rem) comprimía todo en
+   0.28rem de rango: nada se leía como más importante que otra cosa. */
+:root {
+  --fs-titulo: 1.25rem;   /* título de la entidad que se está trabajando */
+  --fs-dato:   0.95rem;   /* dato que decide: SKU, GTIN, identificador */
+  --fs-cuerpo: 0.875rem;  /* dato de apoyo */
+  --fs-meta:   0.8rem;    /* metadatos, telemetría, detalle colapsado */
+  --fs-label:  0.75rem;   /* etiqueta de campo */
+}
+
+/* ── Botones ────────────────────────────────────────────────────────────────
+   Tres pesos y ninguna ambigüedad: en una pantalla hay UNA acción primaria.
+   La primaria usa fondo tenue + borde + texto de acento en vez de fondo sólido:
+   texto claro sobre #2DB8E8 sólido da ~1.9:1 y no pasa AA. Así se logra el peso
+   visual sin inventar un token de texto-sobre-acento. */
+.ui-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  min-height: var(--tap-min, 44px); padding: .52rem .8rem;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface2); color: var(--txt);
+  font: inherit; font-size: var(--fs-cuerpo); text-decoration: none; cursor: pointer;
+}
+.ui-btn:hover { border-color: var(--border2); }
+.ui-btn:disabled { cursor: not-allowed; opacity: .55; }
+.ui-btn--primario {
+  font-size: var(--fs-dato); font-weight: 600; padding: .62rem 1.1rem;
+  border-color: var(--accent); background: var(--accent-dim); color: var(--accent);
+}
+.ui-btn--peligro { border-color: var(--red-bd); background: transparent; color: var(--red); }
+.ui-btn--ancho { width: 100%; min-height: var(--tap-comfort, 56px); }
+
+/* ── Superficies ───────────────────────────────────────────────────────────── */
+.ui-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.ui-panel { padding: .85rem; border: 1px solid var(--border); border-radius: 9px; background: var(--surface2); }
+.ui-panel > h3 { margin: .1rem 0 .6rem; font-size: var(--fs-cuerpo); }
+
+/* ── Chips de estado ────────────────────────────────────────────────────────
+   El color dice el estado, no el gusto: ámbar espera acción, verde ya se resolvió,
+   rojo frena, gris es neutro. */
+.ui-chip {
+  display: inline-block; padding: .12rem .45rem; border-radius: 99px;
+  font-size: var(--fs-label); border: 1px solid var(--border);
+  background: var(--surface2); color: var(--muted);
+}
+.ui-chip--urgente { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-bd); }
+.ui-chip--critico { background: var(--red-bg); color: var(--red); border-color: var(--red-bd); }
+.ui-chip--ok { background: var(--green-bg); color: var(--green); border-color: var(--green-bd); }
+
+/* ── Dato decisivo ─────────────────────────────────────────────────────────
+   Un identificador es código, no prosa: monoespaciado y con fondo propio para que
+   el ojo lo encuentre sin leer la etiqueta. */
+.ui-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-dato); font-weight: 700;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; padding: .05rem .35rem;
+}
+
+/* ── Etiquetas de campo ─────────────────────────────────────────────────────
+   Deliberadamente apagadas: son el nombre del dato, no el dato. Antes iban en acento
+   y competían con lo que sí se puede tocar. */
+.ui-label { font-size: var(--fs-label); font-weight: 500; color: var(--muted); }
+
+/* ── Telemetría ────────────────────────────────────────────────────────────
+   Números de contexto en una línea, no en tarjetas: no compiten con la tarea. */
+.ui-resumen { font-size: var(--fs-meta); color: var(--muted); line-height: 1.6; }
+
+/* ── Divulgación progresiva ─────────────────────────────────────────────────
+   Lo que decide en el 90% de los casos queda visible; el resto, a un clic. */
+.ui-mas { margin-top: .6rem; border-top: 1px solid var(--border); padding-top: .5rem; }
+.ui-mas > summary {
+  cursor: pointer; font-size: var(--fs-meta); color: var(--accent);
+  min-height: var(--tap-min, 44px); display: flex; align-items: center;
+}
+.ui-mas[open] > summary { margin-bottom: .4rem; }
+
+/* ── Tiras de navegación ───────────────────────────────────────────────────
+   Con scroll horizontal: una pestaña cortada a la mitad es peor que una que se
+   desplaza. */
+.ui-tabs { display: flex; gap: .45rem; overflow-x: auto; padding-bottom: .6rem; -webkit-overflow-scrolling: touch; }
+.ui-tabs > .ui-btn { white-space: nowrap; background: transparent; }
+.ui-tabs > .ui-btn[aria-selected="true"] { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+
+/* ── Tablas ────────────────────────────────────────────────────────────────
+   Siempre dentro de .ui-tablewrap: una tabla nunca hace scrollear la página entera. */
+.ui-tablewrap { overflow-x: auto; }
+.ui-table { width: 100%; border-collapse: collapse; font-size: var(--fs-cuerpo); }
+.ui-table th, .ui-table td { padding: .6rem; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+
+/* ── Avisos ────────────────────────────────────────────────────────────────── */
+.ui-aviso { padding: .7rem .85rem; border-radius: 9px; font-size: var(--fs-cuerpo); line-height: 1.55; }
+.ui-aviso--info { background: var(--blue-bg); border: 1px solid var(--blue-bd); }
+.ui-aviso--atencion { background: var(--amber-bg); border: 1px solid var(--amber-bd); }
+.ui-aviso--critico { background: var(--red-bg); border: 1px solid var(--red-bd); }
+.ui-aviso--ok { background: var(--green-bg); border: 1px solid var(--green-bd); color: var(--green); }
+
+/* ── Campos ────────────────────────────────────────────────────────────────── */
+.ui-input {
+  width: 100%; padding: .6rem; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--txt); font: inherit; font-size: var(--fs-cuerpo);
+  min-height: var(--tap-min, 44px);
+}
+
+/* El foco se ve siempre y en todo: es lo primero que se pierde al maquetar rápido. */
+.ui-btn:focus-visible, .ui-input:focus-visible, .ui-mas > summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}

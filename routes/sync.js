@@ -8,6 +8,7 @@
  */
 
 import { Router } from 'express';
+import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
@@ -15,11 +16,16 @@ import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
 import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { norm, tsr } from '../lib/matcherEngine.js';
-import { partirClaveMl, extraerErrorMl } from '../lib/mlUtil.js';
+import { partirClaveMl, extraerErrorMl, tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
+import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
+import { espera } from '../lib/esperas.js';
+import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
+import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
+import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -162,6 +168,24 @@ export function logSync(db, { direccion, clave, sku, cantAnterior, cantNueva, es
   `).run(direccion, clave ?? null, sku ?? null, cantAnterior ?? null, cantNueva ?? null, estado, error ?? null, intentos, now(), now());
 }
 
+/**
+ * ¿Este SKU resuelve a exactamente un producto del catálogo WC?
+ *
+ * Deliberadamente NO usa `buscarEnCache`, que ante un SKU repetido elige el de menor stock:
+ * ese desempate sirve para elegir entre variaciones ya vinculadas, no para aceptar como
+ * identidad un SKU que nadie verificó. Acá la ambigüedad tiene que decir "no".
+ */
+// Ventas pagas retenidas por Guardia ML, para el chip de "Requiere tu atención" del inicio
+// (plan 2026-09-13-guardia-ventas-retenidas.md). Fail-open: sin tabla (bases de test mínimas) → 0.
+function contarVentasRetenidasGuardia(db) {
+  try {
+    return db.prepare("SELECT COUNT(*) AS n FROM guardia_ml_pedidos_retenidos WHERE estado = 'retenido'").get().n;
+  } catch (e) {
+    if (!/no such table/i.test(e.message)) console.error('dashboard: no se pudo contar ventas retenidas de Guardia ML:', e.message);
+    return 0;
+  }
+}
+
 function mlCfgOk(cfg) {
   return cfg?.ml?.clientId && cfg?.ml?.clientSecret && cfg?.ml?.userId;
 }
@@ -186,11 +210,25 @@ function upsertMlStockEstado(db, clave, sku, cantidad) {
  * límite de fotos por categoría) y puede rechazar el update con HTTP 400 aunque
  * el stock en sí sea válido. El endpoint puntual solo toca esa variación.
  */
-function buildMlStockUpdate(itemId, variationId, cantidad) {
+export function buildMlStockUpdate(itemId, variationId, cantidad) {
   if (variationId) {
     return { path: `/items/${itemId}/variations/${variationId}`, body: { available_quantity: cantidad } };
   }
   return { path: `/items/${itemId}`, body: { available_quantity: cantidad } };
+}
+
+/** Puerta única antes de cualquier PUT de available_quantity hacia ML. */
+export function bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior = null, cache = null } = {}) {
+  if (Number(cantidad) <= 0) return { bloqueado: false };
+  let contradiccion = cache?.get(clave);
+  if (contradiccion === undefined) {
+    contradiccion = contradiccionDeClave(db, clave, sku);
+    cache?.set(clave, contradiccion);
+  }
+  if (!contradiccion.contradice) return { bloqueado: false, contradiccion };
+  logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior, cantNueva: cantidad,
+    estado: 'bloqueado_contradiccion', error: JSON.stringify(contradiccion.motivos) });
+  return { bloqueado: true, contradiccion, cantidad };
 }
 
 // CTE compartido que calcula el stock disponible para ML por publicación mapeada
@@ -226,8 +264,9 @@ const COMPUTED_STOCK_CTE = `
     FROM sku_matcher_decisiones d
     JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
     LEFT JOIN ml_stock_estado e ON e.clave = d.clave
-    LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
-    WHERE d.accion IN ('asignar','confirmar')
+      LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
+      LEFT JOIN guardia_ml_casos gm ON gm.clave = d.clave AND gm.estado != 'resuelto' AND gm.bloquea_sync = 1
+      WHERE d.accion IN ('asignar','confirmar') AND gm.id IS NULL
       AND d.sku IS NOT NULL AND d.sku <> ''
   )`;
 
@@ -297,12 +336,98 @@ async function _syncMlToWc(db, cfg) {
     }
   }
 
-  // Avanzar cursor
+  // Avanzar cursor. El WHERE del ON CONFLICT lo hace monótono en SQL (hallazgo del revisor,
+  // A.3): este barrido puede tardar minutos (paginado + Woo + shipments) leyendo `desde` al
+  // empezar; si mientras tanto syncOrdenMlPuntual ya avanzó el cursor a una orden más nueva
+  // (llegó por webhook durante la corrida), este UPDATE incondicional lo haría retroceder.
+  // Comparando contra el valor ACTUAL en la tabla (no contra `desde`, que es una copia vieja)
+  // nunca se pisa un valor más nuevo ya guardado por el otro camino.
   if (ultimaFecha > desde) {
     db.prepare(`
       INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
       ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+        WHERE excluded.valor > sync_estado.valor
     `).run(ultimaFecha, now());
+  }
+}
+
+/**
+ * A.3 — Procesa UNA orden ML puntual (por el `resource` de un webhook), sin el barrido
+ * paginado de `/orders/search`. `_procesarOrden` es agnóstico al origen del objeto orden
+ * (mismo shape venga de `/orders/search` o de un GET puntual a `/orders/{id}`), así que no
+ * hace falta tocar su firma ni su idempotencia.
+ *
+ * El barrido paginado completo (`syncMlToWc`, cron cada 10 min) queda como respaldo sin
+ * tocar: si este camino puntual falla o no llega, la orden igual se procesa en la corrida
+ * siguiente del cron. No toma el candado `_mlToWcEnCurso` — no compite por él a propósito:
+ * la idempotencia real está en `ordenes_ml_procesadas` (chequeada acá) y, sobre todo, en el
+ * `INSERT` de reserva contra la PK `ml_order_id` que hace `_procesarOrden` antes de escribir
+ * a Woo (más abajo en este archivo, no el `SELECT` de pre-chequeo que hay antes — ese es solo
+ * una optimización barata, no la garantía real). Ese `INSERT` es lo que de verdad impide que
+ * una corrida puntual y el barrido paginado dupliquen un pedido si coinciden en el tiempo
+ * (mismo criterio que `syncPedidoMlPuntual`/`syncPedidoWebPuntual` de A.1, que tampoco toman
+ * ningún candado).
+ *
+ * Fail-open: nunca tira, solo loguea — un error acá no debe tirar abajo el handler del
+ * webhook (que ya respondió 200 antes de llamar a esto).
+ */
+export async function syncOrdenMlPuntual(db, cfg, mlOrderId) {
+  const { ml: mlCfg, woo: wooCfg } = cfg;
+  if (!mlCfgOk(cfg)) return { omitido: true };
+  if (!mlOrderId) return { omitido: true, motivo: 'sin_order_id' };
+
+  const yaProc = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(mlOrderId));
+  if (yaProc) return { omitido: true, motivo: 'ya_procesada' };
+
+  try {
+    const resp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
+    if (resp.status !== 200) {
+      console.error(`syncOrdenMlPuntual: error API ML ${resp.status} para orden ${mlOrderId} — la retoma el cron`);
+      return { omitido: true, motivo: `http_${resp.status}` };
+    }
+    const orden = resp.data;
+    // Mismo filtro que el barrido paginado (`order.status=paid` en el query string de
+    // _syncMlToWc, línea ~271) y que el camino puntual hermano de A.1
+    // (syncPedidoMlPuntual, routes/preparacion.js:2229). El barrido lo aplicaba en el query
+    // string, así que nunca hacía falta chequearlo en _procesarOrden — al reemplazarlo por un
+    // GET puntual (que trae la orden sea cual sea su estado) hay que chequearlo acá. Sin
+    // esto, una orden en payment_required/payment_in_process (pago con ticket/transferencia
+    // pendiente de acreditar) crearía el pedido en Woo y descontaría stock de una venta que
+    // puede no concretarse nunca — y quedaría sellada en ordenes_ml_procesadas, así que el
+    // cron tampoco la reprocesaría cuando sí pase a 'paid'.
+    if (orden.status !== 'paid') {
+      return { omitido: true, motivo: `status_${orden.status}` };
+    }
+    await _procesarOrden(db, wooCfg, mlCfg, orden);
+    // Avanzar el cursor del barrido paginado (mismo campo que actualiza _syncMlToWc, línea
+    // ~301): sin esto, con el camino puntual sellando la mayoría de las órdenes recientes en
+    // ordenes_ml_procesadas antes de que corra el cron, `_syncMlToWc` nunca encuentra una
+    // orden "nueva" que hacer avanzar el cursor (su `continue` por yaProc corta ANTES de
+    // tocar ultimaFecha) — el barrido de respaldo terminaría re-paginando una ventana cada
+    // vez más vieja en cada corrida, sin límite.
+    //
+    // Solo si la orden quedó SELLADA en ordenes_ml_procesadas (hallazgo del revisor):
+    // _procesarOrden puede retornar sin sellar (reserva retenida fail-closed, o liberada para
+    // reintento — ver sus comentarios más abajo) cuando algo falló a mitad de camino. Avanzar
+    // el cursor igual sacaría esa orden de la ventana del barrido de respaldo apenas llegue
+    // una más nueva, perdiéndola en silencio en vez de dejar que el cron la reintente.
+    const sellada = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(mlOrderId));
+    if (sellada && orden.date_created) {
+      const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get();
+      if (!cursorRow || orden.date_created > cursorRow.valor) {
+        // El WHERE hace el avance monótono también en SQL (mismo criterio que _syncMlToWc):
+        // red de seguridad ante otra carrera con el barrido, no solo el chequeo de JS de arriba.
+        db.prepare(`
+          INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
+          ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+            WHERE excluded.valor > sync_estado.valor
+        `).run(orden.date_created, now());
+      }
+    }
+    return { omitido: false };
+  } catch (e) {
+    console.error(`syncOrdenMlPuntual: excepción procesando orden ${mlOrderId} — la retoma el cron:`, e.message);
+    return { omitido: true, motivo: 'excepcion' };
   }
 }
 
@@ -380,7 +505,7 @@ async function buscarPedidoWcPorMlOrderId(wooCfg, orderId, desdeIso) {
   let ultimoError;
 
   for (let intento = 0; intento <= VERIF_WC_BACKOFF_MS.length; intento++) {
-    if (intento > 0) await sleep(VERIF_WC_BACKOFF_MS[intento - 1]);
+    if (intento > 0) await sleep(espera(VERIF_WC_BACKOFF_MS[intento - 1]));
     try {
       for (let page = 1; page <= VERIF_WC_MAX_PAGINAS; page++) {
         const resp = await wooFetch(
@@ -426,6 +551,9 @@ function requiereVerificacionWc(e) {
 async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const orderId = String(orden.id);
   const items = orden.order_items ?? [];
+  // La Guardia ya conserva esta venta; esperar una liberación humana evita
+  // reintentos, reservas o efectos laterales en Woo en cada ciclo.
+  if (pedidoMlRetenido(db, orderId)) return;
   let algunSinMapeo = false;
 
   // Reservas abandonadas (proceso murió entre reservar y confirmar/liberar, ej: kill -9)
@@ -491,7 +619,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   let metodoEnvio = null;
   if (orden.shipping?.id) {
     try {
-      const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${orden.shipping.id}`);
+      const shipResp = await mlFetch(db, mlCfg, 'get', `/shipments/${orden.shipping.id}`, null, { headers: { 'x-format-new': 'true' } });
       // mlFetch usa validateStatus: () => true (nunca lanza por HTTP status) — un
       // 403/404/500 de ML llega acá como respuesta normal, no como excepción. Hay que
       // chequear el status a mano (mismo patrón que routes/preparacion.js) o un error de
@@ -500,7 +628,12 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
         throw new Error(`ML respondió ${shipResp.status} al consultar /shipments/${orden.shipping.id}`);
       }
       const ship = shipResp.data;
-      const addr = ship?.receiver_address;
+      // En formato nuevo ML separa el nombre del receptor y la dirección dentro de
+      // destination. Solo el formato viejo usa receiver_address en la raíz.
+      const direccionNueva = ship?.destination?.shipping_address;
+      const addr = direccionNueva
+        ? { ...direccionNueva, receiver_name: direccionNueva.receiver_name || ship.destination.receiver_name }
+        : (!ship?.destination ? ship?.receiver_address : null);
       // Solo se arma `shipping` si hay al menos un dato real (nombre o calle) — si no, un
       // objeto shipping vacío deja al pedido con una dirección "declarada" pero en blanco,
       // y la preparación/etiqueta muestra un destinatario vacío en vez de dejar clara la
@@ -526,7 +659,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
           country: 'AR',
         };
       }
-      metodoEnvio = ship?.logistic_type || ship?.shipping_option?.name || null;
+      metodoEnvio = ship?.lead_time?.shipping_method?.name
+        || ship?.lead_time?.shipping_method?.type
+        || tipoLogisticaMl(ship)
+        || ship?.shipping_option?.name || null;
     } catch (eShip) {
       // No aborta, no libera ni retiene la reserva: es solo un aviso para detectar el caso.
       logSync(db, {
@@ -560,7 +696,41 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   }
 
   const ov = normalizarOrdenMl(orden);
+  const clavesSinCobertura = [];
+  const clavesBloqueadas = [];
+  for (const item of ov.items) {
+    const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
+    const cubiertaPorVinculo = !!skuVinculado && !!buscarEnCache(db, skuVinculado) && esClaveCubierta(db, item.clave);
+    // Decisión del usuario (2026-09-05). Esta guarda y el fallback anti-sobreventa de más
+    // abajo (~línea 700) venían del commit base conflictivo y se contradecían: la guarda
+    // retenía la orden entera antes de que el fallback pudiera usar el `seller_sku` que trae
+    // la propia venta, dejándolo inalcanzable. El fallback se había escrito con datos
+    // medidos —83 ventas sin mapear en 60 días, 54 con un SKU que SÍ existía en el catálogo—
+    // así que anularlo reabría esa fábrica de sobreventas; pero aceptar cualquier seller_sku
+    // podía descontar el producto equivocado.
+    //
+    // Reconciliación: el `seller_sku` de la venta cuenta como cobertura SOLO si resuelve a
+    // EXACTAMENTE un producto del catálogo WC. Con cero coincidencias no sabemos qué
+    // descontar; con dos o más, `buscarEnCache` desempata por menor stock —bien para elegir
+    // entre hermanas ya vinculadas, pero no para decidir una identidad que nadie verificó.
+    // En ambos casos se retiene, que es lo que ya hacía.
+    const cubiertaPorSellerSku = !cubiertaPorVinculo && skuUnicoEnCatalogo(db, item.seller_sku);
+    if (!cubiertaPorVinculo && !cubiertaPorSellerSku) clavesSinCobertura.push(item.clave);
+    // GUARDIA: verificar también si la clave está bloqueada (seller_sku divergente o sin
+    // resolver). Esto NO lo levanta la cobertura por seller_sku: una clave que Guardia marcó
+    // como divergente se retiene igual, porque ahí el seller_sku es justamente el dato en duda.
+    if (claveBloqueadaGuardia(db, item.clave)) clavesBloqueadas.push(item.clave);
+  }
+  if (clavesSinCobertura.length || clavesBloqueadas.length) {
+    retenerPedidoMl(db, { orderId, items, claves: [...new Set([...clavesSinCobertura, ...clavesBloqueadas])] });
+    const motivos = [];
+    if (clavesSinCobertura.length) motivos.push(`sin vínculo exacto (${clavesSinCobertura.join(', ')})`);
+    if (clavesBloqueadas.length) motivos.push(`bloqueada por Guardia (${clavesBloqueadas.join(', ')})`);
+    logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'retenido_guardia_ml', error: motivos.join('; ') });
+    return;
+  }
   const lineItems = [];
+  const skusProcesados = new Set(); // Capturar SKUs para resincronizar hermanas después
   for (const item of ov.items) {
     const itemId = item.item_id_ml;
     const varId = item.variation_id_ml;
@@ -672,6 +842,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
         error: `SKU sin precio de LISTA en catalogo_cache (${motivo}) — línea creada con el precio registrado en WC, no con el de contado`,
       });
     }
+    skusProcesados.add(sku); // Registrar SKU para resincronizar hermanas después
     lineItems.push(li);
   }
 
@@ -768,6 +939,26 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       INSERT OR IGNORE INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en)
       VALUES (?, ?, ?, ?, ?)
     `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), algunSinMapeo ? 'parcial' : 'ok', now());
+
+    // Resincronizar stock de SKUs compartidos (hermanas): cuando se vende en una publicación,
+    // todas las hermanas que comparten el SKU reciben la actualización automáticamente.
+    // FAIL-OPEN: errores aquí NO bloquean la orden. Corren en background sin await.
+    for (const sku of skusProcesados) {
+      // Llamada asíncrona sin await (fire-and-forget) para no bloquear. Los errores se logean
+      // en sync_log por syncSkuPuntual. El cooldown de ML puede omitir el resync (estado='omitido'),
+      // que es normal — el cron siguiente lo retomará.
+      (async () => {
+        try {
+          await syncSkuPuntual(db, { ml: mlCfg }, sku);
+        } catch (eResync) {
+          console.error(`[sync] Error resincronizando SKU ${sku} tras venta ML ${orderId}:`, eResync.message);
+          logSync(db, {
+            direccion: 'wc_ml', sku, estado: 'error',
+            error: `Resync de hermanas tras venta: ${eResync.message}`.slice(0, 500),
+          });
+        }
+      })();
+    }
 
     // Nota PRIVADA del pedido (decisión del usuario, 2026-08-03): customer_note del POST de
     // creación la ve el cliente en la web y en los mails — se pasa a un recurso separado
@@ -902,6 +1093,171 @@ export async function procesarCancelacionesMl(db, cfg) {
   }
 }
 
+// ─── syncSkuPuntual ──────────────────────────────────────────────────────────
+
+// Backoff acotado a UN reintento (no 3 como el resto del repo): esta función corre
+// síncrona dentro de un request HTTP de edición manual de stock (A.2), no en un cron
+// de fondo — un reintento agresivo por SKU en un lote de 40 puede colgar la request
+// minutos. Si falla tras el reintento, el cron periódico de syncWcToMl retoma (fail-open).
+const SYNC_SKU_PUNTUAL_BACKOFF_MS = [800];
+
+/**
+ * Empuja a ML el diff de UNA clave (item+variación) puntual. No reintenta ante 429:
+ * el cooldown es global por cuenta (mismo motivo por el que _syncWcToMl corta la
+ * corrida entera ante 429, ver más abajo) — reintentar ahí solo quema el backoff sin
+ * chance de éxito. Tampoco reintenta si no se pudo confirmar el status de la
+ * publicación (igual que _syncWcToMl: se loguea y se sigue, no es recuperable
+ * reintentando el mismo GET).
+ */
+async function _empujarClaveMl(db, mlCfg, sku, diff) {
+  const { clave, stock_disponible_ml, cantidad_ml } = diff;
+  const { itemId, variationId } = partirClaveMl(clave);
+  const cantidad = Math.max(0, Math.round(stock_disponible_ml));
+
+  let ultimoError = null;
+  for (let intento = 0; intento <= SYNC_SKU_PUNTUAL_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(SYNC_SKU_PUNTUAL_BACKOFF_MS[intento - 1]);
+    try {
+      // Mismo patrón que _syncWcToMl: leer el status del cache primero (poblado por el
+      // matcher) y solo hacer el GET a ML como fallback si no está cacheado. En el caso
+      // común esto ahorra una llamada + el sleep(ML_CALL_DELAY_MS) por clave — con un
+      // lote de 40 SKUs la diferencia es la request HTTP colgada minutos vs. segundos.
+      let status;
+      const cacheado = db.prepare('SELECT status FROM ml_publicaciones_cache WHERE item_id = ?').get(itemId);
+      if (cacheado?.status) {
+        status = cacheado.status;
+      } else {
+        const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
+        if (est.status === 429) {
+          // Cooldown global por cuenta: no es un error de este push, es que ML está
+          // limitando la cuenta entera — mismo criterio que _syncWcToMl (cortadoPor429):
+          // no se intentó nada, se retoma solo en el próximo ciclo del cron.
+          return { clave, estado: 'omitido', detalle: 'Cooldown activo en ML (429), lo retoma el cron' };
+        }
+        status = est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido';
+        await sleep(espera(ML_CALL_DELAY_MS));
+      }
+      if (status === 'desconocido') {
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: 'No se pudo consultar el status de la publicación en ML' });
+        return { clave, estado: 'error', detalle: 'No se pudo consultar el status de la publicación' };
+      }
+      if (status !== 'active') {
+        return { clave, estado: 'sin_cambios', detalle: `Publicación ${status}, no se sincroniza` };
+      }
+
+      const bloqueo = bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior: cantidad_ml });
+      if (bloqueo.bloqueado) return { clave, estado: 'bloqueado_contradiccion', bloqueado: true, motivos: bloqueo.contradiccion.motivos };
+      const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
+      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+
+      if (resp.status === 429) {
+        return { clave, estado: 'omitido', detalle: 'Cooldown activo en ML (429) durante PUT, lo retoma el cron' };
+      }
+      if (resp.status === 200) {
+        upsertMlStockEstado(db, clave, sku, cantidad);
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'ok' });
+        return { clave, estado: 'sincronizado', detalle: `Stock actualizado: ${cantidad}` };
+      }
+
+      const causa = extraerErrorMl(resp, resp.data?.error || JSON.stringify(resp.data ?? {}));
+      if (/doesn'?t have a variation/i.test(causa)) {
+        descartarVariacionMuerta(db, clave, `Variación inexistente en ML: ${causa}`.slice(0, 200));
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'remapeo_requerido', error: causa.slice(0, 500) });
+        return { clave, estado: 'error', detalle: `Remapeo requerido: ${causa}` };
+      }
+      if (/cannot exceeds? \d+ pictures/i.test(causa)) {
+        logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'requiere_atencion_ml', error: causa.slice(0, 500) });
+        return { clave, estado: 'error', detalle: `Publicación bloqueada en ML: ${causa}` };
+      }
+      // No se reintenta un HTTP de respuesta (4xx/5xx que ML SÍ contestó): no es un fallo
+      // transitorio de red, es un rechazo — mismo criterio que _syncWcToMl, que loguea y
+      // sigue sin reintentar. El caso típico es status stale en ml_publicaciones_cache
+      // (activa en cache, pausada de verdad en ML): reintentar el mismo PUT repite el
+      // mismo 400 sin chance de éxito, solo suma 800ms de latencia al operario. El único
+      // reintento real es para excepciones de red/timeout (catch de abajo).
+      ultimoError = `HTTP ${resp.status}: ${causa}`;
+      logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: ultimoError.slice(0, 500) });
+      return { clave, estado: 'error', detalle: ultimoError };
+    } catch (e) {
+      ultimoError = e.message;
+      if (intento < SYNC_SKU_PUNTUAL_BACKOFF_MS.length) continue;
+      logSync(db, { direccion: 'wc_ml', clave, sku, cantAnterior: cantidad_ml, cantNueva: cantidad, estado: 'error', error: e.message });
+      return { clave, estado: 'error', detalle: `Fallo tras reintento: ${e.message}` };
+    }
+  }
+  return { clave, estado: 'error', detalle: ultimoError || 'Error desconocido' };
+}
+
+/**
+ * Sincroniza el stock de un SKU puntual a MercadoLibre, disparado al guardar una
+ * edición manual de stock (A.2 del plan). Busca TODOS los diffs pendientes de ese
+ * SKU contra ML (un SKU puede tener más de una publicación/variación mapeada — un
+ * `LIMIT 1` acá reportaría "sincronizado" habiendo dejado otra publicación con el
+ * stock viejo) y empuja cada uno con `_empujarClaveMl`. Fail-open: no reemplaza al
+ * cron `syncWcToMl`, que sigue de respaldo si esto falla.
+ *
+ * Lee `_wcToMlEnCurso` pero no lo toma (no se pone en `true` a sí mismo): si el cron
+ * general YA está en curso al momento de esta llamada, el push puntual se omite (el
+ * cron va a cubrir el mismo diff en su misma corrida, no hace falta duplicar la
+ * llamada a ML). Si el cron arranca DESPUÉS de que este push ya empezó, se acepta la
+ * ventana de carrera — el PUT de stock a ML es idempotente, así que el peor caso es
+ * una llamada de más, no una escritura incorrecta.
+ *
+ * @returns {Promise<{sku, estado: 'sincronizado'|'sin_cambios'|'error'|'omitido', detalle}>}
+ */
+export async function syncSkuPuntual(db, cfg, sku) {
+  const { ml: mlCfg } = cfg;
+
+  if (!sku || typeof sku !== 'string') {
+    return { sku, estado: 'error', detalle: 'SKU inválido' };
+  }
+  if (!mlCfgOk(cfg)) {
+    return { sku, estado: 'omitido', detalle: 'ML no configurado' };
+  }
+  if (_wcToMlEnCurso) {
+    return { sku, estado: 'omitido', detalle: 'Sync general de ML en curso, este SKU se cubre en esa corrida' };
+  }
+
+  const diffs = db.prepare(`
+    ${COMPUTED_STOCK_CTE}
+    SELECT * FROM computed
+    WHERE sku = ?
+      AND (cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml)
+  `).all(sku);
+
+  if (diffs.length === 0) {
+    return { sku, estado: 'sin_cambios', detalle: 'Sin cambios pendientes en ML' };
+  }
+
+  const resultados = [];
+  for (const diff of diffs) {
+    resultados.push(await _empujarClaveMl(db, mlCfg, sku, diff));
+  }
+
+  const bloqueados = resultados.filter(r => r.bloqueado);
+  if (bloqueados.length > 0) return { sku, estado: 'bloqueado_contradiccion', bloqueado: true, resultados };
+  const errores = resultados.filter(r => r.estado === 'error');
+  if (errores.length > 0) {
+    return { sku, estado: 'error', detalle: errores.map(r => r.detalle).join('; ').slice(0, 400) };
+  }
+  const sincronizadas = resultados.filter(r => r.estado === 'sincronizado').length;
+  if (sincronizadas === 0) {
+    const omitidas = resultados.filter(r => r.estado === 'omitido').length;
+    if (omitidas > 0) {
+      // Al menos una quedó SIN INTENTAR (cooldown 429): no es "confirmado sin diff", es
+      // "no se sabe todavía" — aunque otra clave del mismo SKU sí estuviera sin_cambios
+      // de verdad, mezclarlo bajo 'sin_cambios' mentiría (ese estado significa "sin diff
+      // pendiente en ML", y acá sigue habiendo un diff que ni se tocó).
+      return { sku, estado: 'omitido', detalle: `${omitidas} publicación(es) pospuestas por cooldown de ML, las retoma el cron` };
+    }
+    const detalle = resultados.length > 1
+      ? `${resultados.length} publicaciones sin cambios (${resultados.map(r => r.detalle).join('; ')})`.slice(0, 400)
+      : resultados[0]?.detalle || 'Ninguna publicación activa para este SKU';
+    return { sku, estado: 'sin_cambios', detalle };
+  }
+  return { sku, estado: 'sincronizado', detalle: `${sincronizadas}/${resultados.length} publicaciones actualizadas` };
+}
+
 // ─── syncWcToMl ──────────────────────────────────────────────────────────────
 
 // Candado para evitar corridas concurrentes de WC→ML (cron + disparo manual +
@@ -928,8 +1284,8 @@ export async function syncWcToMl(db, cfg, opts = {}) {
   if (_wcToMlEnCurso) return { omitido: true };
   _wcToMlEnCurso = true;
   try {
-    await _syncWcToMl(db, cfg, opts);
-    return { omitido: false };
+    const bloqueos = await _syncWcToMl(db, cfg, opts);
+    return { omitido: false, bloqueados_contradiccion: bloqueos };
   } finally {
     _wcToMlEnCurso = false;
   }
@@ -978,6 +1334,8 @@ async function _syncWcToMl(db, cfg, opts = {}) {
   // bloqueado, etc.) NO suman — ver comentario de la constante más arriba.
   let llamadasMl = 0;
   let cortadoPorTope = false;
+  let bloqueadosContradiccion = 0;
+  const contradicciones = new Map();
   try {
     const cacheStatus = db.prepare('SELECT DISTINCT item_id, status FROM ml_publicaciones_cache').all();
     for (const r of cacheStatus) {
@@ -1000,6 +1358,8 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     const cantidad = Math.max(0, Math.round(stock_disponible_ml));
 
     try {
+      const bloqueoStock = bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior: diff.cantidad_ml, cache: contradicciones });
+      if (bloqueoStock.bloqueado) { bloqueadosContradiccion++; continue; }
       if (!estadoItem.has(itemId)) {
         llamadasMl++;
         const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
@@ -1013,7 +1373,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
           break;
         }
         estadoItem.set(itemId, est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido');
-        await sleep(ML_CALL_DELAY_MS);
+        await sleep(espera(ML_CALL_DELAY_MS));
       }
       const status = estadoItem.get(itemId);
       if (status === 'desconocido') {
@@ -1076,7 +1436,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     }
 
     // Delay para respetar rate limits de ML.
-    await sleep(ML_CALL_DELAY_MS);
+    await sleep(espera(ML_CALL_DELAY_MS));
   }
 
   if (cortadoPor429) {
@@ -1092,6 +1452,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     // grande, se retoma la próxima corrida)" de "cortó por 429" en el log.
     logSync(db, { direccion: 'wc_ml', clave: null, sku: null, estado: 'info', error: `Tope de ${maxLlamadas} llamadas a ML alcanzado — corte de corrida, se retoma en el próximo ciclo` });
   }
+  return bloqueadosContradiccion;
 }
 
 // ─── reconciliarStockMl ──────────────────────────────────────────────────────
@@ -1218,7 +1579,7 @@ async function _reconciliarStockMl(db, cfg) {
   let esperasCooldown = 0;
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    const path = `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,available_quantity,variations`;
+    const path = `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.status,body.sub_status,body.available_quantity,body.variations`;
     let resp;
     try {
       resp = await mlFetch(db, mlCfg, 'get', path);
@@ -1255,7 +1616,7 @@ async function _reconciliarStockMl(db, cfg) {
         break;
       }
       if (resp.status === 200 && Array.isArray(resp.data)) {
-        for (const e of resp.data) if (e.code === 200 && e.body) porItem.set(String(e.body.id), e.body);
+        for (const e of resp.data) if ((e.status_code ?? e.code) === 200 && e.body) porItem.set(String(e.body.id), e.body);
       }
       // status !== 200 (no 429), o un elemento con code !== 200 dentro del array: ese/esos
       // itemIds quedan AUSENTES de porItem, tratado fail-closed más abajo (mismo criterio que
@@ -1593,22 +1954,46 @@ export async function procesarReintentos(db, cfg) {
 
 // ─── reactivación de pausadas por falta de stock ────────────────────────────────
 
+// El vigía de formato pausa publicaciones que pasaron a describir otra cosa (ver
+// docs/superpowers/specs/2026-09-12-vigia-formato-publicaciones-design.md). Si el reactivador
+// las levantara, el arreglo se anularía solo y en silencio: se saltean hasta que una persona
+// revise el cambio, igual que se hace con las pausadas manualmente por el vendedor.
 /**
  * Lista las publicaciones ML pausadas por out_of_stock que ya tienen stock
  * disponible en la web y están mapeadas. Devuelve filas por variación.
  * (El agrupado por publicación lo hace el router para el display.)
  */
-export function getReactivablesRows(db, itemIds = null) {
+export function reabrirAvisosSinStock(db) {
+  const rows = db.prepare(`${COMPUTED_STOCK_CTE}
+    SELECT c.id FROM ml_publicacion_cambios c JOIN computed x ON x.clave=c.clave
+    WHERE c.bloquea_reactivador=1 AND c.revisado_en IS NOT NULL AND x.stock_disponible_ml > 0`).all();
+  const upd = db.prepare("UPDATE ml_publicacion_cambios SET revisado_en=NULL, revisado_por=NULL, bloquea_reactivador=0, pausa_error=COALESCE(pausa_error,'') || ' | reabierto: volvió el stock' WHERE id=?");
+  db.transaction(() => rows.forEach(r => upd.run(r.id)))();
+  return rows.length;
+}
+
+/**
+ * `incluirPausasManuales` (sólo la reactivación manual de "Pausadas con stock en Woo"): además de las pausadas por
+ * out_of_stock, trae las que quedaron pausadas por el vendedor o sin sub_status. Los avisos del vigía sin revisar
+ * SIGUEN bloqueando: una pausa del vigía sólo se revierte revisando el cambio.
+ */
+export function getReactivablesRows(db, itemIds = null, { incluirPausasManuales = false } = {}) {
+  reabrirAvisosSinStock(db);
+  const filtroSub = incluirPausasManuales ? '' : `
+      AND p.sub_status LIKE '%out_of_stock%'
+      AND p.sub_status NOT LIKE '%paused_by_seller%'`;
   let sql = `
     ${COMPUTED_STOCK_CTE}
     SELECT cm.clave, cm.sku, cm.stock_disponible_ml,
            p.item_id, p.variation_id, p.titulo, p.variations_texto, p.thumbnail
     FROM computed cm
     JOIN ml_publicaciones_cache p ON p.clave = cm.clave
-    WHERE p.status = 'paused'
-      AND p.sub_status LIKE '%out_of_stock%'
-      AND p.sub_status NOT LIKE '%paused_by_seller%'
-      AND cm.stock_disponible_ml > 0`;
+    WHERE p.status = 'paused'${filtroSub}
+      AND cm.stock_disponible_ml > 0
+      AND NOT EXISTS (
+        SELECT 1 FROM ml_publicacion_cambios vc
+        WHERE vc.clave = p.clave AND vc.solo_aviso = 0 AND (vc.revisado_en IS NULL OR vc.bloquea_reactivador = 1)
+      )`;
   const params = [];
   if (Array.isArray(itemIds) && itemIds.length) {
     sql += ` AND p.item_id IN (${itemIds.map(() => '?').join(',')})`;
@@ -1644,10 +2029,10 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
     try {
       const resp = await mlFetch(
         db, mlCfg, 'get',
-        `/items?ids=${chunk.join(',')}&attributes=id,price,category_id,listing_type_id,shipping,variations`
+        `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations`
       );
       if (resp.status === 200 && Array.isArray(resp.data)) {
-        for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+        for (const e of resp.data) if ((e.status_code ?? e.code) === 200 && e.body) items.set(String(e.body.id), e.body);
       }
     } catch (e) {
       // mlFetch no lanza por status HTTP, pero SÍ por timeout/error de red de axios (ver
@@ -1727,7 +2112,7 @@ async function evaluarPreciosReactivables(db, mlCfg, filasPorItem) {
  */
 // Persiste en ml_publicaciones_cache.precio (+ precio_actualizado_en) el precio de ML ya
 // resuelto por el multiget de reactivarItems (ver evaluarNetoVariaciones). NO agrega ninguna
-// llamada a ML: el dato ya vino en la respuesta del /items?ids= que igual se hace para el
+// llamada a ML: el dato ya vino en la respuesta del /items/bulk?ids= que igual se hace para el
 // screening/revalidación. Cierra el bug medido 2026-08-06: las 30 filas de
 // ml_reactivacion_frenada tenían precio_ml_evaluado no nulo pero
 // ml_publicaciones_cache.precio en NULL (esa columna solo se llenaba desde el refresco MANUAL
@@ -1811,7 +2196,7 @@ async function evaluarNetoVariaciones(db, mlCfg, itemId, item, variaciones, opts
  *
  * `item` llega YA RESUELTO por el multiget de `reactivarItems` (paso 3 del plan
  * ahorro-llamadas-ml: antes era un GET /items/{itemId} por publicación, ahora un solo
- * /items?ids= en chunks de 20 para todo el lote). `item` es `undefined` si esa publicación
+ * /items/bulk?ids= en chunks de 20 para todo el lote). `item` es `undefined` si esa publicación
  * quedó AUSENTE de la respuesta del multiget (chunk fallido o item inaccesible): se trata
  * fail-closed, igual que un GET individual que hubiera fallado.
  *
@@ -1851,7 +2236,7 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, item, opts 
     // salga de la lista de reactivables y no se reintente en loop.
     return { omitido: true, motivo: 'Ya no está pausada en ML, se omitió', cacheStatus: item.status, cacheSubStatus: subStatus };
   }
-  if (subStatus.includes('paused_by_seller')) {
+  if (subStatus.includes('paused_by_seller') && !opts.incluirPausasManuales) {
     // El vendedor la pausó manualmente después de armar la lista: refrescar sub_status en el
     // caché para que getReactivablesRows deje de listarla (el filtro excluye paused_by_seller).
     return { omitido: true, motivo: 'Pausada manualmente por el vendedor, se omitió por seguridad', cacheStatus: 'paused', cacheSubStatus: subStatus };
@@ -1874,7 +2259,7 @@ async function chequearNetoReactivar(db, mlCfg, itemId, variaciones, item, opts 
 export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
   const LOTE_MAX = 50;
   const aProcesar = itemIds.slice(0, LOTE_MAX);
-  const rows = getReactivablesRows(db, aProcesar);
+  const rows = getReactivablesRows(db, aProcesar, { incluirPausasManuales: opts.incluirPausasManuales === true });
 
   // Agrupar variaciones válidas por item
   const porItem = new Map();
@@ -1897,11 +2282,11 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
     try {
       const resp = await mlFetch(
         db, mlCfg, 'get',
-        `/items?ids=${chunk.join(',')}&attributes=id,status,sub_status,price,category_id,listing_type_id,shipping,variations`,
+        `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.status,body.sub_status,body.price,body.category_id,body.listing_type_id,body.shipping,body.variations`,
         null, opts
       );
       if (resp.status === 200 && Array.isArray(resp.data)) {
-        for (const e of resp.data) if (e.code === 200 && e.body) items.set(String(e.body.id), e.body);
+        for (const e of resp.data) if ((e.status_code ?? e.code) === 200 && e.body) items.set(String(e.body.id), e.body);
       }
     } catch (e) {
       // Igual criterio que evaluarPreciosReactivables: mlFetch puede lanzar por timeout/error
@@ -1970,6 +2355,16 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
         return { item_id: itemId, ok: false, bloqueado: true, ...revalidacion };
       }
 
+      const bloqueosContradiccion = variaciones.map((v) => ({
+        variacion: v,
+        bloqueo: bloquearStockPorContradiccion(db, { clave: v.clave, sku: v.sku,
+          cantidad: Math.max(0, Math.round(v.stock_disponible_ml)), cantAnterior: v.cantidad_ml }),
+      })).filter((x) => x.bloqueo.bloqueado);
+      if (bloqueosContradiccion.length) {
+        return { item_id: itemId, ok: false, bloqueado: true, motivo: 'contradiccion_titulo',
+          bloqueos: bloqueosContradiccion.map((x) => ({ clave: x.variacion.clave, motivos: x.bloqueo.contradiccion.motivos })) };
+      }
+
       // 1) Empujar stock de cada variación con stock web disponible (en orden dentro del item)
       for (const v of variaciones) {
         const cantidad = Math.max(0, Math.round(v.stock_disponible_ml));
@@ -1998,7 +2393,15 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
       return { item_id: itemId, ok: true, variaciones: variaciones.length };
     } catch (e) {
       const error = e.message;
-      logSync(db, { direccion: 'wc_ml', clave: itemId, estado: 'error', error: `reactivar: ${error}`.slice(0, 500) });
+      // Una fila por variación con la clave CANÓNICA (item_id|variation_id), igual que el
+      // camino de éxito de arriba. Loguear con `itemId` pelado (sin el pipe) era un bug: la
+      // clave no matcheaba ml_stock_estado, así que el filtro de auto-curado del dashboard
+      // ("ya sincronizó después → dejá de mostrarlo") nunca la limpiaba y el error quedaba
+      // pegado para siempre; tampoco joineaba ml_publicaciones_cache, así que aparecía sin
+      // título ni miniatura. 34 publicaciones cayeron en esto entre julio y agosto 2026.
+      for (const v of variaciones) {
+        logSync(db, { direccion: 'wc_ml', clave: v.clave, sku: v.sku, estado: 'error', error: `reactivar: ${error}`.slice(0, 500) });
+      }
       return { item_id: itemId, ok: false, error };
     }
   });
@@ -2116,8 +2519,24 @@ export async function reactivarAutomatico(db, cfg) {
     // en masa y la comparación de abajo perdía sentido; con él, más la ventana de red de
     // seguridad bajada a 2h, el riesgo de frenada fantasma queda acotado.
     //
-    // ACOPLAMIENTO IMPLÍCITO A VIGILAR (hallazgo del revisor, MENOR, 2026-08-06): hoy la única
-    // vía que mantiene `ml_publicaciones_cache.precio` fresco es ese POST puntual. Si el día de
+    // ACOPLAMIENTO IMPLÍCITO A VIGILAR (hallazgo del revisor, MENOR, 2026-08-06). ACTUALIZADO
+    // 2026-09-05: ya NO es la única vía. El webhook de `items` de ML proyecta y refresca el
+    // cache —precio incluido— por multiget acotado (`item.project` en workerIntegrationJobs).
+    // Se evaluó contra este comentario antes de habilitarlo, que es lo que pedía:
+    //   · Refresca el caché, que es la mitad que importa para esta comparación. Un precio más
+    //     fresco hace que `necesitaRecheck` DETECTE la diferencia contra `precio_ml_evaluado`
+    //     y re-consulte, en vez de saltearla — o sea que fortalece esta red, no la degrada.
+    //   · No borra la frenada, y no hace falta: la fila se sobrescribe (ON CONFLICT DO UPDATE)
+    //     cuando la re-evaluación la vuelve a producir, y el recheck ya se disparó por el
+    //     precio distinto. Borrarla sería sólo un atajo para forzar la re-evaluación.
+    //   · No reactiva nada por su cuenta: `reactivarAutomatico` sigue con su propio cron y
+    //     `chequearNetoReactivar` revalida en vivo contra ML antes de escribir. Lo que cambia
+    //     es CUÁNDO se evalúa, no si se reactiva.
+    // Exposición medida el 2026-09-05: 7 frenadas vigentes y 12 filas realmente reactivables
+    // (de 4621 pausadas por out_of_stock, el resto sin stock en Woo), así que el costo en
+    // llamadas está acotado por esos 12 y no por el volumen de webhooks.
+    //
+    // Historia: hasta 2026-09-05 la única vía que mantenía el precio fresco era el POST puntual. Si el día de
     // mañana se agrega OTRA vía de cambio de precio de ML (push masivo, integración nueva,
     // script de carga), esa vía tiene que sumarle el mismo par
     // actualizar-caché/borrar-frenada que hoy tiene POST /actualizar-precio — si no, esta
@@ -2268,11 +2687,11 @@ async function variacionesVivasDeMl(db, mlCfg, itemIds) {
   const ids = [...new Set((itemIds || []).filter(Boolean))];
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
-    const resp = await mlFetch(db, mlCfg, 'get', `/items?ids=${chunk.join(',')}&attributes=id,status,variations`);
-    await sleep(ML_CALL_DELAY_MS);
+    const resp = await mlFetch(db, mlCfg, 'get', `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.status,body.variations`);
+    await sleep(espera(ML_CALL_DELAY_MS));
     if (resp.status !== 200 || !Array.isArray(resp.data)) continue; // chunk fallido → fail-closed
     for (const entry of resp.data) {
-      if (entry.code !== 200 || !entry.body) continue;
+      if ((entry.status_code ?? entry.code) !== 200 || !entry.body) continue;
       const vs = Array.isArray(entry.body.variations) ? entry.body.variations : [];
       vivas.set(String(entry.body.id), new Set(vs.map(v => String(v.id))));
     }
@@ -2367,10 +2786,10 @@ async function enriquecerConMl(db, mlCfg, rows) {
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(db, mlCfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,secure_thumbnail,thumbnail`);
+      `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.title,body.secure_thumbnail,body.thumbnail`);
     if (resp.status !== 200 || !Array.isArray(resp.data)) continue;
     for (const entry of resp.data) {
-      if (entry.code !== 200 || !entry.body) continue;
+      if ((entry.status_code ?? entry.code) !== 200 || !entry.body) continue;
       const b = entry.body;
       info.set(String(b.id), { title: b.title || '', thumbnail: b.secure_thumbnail || b.thumbnail || '' });
     }
@@ -2425,10 +2844,10 @@ async function diagnosticarErrores(db, mlCfg, rows) {
   for (let i = 0; i < itemIds.length; i += MULTIGET_CHUNK) {
     const chunk = itemIds.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetch(db, mlCfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,variations,secure_thumbnail,thumbnail`);
+      `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.title,body.status,body.sub_status,body.variations,body.secure_thumbnail,body.thumbnail`);
     if (resp.status !== 200 || !Array.isArray(resp.data)) continue;
     for (const entry of resp.data) {
-      if (entry.code === 200 && entry.body) info.set(String(entry.body.id), entry.body);
+      if ((entry.status_code ?? entry.code) === 200 && entry.body) info.set(String(entry.body.id), entry.body);
     }
   }
 
@@ -2560,9 +2979,18 @@ export function syncRouter(db, cfg) {
     const ultimosOk = db.prepare(
       "SELECT direccion, MAX(creado_en) as ultima FROM sync_log WHERE estado='ok' GROUP BY direccion"
     ).all();
-    const errores = db.prepare(
-      "SELECT COUNT(*) as n FROM sync_log WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')"
-    ).get();
+    const tieneClaveSync = db.prepare('PRAGMA table_info(sync_log)').all().some(c => c.name === 'clave');
+    const errores = tieneClaveSync
+      ? db.prepare(`
+          SELECT COUNT(*) as n FROM sync_log s
+          WHERE s.estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
+            AND NOT EXISTS (
+              SELECT 1 FROM sync_log newer
+              WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave
+                AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id))
+            )
+        `).get()
+      : db.prepare("SELECT COUNT(*) as n FROM sync_log WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')").get();
 
     res.json({
       ok: true,
@@ -2635,9 +3063,14 @@ export function syncRouter(db, cfg) {
   router.get('/errores', (req, res) => {
     const rows = db.prepare(`
       SELECT id, direccion, clave, sku, cant_anterior, cant_nueva, estado, intentos, error, creado_en, actualizado_en
-      FROM sync_log
-      WHERE estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
-      ORDER BY creado_en DESC LIMIT 200
+      FROM sync_log s
+      WHERE s.estado IN ('error','agotado','sin_mapeo','remapeo_requerido','requiere_atencion_ml')
+        AND NOT EXISTS (
+          SELECT 1 FROM sync_log newer
+          WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave
+            AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id))
+        )
+      ORDER BY s.creado_en DESC, s.id DESC LIMIT 200
     `).all();
     res.json({ ok: true, data: rows });
   });
@@ -2711,14 +3144,15 @@ export function syncRouter(db, cfg) {
     ).get().n;
     const requiereAtencion = db.prepare(
       `SELECT COUNT(DISTINCT clave) n FROM sync_log
-       WHERE estado='requiere_atencion_ml' AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM ml_stock_estado)`
+       WHERE estado='requiere_atencion_ml'
+         AND NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = sync_log.clave AND m.actualizado_en >= sync_log.creado_en)`
     ).get().n;
     const erroresReales = db.prepare(
-      `SELECT COUNT(DISTINCT clave) n FROM sync_log
-       WHERE estado IN ('error','agotado') AND clave IS NOT NULL
-         AND clave NOT IN (SELECT clave FROM ml_stock_estado)
-         AND clave NOT IN (SELECT clave FROM errores_descartados)`
+      `SELECT COUNT(*) n FROM sync_log s
+       WHERE s.estado IN ('error','agotado')
+         AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave)
+         AND NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en)
+         AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))`
     ).get().n;
     const catMap = { sin_mapeo: sinMapeo, remapeo_requerido: remapeoReq, requiere_atencion_ml: requiereAtencion };
 
@@ -2751,6 +3185,10 @@ export function syncRouter(db, cfg) {
       // está roto y no procesa nada". No requiere tocar public/: el front decide si lo muestra.
       stock: { sincronizadas, pendientes, pendientesPausadas, maxLlamadasPorCorrida: SYNC_WC_ML_MAX_LLAMADAS_ML_POR_CORRIDA },
       reactivables,
+      // Pausadas con stock en Woo (cualquier causa) y SKUs en solo_local: visibles en Sincronización.
+      pausadas_con_stock: (() => { try { return listarPausadasConStock(db).resumen; } catch (_) { return null; } })(),
+      identidad_encoladas: (() => { try { return encoladasSinEjecutar(db); } catch (_) { return null; } })(),
+      solo_local: (() => { try { return resumenSoloLocal(db); } catch (_) { return null; } })(),
       pedidos: {
         total: pedidos.total ?? 0,
         cancelados: pedidos.cancelados ?? 0,
@@ -2762,11 +3200,107 @@ export function syncRouter(db, cfg) {
         remapeo_requerido: catMap.remapeo_requerido ?? 0,
         requiere_atencion_ml: catMap.requiere_atencion_ml ?? 0,
         errores_reales: erroresReales,
+        ventas_retenidas_guardia: contarVentasRetenidasGuardia(db),
       },
       skus,
       frenadas,
       vinculos_sospechosos: contarVinculosSospechosos(db),
     });
+  });
+
+  // Cambios de formato detectados por el vigía, sin revisar. El JOIN con el cache trae el
+  // título para que la pantalla no muestre sólo un MLA.
+  router.get('/cambios-formato', (_req, res) => {
+    const data = db.prepare(`
+      SELECT MIN(c.id) id, json_group_array(c.id) ids, COUNT(DISTINCT c.clave) variaciones, MIN(c.clave) clave, c.item_id, MIN(c.sku) sku, c.campo, c.valor_anterior, c.valor_nuevo,
+             MAX(c.pausada) pausada, MAX(c.pausa_error) pausa_error, MAX(c.nota) nota, MAX(c.detectado_en) detectado_en, p.titulo, p.thumbnail, p.permalink
+      FROM ml_publicacion_cambios c
+      LEFT JOIN ml_publicaciones_cache p ON p.clave = c.clave
+      WHERE c.revisado_en IS NULL
+      GROUP BY c.item_id, c.campo, c.valor_nuevo
+      ORDER BY detectado_en DESC, id DESC
+    `).all().map(r => ({ ...r, ids: JSON.parse(r.ids) }));
+    res.json({ ok: true, data, total: data.length });
+  });
+
+  // Comparación de los dos productos de un aviso de migración. Se pide al abrir la tarjeta, no por render;
+  // las lecturas a ML quedan cacheadas en sqlite (lib/comparacionProductos.js).
+  router.get('/cambios-formato/:id/comparacion', async (req, res) => {
+    const c = db.prepare('SELECT * FROM ml_publicacion_cambios WHERE id=?').get(req.params.id);
+    if (!c) return res.status(404).json({ ok: false, error: 'Cambio no encontrado' });
+    if (c.campo !== 'catalog_product_id') return res.json({ ok: false, error: 'Sólo aplica a cambios de producto de catálogo' });
+    const pub = db.prepare('SELECT atributos_json FROM ml_publicaciones_cache WHERE clave=?').get(c.clave);
+    res.json(await compararProductos(db, cfg?.ml, c, pub));
+  });
+
+  // Revisar cierra el aviso. Con `reactivar: true` además despausa: es el ÚNICO camino por el
+  // que una pausa del vigía se revierte, y siempre lo dispara una persona.
+  router.post('/cambios-formato/:id/revisar', async (req, res) => {
+    const fila = db.prepare('SELECT * FROM ml_publicacion_cambios WHERE id=?').get(req.params.id);
+    if (!fila) return res.status(404).json({ ok: false, error: 'Cambio no encontrado' });
+    if (fila.revisado_en) return res.json({ ok: true, ya_revisado: true, reactivada: false });
+
+    // Los rechazos se responden con 409, nunca 502: Cloudflare reemplaza los 502 por su página
+    // HTML y la pantalla mostraba "Unexpected token '<'" en vez del motivo (2026-09-14).
+    let reactivada = false;
+    let pendienteStock = false;
+    let motivoPend = null; // por qué quedó pendiente: sin_stock_woo | otro_aviso | solo_local | sin_vinculo (null = ML sin stock)
+    if (req.body?.reactivar === true) {
+      // Convención de este router: mlCfgOk valida el CONTENEDOR (`cfg`, con cfg.ml adentro) y
+      // mlFetch recibe el cliente ya desestructurado. Ver el patrón de la línea 276.
+      if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+      // Antes del PUT: si la publicación sigue pausada pero ya no hay stock en Woo, o el reactivador la tiene
+      // trabada por otra razón (otro aviso abierto, solo_local, sin vínculo), el aviso se cierra sin reactivar.
+      let noCorresponde = false;
+      let motivoPendiente = null;
+      try {
+        const pausada = db.prepare("SELECT 1 FROM ml_publicaciones_cache WHERE item_id = ? AND status = 'paused' LIMIT 1").get(fila.item_id);
+        if (pausada) {
+          const p = listarPausadasConStock(db).data.find((x) => x.item_id === fila.item_id);
+          const otroAviso = db.prepare(`SELECT 1 FROM ml_publicacion_cambios WHERE item_id = ? AND revisado_en IS NULL AND solo_aviso = 0
+            AND bloquea_reactivador = 1 AND NOT (campo = ? AND valor_nuevo IS ?) LIMIT 1`).get(fila.item_id, fila.campo, fila.valor_nuevo);
+          motivoPendiente = !p || !(p.stock_woo > 0) ? 'sin_stock_woo' : otroAviso ? 'otro_aviso'
+            : (p.motivo_no_reactivable === 'solo_local' || p.motivo_no_reactivable === 'sin_vinculo') ? p.motivo_no_reactivable : null;
+          noCorresponde = !!motivoPendiente;
+        }
+      } catch (_) { /* si la verificación falla, se sigue con el camino de siempre (ML rechaza lo que no se puede) */ }
+      if (noCorresponde) { pendienteStock = true; motivoPend = motivoPendiente; }
+      else try {
+        const r = await mlFetch(db, cfg.ml, 'put', `/items/${fila.item_id}`, { status: 'active' });
+        if (r.status >= 200 && r.status < 300) {
+          reactivada = true;
+        } else {
+          // ML no activa una publicación sin stock. Si ese es el motivo, el formato quedó
+          // aprobado igual: se cierra el aviso y el reactivador la activa cuando haya stock.
+          const item = await mlFetch(db, cfg.ml, 'get', `/items/${fila.item_id}?attributes=status,sub_status,available_quantity`);
+          const subStatus = Array.isArray(item?.data?.sub_status) ? item.data.sub_status : [];
+          if (item?.status === 200 && item.data?.status === 'paused' && subStatus.includes('out_of_stock')) {
+            pendienteStock = true;
+          } else {
+            // Fail-closed: si no se pudo reactivar por otro motivo, el aviso sigue vivo.
+            const detalle = r.data?.message || r.data?.error || `status ${r.status}`;
+            return res.status(409).json({ ok: false, error: `MercadoLibre no la reactivó: ${detalle}` });
+          }
+        }
+      } catch (e) {
+        return res.status(409).json({ ok: false, error: `No se pudo reactivar: ${e?.message || 'error de conexión con MercadoLibre'}` });
+      }
+    }
+    // El vigía abre un aviso por variación: se cierran las variaciones del MISMO cambio (campo y
+    // valor nuevo). Un cambio de otro campo en la misma publicación sigue abierto para decidirlo aparte.
+    const cerrados = db.prepare(`UPDATE ml_publicacion_cambios SET revisado_en=?, revisado_por=?, bloquea_reactivador=0
+      WHERE item_id=? AND campo=? AND valor_nuevo IS ? AND revisado_en IS NULL`)
+      .run(new Date().toISOString(), req.user?.username || null, fila.item_id, fila.campo, fila.valor_nuevo).changes;
+    // Cerrado el aviso sin reactivar: si la publicación sigue pausada con stock en Woo, se ofrece reactivarla
+    // (un clic, siempre manual). Es sólo una oferta: no se reactiva nada acá.
+    let ofertaReactivar = null;
+    if (!reactivada && !pendienteStock) {
+      try {
+        const p = listarPausadasConStock(db).data.find((x) => x.item_id === fila.item_id && x.reactivable);
+        if (p) ofertaReactivar = { item_id: p.item_id, stock_woo: p.stock_woo };
+      } catch (_) { /* la oferta es opcional */ }
+    }
+    res.json({ ok: true, reactivada, pendiente_stock: pendienteStock, motivo_pendiente: pendienteStock ? (motivoPend || 'ml_sin_stock') : null, cerrados, oferta_reactivar: ofertaReactivar });
   });
 
   // Conteo rápido de reactivables (solo lee el caché local, sin consultar precios en ML).
@@ -2842,6 +3376,49 @@ export function syncRouter(db, cfg) {
     } finally {
       // Pase lo que pase (incluida una cancelación del cliente a mitad de camino) el candado
       // se libera acá, así el próximo lote no queda bloqueado por una reactivación fantasma.
+      _reactivarEnCurso = false;
+    }
+  });
+
+  // Publicaciones pausadas en ML con stock en Woo, con la causa de la pausa (Fase A de pausas con sentido).
+  // Sólo lectura sobre la caché local. `?causa=` filtra por una causa.
+  router.get('/pausadas-con-stock', (req, res) => {
+    try {
+      const causa = req.query.causa ? String(req.query.causa) : null;
+      if (causa && !CAUSAS_PAUSA.includes(causa)) {
+        return res.status(400).json({ ok: false, error: `causa debe ser una de: ${CAUSAS_PAUSA.join(', ')}` });
+      }
+      res.json({ ok: true, ...listarPausadasConStock(db, { causa }), solo_local: resumenSoloLocal(db) });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // Reactivación MANUAL de pausadas con stock: siempre la dispara una persona (nunca el sistema). Incluye las que
+  // pausó el vendedor o quedaron sin sub_status; las pausas del vigía sin revisar y las solo_local/sin vínculo no
+  // se reactivan por acá (se devuelven en `no_reactivables`). Comparte candado con /reactivar.
+  router.post('/pausadas-con-stock/reactivar', async (req, res) => {
+    if (!mlCfgOk(cfg)) return res.status(400).json({ ok: false, error: 'MercadoLibre no configurado' });
+    const { itemIds } = req.body || {};
+    if (!Array.isArray(itemIds) || !itemIds.length || itemIds.length > 50 || itemIds.some((x) => typeof x !== 'string' || !x)) {
+      return res.status(400).json({ ok: false, error: 'itemIds requerido (1 a 50 ids de publicación)' });
+    }
+    if (_reactivarEnCurso) return res.status(409).json({ ok: false, error: 'Ya hay una reactivación en curso' });
+    _reactivarEnCurso = true;
+    try {
+      const reactivables = new Set(listarPausadasConStock(db).data.filter((p) => p.reactivable).map((p) => p.item_id));
+      const pedidos = [...new Set(itemIds)];
+      const validos = pedidos.filter((id) => reactivables.has(id));
+      const noReactivables = pedidos.filter((id) => !reactivables.has(id));
+      const actor = req.user?.username || 'desconocido';
+      const r = validos.length
+        ? await reactivarItems(db, mlCfg, validos, { manual: true, incluirPausasManuales: true })
+        : { procesados: 0, resultados: [] };
+      console.log(`[pausadas-con-stock] reactivación manual por ${actor}: ${validos.length} publicaciones`);
+      if (!res.writableEnded) res.json({ ok: true, actor, no_reactivables: noReactivables, ...r });
+    } catch (e) {
+      if (!res.writableEnded) res.status(500).json({ ok: false, error: e.message });
+    } finally {
       _reactivarEnCurso = false;
     }
   });
@@ -2922,39 +3499,42 @@ export function syncRouter(db, cfg) {
     },
     requiere_atencion_ml: {
       estados: "'requiere_atencion_ml'",
-      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado)",
+      exclude: "NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave IS s.clave AND m.actualizado_en >= s.creado_en) AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))",
     },
     errores: {
       estados: "'error','agotado'",
-      exclude: "s.clave NOT IN (SELECT clave FROM ml_stock_estado) AND s.clave NOT IN (SELECT clave FROM errores_descartados)",
+      exclude: "NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en) AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave) AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))",
     },
   };
 
   router.get('/atencion/:cat', async (req, res) => {
     const def = ATENCION_DEFS[req.params.cat];
     if (!def) return res.status(400).json({ ok: false, error: 'categoría inválida' });
+    const incluyeClaveNula = req.params.cat === 'errores';
+    const filtroClave = incluyeClaveNula ? '' : 'AND s.clave IS NOT NULL';
+    const agrupacion = incluyeClaveNula ? 's.direccion, s.clave' : 's.clave';
     // Total real (sin LIMIT), para no reportar el tope de la query como si fuera el total.
     const totalReal = db.prepare(`
       SELECT COUNT(*) n FROM (
         SELECT s.clave
         FROM sync_log s
         WHERE s.estado IN (${def.estados})
-          AND s.clave IS NOT NULL
+          ${filtroClave}
           AND ${def.exclude}
-        GROUP BY s.clave
+        GROUP BY ${agrupacion}
       )
     `).get().n;
     // GROUP BY clave con MAX(creado_en): SQLite toma sku/error de la fila más reciente.
     const rows = db.prepare(`
-      SELECT s.clave, s.sku, s.error, s.estado, MAX(s.creado_en) AS creado_en,
+      SELECT s.clave, s.sku, s.error, s.estado, s.creado_en,
              p.item_id, p.variation_id, p.titulo, p.variations_texto, p.status AS ml_status, p.thumbnail
       FROM sync_log s
       LEFT JOIN ml_publicaciones_cache p ON p.clave = s.clave
       WHERE s.estado IN (${def.estados})
-        AND s.clave IS NOT NULL
+        ${filtroClave}
         AND ${def.exclude}
-      GROUP BY s.clave
-      ORDER BY creado_en DESC
+      ${incluyeClaveNula ? '' : 'GROUP BY s.clave'}
+      ORDER BY s.creado_en DESC, s.id DESC
       LIMIT 500
     `).all();
 
@@ -2995,12 +3575,8 @@ export function syncRouter(db, cfg) {
   router.post('/desvincular', (req, res) => {
     const { clave } = req.body || {};
     if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
-    // Atómico: si el borrado de descartes fallara a mitad de camino, la clave quedaría
-    // reasignable pero con descartes del vínculo anterior todavía vivos, tapando en silencio
-    // señales legítimas del vínculo que la remapee después.
     const info = db.transaction(() => {
       const r = db.prepare('DELETE FROM sku_matcher_decisiones WHERE clave = ?').run(clave);
-      // Los descartes de sospechosos valían para el vínculo anterior, no para el que le toque después.
       db.prepare('DELETE FROM ml_vinculos_revisados WHERE clave = ?').run(clave);
       return r;
     })();
@@ -3037,6 +3613,10 @@ export function syncRouter(db, cfg) {
     const { itemId, variationId } = partirClaveMl(clave);
     const cantidad = Math.max(0, Math.round(row.stock_disponible_ml));
     try {
+      const bloqueo = bloquearStockPorContradiccion(db, { clave, sku: row.sku, cantidad, cantAnterior: row.cantidad_ml });
+      if (bloqueo.bloqueado) {
+        return res.status(409).json({ ok: false, bloqueado: true, error: 'contradiccion_titulo', motivos: bloqueo.contradiccion.motivos });
+      }
       const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
       // manual: true — reintento puntual disparado a mano desde el panel.
       const resp = await mlFetch(db, mlCfg, 'put', path, body, { manual: true });

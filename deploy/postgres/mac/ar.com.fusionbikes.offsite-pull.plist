@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Nivel 2 de DR (PM-169): descarga el repositorio pgBackRest al iniciar sesión y cada hora.
+     Instalar en ~/Library/LaunchAgents/ y cargar con: launchctl load ~/Library/LaunchAgents/ar.com.fusionbikes.offsite-pull.plist
+     Reemplazar RUTA_SCRIPT por la ruta real de offsite-pull-mac.sh en la Mac. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ar.com.fusionbikes.offsite-pull</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>RUTA_SCRIPT</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/fusion-offsite-pull.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/fusion-offsite-pull.err</string>
+</dict>
+</plist>

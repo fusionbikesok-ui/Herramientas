@@ -1,11 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'fs';
+import { createHash } from 'node:crypto';
 import { openDb } from '../db/index.js';
 import {
   seleccionarPendientes, contarPendientes, pushSkusPendientes,
-  getEstadoPush, _resetEstadoPushParaTests,
+  getEstadoPush, _resetEstadoPushParaTests, escribirSkuEnMl, desvincularSkuEnMl,
 } from '../lib/matcherPush.js';
 import { mlFetch, estadoCooldownMl, _resetCooldownParaTests } from '../lib/mlClient.js';
+import { claveBloqueadaGuardia } from '../lib/guardiaMl.js';
 
 // Mock axios para evitar llamadas reales a ML
 vi.mock('axios', async () => {
@@ -36,6 +38,15 @@ vi.mock('../lib/mlClient.js', async () => {
 });
 
 const TEST_DB = './test/tmp-matcher-push.sqlite';
+let currentTestId = 'setup';
+const TEST_DB_PATHS = new Set();
+beforeEach((ctx) => { currentTestId = ctx.task.id; });
+function openTestDb() {
+  const hash = createHash('sha256').update(currentTestId).digest('hex').slice(0, 16);
+  const ruta = `${TEST_DB}.${process.pid}.${hash}.sqlite`;
+  TEST_DB_PATHS.add(ruta);
+  return openDb(ruta);
+}
 const ML_CFG = { clientId: 'client123', clientSecret: 'secret456', userId: '99999' };
 
 function now() { return new Date().toISOString(); }
@@ -43,23 +54,33 @@ function now() { return new Date().toISOString(); }
 function seedToken(db) {
   const expiresAt = new Date(Date.now() + 4 * 3600 * 1000).toISOString();
   db.prepare(
-    `INSERT INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
+    `INSERT OR IGNORE INTO ml_oauth_token (id, access_token, refresh_token, expires_at, actualizado_en)
      VALUES (1, 'tok', 'ref', ?, ?)`
   ).run(expiresAt, now());
+  db.prepare('UPDATE ml_oauth_token SET access_token = ?, refresh_token = ?, expires_at = ?, actualizado_en = ? WHERE id = 1')
+    .run('tok', 'ref', expiresAt, now());
 }
 
-function seedDecision(db, { clave, sku, accion = 'asignar' }) {
+// `actualizado_en` acepta un valor explícito porque el ORDER BY de pushSkusPendientes ordena
+// por esta columna (lib/matcherPush.js:262). Los tests que dependen del orden entre dos claves
+// NO pueden confiar en que dos `new Date()` consecutivos difieran: con la base de test rápida
+// caen en el mismo milisegundo, el ORDER BY empata y SQLite devuelve el orden que quiere.
+// Apareció el 2026-09-12 al poner el journal en memoria, pero la fragilidad ya estaba.
+function seedDecision(db, { clave, sku, accion = 'asignar', actualizadoEn = now() }) {
   db.prepare(
     'INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
-  ).run(clave, sku, sku, accion, now());
+  ).run(clave, sku, sku, accion, actualizadoEn);
 }
 
 function seedCache(db, { clave, itemId, variationId = '', titulo = 'Pub', status = 'active', sellerSku = '' }) {
   db.prepare(
-    `INSERT INTO ml_publicaciones_cache
+    `INSERT OR IGNORE INTO ml_publicaciones_cache
        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, actualizado_en)
      VALUES (?, ?, ?, ?, ?, '', 0, '', '', ?, '', ?)`
   ).run(clave, itemId, variationId, titulo, status, sellerSku, now());
+  db.prepare(
+    `UPDATE ml_publicaciones_cache SET item_id = ?, variation_id = ?, titulo = ?, status = ?, seller_sku = ?, actualizado_en = ? WHERE clave = ?`
+  ).run(itemId, variationId, titulo, status, sellerSku, now(), clave);
 }
 
 function respOk() {
@@ -75,7 +96,7 @@ function resp400(msg = 'no se pudo') {
 describe('lib/matcherPush', () => {
   let db;
   beforeEach(async () => {
-    db = openDb(TEST_DB);
+    db = openTestDb();
     seedToken(db);
     vi.clearAllMocks();
     // mlFetch es un mock que por default reenvía a la implementación real (vi.fn(actual));
@@ -95,6 +116,9 @@ describe('lib/matcherPush', () => {
   afterEach(() => {
     db.close();
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+  });
+  afterAll(() => {
+    for (const ruta of TEST_DB_PATHS) if (fs.existsSync(ruta)) fs.unlinkSync(ruta);
   });
 
   it('seleccionarPendientes prioriza activas sobre pausadas', () => {
@@ -324,8 +348,16 @@ describe('lib/matcherPush', () => {
   });
 
   describe('corte por tope de tiempo puro (hallazgo A del revisor, 2026-08-06)', () => {
+    // Estos tests dependen del CALL_DELAY_MS real (900 × 350 ms > 300 s): sin la espera rápida
+    // de la suite (lib/esperas.js).
+    let esperasRapidas;
+    beforeEach(() => {
+      esperasRapidas = process.env.FUSION_ESPERAS_RAPIDAS;
+      delete process.env.FUSION_ESPERAS_RAPIDAS;
+    });
     afterEach(() => {
       vi.useRealTimers();
+      if (esperasRapidas !== undefined) process.env.FUSION_ESPERAS_RAPIDAS = esperasRapidas;
     });
     // Con muchas publicaciones sanas (ML responde 200 a todo) el CALL_DELAY_MS entre cada una
     // termina agotando TIEMPO_MAX_CORRIDA_MS sin que haya habido ningún cooldown/cupo propio
@@ -350,7 +382,7 @@ describe('lib/matcherPush', () => {
       expect(r.cortado_por_error).toBe(false);
       expect(r.errores).toBe(0);
       expect(contarPendientes(db).total).toBeGreaterThan(0); // quedó trabajo para el próximo ciclo
-    }, 20_000); // 900 seeds + iteraciones reales bajo fake timers superan el timeout default de 5s
+    }, 60_000); // 900 seeds + iteraciones reales bajo fake timers superan el timeout default
 
     it('agota MAX_REINTENTOS_SIN_CUPO (no el tope de tiempo) cuando el presupuesto propio nunca se libera', async () => {
       // NOTA (tester, corrección post-revisor): con reservarCupo devolviendo false SIEMPRE,
@@ -475,14 +507,16 @@ describe('lib/matcherPush', () => {
   // --- Cuota de pausadas por corrida ---
   describe('cuota de pausadas por corrida', () => {
     it('con 5 activas y 100 pausadas, seleccionarPendientes(cuota=10) trae las 5 activas y exactamente 10 publicaciones pausadas', () => {
-      for (let i = 0; i < 5; i++) {
-        seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
-        seedDecision(db, { clave: `A${i}|`, sku: `FB-A${i}` });
-      }
-      for (let i = 0; i < 100; i++) {
-        seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
-        seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
-      }
+      db.transaction(() => {
+        for (let i = 0; i < 5; i++) {
+          seedCache(db, { clave: `A${i}|`, itemId: `A${i}`, status: 'active' });
+          seedDecision(db, { clave: `A${i}|`, sku: `FB-A${i}` });
+        }
+        for (let i = 0; i < 100; i++) {
+          seedCache(db, { clave: `P${i}|`, itemId: `P${i}`, status: 'paused' });
+          seedDecision(db, { clave: `P${i}|`, sku: `FB-P${i}` });
+        }
+      })();
 
       const lote = seleccionarPendientes(db, { limite: 1000, cuotaPausadas: 10 });
       const activasSel = lote.filter(p => p.status === 'active');
@@ -583,7 +617,7 @@ describe('lib/matcherPush', () => {
       const fallos = db.prepare('SELECT COUNT(*) n FROM ml_sku_push_fallos').get().n;
       expect(fallos).toBe(0);
       expect(contarPendientes(db).total).toBe(100);
-    });
+    }, 15000);
 
     it('cortado_por_cuota es true cuando la cuota se agota y quedan pausadas sin procesar', async () => {
       for (let i = 0; i < 100; i++) {
@@ -613,12 +647,14 @@ describe('lib/matcherPush', () => {
     }, 15000);
 
     it('una clave saltada por idempotencia (caché refrescada por otro proceso) cuenta en "saltados", no en "escritos"', async () => {
-      // A2 se seedea primero (queda con timestamp más viejo) y A1 después (más nuevo), para
-      // que el ORDER BY ... DESC procese A1 primero dentro del grupo de activas.
+      // A1 tiene que procesarse ANTES que A2 para que el mock alcance a "refrescar" la caché
+      // de A2 mientras se escribe A1. El orden sale del ORDER BY d.actualizado_en DESC, así que
+      // las fechas van EXPLÍCITAS: sembrarlas una tras otra y confiar en el reloj no alcanza,
+      // porque las dos caen en el mismo milisegundo y el empate lo desempata SQLite.
       seedCache(db, { clave: 'A2|', itemId: 'A2', status: 'active' });
-      seedDecision(db, { clave: 'A2|', sku: 'FB-2' });
+      seedDecision(db, { clave: 'A2|', sku: 'FB-2', actualizadoEn: '2026-01-01T00:00:00.000Z' });
       seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active' });
-      seedDecision(db, { clave: 'A1|', sku: 'FB-1' });
+      seedDecision(db, { clave: 'A1|', sku: 'FB-1', actualizadoEn: '2026-01-02T00:00:00.000Z' });
 
       let llamados = 0;
       axios.request.mockImplementation(async () => {
@@ -672,6 +708,77 @@ describe('lib/matcherPush', () => {
 
       // contarPendientes no acota nada por cuota: siempre la cola real
       expect(contarPendientes(db).total).toBe(105);
+    });
+  });
+
+  // --- UM1: Bloqueo de Guardia sobre escrituras legacy ---
+  describe('Guardia ML: bloqueo de claves bloqueadas', () => {
+    it('rechaza escribirSkuEnMl legacy cuando clave está bloqueada', async () => {
+      seedCache(db, { clave: 'MLA-BLQ|', itemId: 'MLA-BLQ' });
+      seedDecision(db, { clave: 'MLA-BLQ|', sku: 'FB-TEST' });
+      // Simular bloqueo de Guardia creando un caso activo que bloqueaSync
+      db.prepare(`
+        INSERT INTO guardia_ml_casos (clave, estado, severidad, motivo, bloquea_sync, creado_en, actualizado_en)
+        VALUES ('MLA-BLQ|', 'abierto', 'urgente', 'sin_cobertura', 1, ?, ?)
+      `).run(now(), now());
+
+      const r = await escribirSkuEnMl(db, ML_CFG, 'MLA-BLQ|', 'FB-TEST', { manual: true });
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain('bloqueada por Guardia');
+    });
+
+    it('permite escribirSkuEnMl con guardianOperation=true pese al bloqueo', async () => {
+      seedCache(db, { clave: 'MLA-GUARDIA|', itemId: 'MLA-GUARDIA' });
+      seedDecision(db, { clave: 'MLA-GUARDIA|', sku: 'FB-AUTH' });
+      // Crear caso bloqueado
+      db.prepare(`
+        INSERT INTO guardia_ml_casos (clave, estado, severidad, motivo, bloquea_sync, creado_en, actualizado_en)
+        VALUES ('MLA-GUARDIA|', 'abierto', 'urgente', 'sin_cobertura', 1, ?, ?)
+      `).run(now(), now());
+
+      axios.request.mockResolvedValue(respOk());
+
+      // Sin guardianOperation: rechaza
+      let r = await escribirSkuEnMl(db, ML_CFG, 'MLA-GUARDIA|', 'FB-AUTH');
+      expect(r.ok).toBe(false);
+
+      // Con guardianOperation: permite
+      r = await escribirSkuEnMl(db, ML_CFG, 'MLA-GUARDIA|', 'FB-AUTH', { guardianOperation: true });
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe(200);
+    });
+
+    it('rechaza desvincularSkuEnMl legacy cuando clave está bloqueada', async () => {
+      seedCache(db, { clave: 'MLA-DESVBL|', itemId: 'MLA-DESVBL', sellerSku: 'FB-OLD' });
+      // Crear caso bloqueado
+      db.prepare(`
+        INSERT INTO guardia_ml_casos (clave, estado, severidad, motivo, bloquea_sync, creado_en, actualizado_en)
+        VALUES ('MLA-DESVBL|', 'abierto', 'urgente', 'sin_cobertura', 1, ?, ?)
+      `).run(now(), now());
+
+      const r = await desvincularSkuEnMl(db, ML_CFG, 'MLA-DESVBL|');
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain('bloqueada por Guardia');
+    });
+
+    it('permite desvincularSkuEnMl con guardianOperation=true pese al bloqueo', async () => {
+      seedCache(db, { clave: 'MLA-DESV-AUTH|', itemId: 'MLA-DESV-AUTH', sellerSku: 'FB-VIEJO' });
+      // Crear caso bloqueado
+      db.prepare(`
+        INSERT INTO guardia_ml_casos (clave, estado, severidad, motivo, bloquea_sync, creado_en, actualizado_en)
+        VALUES ('MLA-DESV-AUTH|', 'abierto', 'urgente', 'sin_cobertura', 1, ?, ?)
+      `).run(now(), now());
+
+      axios.request.mockResolvedValue(respOk());
+
+      // Sin guardianOperation: rechaza
+      let r = await desvincularSkuEnMl(db, ML_CFG, 'MLA-DESV-AUTH|');
+      expect(r.ok).toBe(false);
+
+      // Con guardianOperation: permite
+      r = await desvincularSkuEnMl(db, ML_CFG, 'MLA-DESV-AUTH|', { guardianOperation: true });
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe(200);
     });
   });
 });

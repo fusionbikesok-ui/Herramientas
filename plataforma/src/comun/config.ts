@@ -1,0 +1,305 @@
+import { readFileSync } from 'node:fs';
+import { leerSecretoProtegido } from '../seguridad/secreto.ts';
+import { z } from 'zod';
+
+export type Servicio = 'api' | 'worker' | 'scheduler';
+/**
+ * Barridos multi-cuenta (T3 C4): las cuentas salen de un registro en archivo, validado contra la base al
+ * arrancar (`reconciliacion/registro.ts`); el worker no descubre cuentas desde la base.
+ */
+export interface ConfigBarridos {
+  registroFile: string;
+  keyringFile: string;
+  /** Claves HMAC del plano de control hacia el gateway del legado. Separadas del keyring de sobres. */
+  gatewayKeyringFile?: string;
+}
+/**
+ * API interna de señales (T3 C3). Todo o nada, igual que barridos: sin estas tres variables la ruta no
+ * existe. `cuentas` es "mercadolibre=<uuid>,woocommerce=<uuid>": la cuenta la decide el servidor.
+ */
+export interface ConfigSenales {
+  keyringFile: string;
+  cuentas: ReadonlyMap<'mercadolibre' | 'woocommerce', string>;
+  origenes: string;
+}
+/**
+ * Informes diarios firmados (E1 T4). Todo o nada, igual que barridos y señales: sin estas variables el
+ * scheduler no emite informes. Los secretos van en archivos sueltos (0600) y se leen al arrancar; nunca en
+ * variables de entorno, donde quedarían visibles en `docker inspect` (diseño §9 bis).
+ */
+export interface ConfigInformes {
+  claveFirmaFile: string;
+  pendientesDir: string;
+  clavePublicaUbicacion: string;
+  b2: { endpoint: string; region: string; bucket: string; escritura: { id: string; clave: string }; lectura: { id: string; clave: string } };
+  smtp: { host: string; puerto: number; seguro: boolean; usuario: string; clave: string; desde: string; para: string };
+}
+/**
+ * Catálogo canónico (E2 T1). Tiene **su propio** keyring de sobres a propósito: el del worker se cargaba
+ * sólo dentro de `if (config.barridos)`, así que el proyector no podía encenderse sin encender barridos,
+ * que es exactamente al revés del orden de puesta en producción (primero el proyector con canario).
+ *
+ * Todo nace apagado. Los topes están pensados para no atropellar: el backlog son 3.490 mensajes de Woo
+ * más 427 de ML, y el bootstrap comparte con los barridos el cupo del gateway del legado.
+ */
+export interface ConfigCatalogo {
+  proyector: boolean;
+  bootstrap: boolean;
+  keyringFile: string;
+  lote: number;
+  pausaMs: number;
+  /** 0 = sin límite. Con un número, el proyector se detiene ahí y deja un resumen para revisar. */
+  canario: number;
+  bootstrapRpm: number;
+  /** Señales de ML reclamables a partir de las cuales el bootstrap cede una vuelta. */
+  bootstrapCedeSenales: number;
+  umbralErrorPorciento: number;
+  /** Abrir `atributo_divergente` al comparar canales. Apagado, los atributos se capturan igual. */
+  compararAtributos: boolean;
+}
+export interface Config {
+  servicio: Servicio; instancia: string; version: string; pgUrl: string; apiPuerto: number;
+  estadoPgDir: string; heartbeatMaxS: number; heartbeatIntervalMs: number;
+  barridos?: ConfigBarridos;
+  senales?: ConfigSenales;
+  informes?: ConfigInformes;
+  catalogo?: ConfigCatalogo;
+  /**
+   * E3 corte 1: si una decisión humana de la bandeja manda sobre la copiada del legado. Apagado por
+   * omisión — sin esto, `vincularMl`/`reconciliarClave` se comportan bit a bit como antes de E3.
+   *
+   * TOP-LEVEL y no dentro de `catalogo` (hallazgo de revisión sobre 447126b6): si viviera en
+   * `ConfigCatalogo`, un servicio sin CATALOGO_PROYECTOR/CATALOGO_BOOTSTRAP encendidos (el catálogo entero
+   * apagado, `catalogo` queda `undefined`) leería `bandeja` como `false` sin que nadie lo pusiera ahí —
+   * mientras otro servicio con el catálogo sí encendido y `E3_BANDEJA=1` real quedaría en `true`. Worker y
+   * API tienen que leer EL MISMO valor siempre, esté o no el catálogo configurado en ese servicio en
+   * particular, así que `bandeja` se parsea independiente de `catalogo` y `cargarConfig` valida además que
+   * no pueda quedar encendida sin catálogo (ver más abajo): una autoridad sin proyector es un error de
+   * despliegue, no un estado válido en silencio.
+   */
+  bandeja: boolean;
+  /** E3 corte 3: flags del auto-SKU (apagados por omisión). Los leen worker y API por igual. */
+  flagsAutoSku: { E3_AUTO_SKU: boolean; E3_CANARIO: boolean };
+  E3_INTERVENTION: '0' | '1';
+  /**
+   * E3 corte 1 tarea 4: si el ciclo del motor en sombra corre en este worker (src/worker/identidad.ts).
+   * Apagado por omisión, mismo criterio que `bandeja` arriba: TOP-LEVEL, no dentro de `catalogo`, para
+   * que valga igual esté o no el catálogo configurado en este servicio en particular. Sólo lo lee el
+   * worker (el motor no tiene sentido en la API); `cargarConfig` exige CATALOGO_PROYECTOR=1 igual que
+   * `bandeja`, porque el motor lee product_models.titulo y catalog.model_attributes, que sólo existen
+   * si el proyector de E2 los está escribiendo.
+   */
+  motor: boolean;
+  /** Pausa entre vueltas del ciclo del motor (src/worker/identidad.ts). Sólo tiene efecto con `motor: true`. */
+  motorPausaMs: number;
+}
+export class ErrorConfig extends Error { override name = 'ErrorConfig'; }
+
+const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const CAMPOS_SENALES = ['SENALES_KEYRING_FILE', 'SENALES_CUENTAS', 'SENALES_ORIGENES'] as const;
+const CAMPOS_BARRIDOS = ['BARRIDOS_REGISTRO_FILE', 'BARRIDOS_KEYRING_FILE'] as const;
+/**
+ * Un booleano de entorno que sólo acepta 'true' o 'false'. Con `x === 'true'` a secas, un `TRUE`, un `1`
+ * o un `tru` se vuelven `false` sin que nadie se entere: la misma degradación silenciosa que motivó poner
+ * `SMTP_SEGURO` entre los campos obligatorios, pero por la puerta del typo en vez de la de la omisión.
+ */
+function booleanoEstricto(nombre: string, valor: string): boolean {
+  if (valor !== 'true' && valor !== 'false') {
+    throw new ErrorConfig(`${nombre} inválida: se espera 'true' o 'false', no ${JSON.stringify(valor)}`);
+  }
+  return valor === 'true';
+}
+
+const CAMPOS_INFORMES = [
+  'INFORMES_CLAVE_FIRMA_FILE', 'INFORMES_PENDIENTES_DIR', 'INFORMES_CLAVE_PUBLICA_UBICACION',
+  'B2_ENDPOINT', 'B2_REGION', 'B2_BUCKET',
+  'B2_ESCRITURA_ID_FILE', 'B2_ESCRITURA_CLAVE_FILE', 'B2_LECTURA_ID_FILE', 'B2_LECTURA_CLAVE_FILE',
+  // `SMTP_SEGURO` es obligatoria y además se valida su VALOR (`booleanoEstricto`): si faltara, o si
+  // trajera un typo, el correo saldría sin TLS y el arranque no protestaría. Degradar el transporte en
+  // silencio es peor que no arrancar.
+  'SMTP_HOST', 'SMTP_PUERTO', 'SMTP_SEGURO', 'SMTP_USUARIO_FILE', 'SMTP_CLAVE_FILE', 'SMTP_DESDE', 'INFORMES_PARA',
+] as const;
+
+const Esquema = z.object({
+  SERVICIO: z.enum(['api', 'worker', 'scheduler', 'migrate']),
+  INSTANCIA: z.string().min(1),
+  VERSION: z.string().min(1),
+  PG_HOST: z.string().min(1),
+  PG_PORT: z.coerce.number().int().positive(),
+  PG_DATABASE: z.string().min(1),
+  PG_USER: z.string().min(1),
+  PG_PASSWORD: z.string().min(1).optional(),
+  PG_PASSWORD_FILE: z.string().min(1).optional(),
+  API_PUERTO: z.coerce.number().int().positive().default(3201),
+  ESTADO_PG_DIR: z.string().min(1).default('/estado-pg'),
+  HEARTBEAT_MAX_S: z.coerce.number().int().min(1).default(120),
+  HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(100).default(30_000),
+  BARRIDOS_REGISTRO_FILE: z.string().min(1).optional(),
+  BARRIDOS_GATEWAY_KEYRING_FILE: z.string().min(1).optional(),
+  BARRIDOS_KEYRING_FILE: z.string().min(1).optional(),
+  CATALOGO_PROYECTOR: z.string().min(1).optional(),
+  CATALOGO_BOOTSTRAP: z.string().min(1).optional(),
+  CATALOGO_KEYRING_FILE: z.string().min(1).optional(),
+  // Los mínimos no son decoración: un lote o un rpm en 0 haría un bucle que no procesa nada y parece sano.
+  CATALOGO_LOTE: z.coerce.number().int().min(1).max(500).default(20),
+  CATALOGO_PAUSA_MS: z.coerce.number().int().min(0).default(1000),
+  CATALOGO_CANARIO: z.coerce.number().int().min(0).default(0),
+  CATALOGO_BOOTSTRAP_RPM: z.coerce.number().int().min(1).max(600).default(10),
+  CATALOGO_BOOTSTRAP_CEDE_SENALES: z.coerce.number().int().min(0).default(20),
+  // Apagado por omisión: se despliega capturando y se enciende ('1') después de medir. Capturar no depende de esto.
+  CATALOGO_COMPARAR_ATRIBUTOS: z.enum(['0', '1']).default('0'),
+  CATALOGO_UMBRAL_ERROR: z.coerce.number().int().min(1).max(100).default(10),
+  // E3 corte 1: apagado por omisión hasta el canario. Lo lee tanto el worker (proyector) como la API
+  // (eventos/copias del legado) — ambos toman ConfigCatalogo.bandeja del mismo parseo, así que nunca pueden
+  // quedar en valores distintos por un typo en un solo servicio.
+  E3_BANDEJA: z.enum(['0', '1']).default('0'),
+  E3_MOTOR: z.enum(['0', '1']).default('0'),
+  // E3 corte 3: apagados por omisión; nada se enciende sin José y sin E1 aceptada (PM-187).
+  E3_CANARIO: z.enum(['0', '1']).default('0'),
+  E3_AUTO_SKU: z.enum(['0', '1']).default('0'),
+  E3_INTERVENTION: z.enum(['0', '1']).default('0'),
+  E3_MOTOR_PAUSA_MS: z.coerce.number().int().min(1000).default(1_800_000), // 30 minutos, el default del plan.
+});
+
+/** Todo o nada: media configuración de barridos haría arrancar un worker que no barre nada. */
+function leerBarridos(env: Record<string, string | undefined>): ConfigBarridos | undefined {
+  const presentes = CAMPOS_BARRIDOS.filter((c) => env[c]);
+  if (presentes.length === 0) return undefined;
+  const faltantes = CAMPOS_BARRIDOS.filter((c) => !env[c]);
+  if (faltantes.length) throw new ErrorConfig(`configuración de barridos incompleta: ${faltantes.join(', ')}`);
+  // Las variables T2 de cuenta única ya no existen: dejarlas puestas indica una configuración vieja.
+  const viejas = ['BARRIDOS_CUENTA', 'BARRIDOS_ML_URL', 'BARRIDOS_WOO_URL', 'BARRIDOS_ML_SELLER'].filter((c) => env[c]);
+  if (viejas.length) throw new ErrorConfig(`variables de cuenta única de T2 ya no soportadas: ${viejas.join(', ')}`);
+  return {
+    registroFile: env.BARRIDOS_REGISTRO_FILE!, keyringFile: env.BARRIDOS_KEYRING_FILE!,
+    ...(env.BARRIDOS_GATEWAY_KEYRING_FILE ? { gatewayKeyringFile: env.BARRIDOS_GATEWAY_KEYRING_FILE } : {}),
+  };
+}
+
+/**
+ * El keyring es obligatorio en cuanto se enciende cualquiera de los dos: sin él no se descifra ningún
+ * payload, y descubrirlo mensaje por mensaje manda todo el backlog a la DLQ.
+ */
+function leerCatalogo(v: z.infer<typeof Esquema>): ConfigCatalogo | undefined {
+  const proyector = v.CATALOGO_PROYECTOR === '1';
+  const bootstrap = v.CATALOGO_BOOTSTRAP === '1';
+  if (!proyector && !bootstrap) return undefined;
+  if (!v.CATALOGO_KEYRING_FILE) throw new ErrorConfig('el catálogo está encendido y falta CATALOGO_KEYRING_FILE');
+  return {
+    proyector, bootstrap, keyringFile: v.CATALOGO_KEYRING_FILE,
+    lote: v.CATALOGO_LOTE, pausaMs: v.CATALOGO_PAUSA_MS, canario: v.CATALOGO_CANARIO,
+    bootstrapRpm: v.CATALOGO_BOOTSTRAP_RPM, bootstrapCedeSenales: v.CATALOGO_BOOTSTRAP_CEDE_SENALES,
+    umbralErrorPorciento: v.CATALOGO_UMBRAL_ERROR,
+    compararAtributos: v.CATALOGO_COMPARAR_ATRIBUTOS === '1',
+  };
+}
+
+function leerSenales(env: Record<string, string | undefined>): ConfigSenales | undefined {
+  const presentes = CAMPOS_SENALES.filter((c) => env[c]);
+  if (presentes.length === 0) return undefined;
+  const faltantes = CAMPOS_SENALES.filter((c) => !env[c]);
+  if (faltantes.length) throw new ErrorConfig(`configuración de señales incompleta: ${faltantes.join(', ')}`);
+  const cuentas = new Map<'mercadolibre' | 'woocommerce', string>();
+  for (const par of env.SENALES_CUENTAS!.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const [canal, uuid] = par.split('=');
+    if ((canal !== 'mercadolibre' && canal !== 'woocommerce') || !uuid || !UUID.test(uuid) || cuentas.has(canal)) {
+      throw new ErrorConfig('SENALES_CUENTAS inválida: se espera canal=uuid sin repetir canal');
+    }
+    cuentas.set(canal, uuid);
+  }
+  if (!cuentas.size) throw new ErrorConfig('SENALES_CUENTAS vacía');
+  return { keyringFile: env.SENALES_KEYRING_FILE!, cuentas, origenes: env.SENALES_ORIGENES! };
+}
+
+function leerInformes(env: Record<string, string | undefined>, leerArchivo: (ruta: string) => string): ConfigInformes | undefined {
+  const presentes = CAMPOS_INFORMES.filter((c) => env[c]);
+  if (presentes.length === 0) return undefined;
+  const faltantes = CAMPOS_INFORMES.filter((c) => !env[c]);
+  if (faltantes.length) throw new ErrorConfig(`configuración de informes incompleta: ${faltantes.join(', ')}`);
+  // Los secretos de B2 y SMTP se leen con las mismas guardas que la clave de firma (dueño, permisos, archivo
+  // regular, directorio no escribible por otros): antes bastaba un readFileSync y un archivo montado con
+  // permisos abiertos pasaba en silencio.
+  const secreto = (campo: typeof CAMPOS_INFORMES[number]) => {
+    const valor = leerArchivo(env[campo]!).trim();
+    if (!valor) throw new ErrorConfig(`${campo} está vacío`);
+    return valor;
+  };
+  const puerto = Number(env.SMTP_PUERTO);
+  if (!Number.isInteger(puerto) || puerto <= 0) throw new ErrorConfig('SMTP_PUERTO inválido');
+  return {
+    claveFirmaFile: env.INFORMES_CLAVE_FIRMA_FILE!, pendientesDir: env.INFORMES_PENDIENTES_DIR!,
+    clavePublicaUbicacion: env.INFORMES_CLAVE_PUBLICA_UBICACION!,
+    b2: {
+      endpoint: env.B2_ENDPOINT!, region: env.B2_REGION!, bucket: env.B2_BUCKET!,
+      escritura: { id: secreto('B2_ESCRITURA_ID_FILE'), clave: secreto('B2_ESCRITURA_CLAVE_FILE') },
+      lectura: { id: secreto('B2_LECTURA_ID_FILE'), clave: secreto('B2_LECTURA_CLAVE_FILE') },
+    },
+    smtp: {
+      host: env.SMTP_HOST!, puerto, seguro: booleanoEstricto('SMTP_SEGURO', env.SMTP_SEGURO!),
+      usuario: secreto('SMTP_USUARIO_FILE'), clave: secreto('SMTP_CLAVE_FILE'),
+      desde: env.SMTP_DESDE!, para: env.INFORMES_PARA!,
+    },
+  };
+}
+
+/**
+ * Una variable vacía es una variable ausente.
+ *
+ * Docker Compose interpola `${VAR}` de una variable que no existe como cadena vacía, y la pasa igual al
+ * contenedor. Contra un esquema de `z.string().min(1).optional()` eso no es "ausente" sino "inválida", y el
+ * servicio no arranca: un flag apagado tumbaba el worker. Pasó con `CATALOGO_BOOTSTRAP` el 2026-09-19.
+ */
+function sinVacias(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const limpio: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) if (v !== '') limpio[k] = v;
+  return limpio;
+}
+
+export function cargarConfig(envCrudo: NodeJS.ProcessEnv, leerArchivo: (ruta: string) => string = leerSecretoProtegido): Config {
+  const env = sinVacias(envCrudo);
+  const r = Esquema.safeParse(env);
+  if (!r.success) {
+    const campos = r.error.issues.map((i) => i.path.join('.')).join(', ');
+    throw new ErrorConfig(`configuración inválida o incompleta: ${campos}`);
+  }
+  const e = r.data;
+  if (e.SERVICIO === 'migrate') throw new ErrorConfig('SERVICIO=migrate usa src/db/cli-migrar.ts');
+  if (!e.PG_PASSWORD && !e.PG_PASSWORD_FILE) throw new ErrorConfig('configuración inválida o incompleta: PG_PASSWORD_FILE');
+  const clave = e.PG_PASSWORD ?? leerArchivo(e.PG_PASSWORD_FILE ?? '').trim();
+  if (!clave) throw new ErrorConfig('PG_PASSWORD_FILE está vacío');
+  const barridos = leerBarridos(env);
+  const senales = leerSenales(env);
+  const informes = leerInformes(env, leerArchivo);
+  const catalogo = leerCatalogo(e);
+  const bandeja = e.E3_BANDEJA === '1';
+  // El worker es quien VINCULA publicaciones nuevas con la autoridad de la bandeja, en vincularMl dentro
+  // del proyector (src/catalogo/proyector.ts): si el proyector no corre en este worker (catalogo apagado, o
+  // sin CATALOGO_PROYECTOR encendido) pero E3_BANDEJA=1 igual, la bandeja "está prendida" de nombre y no
+  // aplica en ningún lado — la API, mientras tanto, seguiría abriendo decision_en_conflicto y NO
+  // revinculando eventos del legado como si la autoridad estuviera activa, mientras las publicaciones
+  // nuevas nacen sin consultarla nunca. Dos autoridades distintas, por un typo en el compose del worker.
+  // La API no necesita el catálogo encendido para leer `bandeja`: no corre el proyector, y aplicar/confirmar
+  // eventos del legado no depende de CATALOGO_KEYRING_FILE ni de ningún otro campo de `ConfigCatalogo`.
+  if (bandeja && e.SERVICIO === 'worker' && !catalogo?.proyector) {
+    throw new ErrorConfig('E3_BANDEJA=1 en el worker requiere CATALOGO_PROYECTOR=1: sin el proyector corriendo, la bandeja no se aplica al vincular publicaciones nuevas');
+  }
+  const motor = e.E3_MOTOR === '1';
+  if (motor && e.SERVICIO !== 'worker') {
+    throw new ErrorConfig('E3_MOTOR=1 sólo tiene sentido en el worker (el motor no corre en la API)');
+  }
+  if (motor && !catalogo?.proyector) {
+    throw new ErrorConfig('E3_MOTOR=1 requiere CATALOGO_PROYECTOR=1: el motor lee product_models.titulo y catalog.model_attributes, que sólo existen con el proyector de E2 corriendo');
+  }
+  return {
+    servicio: e.SERVICIO, instancia: e.INSTANCIA, version: e.VERSION,
+    pgUrl: `postgres://${encodeURIComponent(e.PG_USER)}:${encodeURIComponent(clave)}@${e.PG_HOST}:${e.PG_PORT}/${e.PG_DATABASE}`,
+    apiPuerto: e.API_PUERTO, estadoPgDir: e.ESTADO_PG_DIR, heartbeatMaxS: e.HEARTBEAT_MAX_S, heartbeatIntervalMs: e.HEARTBEAT_INTERVAL_MS,
+    bandeja, motor, motorPausaMs: e.E3_MOTOR_PAUSA_MS,
+    flagsAutoSku: { E3_AUTO_SKU: e.E3_AUTO_SKU === '1', E3_CANARIO: e.E3_CANARIO === '1' },
+    E3_INTERVENTION: e.E3_INTERVENTION,
+    ...(barridos ? { barridos } : {}),
+    ...(senales ? { senales } : {}),
+    ...(informes ? { informes } : {}),
+    ...(catalogo ? { catalogo } : {}),
+  };
+}

@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Conteo — propuesta de rediseño</title>
+<style>
+  /* Tokens tomados de public/lib/theme.css: la propuesta no inventa una paleta nueva,
+     usa la que ya comparten las demás herramientas. */
+  :root{
+    --bg:#0C0F16; --panel:#141A25; --panel2:#1B2235;
+    --border:#24304A; --border2:#2E3B57;
+    --accent:#2DB8E8; --accent-dk:#1C93BD; --accent-dim:rgba(45,184,232,.12);
+    --txt:#E4EAF4; --muted:#8493B0; --muted2:#5B6B8C;
+    --green:#34D399; --green-dim:rgba(52,211,153,.12);
+    --amber:#F5B942; --amber-dim:rgba(245,185,66,.12);
+    --radius:12px; --radius-sm:9px;
+    --u:4px; /* unidad base */
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:#07090E;color:var(--txt);
+    font:400 15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:26px;letter-spacing:-.02em;margin:0 0 6px;text-wrap:balance}
+  .lede{color:var(--muted);margin:0 0 28px;max-width:62ch;text-wrap:pretty}
+  h2{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+     margin:40px 0 14px;font-weight:600}
+  .nota{color:var(--muted);font-size:13.5px;max-width:60ch;margin:10px 0 0;text-wrap:pretty}
+  .fila-pantallas{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
+
+  /* ---- Teléfono ---- */
+  .tel{width:390px;height:844px;background:var(--bg);border:1px solid var(--border2);
+    border-radius:26px;overflow:hidden;position:relative;display:flex;flex-direction:column;
+    box-shadow:0 0 0 1px rgba(255,255,255,.04), 0 24px 60px rgba(0,0,0,.5);flex:0 0 auto}
+
+  /* Franja superior fija: escanear Y buscar son el mismo campo. */
+  .top{padding:12px 14px 10px;background:var(--bg);border-bottom:1px solid var(--border);
+    position:sticky;top:0;z-index:5}
+  .ronda{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+  .ronda b{font-size:13px;font-weight:600;letter-spacing:.01em}
+  .ronda span{font-size:12px;color:var(--muted)}
+  .campo{display:flex;align-items:center;gap:10px;background:#0A0D14;
+    border:1px solid var(--border2);border-radius:var(--radius);padding:0 12px;height:56px}
+  .campo input{flex:1;background:none;border:0;color:var(--txt);font-size:16px;outline:none;height:100%}
+  .campo input::placeholder{color:var(--muted2)}
+  .campo .cam{width:40px;height:40px;border-radius:var(--radius-sm);border:1px solid var(--border2);
+    background:var(--panel2);display:grid;place-items:center;font-size:17px;flex:0 0 auto}
+
+  /* Confirmación de la última lectura: qué entró y cuánto lleva ese producto. */
+  .ultimo{margin-top:9px;display:flex;align-items:center;gap:10px;background:var(--green-dim);
+    border:1px solid rgba(52,211,153,.32);border-radius:var(--radius-sm);padding:9px 11px}
+  .ultimo .tick{color:var(--green);font-size:15px;font-weight:700}
+  .ultimo .t{flex:1;min-width:0}
+  .ultimo .t b{display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ultimo .t span{font-size:12px;color:var(--muted)}
+  .ultimo .n{font-variant-numeric:tabular-nums;font-size:19px;font-weight:700;color:var(--green)}
+  .ultimo .undo{font-size:12px;color:var(--accent);border:0;background:none;padding:6px 2px;font-weight:600}
+
+  .lista{flex:1;overflow:hidden;padding:12px 14px 8px;display:flex;flex-direction:column;gap:10px}
+
+  /* La ficha de producto: foto, nombre grande, un solo número editable. */
+  .ficha{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:11px;display:flex;gap:11px;align-items:flex-start}
+  .ficha img{width:72px;height:72px;border-radius:var(--radius-sm);object-fit:cover;background:#fff;
+    outline:1px solid rgba(255,255,255,.10);outline-offset:-1px;flex:0 0 auto}
+  .ficha .info{flex:1;min-width:0}
+  .ficha .nom{font-size:16px;font-weight:600;line-height:1.25;letter-spacing:-.01em;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .ficha .meta{font-size:12.5px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+  .ficha .estado{font-size:12.5px;margin-top:7px;font-weight:600}
+  .ok{color:var(--green)} .dif{color:var(--amber)}
+
+  /* Campo numérico: se tipea O se ajusta. 56px de alto, nada pegado al lado. */
+  .num{display:flex;flex-direction:column;align-items:center;gap:6px;flex:0 0 auto}
+  .num .caja{width:74px;height:56px;border-radius:var(--radius-sm);border:1.5px solid var(--border2);
+    background:#0A0D14;display:grid;place-items:center;font-size:26px;font-weight:700;
+    font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .num .caja.vacia{color:var(--muted2);font-weight:500;font-size:20px;border-style:dashed}
+  .num .caja.hecho{border-color:rgba(52,211,153,.45);background:var(--green-dim);color:var(--green)}
+  .num .caja.hechodif{border-color:rgba(245,185,66,.45);background:var(--amber-dim);color:var(--amber)}
+  .num .mas{font-size:12px;color:var(--muted);border:0;background:none;padding:2px}
+
+  /* Producto con variantes: una foto, varias cantidades. */
+  .grupo{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .grupo .cab{display:flex;gap:11px;padding:11px;align-items:center}
+  .grupo .cab img{width:72px;height:72px;border-radius:var(--radius-sm);object-fit:cover;background:#fff;
+    outline:1px solid rgba(255,255,255,.10);outline-offset:-1px}
+  .grupo .cab .nom{font-size:16px;font-weight:600;line-height:1.25;letter-spacing:-.01em}
+  .grupo .cab .meta{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .var{display:flex;align-items:center;gap:10px;padding:9px 11px;border-top:1px solid var(--border);
+    min-height:56px}
+  .var .et{flex:1;font-size:15px;font-weight:600}
+  .var .et small{display:block;font-weight:400;font-size:12px;color:var(--muted);margin-top:1px}
+  .var .caja{width:64px;height:44px;border-radius:8px;border:1.5px solid var(--border2);background:#0A0D14;
+    display:grid;place-items:center;font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+  .var .caja.vacia{color:var(--muted2);border-style:dashed;font-weight:500;font-size:17px}
+  .var .caja.hecho{border-color:rgba(52,211,153,.45);background:var(--green-dim);color:var(--green)}
+
+  /* Franja inferior fija: progreso real de la ronda, en la zona del pulgar. */
+  .bottom{background:var(--panel);border-top:1px solid var(--border);padding:11px 14px 14px}
+  .prog{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px}
+  .prog b{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .prog span{font-size:12.5px;color:var(--muted)}
+  .barra{height:6px;border-radius:99px;background:#0A0D14;overflow:hidden;margin-bottom:11px}
+  .barra i{display:block;height:100%;width:25%;background:var(--accent);border-radius:99px}
+  .cerrar{width:100%;height:52px;border-radius:var(--radius);border:1px solid var(--border2);
+    background:var(--panel2);color:var(--txt);font-size:15px;font-weight:600}
+
+  /* ---- Pantalla de empezar ---- */
+  .hoy{margin:14px;padding:16px;border-radius:var(--radius);
+    background:linear-gradient(180deg, rgba(45,184,232,.10), rgba(45,184,232,.03));
+    border:1px solid rgba(45,184,232,.30)}
+  .hoy .k{font-size:11.5px;letter-spacing:.10em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  .hoy .q{font-size:25px;font-weight:700;letter-spacing:-.02em;margin:8px 0 4px;line-height:1.15}
+  .hoy .d{font-size:13.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .hoy .go{margin-top:14px;width:100%;height:56px;border-radius:var(--radius);border:0;
+    background:var(--accent);color:#04121A;font-size:16px;font-weight:700}
+  .otra{margin:22px 14px 0}
+  .otra .lbl{font-size:12.5px;color:var(--muted);margin-bottom:8px}
+  .sug{display:flex;justify-content:space-between;padding:13px 12px;border-bottom:1px solid var(--border);
+    font-size:14.5px;min-height:48px;align-items:center}
+  .sug span{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+
+
+  /* ---- Buscador para asociar un código (compartido por 4 herramientas) ---- */
+  .codigo-cab{padding:14px;border-bottom:1px solid var(--border)}
+  .codigo-cab .k{font-size:11.5px;letter-spacing:.10em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .codigo-cab .cod{font-size:28px;font-weight:700;letter-spacing:.02em;font-variant-numeric:tabular-nums;margin:6px 0 2px}
+  .codigo-cab .tipo{font-size:12.5px;color:var(--muted)}
+  .res{display:flex;gap:11px;align-items:center;padding:10px 11px;border-radius:var(--radius-sm);
+    border:1px solid transparent;min-height:64px}
+  .res:hover,.res.foco{background:var(--accent-dim);border-color:rgba(45,184,232,.35)}
+  .res img{width:56px;height:56px;border-radius:8px;object-fit:cover;background:#fff;
+    outline:1px solid rgba(255,255,255,.10);outline-offset:-1px;flex:0 0 auto}
+  .res .c{flex:1;min-width:0}
+  .res .t{font-size:15px;font-weight:600;line-height:1.25;letter-spacing:-.01em;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .res .v{font-size:14px;font-weight:700;color:var(--txt);margin-top:2px}
+  .res .m{font-size:12px;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:3px 7px;border-radius:99px;
+    letter-spacing:.02em;white-space:nowrap}
+  .pill.libre{background:var(--green-dim);color:var(--green);border:1px solid rgba(52,211,153,.35)}
+  .pill.ocupado{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(245,185,66,.40)}
+  .aviso{margin:12px 14px;padding:11px 12px;border-radius:var(--radius-sm);background:var(--amber-dim);
+    border:1px solid rgba(245,185,66,.40);font-size:13px;line-height:1.45}
+  .aviso b{color:var(--amber)}
+  .kbd{display:inline-block;font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+    padding:4px 6px;border-radius:5px;background:var(--panel2);border:1px solid var(--border2);color:var(--muted)}
+
+  /* ---- Escritorio ---- */
+  .desk{flex:1;min-width:560px;background:var(--bg);border:1px solid var(--border2);border-radius:16px;
+    overflow:hidden;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  .desk .dtop{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;gap:16px;align-items:center}
+  .desk .dtop .campo{flex:1;max-width:460px}
+  .dcols{display:flex;min-height:430px}
+  .dizq{flex:1;padding:14px;display:flex;flex-direction:column;gap:9px;border-right:1px solid var(--border)}
+  .dder{width:330px;padding:18px;background:var(--panel)}
+  .dder img{width:100%;height:190px;object-fit:contain;background:#fff;border-radius:var(--radius);
+    outline:1px solid rgba(255,255,255,.10);outline-offset:-1px}
+  .dder .nom{font-size:19px;font-weight:600;margin:14px 0 4px;letter-spacing:-.01em;line-height:1.25}
+  .dder .meta{font-size:13px;color:var(--muted)}
+  .dder .cajagrande{margin-top:16px;height:76px;border-radius:var(--radius);border:1.5px solid var(--accent);
+    background:#0A0D14;display:grid;place-items:center;font-size:38px;font-weight:700;
+    font-variant-numeric:tabular-nums;color:var(--txt)}
+  .dder .ayuda{font-size:12.5px;color:var(--muted);margin-top:9px;text-align:center}
+  .compacta{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--radius-sm);
+    border:1px solid transparent;min-height:56px}
+  .compacta.sel{background:var(--accent-dim);border-color:rgba(45,184,232,.35)}
+  .compacta img{width:44px;height:44px;border-radius:7px;object-fit:cover;background:#fff;
+    outline:1px solid rgba(255,255,255,.10);outline-offset:-1px}
+  .compacta .n{flex:1;font-size:14.5px;font-weight:500;line-height:1.3}
+  .compacta .c{width:52px;height:40px;border-radius:8px;border:1.5px solid var(--border2);background:#0A0D14;
+    display:grid;place-items:center;font-weight:700;font-variant-numeric:tabular-nums}
+  .compacta .c.vacia{color:var(--muted2);border-style:dashed;font-weight:500}
+  .compacta .c.hecho{border-color:rgba(52,211,153,.45);background:var(--green-dim);color:var(--green)}
+  .compacta .c.hechodif{border-color:rgba(245,185,66,.45);background:var(--amber-dim);color:var(--amber)}
+
+  .cap{font-size:12.5px;color:var(--muted2);margin-top:10px;letter-spacing:.04em;text-transform:uppercase;font-weight:600}
+  .antes{border-left:2px solid var(--amber);padding-left:12px;margin:14px 0 0;color:var(--muted);font-size:13.5px;max-width:62ch}
+  .antes b{color:var(--amber)}
+  @media (max-width:900px){ .desk{min-width:0;width:100%} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Conteo de inventario — propuesta</h1>
+  <p class="lede">Maqueta con productos y fotos reales de la ronda Shimano · TRANSMISIÓN.
+    Los colores salen de <code>public/lib/theme.css</code>, los mismos del resto de las herramientas.</p>
+
+  <h2>Teléfono · las dos pantallas que importan</h2>
+  <div class="fila-pantallas">
+
+    <!-- EMPEZAR -->
+    <div class="tel">
+      <div class="top"><div class="ronda"><b>Contador de inventario</b><span>Matías</span></div></div>
+      <div class="hoy">
+        <div class="k">Hoy te toca</div>
+        <div class="q">Shimano · Transmisión</div>
+        <div class="d">151 productos · unas 2 h 10 · cubre lo que hace más de 20 días no se toca</div>
+        <button class="go">Empezar esta ronda</button>
+      </div>
+      <div class="otra">
+        <div class="lbl">¿Necesitás contar otra cosa?</div>
+        <div class="campo" style="height:52px"><span style="color:var(--muted2)">⌕</span>
+          <input placeholder="Marca o categoría…" value=""></div>
+        <div style="margin-top:6px">
+          <div class="sug">Shimano <span>543 productos</span></div>
+          <div class="sug">Shimano · Frenos <span>96 productos</span></div>
+          <div class="sug">Cascos <span>286 productos</span></div>
+        </div>
+      </div>
+      <div style="flex:1"></div>
+      <div class="bottom" style="background:transparent;border:0">
+        <div style="font-size:12.5px;color:var(--muted2);text-align:center">
+          1.202 productos sin contar nunca · 10 días para cubrir la tienda
+        </div>
+      </div>
+    </div>
+
+    <!-- CONTAR -->
+    <div class="tel">
+      <div class="top">
+        <div class="ronda"><b>Shimano · Transmisión</b><span>00:41</span></div>
+        <div class="campo">
+          <span style="color:var(--muted2);font-size:17px">⌗</span>
+          <input placeholder="Escaneá o escribí para buscar" value="">
+          <div class="cam">▣</div>
+        </div>
+        <div class="ultimo">
+          <span class="tick">✓</span>
+          <div class="t"><b>Cadena Shimano Hg53 9V 116 Links</b><span>FB-1541 · sumó 1</span></div>
+          <span class="n">3</span>
+          <button class="undo">Deshacer</button>
+        </div>
+      </div>
+
+      <div class="lista">
+        <div class="ficha">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/1829-4601.png" alt="">
+          <div class="info">
+            <div class="nom">Cadena Shimano Hg53 9V 116 Links</div>
+            <div class="meta">FB-1541</div>
+            <div class="estado ok">✓ coincide con el sistema</div>
+          </div>
+          <div class="num"><div class="caja hecho">3</div></div>
+        </div>
+
+        <div class="ficha">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2024/07/BB-MT501-shic219-primary_1_750_750.jpeg" alt="">
+          <div class="info">
+            <div class="nom">Caja Pedalera Shimano Mt501 68-73mm</div>
+            <div class="meta">FB-21076</div>
+            <div class="estado dif">El sistema tenía 10 · faltan 2</div>
+          </div>
+          <div class="num"><div class="caja hechodif">8</div></div>
+        </div>
+
+        <div class="ficha">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/94779999-4868.jpg" alt="">
+          <div class="info">
+            <div class="nom">Piñón Shimano Hg400 9V 11-25T</div>
+            <div class="meta">FB-4392</div>
+          </div>
+          <div class="num"><div class="caja vacia">—</div><button class="mas">contar</button></div>
+        </div>
+
+        <div class="ficha">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/74728679-1438.png" alt="">
+          <div class="info">
+            <div class="nom">Cambio Trasero Shimano Altus M310 7V 8V</div>
+            <div class="meta">FB-1569</div>
+          </div>
+          <div class="num"><div class="caja vacia">—</div><button class="mas">contar</button></div>
+        </div>
+      </div>
+
+      <div class="bottom">
+        <div class="prog"><b>38 de 151</b><span>quedan ~1 h 20</span></div>
+        <div class="barra"><i></i></div>
+        <button class="cerrar">Revisar y cerrar la ronda</button>
+      </div>
+    </div>
+
+    <!-- VARIANTES -->
+    <div class="tel">
+      <div class="top">
+        <div class="ronda"><b>Santini</b><span>00:12</span></div>
+        <div class="campo">
+          <span style="color:var(--muted2);font-size:17px">⌗</span>
+          <input placeholder="Escaneá o escribí para buscar" value="calza">
+          <div class="cam">▣</div>
+        </div>
+      </div>
+      <div class="lista">
+        <div class="grupo">
+          <div class="cab">
+            <img src="https://fusionbikes.com.ar/wp-content/uploads/2026/05/world-men-s-bib-tights.jpg" alt="">
+            <div>
+              <div class="nom">Calza de Invierno UCI Rainbow Man</div>
+              <div class="meta">Santini · 4 variantes</div>
+            </div>
+          </div>
+          <div class="var"><div class="et">L / Gris<small>FB-62878</small></div><div class="caja hecho">1</div></div>
+          <div class="var"><div class="et">L / Negro<small>FB-62879</small></div><div class="caja vacia">—</div></div>
+          <div class="var"><div class="et">XL / Negro<small>FB-62881</small></div><div class="caja vacia">—</div></div>
+          <div class="var"><div class="et">M / Gris<small>FB-62877</small></div><div class="caja vacia">—</div></div>
+        </div>
+        <div class="grupo">
+          <div class="cab">
+            <img src="https://fusionbikes.com.ar/wp-content/uploads/2026/05/world-women-s-bib-tights.jpg" alt="">
+            <div>
+              <div class="nom">Calza de Invierno UCI Rainbow Women</div>
+              <div class="meta">Santini · 3 variantes</div>
+            </div>
+          </div>
+          <div class="var"><div class="et">S / Negro<small>FB-62438</small></div><div class="caja vacia">—</div></div>
+          <div class="var"><div class="et">M / Negro<small>FB-62439</small></div><div class="caja vacia">—</div></div>
+        </div>
+      </div>
+      <div class="bottom">
+        <div class="prog"><b>1 de 12</b><span>búsqueda: “calza”</span></div>
+        <div class="barra"><i style="width:8%"></i></div>
+        <button class="cerrar">Revisar y cerrar la ronda</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="nota"><b>Izquierda:</b> empezar — la ronda sugerida manda, y el buscador reemplaza los 247 chips.
+    <b>Centro:</b> contar — campo fijo que escanea y busca, confirmación de la última lectura con deshacer,
+    y el progreso abajo, al alcance del pulgar. <b>Derecha:</b> variantes agrupadas bajo una sola foto.</p>
+
+  <div class="antes">
+    <b>Lo que cambia respecto de hoy:</b> no se ve el stock del sistema hasta que cargás la cantidad;
+    la fila no se mueve de lugar al contarla; el número se tipea en vez de sumarse de a uno;
+    y escanear el EAN, escanear otro EAN del mismo producto o tocar “contar” suman a la misma línea.
+  </div>
+
+
+  <h2>El buscador para asociar un código · hoy hay cuatro versiones distintas</h2>
+  <p class="nota" style="margin-bottom:16px">Lo usan Códigos, Consulta de precios, Conteo y Recepción, cada uno con su
+    propia implementación. Solo el <b>17% del catálogo tiene código cargado</b>, así que asociar no es un caso raro:
+    es el trabajo que hace posible escanear. Y en escritorio se asocia el doble que en teléfono (176 contra 86).</p>
+
+  <div class="fila-pantallas">
+    <!-- TELÉFONO: asociar -->
+    <div class="tel">
+      <div class="codigo-cab">
+        <div class="k">Código sin asociar</div>
+        <div class="cod">779 0123 456789</div>
+        <div class="tipo">EAN-13 · leído recién con el lector</div>
+      </div>
+      <div style="padding:12px 14px 0">
+        <div class="campo" style="height:52px">
+          <span style="color:var(--muted2);font-size:17px">⌕</span>
+          <input placeholder="Buscá por nombre o SKU…" value="cadena shimano">
+        </div>
+      </div>
+      <div class="lista" style="gap:2px;padding-top:10px">
+        <div class="res foco">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/1829-4601.png" alt="">
+          <div class="c">
+            <div class="t">Cadena Shimano Hg53 9V 116 Links</div>
+            <div class="m">FB-1541 · Shimano · 14 en sistema</div>
+          </div>
+          <span class="pill libre">sin código</span>
+        </div>
+        <div class="res">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/1831-4605.png" alt="">
+          <div class="c">
+            <div class="t">Cadena Shimano Hg54 10V 116 Links</div>
+            <div class="m">FB-1551 · Shimano · 7 en sistema</div>
+          </div>
+          <span class="pill ocupado">ya tiene 4550…</span>
+        </div>
+        <div class="res">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/2269-4866.jpg" alt="">
+          <div class="c">
+            <div class="t">Piñón Shimano Hg200 8V 12-32T</div>
+            <div class="m">FB-2763 · Shimano · 8 en sistema</div>
+          </div>
+          <span class="pill libre">sin código</span>
+        </div>
+      </div>
+      <div class="aviso">
+        <b>Ojo:</b> asociar escribe el código en WooCommerce. Si el producto ya tiene uno, lo reemplaza —
+        por eso los que están ocupados se marcan en ámbar y piden una confirmación más.
+      </div>
+      <div class="bottom">
+        <button class="cerrar" style="background:var(--accent);color:#04121A;border:0;font-weight:700;height:56px">
+          Asociar a Cadena Hg53 9V</button>
+        <div style="text-align:center;margin-top:10px">
+          <button style="background:none;border:0;color:var(--accent);font-size:13.5px;font-weight:600;padding:10px 8px">Ahora no, seguir contando</button></div>
+      </div>
+    </div>
+
+    <!-- TELÉFONO: variantes que comparten foto -->
+    <div class="tel">
+      <div class="codigo-cab">
+        <div class="k">Código sin asociar</div>
+        <div class="cod">889 4567 001234</div>
+        <div class="tipo">EAN-13 · leído recién con el lector</div>
+      </div>
+      <div style="padding:12px 14px 0">
+        <div class="campo" style="height:52px">
+          <span style="color:var(--muted2);font-size:17px">⌕</span>
+          <input placeholder="Buscá por nombre o SKU…" value="zapatilla shimano rc502">
+        </div>
+      </div>
+      <div class="lista" style="gap:2px;padding-top:10px">
+        <div class="res foco">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/05/shimano-shrc502-road-22a-sho-eshrc502mc-black-1.jpg" alt="">
+          <div class="c">
+            <div class="t" style="font-size:13px;font-weight:500;color:var(--muted)">Zapatillas Shimano RC502</div>
+            <div class="v">40 · Negro</div>
+            <div class="m">FB-8795 · 1 en sistema</div>
+          </div>
+          <span class="pill libre">sin código</span>
+        </div>
+        <div class="res">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/05/shimano-shrc502-road-22a-sho-eshrc502mc-black-1.jpg" alt="">
+          <div class="c">
+            <div class="t" style="font-size:13px;font-weight:500;color:var(--muted)">Zapatillas Shimano RC502</div>
+            <div class="v">41 · Negro</div>
+            <div class="m">FB-8796 · 0 en sistema</div>
+          </div>
+          <span class="pill libre">sin código</span>
+        </div>
+        <div class="res">
+          <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/05/shimano-shrc502-road-22a-sho-eshrc502mc-black-1.jpg" alt="">
+          <div class="c">
+            <div class="t" style="font-size:13px;font-weight:500;color:var(--muted)">Zapatillas Shimano RC502</div>
+            <div class="v">42 · Negro</div>
+            <div class="m">FB-8797 · 2 en sistema</div>
+          </div>
+          <span class="pill libre">sin código</span>
+        </div>
+      </div>
+      <div class="aviso" style="background:var(--accent-dim);border-color:rgba(45,184,232,.35)">
+        Hay <b style="color:var(--accent)">16 zapatillas RC502 con la misma foto</b>. Cuando las variantes comparten
+        imagen, el talle y el color pasan a ser lo más grande de la fila y el nombre se apaga: la foto no distingue nada.
+      </div>
+      <div class="bottom">
+        <button class="cerrar" style="background:var(--accent);color:#04121A;border:0;font-weight:700;height:56px">
+          Asociar a 41 · Blanco</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>El mismo buscador en escritorio · sin soltar el teclado</h2>
+  <div class="desk">
+    <div class="dtop">
+      <div>
+        <div style="font-size:11.5px;letter-spacing:.10em;text-transform:uppercase;color:var(--muted);font-weight:700">Código sin asociar</div>
+        <div style="font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.02em">779 0123 456789</div>
+      </div>
+      <div class="campo" style="height:48px;flex:1;max-width:520px">
+        <span style="color:var(--muted2);font-size:17px">⌕</span>
+        <input value="cadena shimano">
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <span class="kbd">↑ ↓</span><span style="font-size:12px;color:var(--muted)">elegir</span>
+        <span class="kbd">Enter</span><span style="font-size:12px;color:var(--muted)">asociar</span>
+        <span class="kbd">Esc</span><span style="font-size:12px;color:var(--muted)">saltear</span>
+      </div>
+    </div>
+    <div class="dizq" style="border:0;padding:12px 14px">
+      <div class="res foco">
+        <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/1829-4601.png" alt="">
+        <div class="c"><div class="t">Cadena Shimano Hg53 9V 116 Links</div>
+          <div class="m">FB-1541 · Shimano · Transmisión · 14 en sistema</div></div>
+        <span class="pill libre">sin código</span>
+      </div>
+      <div class="res">
+        <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/1831-4605.png" alt="">
+        <div class="c"><div class="t">Cadena Shimano Hg54 10V 116 Links</div>
+          <div class="m">FB-1551 · Shimano · Transmisión · 7 en sistema</div></div>
+        <span class="pill ocupado">ya tiene 4550…</span>
+      </div>
+      <div class="res">
+        <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/74728679-1438.png" alt="">
+        <div class="c"><div class="t">Cambio Trasero Shimano Altus M310 7V 8V</div>
+          <div class="m">FB-1569 · Shimano · Transmisión · 8 en sistema</div></div>
+        <span class="pill libre">sin código</span>
+      </div>
+    </div>
+  </div>
+  <p class="nota">El lector escribe en el campo, las flechas mueven la selección y Enter asocia: la mano no
+    va al mouse. Es el flujo que pide el dato de uso — en escritorio se asocian 176 códigos contra 86 en teléfono.</p>
+
+  <h2>Escritorio · lista a la izquierda, producto a la derecha</h2>
+  <div class="desk">
+    <div class="dtop">
+      <b style="font-size:15px">Shimano · Transmisión</b>
+      <div class="campo" style="height:48px">
+        <span style="color:var(--muted2);font-size:17px">⌗</span>
+        <input placeholder="Escaneá o escribí para buscar">
+      </div>
+      <div style="margin-left:auto;font-size:13.5px;color:var(--muted);font-variant-numeric:tabular-nums">
+        <b style="color:var(--txt);font-size:15px">38 de 151</b> · quedan ~1 h 20
+      </div>
+    </div>
+    <div class="dcols">
+      <div class="dizq">
+        <div class="compacta"><img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/1829-4601.png" alt="">
+          <div class="n">Cadena Shimano Hg53 9V 116 Links</div><div class="c hecho">3</div></div>
+        <div class="compacta"><img src="https://fusionbikes.com.ar/wp-content/uploads/2024/07/BB-MT501-shic219-primary_1_750_750.jpeg" alt="">
+          <div class="n">Caja Pedalera Shimano Mt501 68-73mm</div><div class="c hechodif">8</div></div>
+        <div class="compacta sel"><img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/94779999-4868.jpg" alt="">
+          <div class="n">Piñón Shimano Hg400 9V 11-25T</div><div class="c vacia">—</div></div>
+        <div class="compacta"><img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/74728679-1438.png" alt="">
+          <div class="n">Cambio Trasero Shimano Altus M310 7V 8V</div><div class="c vacia">—</div></div>
+        <div class="compacta"><img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/2269-4866.jpg" alt="">
+          <div class="n">Piñón Shimano Hg200 8V 12-32T</div><div class="c vacia">—</div></div>
+        <div class="compacta"><img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/1831-4605.png" alt="">
+          <div class="n">Cadena Shimano Hg54 10V 116 Links</div><div class="c vacia">—</div></div>
+      </div>
+      <div class="dder">
+        <img src="https://fusionbikes.com.ar/wp-content/uploads/2023/03/94779999-4868.jpg" alt="">
+        <div class="nom">Piñón Shimano Hg400 9V 11-25T</div>
+        <div class="meta">FB-4392 · Shimano · Transmisión</div>
+        <div class="cajagrande">9</div>
+        <div class="ayuda">Escribí la cantidad y Enter para pasar al siguiente</div>
+      </div>
+    </div>
+  </div>
+  <p class="nota">El ojo no cruza 1.440 px por producto: la lista queda a la izquierda y el producto en curso,
+    con su foto grande y el campo, a la derecha. El lector escribe en el mismo campo de arriba.</p>
+</div>
+</body>
+</html>

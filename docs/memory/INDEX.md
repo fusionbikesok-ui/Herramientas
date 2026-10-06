@@ -1,18 +1,21 @@
 # Índice de memoria
 
-Este archivo es un router, no una enciclopedia. Leelo junto con `active.md` y abrí solo los
+Este archivo es un router, no una enciclopedia. Leelo junto con `/opt/fusionbikes/herramientas/docs/memory/active.md` y abrí solo los
 módulos cuyo disparador coincida con la tarea.
 
 | Tema o disparador | Módulo a leer |
 | --- | --- |
-| Arquitectura, estructura, contratos internos, decisiones transversales | `modules/architecture.md` |
-| MercadoLibre, WooCommerce, ventas, publicaciones, sincronización, precios | `modules/integrations-ml-woo.md` |
-| VPS, staging, dependencias del sistema, procesos, despliegue | `modules/operations-vps.md` |
-| Pantallas, navegación, responsive, accesibilidad, pruebas en navegador | `modules/ui-ux.md` |
-| Coordinación entre agentes, worktrees, handoffs y gates | `../agent-coordination.md` |
+| Arquitectura, estructura, contratos internos, decisiones transversales | `/opt/fusionbikes/herramientas/docs/memory/modules/architecture.md` |
+| MercadoLibre, WooCommerce, ventas, publicaciones, sincronización, precios | `/opt/fusionbikes/herramientas/docs/memory/modules/integrations-ml-woo.md` |
+| VPS, staging aislado, dependencias, pipeline, backup y despliegue | `/opt/fusionbikes/herramientas/docs/memory/modules/operations-vps.md` |
+| Pantallas, navegación, responsive, accesibilidad, pruebas en navegador | `/opt/fusionbikes/herramientas/docs/memory/modules/ui-ux.md` |
+| Preparación, depósito, stock, recepción, conteos y despacho | `/opt/fusionbikes/herramientas/docs/memory/modules/warehouse-operations.md` |
+| App móvil, ramas, contrato móvil y sincronización entre repositorios | `/opt/fusionbikes/herramientas/docs/memory/modules/mobile-app.md` |
+| Mapa de herramientas de `public/`: qué hace cada una, ruta, endpoints, doc y estado (vigente, se fusiona, retirada) | `/opt/fusionbikes/herramientas/docs/memory/modules/herramientas.md` |
+| Coordinación entre agentes, worktrees, handoffs, fichas y gates | `/opt/fusionbikes/herramientas/docs/agent-coordination.md` |
+| Especificación canónica, decisiones, archivo, fichas y SOP | `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md` |
 
-Los planes y especificaciones históricas están en `docs/superpowers/`; consultalos solo si
-un módulo o la tarea remite a uno concreto.
+La vigencia de planes y specs se consulta en `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`; no trates un documento fechado como instrucción actual sin esa clasificación.
 
 ## Reglas de mantenimiento
 

@@ -3,6 +3,38 @@
 Fuente de verdad del contrato entre el backend Express y el frontend interno (`public/`).
 Texto simple, no OpenAPI. Documentar acá todo endpoint que se agregue o cambie.
 
+## Vínculos del Matcher
+
+### POST /api/matcher/vinculos/no-sincronizar
+
+Mutación UM1 autenticada para marcar una publicación como `omitir`. Escribe la decisión,
+limpia revisiones pendientes y registra auditoría en Identidad/`sync_log`. Body:
+`{ "clave": "MLA...|...", "expected_sku": "SKU-actual" }`. Es obligatorio si la clave tiene
+vínculo activo (`asignar`/`confirmar`) y debe ser `null` explícito si no lo tiene. Si no coincide
+responde 409 `{ ok:false, error:"vista_vieja", sku_actual }`; ausencia o forma incorrecta responde
+400. Sin usuario responde 401. `omitir` cancela operaciones pendientes de Guardia/Identidad y no
+es revertido por automatismos. Para reemplazarlo, los vínculos manuales deben enviar
+`override_omitir:true`; sin ese campo responden 409 `omitir_requiere_override`.
+
+### GET /api/matcher/productos/buscar?q=...
+
+Búsqueda acotada por SQL sobre catálogo y publicaciones ML. `q` debe contener al menos dos
+caracteres alfanuméricos después de normalizar; comodines sin texto, como `--` o `%%`, responden
+400. `limite` opcional admite 1–50.
+
+Respuesta: `{ ok:true, data:[...], sin_producto_woo:[...], total }`. `data` agrupa por producto Woo
+(unidad vendible) sus publicaciones ML, incluidas las hermanas ya vinculadas al mismo SKU, y también
+trae las coincidencias que solo existen en Woo (sin publicación). `sin_producto_woo` lista las
+publicaciones ML que coinciden con la búsqueda pero no tienen producto Woo vinculado; `total` es la
+cantidad de unidades devueltas en `data`.
+
+Los vínculos manuales que detecten atributos incompatibles responden 409:
+`{ ok:false, error:"contradiccion_titulo", motivos:[...] }`. El chequeo compara transmisión,
+velocidades, conjuntos de colores, rodado y talle sólo con contexto de bicicleta/indumentaria;
+stock cero puede escribirse para permitir la protección contra sobreventa. El mismo 409 se aplica
+si una operación durable intenta restaurar stock o activar una identidad después de que cambió la
+evidencia.
+
 ## Sincronización ML ↔ WooCommerce
 
 ### POST /api/sync/ml-wc
@@ -326,7 +358,7 @@ frenada. Fail-closed deliberado, no se saltea la guarda de precio bajo ningún f
 ## Vínculos WC↔ML — MOVIDO a `/api/cobertura/vinculos*`
 
 **Matcher unificado, entrega 1 (2026-08-14)** — ver la sección al final del documento.
-`public/vinculos/index.html` se retira
+`public/vinculos/index.html` se retiró (2026-10-06 se borró también `public/cobertura/`)
 (`/vinculos` ahora redirige). El motor (`filasDeVinculos`, `cargarDescartes`,
 `senalesVigentes`, `logSync`) se mantiene en `routes/sync.js` (lo sigue usando `GET
 /api/sync/dashboard` para `vinculos_sospechosos`) y se reusa por export, no se duplicó. El
@@ -345,8 +377,7 @@ con `accion` en `asignar`/`confirmar`).
 - Request: sin body. `:sku` en la URL.
 - Response 200: `{ "ok": true, "producto": { "sku", "nombre", "stock", "img", "precio_lista",
   "precio_contado" }, "publicaciones": [{ "clave", "item_id", "variation_id", "titulo",
-  "status", "sub_status", "color", "talle", "variations_texto", "seller_sku",
-  "decision_sku", "thumbnail",
+  "status", "sub_status", "color", "talle", "variations_texto", "seller_sku", "thumbnail",
   "permalink", "precio_ml", "precio_actualizado_en", "stock_ml", "stock_sincronizado",
   "senales": [{ "senal", "peso", "detalle", "valor" }] }] }`.
   `senales` ya viene filtrada de las que el usuario descartó con el mismo valor concreto
@@ -354,9 +385,6 @@ con `accion` en `asignar`/`confirmar`).
   `catalogo_cache.regular_price` (precio de LISTA), nunca de `precio` (VIGENTE) — ver el
   porqué en el comentario de `precioWebClave()` en `lib/mlPrecios.js`. Ambos son `null` si
   `regular_price` es NULL.
-  `decision_sku` es el SKU de la decisión local vigente y funciona como snapshot para la
-  reasignación optimista; puede diferir de `seller_sku` mientras el cambio todavía no se
-  publicó o no fue observado en MercadoLibre.
 - Response 400: `{ "ok": false, "error": "sku requerido" }`.
 - Response 404: `{ "ok": false, "error": "SKU no encontrado en el catálogo" }`.
 
@@ -394,23 +422,14 @@ clave en la MISMA transacción que la reasignación: valían para el vínculo an
 nuevo, y si el borrado quedara fuera de la transacción un fallo a mitad de camino dejaría
 descartes viejos tapando señales legítimas del vínculo nuevo.
 
-- Request: `{ "clave", "sku", "expected_sku" }`. `clave` y `sku` son strings no vacíos;
-  `expected_sku` es el SKU que el cliente leyó antes de abrir/confirmar la edición, o
-  `null` si en ese snapshot no había decisión. El campo es obligatorio: una reasignación
-  deliberada de una decisión moderna se acepta cuando coincide con el valor actual.
-- Response 200: `{ "ok": true, "clave", "sku_anterior", "sku" }`.
+- Request: `{ "clave", "sku" }` — ambos strings no vacíos.
+- Response 200: `{ "ok": true }`.
 - Response 400: `{ "ok": false, "error": "clave requerida" }`,
   `{ "ok": false, "error": "sku requerido" }`,
-  `{ "ok": false, "error": "expected_sku requerido (string o null)" }`,
   `{ "ok": false, "error": "La clave no existe en el caché de publicaciones" }` (evita crear un
   vínculo fantasma en `sku_matcher_decisiones` que no aparece en ningún listado pero ensucia
   el contador de "necesitan atención" del home), o
   `{ "ok": false, "error": "El SKU no existe en el catálogo" }`.
-- Response 409: el vínculo ya no coincide con el snapshot del cliente; no escribe nada.
-  `{ "ok": false, "ya_resuelto": true, "expected_sku", "sku_actual", "sku",
-  "resuelto_por", "propio", "accion", "wc_nombre", "error" }`. El frontend debe
-  refrescar el vínculo y pedir confirmación otra vez; para una corrección deliberada nueva,
-  reenviar el `sku_actual` recién leído como el próximo `expected_sku`.
 
 ### POST /api/cobertura/vinculos/:clave/desvincular (nuevo, **ADMIN-ONLY**)
 Borra el mapeo (`sku_matcher_decisiones` + descartes de `ml_vinculos_revisados`) para que la
@@ -541,22 +560,6 @@ por "todo lo que matchea el filtro actual".
 - Permiso: `anyOf: ['config-ml']`, nivel `write` (regla `^\/sync\/config-ml(\/|$)` de
   `lib/permisos.js`, ya existente — el POST cae ahí igual que el alta unitaria).
 
-## Preparación de pedidos — cola e historial
-
-### GET /api/preparacion/pendientes
-
-Las filas de canal `ml` incluyen ambos identificadores: `ml_order_id` (id técnico de la
-orden) y `pack_id` (id del pack que MercadoLibre muestra al vendedor; `null` si la orden no
-pertenece a un pack). No deben suponerse iguales. Ejemplo real cubierto:
-`pack_id:"2000014544268249"` con `ml_order_id:"2000017948004320"`. El buscador del cliente
-debe contemplar ambos. Las filas `web` no tienen `pack_id`.
-
-### GET /api/preparacion/historial
-
-Cada preparación de canal `ml` expone `pack_id` además de `ml_order_id`. Las preparaciones
-anteriores al soporte del campo se completan desde `pedidos_cache` mediante la migración
-022 y en cada sincronización/alta idempotente posterior; hasta entonces puede ser `null`.
-
 ## Preparación de pedidos — perfiles de foto por SKU
 
 Overrides de perfil de foto para un producto puntual. Prioridad de resolución del perfil
@@ -655,7 +658,8 @@ corriendo en línea).
 
 ### POST /api/preparacion/:id/foto (comportamiento cambiado)
 - Sigue aceptando `multipart/form-data` con campo `archivo` (límite 15MB), `item_id` y `tipo`
-  opcionales en el body.
+  opcionales en el body. `upload_id` también es opcional y debe ser estable durante los reintentos
+  de una misma intención de subida.
 - El guard de "solo imágenes" (mimetype `image/*` o extensión `.heic`/`.heif`) sigue siendo
   sincrónico y sigue devolviendo 400 `{ ok: false, error: 'solo imágenes' }` si no matchea.
 - **Ya no valida que el contenido sea una imagen real decodificable** (antes lo hacía sharp
@@ -665,7 +669,9 @@ corriendo en línea).
   cuando falla la conversión (fail-open en la subida, fail-closed en el procesamiento: nunca
   se muestra `'listo'` con datos basura, nunca desaparece en silencio).
 - Response 200: `{ "ok": true, "foto": { ...id, url, url_liviana:null, estado_proceso:
-  'pendiente', es_heic, ... } }` — inmediato, sin esperar la conversión.
+  'pendiente', es_heic, upload_id, ... } }` — inmediato, sin esperar la conversión. `upload_id`
+  es opcional y garantiza idempotencia por preparación: un reintento con el mismo valor devuelve
+  la foto existente y no inserta otra.
 
 ### POST /api/preparacion/:id/foto/:fotoId/reintentar (nuevo)
 Reintento manual de una foto que agotó sus 3 intentos automáticos (backoff 500/1500/4000ms,
@@ -680,46 +686,6 @@ reintento manual puede resolver algo transitorio.
 - Response 404: preparación o foto inexistente.
 
 ## Preparación de pedidos — escaneo obligatorio y evidencia (2026-08-12)
-
-### EAN/GTIN desconocido durante el escaneo (2026-08-22)
-
-`POST /api/preparacion/:id/escanear` mantiene el match exacto por SKU. Si el valor leído es
-un GTIN válido (EAN-8/UPC-A/EAN-13/GTIN-14), no coincide con un SKU y todavía no existe un
-mapa `ean_sku`/`catalogo_cache.gtin` aplicable a esta preparación, responde 200 sin contar:
-
-```json
-{
-  "ok": true,
-  "resultado": "necesita_asociacion",
-  "codigo": "4006381333931",
-  "candidatos": [{ "id": 12, "sku": "FB-123", "nombre": "Título largo", "restante": 1 }]
-}
-```
-
-El frontend debe mostrar los candidatos y pedir una elección explícita. Para confirmar esa
-elección existe `POST /api/preparacion/:id/asociar-codigo`:
-
-Si el GTIN ya resuelve a un SKU conocido pero ese SKU no pertenece a la preparación actual,
-responde `resultado:"no_coincide"` (incluye `sku`) y no ofrece asociación, para evitar mover
-un mapa global correcto al pedido equivocado.
-
-```json
-{ "codigo": "4006381333931", "item_id": 12, "pisar_codigo": false, "pisar_mapa": false }
-```
-
-La respuesta exitosa cuenta una unidad y devuelve `resultado:"match"`, el `item` actualizado
-y `codigo.estado` (`subido`, `sin_cambio`, `fallo`).
-
-Comportamiento ante conflictos:
-- Si el SKU tiene un GTIN diferente, devuelve `resultado:"conflicto"` sin contar ni escribir; `pisar_codigo:true` confirma únicamente el reemplazo en WooCommerce.
-- Si ya existe un mapa `ean_sku` hacia otro SKU, devuelve `resultado:"conflicto"` con `sku_actual`; `pisar_mapa:true` confirma únicamente mover ese mapa.
-- Si ambos conflictos existen, hacen falta ambas confirmaciones.
-
-Un fallo o ausencia de WooCommerce conserva el conteo y el mapa local cuando el SKU es inequívoco, pero informa `codigo.estado:"fallo"` para que pueda reintentarse.
-
-Los códigos no válidos siguen el flujo anterior (`no_coincide`); no se aceptan en el endpoint
-de asociación. Los candidatos se limitan a ítems pendientes de esta preparación y nunca se
-elige uno automáticamente por nombre o cercanía.
 
 Incidente disparador: un pedido de 5 unidades salió con 1 porque `confirmar-manual` (el
 atajo que salta el escaneo) verificaba de un saque sin escanear nada, y era el 48% de los
@@ -740,6 +706,22 @@ Cualquier usuario puede usarla (no se restringe a admin); motivo, usuario y hora
 - Response 404: preparación o ítem inexistente (sin cambios).
 - Re-confirmar un ítem ya `verificado` sigue siendo no-op para el evento (no duplica), pero
   igual exige `motivo` válido en el request — no hay atajo para saltear la validación.
+- Una confirmación manual crea, en la misma transacción y antes de completar `cantidad_escaneada`,
+  una tarea durable `preparacion_etiquetas_manuales` con SKU, producto y unidades que faltaban
+  escanear. No se generan tareas históricas/backfill. Son tareas de rotulado posteriores; no
+  bloquean el despacho y una tarea pendiente indica que la salida requiere revisión. Un retry
+  mientras el ítem sigue verificado es no-op; si el ítem se reabre y vuelve a confirmarse,
+  genera una nueva tarea asociada a esa confirmación.
+- `GET /api/preparacion/:id/etiquetas-manuales` devuelve las tareas con su estado y
+  `requiere_revision_salida`. `POST /api/preparacion/:id/etiquetas-manuales/:taskId/hecha`
+  las marca idempotentemente y conserva `hecha_por`/`hecha_en`. El middleware de escritura
+  autoriza la acción; no requiere claim, para permitir cerrar la tarea después de completar o
+  despachar la preparación y vencer el claim.
+- La confirmación de despacho (con escaneo o manual) mantiene su comportamiento y devuelve
+  `requiere_revision_rotulado` y `tareas_rotulado_pendientes`; el evento de salida conserva
+  esos valores. Una etiqueta pendiente nunca bloquea la salida.
+- `POST /api/preparacion/iniciar` no crea una preparación sin líneas. `POST
+  /api/preparacion/:id/completar` rechaza preparaciones vacías con `PREPARACION_SIN_ITEMS`.
 
 ### GET /api/preparacion/:id (campo agregado: `requisitos_foto` con nota de cantidad)
 Cuando un ítem tiene `cantidad_esperada > 1`, el slot de foto "de artículo" (o "de piezas"
@@ -823,8 +805,8 @@ la preparación (`marcarPreparacionEnviada`, misma función para el endpoint y e
   salió, no es trabajo pendiente) y **no se mezcla** con `GET /historial` (solo trae
   `completada`/`pendiente_deposito`) — se consulta desde `GET /despachadas-sin-verificar`.
 
-#### GET /api/preparacion/despachadas-sin-verificar (nuevo; `total`/`truncado` agregados)
-Lista las preparaciones en `despachada_sin_verificar`, canal `web`, más recientes primero.
+#### GET /api/preparacion/despachadas-sin-verificar (`total`/`truncado` agregados)
+Lista las preparaciones en `despachada_sin_verificar` de ambos canales, más recientes primero.
 Mismo criterio y consulta que `GET /cerradas-sin-evidencia` — un estado que existe para
 poder consultarlo ante un reclamo, así que tiene que tener dónde listarse igual que el
 otro. **No filtra por ventana temporal, a propósito** (ver `despachados_sin_verificar` en
@@ -836,6 +818,31 @@ del revisor).
 - Request: sin body.
 - Response 200: `{ "ok": true, "data": [ { ...preparación, total_items, total_fotos } ], "total": 3, "truncado": false }`.
   `data` viene con `LIMIT 200`; `truncado:true` si `total > data.length`.
+
+#### GET /api/preparacion/historial — canceladas sin retiro registrado
+Incluye `cancelada_sin_retiro_registrado`: WooCommerce o MercadoLibre confirmó una cancelación
+consultada directamente y la preparación no tenía unidades escaneadas ni embaladas. El estado
+no afirma que el producto nunca se movió físicamente; solo indica que no hay retiro registrado.
+Las preparaciones canceladas con unidades levantadas siguen en `cancelada_pendiente_devolucion`
+y conservan su tarea de devolución.
+
+#### Reconciliación automática de preparaciones abiertas
+Cada diez minutos se consulta hasta 50 preparaciones históricas `en_preparacion` directamente en
+WooCommerce (`GET /orders/{id}`) o en MercadoLibre (`GET /orders/{id}` y, si hay envío,
+`GET /shipments/{id}`). Solo `completed`/estado final de despacho de Woo, o un envío ML con
+`shipped`/`delivered` (incluidos los subestados confiables de salida) cierran como `completada`
+si la evidencia está verificada o `despachada_sin_verificar` en otro caso. Una cancelación
+explícita cierra sin retiro registrado o abre la devolución cuando hay unidades levantadas.
+Timeout, error HTTP, respuesta sin estado o estado desconocido se registra en
+`preparacion_reconciliaciones.error`, mantiene la preparación abierta y vuelve a intentarse.
+La corrida no se solapa consigo misma; cada transición usa un `UPDATE` condicionado a que la
+preparación siga abierta y registra un único evento de sistema. Fotos, ítems y autoría se
+conservan. La migración 115 crea el registro del último intento.
+
+Antes de habilitar el cron en producción, respaldar y verificar el respaldo de la base; después
+ejecutar `node scripts/preview-preparacion-reconciliacion.mjs` y revisar todos los IDs/estados
+previstos. El script consulta en páginas de hasta 50 y no cambia estados ni registra intentos
+en preparaciones. El cron permanece apagado salvo `PREPARACION_RECONCILIACION_ACTIVA=true`.
 
 ### Estado nuevo: `cerrada_sin_evidencia`
 Preparaciones viejas que nunca se completaron ni verificaron de verdad, cerradas por el
@@ -880,7 +887,7 @@ del frontend (fuera de este archivo).
 
 ## Seguimientos: 3 secciones locales, ya no se infiere desde Woo (2026-08-13)
 
-Medido en el plan `docs/superpowers/plans/2026-08-13-seguimientos.md`: la pantalla mostraba
+La medición histórica (conservada en Git) mostró que la pantalla presentaba
 **70 pedidos** como "colgados" (a medias) que en realidad nunca pasaron por esta herramienta
 — el usuario carga el tracking a mano en WooCommerce por costumbre, y la versión vieja de
 `GET /seguimientos` infería "a medias" mirando la meta `_andreani_tracking` en pedidos
@@ -906,11 +913,8 @@ Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es da
   { "ok": true, "data": {
     "esperando":       [{ "wc_order_id", "envio", "preparacion_id", "estado_preparacion" }],
     "sin_preparacion": [{ "wc_order_id", "envio", "preparacion_id", "estado_preparacion" }],
-    "a_medias":        [{ "wc_order_id", "envio", "preparacion_id", "tracking", "incierto" }],
+    "a_medias":        [{ "wc_order_id", "envio", "preparacion_id", "tracking" }],
     "a_medias_total": 1,
-    "a_medias_limit": 20,
-    "a_medias_offset": 0,
-    "a_medias_has_more": false,
     "despachados_sin_verificar": 3,
     "cargados_hoy": 5,
     "truncado": false
@@ -925,11 +929,8 @@ Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es da
   excluyen los `en_preparacion`: marcar "etiqueta lista" (`POST /etiquetas/:wcOrderId/lista`)
   ya crea una preparación en ese estado sin trabajo real — excluirlos escondería justo los
   pedidos por despacharse, y un pedido que no aparece manda al operario de vuelta a Woo.
-- **`a_medias`**: `woo_paso2_pendiente=1` — requiere reconciliar/terminar el flujo. En el
-  caso normal, el paso 1 quedó confirmado en Woo y falta el status final; cuando
-  `incierto:true`, el PUT 1 no tuvo respuesta concluyente y el backend todavía **no** afirma
-  que Woo haya guardado el tracking ni mandado el mail. El cron consulta Woo y no manda el
-  PUT 2 hasta confirmar estado `completed` + el mismo tracking (fail-closed). El `tracking`
+- **`a_medias`**: `woo_paso2_pendiente=1` — paso 1 confirmado en Woo (tracking guardado,
+  mail ya mandado) pero el paso 2 (status final `enviadoandreani`) todavía no. El `tracking`
   sale de la columna local `preparaciones.tracking` (guardada en el mismo INSERT que pone
   `woo_paso2_pendiente=1`, ver más abajo) — de solo lectura, no se le vuelve a pedir a Woo.
   **`envio` también sale entero de datos locales** (`preparaciones.numero_pedido`/`comprador`/
@@ -941,11 +942,9 @@ Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es da
   local es más pobre (sin dirección exacta) pero alcanza para identificar al comprador — no
   hace falta reimprimir la etiqueta desde acá. `pedido` es **`order.number`** (numeración
   custom de esta tienda en Woo), nunca `wc_order_id`: son valores distintos, y el operario
-  busca por el primero. La lista acepta query `a_medias_limit` (default 20, mínimo 1, máximo
-  100) y `a_medias_offset` (default 0). `a_medias_total` cuenta el universo entero y
-  `a_medias_has_more` indica si quedan filas. El frontend debe paginar/cargar más mientras
-  `a_medias_has_more` sea `true`, o volver a pedir offset 0 después de cada reintento; no debe
-  asumir que las primeras 20 son la lista completa.
+  busca por el primero. La lista viene con **`LIMIT 20`** (`ORDER BY id`); `a_medias_total` es
+  el conteo real del universo `woo_paso2_pendiente=1`, para que el frontend pueda decir
+  "mostrando 20 de N".
 - **`despachados_sin_verificar`**: solo el número (`COUNT(*)` de preparaciones `canal='web'`
   en ese estado — esta pantalla es exclusivamente Andreani/web, y hoy nada del flujo `ml` deja
   preparaciones en este estado). **Sin ventana temporal, a propósito**: `despachada_sin_verificar`
@@ -970,13 +969,15 @@ Woo) y lo reparte entero entre `esperando` y `sin_preparacion`; `a_medias` es da
 - Response 500: `{ "ok": false, "error": "..." }` si falla la consulta a Woo.
 
 ### POST /api/preparacion/seguimientos/:wcOrderId (ronda de revisión I1/I2, resto sin cambios)
+
+Un segundo POST para el mismo `wcOrderId` mientras hay uno en curso responde `409 {code:'EN_CURSO'}` sin tocar Woo. La marca se toma después de validar claim/permiso, así que un rechazo previo no la deja trabada.
 El fail-closed por estado, el salteo del paso 1 en el reintento (para no reenviar el mail) y
 `marcarPreparacionEnviada` (ver `despachada_sin_verificar` más arriba) **no cambian**.
 
 - **I1 — CAMBIO DE CONTRATO, avisar al frontend**: el evento `tipo:'tracking_cargado'` en
   `preparacion_eventos` (`detalle: { tracking }`, fuente de `GET /seguimientos.data.cargados_hoy`)
-  ahora se registra **inmediatamente después de que Woo confirma el PUT del paso 1** (antes
-  de intentar el paso 2), no solo "en el camino de éxito" como decía esta misma sección hasta la ronda
+  ahora se registra **inmediatamente después del INSERT local del paso 1** (antes de intentar
+  el paso 2), no solo "en el camino de éxito" como decía esta misma sección hasta la ronda
   anterior. Motivo: el paso 1 (Woo en `completed`, tracking guardado, mail nativo ya
   mandado) es el momento real en que el tracking "quedó cargado" — si el paso 2 falla
   (`502`/`colgado:true`) el pedido ya salió igual, y antes ese caso no sumaba a
@@ -998,15 +999,6 @@ El fail-closed por estado, el salteo del paso 1 en el reintento (para no reenvia
   esta tienda), así que el operario no podía ubicar en Woo el único pedido que está trabado.
   `localidad` sale de `shipping.city` con fallback a `billing.city` (mismo criterio que
   `normalizarEnvio`).
-- **Resultado incierto del PUT 1 — fail-closed y visible:** la fila local con
-  `woo_paso2_pendiente=1`, `woo_paso1_incierto=1` y el tracking se persiste antes de enviar
-  el PUT. Si Woo devuelve
-  timeout/error, responde `502` con
-  `{ "ok": false, "colgado": true, "incierto": true, "error": "..." }`, registra
-  `tracking_paso1_incierto` y no intenta el PUT 2. `GET /seguimientos` lo expone como
-  `a_medias[].incierto:true`. No registra `tracking_cargado` hasta que
-  Woo haya confirmado el paso 1. Así el pedido permanece en `a_medias` aunque Woo haya
-  aplicado la escritura pero la respuesta se haya perdido.
 
 ### POST /api/preparacion/seguimientos/:wcOrderId/corregir-tracking (ajuste menor)
 Ahora también actualiza `preparaciones.tracking` (el mismo espejo local de arriba) al tracking
@@ -1028,18 +1020,290 @@ permanente (el chip la contaba todos los días, y "Reintentar" nunca podía reso
 - **Cualquier otro error sigue fail-closed** (5xx, timeout, red): no se toca la bandera, se
   reintenta en la corrida siguiente — no hay forma de distinguir ahí "temporal" de
   "permanente".
-- Antes de enviar el PUT 2, el cron hace `GET /orders/{id}`. Si Woo ya está en el estado
-  final, solo cierra la fila local si `_andreani_tracking` coincide con
-  `preparaciones.tracking`; si está en `completed`, exige la misma coincidencia antes del
-  PUT 2. La única compatibilidad legacy es una fila cuyo tracking local sea `NULL`: su
-  bandera conserva la semántica anterior de "paso 1 confirmado". En cualquier otro estado
-  o ante un tracking diferente/ausente deja la bandera activa y no escribe.
-- Cuando el GET confirma el mismo tracking en `completed` o en el estado final, registra
-  `tracking_cargado` mediante un INSERT idempotente por preparación. En `completed` ocurre
-  antes del PUT 2; si ese PUT falla y el cron vuelve a pasar, el contador `cargados_hoy`
-  sigue sumando uno. Si Woo ya estaba en el estado final no repite el PUT 2, pero registra
-  igualmente `tracking_cargado` y conserva el evento separado `tracking_recuperado` al
-  cerrar la fila local.
+
+### GET /api/preparacion/pendientes (campo agregado: `notas`)
+Cada fila de `data` con `canal:'web'` suma `notas`: el `customer_note` del pedido en
+WooCommerce, cacheado en `pedidos_cache.customer_note` (poblada por `syncPedidosCache`), o
+`''` si el pedido no tiene nota. Los pedidos `canal:'ml'` **no** tienen esta clave — la API
+de orders de MercadoLibre no expone un campo equivalente (confirmado 2026-08-26), así que no
+se inventa un valor vacío ahí para no sugerir que existe la posibilidad.
+
+**Orden de `data`:** la lista viene ordenada por prioridad de canal (MercadoLibre y espejo_ml=1 primero, web después) y por antigüedad (fecha ASC) dentro de cada grupo. Ningún consumidor debe reordenar `data` en cliente — eso es contrato estable. El criterio de prioridad en sí es provisional (ver docs/superpowers/deliveries/E1.md): cuando exista la ola con mini-olas por urgencia, este criterio cambia y el contrato se actualiza junto con él.
+
+### GET/POST /api/jornada/* (E1: apertura, ola y mini-olas)
+
+- `POST /api/jornada/abrir` — requiere sesión. El body no acepta horarios ni una ventana ML
+  global: se ignoran/rechazan esos conceptos y las reglas son canónicas (`America/Argentina/Buenos_Aires`):
+  Web 15:00, ML/Andreani por pedido con deadline de llegada al centro menos 30 minutos, Flex
+  `self_service` hasta 17:00 y Full excluido. Responde 200 con `{jornada, olaInicial, reglas,
+  preflight}`. `preflight` expone estado explícito por integración y agente/impresora
+  (`desconocido`/`no_verificado` cuando no hay fuente real) y es fail-open: no bloquea operaciones
+  no afectadas. 409
+  `OPERATIONAL_DAY_EXISTS` con `{jornada}` si ya se abrió hoy (fecha local Buenos Aires).
+- `GET /api/jornada/hoy` — `{jornada: null}` si no se abrió.
+- `GET /api/jornada/olas` — sincroniza mini-olas y devuelve `{jornada, olas: [{...pick_wave, items}]}`.
+  Cada `claim` no nulo incluye `usuario`, `claimed_at`, `expires_at`, `por_vencer` y
+  `segundos_restantes`, calculados con una única referencia temporal por respuesta.
+- `POST /api/jornada/ola/:id/reclamar` — requiere sesión. Congela la ola (si estaba
+  `abierta`) y abre una mini-ola nueva si correspondía. 200 con `{claim, olaCongelada,
+  olaNueva}`; `claim` incluye `por_vencer`/`segundos_restantes`. 409 `WAVE_CLAIMED` si otro
+  usuario la tiene tomada; 409 `WAVE_NOT_CLAIMABLE` si la ola está completada o en otro
+  estado terminal.
+- `POST /api/jornada/cerrar` — requiere `is_admin`. No exige olas completadas (maestro §2.2:
+  "pendientes se arrastran con alerta"). 200 con `{jornada}` (`estado:'cerrada'`); 401 sin
+  sesión; 403 sin `is_admin`; 409 `NO_OPEN_DAY` si no hay jornada abierta hoy.
+
+`GET /api/preparacion/pendientes` ahora suma `pick_wave_id`/`pick_wave_tipo` (`null` si
+todavía no hay jornada abierta hoy, o si la mini-ola aún no fue sincronizada para ese pedido)
+a cada fila de `data`, sin alterar el orden ya documentado arriba — esta anotación es
+metadata auxiliar fail-open: un error al sincronizar mini-olas o al leer las tablas de
+jornada no rompe la respuesta de `/pendientes`, solo deja esos dos campos en `null`.
+
+### POST /api/preparacion/iniciar (gate nuevo: envío vs. facturación)
+Antes de crear la preparación de un pedido `canal:'web'`, si los datos de envío y
+facturación del pedido difieren de verdad (`direccionesDifieren()` en `lib/preparacion.js`:
+compara calle+número, localidad+provincia, nombre del destinatario y teléfono, normalizado
+sin acentos/mayúsculas/espacios de más) y todavía no se registró una decisión para esa
+preparación:
+
+- Request: `{ canal:'web', id:<wc_order_id>, direccion_elegida?: 'shipping'|'billing' }`.
+- Response 409 (sin `direccion_elegida`, o primera vez que se detecta la diferencia):
+  `{ ok:false, error, direcciones_difieren:true, campos_distintos:[...], envio:{...},
+  facturacion:{...} }` — `envio`/`facturacion` son el objeto completo de `normalizarEnvio()`
+  para cada fuente. **No crea la preparación.**
+- Con `direccion_elegida` presente (`'shipping'` o `'billing'`): crea la preparación
+  normalmente y guarda la elección en `preparaciones.direccion_confirmada_fuente` (+
+  `_por`, `_en`). Una preparación que ya tiene `direccion_confirmada_fuente` no vuelve a
+  frenar en llamadas posteriores a `/iniciar` con el mismo pedido.
+- Si envío y facturación coinciden (caso común), se comporta igual que antes de este
+  cambio — sin 409, sin fricción.
+- La elección persistida es la que usan `GET /etiquetas` y `GET /seguimientos` para esa
+  preparación, en vez de la regla automática de `normalizarEnvio` (envío si tiene
+  `address_1`, si no facturación).
+- Para `canal:'ml'`, `/iniciar` verifica orden `paid`, shipment `ready_to_ship` y logística
+  local antes de crear. Si una respuesta 200 confirma cualquier condición no elegible,
+  responde 409 y no crea preparación; errores o respuestas no concluyentes conservan el
+  comportamiento fail-open de error del endpoint y no crean una preparación parcialmente.
+
+### GET /api/preparacion/vinculos/:clave (Fase 4: detección de pedidos del mismo comprador)
+Consulta sugerencias pendientes de vínculos para un pedido. Devuelve las filas de
+`preparacion_vinculos` donde ese pedido participa y el estado sigue siendo `'sugerido'`
+(todavía no se decidió por ese vínculo).
+
+- Request: `:clave` = `'web:<wc_order_id>'` o `'ml:<ml_order_id>'` (URL-encoded).
+- Response 200 (lista vacía si no hay sugerencias):
+  ```json
+  {
+    "ok": true,
+    "data": [
+      {
+        "id": 1,
+        "campo_match": "email|dni|telefono|nombre_direccion",
+        "otro_pedido": {
+          "clave": "web:123",
+          "canal": "web",
+          "numero": "123",
+          "comprador": "Juan Pérez"
+        },
+        "creado_en": "2026-08-26T10:30:00Z"
+      }
+    ]
+  }
+  ```
+- Response 400: `:clave` ausente o malformada.
+- Response 500: error interno.
+
+### POST /api/preparacion/vinculos/:id/decidir (Fase 4: confirmación del operario)
+Decide si dos pedidos del mismo comprador irán juntos, separados pero vinculados, o no
+vinculados. Actualiza el estado del vínculo y guarda quién y cuándo lo decidió.
+
+- Request:
+  ```json
+  {
+    "estado": "confirmado_junto|confirmado_separado_pero_vinculado|rechazado",
+    "un_solo_paquete": true|false
+  }
+  ```
+  - `estado`: obligatorio, uno de los 3 valores.
+  - `un_solo_paquete`: opcional, ignorado si `estado` no es `'confirmado_junto'`. Si es
+    `true`, ambos pedidos irán en una sola caja; si es `false` o ausente, cajas separadas
+    pero marcadas como vinculadas en la lista.
+
+- Response 200:
+  ```json
+  { "ok": true, "estado": "confirmado_junto" }
+  ```
+
+- Response 400: `estado` inválido.
+- Response 404: vínculo no encontrado.
+- Response 500: error al actualizar.
+
+**Notas de diseño:**
+- La detección de vínculos ocurre cuando se crea una preparación (`POST /iniciar`): para
+  cada pedido nuevo, buscamos otros en la DB que coincidan por DNI, email, teléfono o
+  nombre+dirección de envío (el primero que coincida en ese orden). Si hay match,
+  creamos una fila en `preparacion_vinculos` con `estado='sugerido'`.
+- El frontend consulta `GET /vinculos/:clave` al armarse la pantalla de preparación y
+  avisa al operario si hay sugerencias. El operario decide con `POST /decidir`.
+- La decisión NO toca WooCommerce (es 100% interna) — no envía notas de cliente, no
+  cambia estado del pedido, nada. Es solo para que el operario sepa que dos pedidos
+  vienen de la misma persona y puede organizarlos juntos si quiere.
+
+## Notificaciones ML: preguntas, mensajes y reclamos pendientes (`/api/notificaciones-ml`)
+
+Permiso `notificaciones-ml` (binario, `niveles:false`, igual que `etiquetas`). Alcance
+decidido con el usuario (2026-08-26): solo listar con "hace cuánto" y link a Mercado Libre
+para responder ahí — esta herramienta no responde nada por API.
+
+La app de ML tiene **todos los topics** seleccionados en el panel de developers; el filtro de
+qué procesar vive en `POST /api/ml/notificacion` (`server.js`), no en el panel. Hoy procesa
+`orders` (ya existía; desde A.3, dispara `syncOrdenMlPuntual` — GET puntual de esa orden a
+`/orders/{id}`, no el barrido paginado `/orders/search`, que queda solo en el cron cada 10 min
+como respaldo), `orders_v2` (desde A.1: camino puntual a `pedidos_cache`, igual que `orders`,
+pero **no** dispara `syncOrdenMlPuntual` — eso sigue siendo solo para `orders`), `questions` y
+`messages` y `claims`; cualquier topic válido no implementado (`shipments`, `orders_feedback`,
+`items`, `invoices` u otro futuro) se recibe como `audit-only` y nunca se registra como
+`projected`.
+
+### POST /api/ml/notificacion
+
+Webhook público de MercadoLibre. El envelope debe incluir `topic`, `resource` y `user_id`. La cuenta se valida contra
+`ML_USER_ID`; un envelope inválido responde `400`. Una cuenta distinta responde `200 {ok:true, ignored:true}` sin persistir nada (fail-safe: evita saturación de `integration_events`
+por tráfico de cuentas ajenas no autenticadas, y no es reintentable). Los envelopes aceptados
+persisten `integration_events` y su primer `integration_job` en la misma transacción antes del
+ACK: responden siempre `200` (ML documenta 200 como único ACK válido), distinguiendo eventos nuevos y duplicados únicamente en el body: `{ok:true, duplicate:false}` para eventos nuevos durables y encolados, `{ok:true, duplicate:true}` para duplicados conocidos. Responden `503` si no se pueden
+persistir. Un envelope válido exige `ML_USER_ID` configurado; sin él el endpoint responde `503`.
+La deduplicación incluye topic, acción, versión, recurso, cuenta ML e identificador de
+notificación (o un marcador explícito cuando ML no lo envía); la correlación es por evento y
+recurso.
+El procesamiento posterior conserva el comportamiento fail-open de `orders`: una falla de
+sincronización no cambia el ACK ni bloquea otros canales.
+
+Los jobs de `claim.project` y `question.project` son consumidos por el worker durable de
+`integration_jobs`, con lease, reintentos con backoff y `dead_lettered` al agotar intentos o
+ante tipos no soportados. Sus proyecciones consultan el recurso autoritativo de ML desde el
+worker usando `mlCfg`; si falla, el job es reintentable y el evento no se marca completado.
+`reprocesarJob(db, jobId)` reabre una fila DLQ para operación administrativa y actualiza job,
+evento e historial en una transacción. Cada reclamación usa un token de lease único además del
+worker.
+
+### POST /api/admin/integration-jobs/:id/reprocess (**ADMIN-ONLY**)
+Reintenta un job que se encuentra en Dead Letter Queue (DLQ), reabriendo la fila para que el
+worker lo procese nuevamente. Requiere `requireAdmin` (solo administradores).
+
+- Request: sin body. `:id` es el `job_id` numérico de `integration_jobs`.
+- Response 202 (éxito): `{ "ok": true, "reprocessed": true }` — el job fue reabierto y será
+  procesado en el próximo ciclo del worker.
+- Response 401 (sin sesión): `{ "ok": false, "error": "..." }` — la sesión no es válida o falta
+  autenticación.
+- Response 403 (no-admin): `{ "ok": false, "error": "Requiere administrador" }`.
+- Response 404 (no encontrado): `{ "ok": false, "error": "job DLQ no encontrado" }` — el
+  `:id` no corresponde a ningún job, o el job no está en DLQ (ya fue procesado o está activo).
+
+### GET /api/notificaciones-ml/pendientes
+Response 200: `{ ok:true, preguntas:[...], mensajes:[...], reclamos:[...], reclamos_sin_confirmar:[...], total:number }`.
+- `preguntas`: filas de `ml_preguntas` con `estado='UNANSWERED'`, ordenadas por
+  `fecha_creacion ASC` (más vieja primero — la más urgente arriba).
+- `mensajes`: filas de `ml_mensajes` con `respondido_en IS NULL`, mismo orden.
+- `reclamos`: filas de `ml_reclamos` con `cerrado_en IS NULL` y `consultado_en_ml = 1`,
+  mismo orden. Un estado `unknown` puede aparecer si ML respondió 200 sin `status`; las filas
+  `sin_consultar` creadas por fail-open solo aparecen en `reclamos_sin_confirmar`.
+
+### GET /api/notificaciones-ml/count
+Conteo liviano para el aviso del Home (no trae las filas). Response 200:
+`{ ok:true, preguntas:number, mensajes:number, reclamos:number, reclamos_sin_confirmar:number, total:number }`.
+
+### Ingesta (interna, disparada por el webhook — no expuesta por HTTP)
+`ingerirPregunta(db, mlCfg, resource)`, `ingerirMensaje(db, mlCfg, resource)` e
+`ingerirReclamo(db, mlCfg, resource, originalResource)` en `routes/notificacionesMl.js`.
+
+#### P0.1: Reclamos reales de MercadoLibre (2026-08-28)
+
+**Topics soportados**: `topic='claims'` (legado) y `topic='post_purchase'` con `action='claims'` y
+`resource` conteniendo `/claims/{id}`. El cron legacy `reintentarReclamosSinConsultar` ya no se
+ejecuta: los reintentos ocurren exclusivamente mediante `integration_jobs` durable.
+
+**Recursos soportados** (extracto de la URL del webhook o del envelope):
+- `/claims/{id}` (legado)
+- `/v1/claims/{id}` (intermedio)
+- `/post-purchase/v1/claims/{id}` (recurso del topic `post_purchase`; el envelope usa
+  `actions: ['claims']`)
+
+Independientemente del path de entrada, el backend siempre consulta el **endpoint vigente**
+`GET /post-purchase/v1/claims/{id}` de ML para obtener el dato fresco.
+
+**Estados reales**: `status` toma valores `'opened'` (reclamo abierto) o `'closed'` (resuelto).
+No se usa `stage` como fallback. Estados desconocidos se conservan tal cual — un reclamo no se
+marca como `cerrado_en` a menos que `status === 'closed'` explícitamente.
+
+**Campos persistidos**: `type`, `reason_id`, `resource_id` (nuevos en esta ronda) si ML los
+proporciona; `null` en caso contrario.
+
+**Idempotencia**: si un reclamo ya está cerrado (`cerrado_en IS NOT NULL`) y llega un evento
+retrasado, el GET autoritativo de ML determina el estado vigente; un `opened` fresco puede
+reabrir un reclamo realmente reabierto. El upsert por `id` evita duplicados y la transición
+`opened→closed` conserva una sola fila.
+
+**Fail-open**: si ML no responde con 200, falla de conexión, recurso no encontrado (404) o
+cualquier otro error, el webhook no se bloquea. Se conserva una fila mínima con
+estado `sin_consultar` para conservar el reclamo para diagnóstico. Las filas sin consultar se
+devuelven siempre en `reclamos_sin_confirmar`, separadas de `reclamos` y `total`, hasta que una
+consulta posterior las confirme. La recuperación ocurre mediante los jobs durables de
+`integration_jobs`, con reintentos y backoff; no existe un cron legacy productivo.
+Se deja un warning seguro
+con claim id y status/error (`[notif-ml] ...`) para trazabilidad.
+
+En `post_purchase` solo se proyecta el shape documentado por MercadoLibre: `resource` con
+`/post-purchase/v1/claims/{id}` y `actions: ['claims']` (o `action: 'claims'`). Otros envelopes
+válidos se conservan como `audit-only`, sin proyección.
+
+Los elementos de `reclamos` en `/pendientes` incluyen, además de las columnas históricas,
+`type`, `reason_id`, `resource_id` y `consultado_en_ml`; pueden ser `null` cuando ML no los proporciona.
+`recurso`
+conserva el recurso original del webhook, mientras `resource_id` es el identificador que entrega
+ML dentro del reclamo.
+
+`reclamos_sin_confirmar` contiene filas durables creadas cuando falló la consulta a ML; no se
+mezclan con `reclamos` ni con `total`, pero se muestran en una línea diagnóstica separada del
+aviso operativo del Home.
+
+## Webhooks de sincronización rápida A.1
+
+### POST `/api/woo/webhook/order`
+
+WooCommerce envía el pedido JSON con `id` y `status` para `order.created` u
+`order.updated`; con `WOO_WEBHOOK_SECRET` configurado exige `x-wc-webhook-signature`
+HMAC-SHA256. Responde `{ ok:true }` inmediatamente. En segundo plano, `lpaandreani`
+queda como `estado_envio='pendiente'`, y `completed`/`enviadoandreani` como `enviado` en
+`pedidos_cache`. Otro estado marca una fila pendiente previa como `no_elegible`: no aparece
+en la cola ni permite iniciar preparación, sin borrar preparaciones o auditoría. Es
+fail-open: un error se registra y el cron vuelve a intentarlo.
+
+### POST `/api/woo/webhook/product`
+
+WooCommerce envía `product.created`, `product.updated` y `product.deleted` a esta ruta. Exige
+`x-wc-webhook-topic` y, si `WOO_WEBHOOK_SECRET` está configurado,
+`x-wc-webhook-signature` HMAC-SHA256. La entrega se persiste y deduplica antes de devolver
+`200`; el worker durable relee el producto padre y todas sus variaciones desde Woo. Un evento
+de variación usa `parent_id` y refresca el padre entero. Un `product.deleted` solo elimina del
+cache local la entidad afectada (o sus hijas si es el padre): nunca escribe ni recrea nada en
+Woo. El cron completo continúa como reconciliación ante eventos perdidos.
+
+### POST `/api/ml/notificacion`
+
+ML envía `{ topic, resource, user_id }`. En `orders` y `orders_v2`, `user_id` debe coincidir
+con `ML_USER_ID` cuando está configurado y `resource` debe contener `/orders/{id}`. Responde
+`{ ok:true }` inmediatamente; `orders` además dispara ML→WC y ambos topics ejecutan la
+consulta puntual. Solo una orden `paid`, con envío `ready_to_ship` y logística local se
+guarda como `pendiente` en `pedidos_cache`; las demás no se agregan. Usuario ajeno, recurso
+inválido y errores de fondo son fail-open: se descartan o registran y el cron recupera.
+
+En preparación ML, la evidencia se clasifica como `elegible`, `no_elegible` o `inconcluso`.
+Una orden paga sin `shipping.id`, o un envío `ready_to_ship` sin `logistic_type`, es
+`inconcluso`: el webhook/sync puntual es fail-open y conserva la fila pendiente para el cron,
+pero `POST /api/preparacion/iniciar` responde 409 y no crea una preparación manual hasta contar
+con evidencia suficiente. Logística externa explícita es `no_elegible`; `self_service`,
+`cross_docking`, `drop_off` y `xd_drop_off` son locales.
 
 ## Contador de Inventario (`/api/inventario`)
 
@@ -1093,9 +1357,9 @@ Respuesta 200: `{ ok, sesion }` con `sesion.categorias` / `sesion.marcas` como a
 Al crearse se **congela** el alcance (qué SKUs entran y en qué bloque `con_stock` /
 `sin_stock`) en `inventario_sesion_alcance`.
 - `400` sin categorías ni marcas.
-- `409` si el usuario ya tiene una sesión abierta.
-- `409` si el alcance se cruza con la sesión abierta de otro usuario:
-  `{ ok:false, error, ocupada_por, categorias, marcas }`.
+- `409` si el usuario ya tiene una sesión en estado `abierta` (no puede abrir otra hasta retomar o descartar la actual).
+- `409` si el alcance se cruza con una sesión de otro usuario en estado `abierta` o `confirmada_con_errores`:
+  `{ ok:false, error, ocupada_por, categorias, marcas }`. El solapamiento se checkea con ambos estados porque una sesión en `confirmada_con_errores` sigue siendo reintentable y sus ajustes seguirían siendo válidos.
 
 ### GET /api/inventario/sesion-activa
 `{ ok, sesion|null }` — la sesión abierta propia, con arrays.
@@ -1185,9 +1449,42 @@ la cantidad a mano). Nunca pisa un conteo hecho a mano (`INSERT OR
 IGNORE`) ni toca el bloque con-stock. `400` si la sesión no está abierta.
 
 ### POST /api/inventario/sesiones/:id/confirmar
-Sin cambios en la lógica: claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
+**Ajuste por delta contra stock live (no absoluto):** cada ítem ajusta su stock en Woo
+aplicando un delta: `delta = cantidadContada - stockInicial`, luego `stockFinal = stockLive + delta`.
+Esto preserva las ventas que ocurrieron durante el conteo y evita sobre-publicar stock.
+Claim atómico (`UPDATE ... WHERE estado IN ('abierta','confirmada_con_errores')`),
 **fail-closed por ítem** al escribir a Woo (un PUT fallido no aborta el resto; la sesión
 queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
+**Fail-closed adicional:** si `stockLive > stockInicial` durante el conteo (detección de
+ingreso externo de mercadería o error de medición inicial), el ítem se rechaza sin PUT
+a Woo y cae en fallidos para revisión manual.
+
+**Respuesta 200:**
+```json
+{
+  "ok": true,
+  "ajustados": 5,
+  "fallidos": 0,
+  "errores": [],
+  "ventasDuranteConteo": [
+    {
+      "sku": "FB-1",
+      "stock_al_abrir_sesion": 10,
+      "stock_al_confirmar": 8,
+      "stock_final": 7
+    }
+  ]
+}
+```
+- `ajustados`: cantidad de ítems ajustados exitosamente en Woo.
+- `fallidos`: cantidad de ítems que fallaron (quedan en `inventario_conteos.ajustado_en = NULL`).
+- `errores`: array de `{ sku, error }` para cada ítem fallido.
+- `ventasDuranteConteo`: array (opcional, solo presente si hubo al menos una venta detectada).
+  Cada entrada contiene:
+  - `sku`: el SKU donde se detectó la venta.
+  - `stock_al_abrir_sesion`: el `stock_inicial` congelado (al crear la sesión para ítems en alcance, o al momento del escaneo para ítems fuera de alcance que se agregaron después).
+  - `stock_al_confirmar`: el `stockLive` leído de WC al momento de ajustar.
+  - `stock_final`: el stock que se escribió en Woo tras aplicar el delta.
 
 **Respuesta 409:** corta **antes** de tocar Woo. Dos escenarios:
 
@@ -1223,6 +1520,101 @@ queda en `confirmada_con_errores` y el reintento procesa solo los no ajustados).
    }
    ```
    `pendientes` viene ordenado: `bloque` con_stock primero (CASE WHEN='con_stock' THEN 0), después categoría → marca → nombre, todas COLLATE NOCASE.
+
+### GET /api/inventario/no-contables/sugerencias (Fase 0, Tarea 1)
+Devuelve productos candidatos a marcar como no-contables (sin marca o stock absurdo >500).
+Query params: ninguno.
+- Response 200: `{ "ok": true, "sugerencias": [ { "id_woo", "sku", "nombre", "stock", "marca" }, ... ] }`
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo lectura).
+
+### POST /api/inventario/no-contables (Fase 0, Tarea 1)
+Marca una o más productos como no-contables (excluidos del conteo automático).
+**Requiere admin.** Responde 403 si el usuario no es administrador.
+- Request: `{ "ids_woo": [1, 2, 3] }` (array no vacío de id_woo de productos).
+- Response 200: `{ "ok": true, "marcados": 3 }`.
+- Response 400: `{ "ok": false, "error": "Indicá `ids_woo` (array no vacío)." }`.
+
+### POST /api/inventario/no-contables/revertir (Fase 0, Tarea 1)
+Desmarca productos como no-contables, devolviéndolos al flujo de conteo normal.
+**Requiere admin.** Responde 403 si el usuario no es administrador.
+- Request: `{ "ids_woo": [1, 2, 3] }` (array no vacío de id_woo de productos).
+- Response 200: `{ "ok": true, "revertidos": 3 }`.
+- Response 400: `{ "ok": false, "error": "Indicá `ids_woo` (array no vacío)." }`.
+- También soportado como `DELETE /api/inventario/no-contables` con el mismo body.
+
+### GET /api/inventario/negativos (Fase 0, Tarea 3)
+Lee alertas abiertas de stock negativo detectado en el catálogo.
+- Request: sin body ni query.
+- Response 200: `{ "ok": true, "alertas": [ { "id", "sku", "stock_detectado", "detectado_en", "nombre", "marca", "stock_actual" }, ... ] }`
+  - Solo lista filas con `resuelto_en IS NULL` (alertas abiertas).
+  - `stock_detectado` es el valor negativo que se vio al detectar.
+  - `stock_actual` es el stock presente ahora en `catalogo_cache`.
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo lectura).
+
+### GET /api/inventario/diferencias/pendientes (Fase 0, Tarea 2)
+Devuelve **solo sobrantes pendientes de aprobación** (diferencias grandes que frenaron el ajuste).
+Los faltantes con `requiere_revision=1` siguen existiendo como alertas históricas para investigar,
+pero no aparecen en esta bandeja — son informativos, no accionables.
+- Request: sin body ni query.
+- Response 200: `{ "ok": true, "pendientes": [ { "id", "sku", "tipo", "cantidad_contada", "stock_inicial_usado", "diferencia", "nombre", "marca", "requiere_revision", "revisado_en", "creado_en", ... }, ... ] }`
+  - Solo filas con `tipo='sobrante'`, `requiere_revision=1`, `revisado_en IS NULL`.
+  - Ordenadas por `creado_en` (antiguas primero).
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo lectura).
+
+### POST /api/inventario/diferencias/:id/aprobar (Fase 0, Tarea 2)
+Aprueba un sobrante grande y aplica el ajuste a WooCommerce (ejecuta `setStockWcDelta`).
+**Requiere admin.** Responde 403 si el usuario no es administrador.
+**Defensa en profundidad:** devuelve 400 si se intenta aprobar una fila `tipo != 'sobrante'`.
+- Request: sin body.
+- Response 200: `{ "ok": true, "resultado": { ... } }` — resultado del ajuste a Woo.
+- Response 400:
+  - `{ "ok": false, "error": "Esta diferencia ya fue revisada" }` — si `revisado_en IS NOT NULL`.
+  - `{ "ok": false, "error": "Solo los sobrantes requieren aprobación; los faltantes ya se ajustaron automáticamente al confirmar la sesión" }` — si `tipo != 'sobrante'`.
+- Response 404: `{ "ok": false, "error": "Diferencia no encontrada" }`.
+- Response 502: `{ "ok": false, "error": "<mensaje>" }` — fallo en el ajuste a Woo; queda pendiente para reintentar.
+
+### POST /api/inventario/diferencias/:id/rechazar (Fase 0, Tarea 2)
+Rechaza un sobrante (decisión deliberada de no tocarlo en Woo). Marca la diferencia como revisada
+y **borra la fila de `inventario_conteos`** para ese ítem, cerrando la decisión.
+**Requiere admin.** Responde 403 si el usuario no es administrador.
+**Defensa en profundidad:** devuelve 400 si se intenta rechazar una fila `tipo != 'sobrante'`.
+- Request: sin body.
+- Response 200: `{ "ok": true }`.
+- Response 400:
+  - `{ "ok": false, "error": "Esta diferencia ya fue revisada" }` — si `revisado_en IS NOT NULL`.
+  - `{ "ok": false, "error": "Solo los sobrantes requieren aprobación; los faltantes ya se ajustaron automáticamente al confirmar la sesión" }` — si `tipo != 'sobrante'`.
+- Response 404: `{ "ok": false, "error": "Diferencia no encontrada" }`.
+
+### GET /api/inventario/ritmo (Fase 0, Tarea 4)
+Estima el ritmo de conteo de un operario, en **ítems por hora**, a partir de sus últimas 5
+sesiones confirmadas.
+- Request: query param `usuario` (obligatorio, username del operario).
+- Toma las últimas 5 sesiones de ese usuario con `estado IN ('confirmada',
+  'confirmada_con_errores')`, ordenadas por `confirmado_en DESC`. De esas, quedan como
+  "válidas" las que tienen `items_contados` no nulo y `0 < segundos_activos <= 10800` (3h) —
+  una sesión de más de 3 horas se descarta del cálculo (probablemente no fue continua). Para
+  cada válida calcula `(items_contados / segundos_activos) * 3600`.
+- Con **menos de 3 sesiones válidas**, no hay muestra suficiente: devuelve un valor fijo
+  conservador con `estimado: true`.
+  ```json
+  { "ok": true, "ritmo": 20, "estimado": true, "muestras": 1 }
+  ```
+- Con **3 o más sesiones válidas**, calcula el **percentil 25** (interpolación lineal, método
+  PERCENTILE.INC de Excel) del ritmo observado — no el promedio, para no sobreestimar con
+  una sesión atípicamente rápida.
+  ```json
+  { "ok": true, "ritmo": 28.4, "estimado": false, "muestras": 4 }
+  ```
+  - `ritmo`: ítems por hora (número, puede tener decimales).
+  - `estimado`: `true` si `ritmo` es el valor fijo de respaldo (pocos datos), `false` si es
+    el percentil 25 calculado sobre datos reales.
+  - `muestras`: cantidad de sesiones que efectivamente entraron en el cálculo (después de
+    excluir las de más de 3 horas).
+- Response 400: `{ "ok": false, "error": "Falta `usuario`" }`.
+- Sin permisos especiales: accesible a cualquier usuario con permiso de inventario (solo
+  lectura). Nota: esto expone la métrica de productividad de cualquier operario a cualquier
+  otro con el mismo permiso — decisión de producto, no un descuido, pero vale saberlo si se
+  quiere acotar más adelante.
 
 ## Estado del token ML (banner del Home)
 
@@ -1299,11 +1691,6 @@ checksum), intenta escribir `global_unique_id` en Woo reutilizando `lib/gtinWoo.
     - `conflicto`: producto tiene otro GTIN; requiere `pisar_codigo: true` para sobrescribir.
     - `conflicto_mapa`: EAN ya estaba mapeado en `ean_sku` a otro SKU; requiere `pisar_mapa: true`
       para reemplazarlo. `sku_actual` contiene el SKU anterior. No se toca Woo ni `catalogo_cache`.
-    - `en_curso`: otra request para el mismo EAN está en el tramo remoto (Woo) + persistencia
-      local ahora mismo (mutex por EAN, un solo proceso). **No incluye `sku_actual`** — no es
-      un conflicto de mapa real, así que el frontend no debe ofrecer "mover código" para este
-      estado; incluye `mensaje` con el texto a mostrar. El cliente puede reintentar la misma
-      request en unos segundos sin cambiar ningún flag.
     - `subido`: Woo confirmó el PATCH; `catalogo_cache.gtin` y `ean_sku` se actualizan.
     - `fallo`: Woo rechazó o no respondió; mapa local se conserva, cache no se afirma subido.
       `motivo` contiene `woo` o el rechazo local.
@@ -1349,18 +1736,27 @@ queries usan `LIKE ? ESCAPE '\\'`. Antes de este fix, `q=%` o `q=_` actuaban com
 total (devolvían cualquier fila) en vez de buscarse como texto literal. Sin cambio de forma
 en la respuesta, solo de comportamiento de búsqueda.
 
-## GET /api/precios (contrato de `total`/`truncado` agregado)
+## GET /api/precios (universo completo para filtros locales)
 
-La query interna tiene `LIMIT 1000` (deliberado, se mantiene). Antes, `total` reportaba
-`data.length` (el tope del LIMIT) como si fuera el total real, ocultando publicaciones sin
-aviso ni paginación. Ahora:
+La respuesta trae todas las filas del estado solicitado. El límite histórico de 1.000 se retiró:
+marca, categoría, búsqueda y rangos se aplican en el navegador, por lo que truncar antes del
+filtro ocultaba resultados válidos (caso medido: Pirelli mostraba 6 de 21 publicaciones).
 
 ```
 { "ok": true, "total": <COUNT real, sin LIMIT>, "truncado": <bool>, "data": [...] }
 ```
 
-`truncado=true` cuando `total > data.length` (hay más filas de las que trajo esta
-respuesta). El frontend debe mostrar "mostrando N de M" cuando `truncado` sea `true`.
+`truncado` se conserva por compatibilidad y actualmente es `false`.
+
+## GET /api/precios/estado y POST /api/precios/recalcular — proyección local
+
+La auditoría de precios se actualiza automáticamente desde los caches de ML y Woo. El
+estado conserva los campos históricos (`enCurso`, progreso, `ultimo`, `resumen`) y agrega,
+de forma aditiva, `ultima_sync_en`, `ultima_sync_origen`, `ultima_completa_en`,
+`ml_datos_en`, `woo_datos_en`, `ultimo_error` y `ultimo_error_en`. `POST
+/api/precios/recalcular` mantiene `{ ok, iniciado }`, pero deriva desde cache local: no
+relee masivamente `/items` de Mercado Libre. Comisión y envío sólo se consultan si su cache
+de siete días falta o venció.
 
 Mismo contrato aplicado en `GET /api/sync/atencion/:cat` (también tenía `LIMIT 500`
 reportado como `total: rows.length`): ahora `total` es el COUNT real de esa categoría y se
@@ -1555,8 +1951,13 @@ barata en SQL, separada del payload completo.
 La forma de request/response de los endpoints no cambia (`GET /api/woo/catalogo`:
 `{ ok:true, data:[...] }`), salvo `POST /api/woo/catalogo/recargar` que ahora puede devolver
 `{ ok:true, omitido:true, motivo:'en_curso' }` en vez de `{ ok:true, total }` — ver candado
-más abajo. El resto es comportamiento interno de `refrescarCatalogo`, que igual vale dejar
-escrito porque es contrato operativo, no solo de código.
+más abajo — o, desde el frente de confiabilidad operativa (Hito 3), `{ ok:true, total:0,
+sospechoso:true }` cuando el barrido completo forzado por este mismo endpoint devuelve 0
+productos: `ok:true` porque la llamada en sí no falló, pero `total` NO refleja el catálogo
+real (se omitió la poda por seguridad, ver más abajo) — cualquier cliente de este endpoint
+debe tratar `sospechoso:true` como una falla operativa, no como "0 productos actualizados".
+El resto es comportamiento interno de `refrescarCatalogo`, que igual vale dejar escrito
+porque es contrato operativo, no solo de código.
 
 - Cada corrida es **incremental** salvo que corresponda un barrido **completo**: primera vez
   (sin marca previa), pasó ≥1h desde el último completo (`sync_estado.catalogo_ultimo_completo`,
@@ -1593,8 +1994,7 @@ escrito porque es contrato operativo, no solo de código.
 
 Reemplaza el flujo de "informe" de Cobertura por una herramienta de trabajo: cola priorizada
 por marca, tarjeta de confirmación con candidatos + diff estructurado, multi-publicación y
-solo-ML accionables. Ver `docs/superpowers/plans/2026-08-10-cobertura-accionable.md` y
-`2026-08-10-cobertura-flujo-ux.md`. El motor de matching (candidatos + diff) vive en
+solo-ML accionables. El motor de matching (candidatos + diff) vive en
 `lib/matcherEngine.js` (`construirML`, `candidatosDeWC`, `candidatosParaWC`, `diffTokens`);
 las rutas y la persistencia son este contrato.
 
@@ -1627,11 +2027,13 @@ pesaba 1 MB, es justo lo que este contrato reemplaza para la pantalla de entrada
 Botón "Actualizar desde ML" (plan de flujo §1 y §9): fuerza el refresco de **todo** el
 universo de publicaciones ML (`ml_publicaciones_cache` completo, no solo las que están sin
 `seller_sku`) que alimenta el matcher inverso. Reusa el mismo motor de refresco que
-`POST /api/matcher/refrescar-ml` (`refrescarPublicacionesMl`, `lib/mlClient.js#mlFetch`) —
-no es un camino nuevo hacia ML.
+`POST /api/matcher/refrescar-ml` (`refrescarPublicacionesMl`, `routes/matcher.js#mlFetchConReintento`
+sobre `lib/mlClient.js#mlFetch`) — no es un camino nuevo hacia ML.
 - Request: sin body.
 - Response 202: `{ ok:true, running:true, scope:'all' }` — arrancó en background (el scan +
-  multiget completo tarda 1-3 min, más que el timeout de nginx; el frontend sondea el estado).
+  multiget completo son ~10-15 min reales con ~6840 publicaciones: cada llamada va espaciada
+  1,5s, el pacing mínimo medido para no gatillar el 429 de ML — más que el timeout de nginx;
+  el frontend sondea el estado con presupuesto acorde, no solo un par de minutos).
 - Response 409 (**candado anti-reentrada, COMPARTIDO con el Matcher**): `{ ok:false,
   running:true, error:'Ya hay un refresco en curso', scope }` — si ya había un refresco
   corriendo (disparado desde Cobertura O desde el Matcher, da igual: es el mismo recurso),
@@ -1639,8 +2041,12 @@ no es un camino nuevo hacia ML.
 - **Presupuesto**: las llamadas usan `manual:true` (mismo trato que el resto de refrescos
   manuales del repo) — eso saltea el *cooldown* de 429, **nunca** el presupuesto de
   `lib/mlLimites.js` (`reservarCupo` se llama siempre dentro de `mlFetch`, con o sin `manual`).
-- **Fail-closed**: si el scan o el multiget de ML fallan, `refrescarPublicacionesMl` aborta
-  ANTES de tocar la caché (el reemplazo es una transacción atómica al final) — ninguna
+- **Reintento por llamada** (incidente 2026-08-27): cada llamada individual del scan/multiget
+  tolera hasta 3 reintentos con backoff ante un 5xx transitorio (`mlFetchConReintento`) antes
+  de rendirse — un 429 o un 4xx normal no se reintenta. Si el estado sondeado tarda, puede ser
+  esto: no es necesariamente que el refresco esté colgado.
+- **Fail-closed**: si el scan o el multiget de ML fallan (agotados los reintentos), `refrescarPublicacionesMl`
+  aborta ANTES de tocar la caché (el reemplazo es una transacción atómica al final) — ninguna
   publicación válida se pierde ni queda a mitad de camino. El error queda expuesto en el
   estado sondeable, `ultima_actualizacion_ml` NO avanza.
 
@@ -1722,8 +2128,6 @@ efectivizó en ML, revierte local sin llamar a ML.
   ya está puesto, se dispara `desvincularSkuEnMl` fail-closed; si esa desvinculación falla,
   **se restaura la decisión local** (vuelve a coincidir con la realidad de ML) y responde
   `502 { fail_closed:true }` — nunca queda local diciendo "libre" mientras ML sigue con el SKU.
-  La restauración conserva también `confirmado_por`; no degrada una decisión moderna a una
-  fila legacy sin autoría.
 
 **🟡 corregido (revisor, ronda 3) — `mlFetch` LANZA ante fallo de transporte, no siempre
 devuelve `{ ok:false }`** (`lib/mlClient.js`: `throw e` tras un error de red/timeout/DNS, a
@@ -1840,8 +2244,7 @@ Permiso único, sesión por usuario, concurrencia optimista, Vínculos absorbido
 Fusiona `cobertura` (WC→ML, `/api/cobertura`), `matcher` (ML→WC, `/api/matcher`) y `vinculos`
 (`public/vinculos/index.html`) en una sola herramienta llamada **Matcher**. **Solo backend en
 esta entrega** — el frontend único (una pantalla, dos direcciones, dirección ML→WC
-deshabilitada como "próximamente") es un despacho aparte contra este contrato. Ver
-`docs/superpowers/plans/2026-08-11-matcher-unificado.md`, sección "Las dos entregas". El
+deshabilitada como "próximamente") es un despacho aparte contra este contrato. El
 motor de matching **no se tocó** (`lib/matcherEngine.js` sigue como estaba — eso es la
 entrega 2).
 
@@ -1895,11 +2298,12 @@ documento decía que `deshacer` no era la misma acción que "desvincular" porque
 la publicación en vivo. Era falso: cuando el vínculo ya se efectivizó, `deshacer` llama al
 mismo `desvincularSkuEnMl` y escribe en ML igual. Hallazgo del revisor.)*
 
-**`POST /api/cobertura/vinculos/reasignar` no es admin-only** y permite una corrección
-deliberada, pero exige `expected_sku` (string o `null`). Si coincide con la decisión actual,
-la cambia; si el vínculo cambió desde que el cliente lo leyó, devuelve `409 { ya_resuelto,
-expected_sku, sku_actual, resuelto_por, propio, sku, wc_nombre }` sin escribir. El frontend
-debe refrescar y volver a pedir confirmación con el nuevo snapshot.
+**`POST /api/cobertura/vinculos/reasignar` no es admin-only**, pero desde la entrega 1 pasa
+por la **misma revalidación** que confirmar: si la clave ya la resolvió otra persona con otro
+SKU, devuelve `409 { ya_resuelto, resuelto_por, propio, sku, wc_nombre }` en vez de pisarla en
+silencio. Antes vivía bajo el permiso `sync-ml` (otra herramienta, otro perfil de usuario) y
+esa diferencia era defendible; al mudarla a la superficie del Matcher quedan las dos
+escrituras a un click de distancia y tienen que jugar con la misma regla.
 
 **Límite real del gate de "desvincular", para que no diga lo que no es:** es admin-only *en
 la superficie del Matcher*. Quien además tenga `sync-ml` con nivel `write` puede desvincular
@@ -2014,3 +2418,1251 @@ hermana `cerrar-sin-stock` sí acepta `todos:true`, porque esos productos ya est
 Los SKU pedidos se intersectan con el alcance de **esa** sesión y **ese** bloque: no se puede
 colar un SKU de otra sesión, fuera del alcance, ni del bloque `sin_stock`. 400 si la sesión no
 está abierta.
+
+## Etiquetas — cola persistente (Fase 1 del plan de control de stock, 2026-08-25)
+
+Hasta acá `public/etiquetas/index.html` guardaba la cola de impresión en `localStorage` del
+navegador (se perdía al cerrar la pestaña). Estos endpoints la reemplazan por una cola en la
+base (`etiquetas_cola`, creada por `routes/etiquetas.js`). Permiso: herramienta `etiquetas`
+(`niveles:false`, igual criterio que `inventario` — acceso total una vez adentro).
+
+### GET /api/etiquetas/cola
+Lista la cola. Opcionalmente filtra por `?estado=pendiente|impresa`.
+
+- Response 200: `{ "ok": true, "cola": [ { id, sku, cantidad, origen, sesion_id,
+  solicitado_por, nota, estado, creado_en, impreso_en } ] }`.
+
+### POST /api/etiquetas/cola
+Agrega un ítem a la cola.
+
+- Request: `{ sku, cantidad, origen?, sesion_id?, nota? }`. `sku` no vacío, `cantidad` entero
+  > 0 (400 si no). `solicitado_por` se toma de `req.user.username`, no del body.
+- Response 200: `{ "ok": true, "item": {...} }`.
+
+### PATCH /api/etiquetas/cola/:id
+Edita `cantidad` y/o `nota` de un ítem **pendiente**. 400 si el ítem ya está `impresa`
+(inmutable una vez impresa — evita reimprimir con datos distintos a los que salieron por la
+térmica). 404 si no existe.
+
+- Request: `{ cantidad?, nota? }`.
+- Response 200: `{ "ok": true, "item": {...} }`.
+
+### POST /api/etiquetas/cola/marcar-impresas
+Marca varios ítems como impresos de una vez (después de imprimir el lote).
+
+- Request: `{ ids: [1, 2, 3] }`. 400 si `ids` viene vacío.
+- Response 200: `{ "ok": true, "marcadas": <n> }`. Solo cuenta los que estaban `pendiente`
+  (idempotente: reenviar los mismos ids no vuelve a marcarlos ni suma al conteo).
+
+### DELETE /api/etiquetas/cola/:id
+Descarta un ítem **pendiente** (p.ej. se decidió que no hace falta etiqueta). 400 si ya
+está `impresa` (inmutable, igual criterio que PATCH — una vez impresa queda como registro,
+no se borra). 404 si no existe.
+
+- Response 200: `{ "ok": true }`.
+- Response 400: `{ "ok": false, "error": "solo se puede descartar un ítem pendiente..." }`.
+
+Sin llamadas a ML/Woo — no aplica fail-open/fail-closed. Sin cambios al renderer 50×25mm
+existente: estos endpoints son solo la fuente de datos, la pestaña "Cola de conteo" del
+frontend (próximo despacho) consume el mismo renderer sin tocarlo.
+
+## Ubicaciones — alcance por ubicación física (Fase 2 del plan de control de stock, 2026-08-25)
+
+Zona+estante como alcance alternativo de sesión (barrido completo de un lugar físico),
+mutuamente excluyente con categoría/marca. Habilita el cierre en cero seguro (Rupturas 3 y 6
+del plan): un SKU con unidades registradas en más de una ubicación, o sin ninguna ubicación
+registrada, nunca se cierra en cero automáticamente.
+
+### GET /api/inventario/ubicaciones
+Lista las ubicaciones activas con cuántos SKUs tienen asociados.
+
+- Response 200: `{ "ok": true, "ubicaciones": [ { id, zona, estante, estado, activa,
+  creado_en, skus_registrados } ] }`. `estado`: `bootstrap` | `mapeada`.
+
+### POST /api/inventario/ubicaciones (admin)
+Crea una ubicación nueva.
+
+- Request: `{ zona, estante }`, ambos no vacíos.
+- Response 200: `{ "ok": true, "ubicacion": {...} }` (`estado` arranca en `bootstrap`).
+- Response 409: ya existe esa zona+estante.
+
+### POST /api/inventario/ubicaciones/:id/mapear (admin)
+Marca la ubicación como recorrida y completa. Es el único estado que habilita el cierre en
+cero automático masivo sobre esa ubicación — nunca se infiere solo, es una decisión
+explícita de quien la mapeó.
+
+- Response 200: `{ "ok": true, "ubicacion": {...} }` (`estado: "mapeada"`).
+- Response 404: no existe o está inactiva.
+
+### POST /api/inventario/sesiones (extendido)
+Ahora acepta `ubicacion_id` como alternativa a `categorias`/`marcas` — no se pueden combinar
+en la misma sesión (400 si vienen ambos). El alcance de una sesión por ubicación arranca
+vacío (bootstrap: todavía no hay nada asociado a esa ubicación) y se va poblando solo a
+medida que se escanea — ver "Captura automática" abajo.
+
+- Request: `{ ubicacion_id }` en vez de `{ categorias, marcas }`.
+- Response 400: `ubicacion_id` inexistente/inactiva, o viene junto con categorías/marcas.
+- El anti-solape entre sesiones (409 "El alcance se cruza con la sesión de X") ahora también
+  cubre ubicación: dos sesiones se cruzan si comparten al menos un SKU real, sin importar si
+  una es por ubicación y la otra por categoría/marca.
+
+### Captura automática durante el conteo
+Si la sesión activa tiene `ubicacion_id`, todo SKU que se escanea (`POST
+.../sesiones/:id/escanear`) o se asocia (`POST .../sesiones/:id/asociar`) se asocia SOLO a
+esa ubicación en `producto_ubicacion` (INSERT OR IGNORE — re-escanear el mismo SKU no
+duplica ni pisa la fecha de la primera asociación). Sin acción manual del operario.
+
+### POST /api/inventario/sesiones/:id/cerrar-sin-stock (reglas nuevas cuando la sesión es por ubicación)
+- 400 si la ubicación de la sesión todavía NO está `mapeada` — el cierre en cero automático
+  no es seguro hasta recorrerla entera.
+- Si está mapeada: de los SKUs a cerrar, se **excluyen** (no fallan, se filtran) los que
+  tengan unidades registradas en OTRA ubicación además de esta (overflow) — nunca se
+  auto-cierran. Un SKU sin ninguna ubicación registrada tampoco puede ser candidato en una
+  sesión por ubicación (el alcance se construye solo desde `producto_ubicacion`).
+- Response 200 agrega `excluidos_por_ubicacion: [sku, ...]` cuando hubo alguno filtrado
+  (el campo no aparece si no hubo exclusiones).
+- Comportamiento de una sesión por categoría/marca (sin `ubicacion_id`): sin cambios.
+
+## Rotación y criticidad — historial de ventas + score compuesto (Fase 3 del plan de control de stock, 2026-08-25)
+
+Infraestructura para el planificador de ciclos (Fase 4): historial de ventas WC+ML
+(`ventas_historial`) y un score de criticidad calculado on-demand, no cacheado (ver
+`lib/criticidad.js`). Sin pantalla propia todavía — gateado bajo el permiso `inventario`.
+
+### Backfill / incremental
+`lib/criticidad.js#backfillVentas(db, cfg)` trae ventas de WooCommerce (`/orders`,
+status completed/processing) y MercadoLibre (`/orders/search`, status paid) de los últimos
+12 meses, con cursor incremental por canal (retoma desde la última fecha vista menos 1 día
+de margen). El SKU de MercadoLibre se resuelve con la MISMA lógica que `syncMlToWc`
+(`routes/sync.js`): vínculo confirmado en `sku_matcher_decisiones` primero, `seller_sku` de
+la publicación como fallback — no se reimplementa. Un canal caído no bloquea al otro
+(fail-open entre canales; cada uno reporta su propio error si falla). Corre solo por el cron
+diario (`0 5 * * *` en `server.js`) — no hace falta correrlo a mano.
+
+### GET /api/criticidad/top?limit=50
+Lista SKUs ordenados por score de criticidad descendente (score compuesto 0..1: ventas 12m
+40%, historial de diferencias de inventario 30%, categoría marcada crítica 20%, valor de
+stock actual 10%; cada dimensión normalizada contra el máximo del catálogo).
+
+- Response 200: `{ "ok": true, "criticidad": [ { sku, score, ventas_12m,
+  diferencias_historicas, categoria_critica, valor_stock } ] }`.
+
+### GET /api/criticidad/categorias-criticas
+Lista las categorías marcadas como críticas a mano.
+
+- Response 200: `{ "ok": true, "categorias": [ { categoria, marcado_por, marcado_en } ] }`.
+
+### POST /api/criticidad/categorias-criticas (admin)
+Marca una categoría como crítica (afecta el score de todo SKU que la tenga).
+
+- Request: `{ categoria }`. Idempotente (no falla si ya estaba marcada).
+- Response 200: `{ "ok": true }`.
+
+### DELETE /api/criticidad/categorias-criticas/:categoria (admin)
+Desmarca. 404 si no estaba marcada.
+
+### POST /api/criticidad/backfill (admin)
+Dispara manualmente el backfill/incremental (sin esperar al cron diario) — útil después de
+marcar categorías nuevas o para diagnosticar un canal caído.
+
+- Response 200: `{ "ok": true, "resultado": { woo: {ordenes, insertados} | {error},
+  ml: {ordenes, insertados} | {error} } }`.
+- Response 502: excepción no controlada (no debería pasar — `backfillVentas` ya atrapa los
+  errores de cada canal por separado; esto cubre un fallo fuera de esa función).
+
+## Planificador de ciclos — plan del día y conteo dirigido (Fase 4 del plan de control de stock, 2026-08-25)
+
+### Siembra automática: sku_ultimo_conteo
+Al confirmar (o reintentar) una sesión, `sembrarUltimoConteo` graba en `sku_ultimo_conteo`
+(sku, contado_en, sesion_id, por_omision, diferencia_ultima) cada SKU de
+`inventario_conteos` de esa sesión — **nunca** desde `inventario_sesion_alcance`
+(Ruptura 9: eso infla la cobertura con SKUs que quedaron pendientes, no contados de
+verdad). Un cierre en cero por omisión también siembra (con `por_omision=1`, evidencia
+más débil). Protegido contra pisar un conteo más reciente del mismo SKU hecho por otra
+sesión mientras esta estaba `confirmando`.
+
+### GET /api/inventario/plan-hoy
+Propone UNA sesión para hoy.
+
+- Si hay al menos una ubicación `mapeada` con productos asociados: propone la más urgente
+  (mayor `dias_sin_contar` entre sus SKUs) como barrido completo, `cierre_en_cero_habilitado:
+  true` (las reglas de seguridad de Fase 2 siguen aplicando al cerrar).
+- Si no hay ninguna ubicación mapeada todavía (Ruptura 6, ciclo 0): propone bootstrap por
+  categoría — la que tenga más SKUs nunca contados —, `cierre_en_cero_habilitado: false`.
+- `capacidad_estimada_2h` sale del ritmo del usuario (percentil 25 de sus últimas sesiones,
+  mismo cálculo que `GET /ritmo`; sin usuario en la sesión usa el fallback 20/h). No separa
+  ritmo por condición escaneado/manual (Ruptura 8) todavía — esa granularidad requiere
+  trackear qué ítems se escanearon vs se tipearon a mano, dato que hoy no se registra por
+  separado; queda para un despacho futuro si hace falta.
+- `queda_afuera` es una estimación (`productos - capacidad_estimada_2h`), no una lista.
+
+Response 200:
+```
+{ ok, propuesta: { tipo: 'ubicacion'|'categoria_bootstrap', ...,
+    cierre_en_cero_habilitado, capacidad_estimada_2h, queda_afuera } | null,
+  ritmo: { ritmo, estimado, muestras },
+  cobertura: { total_contable, con_conteo_registrado, porcentaje, vencidos_20_dias },
+  ubicaciones: { mapeadas, totales } }
+```
+
+### GET /api/inventario/dirigido?limit=20
+Lista informativa de los SKUs más urgentes (mayor días sin contar, nunca contados primero),
+para "apagar incendios" puntuales. **No crea sesiones ni habilita cierre en cero** — contar
+uno de estos SKUs se hace desde una sesión normal por categoría/marca/ubicación (Ruptura 5:
+el "conteo dirigido" como TIPO de sesión con su propio alcance de lista-de-SKUs queda fuera
+de este despacho — este endpoint es solo la lista de prioridades).
+
+- Response 200: `{ ok, dirigido: [ { sku, nombre, stock, dias_sin_contar, nunca_contado } ] }`.
+
+## Actualización de stock — push inmediato a MercadoLibre
+
+Dos endpoints que aplican stock a WooCommerce disparan, para cada SKU que se aplicó CON ÉXITO
+en WC, un push puntual de ese SKU a ML (`syncSkuPuntual`). Si aplicar a WC falló para un SKU,
+NO se intenta el push — `catalogo_cache` sigue con el stock viejo en ese caso, así que empujar
+igual pushearía a ML un valor sin relación con el cambio pedido. El campo `sync_ml` en la
+respuesta confirma si el push fue exitoso, quedó pendiente/omitido, o falló (fail-open: si
+falla, el error se reporta pero no bloquea; el cron periódico de `syncWcToMl` retoma como
+respaldo).
+
+**`sync_ml` NO está alineado por índice con `resultados`**: solo trae una entrada por cada SKU
+que sí se aplicó en WC (los que fallaron en `resultados` no tienen contraparte en `sync_ml`), y
+tampoco emite entrada si el ítem no tenía `sku`.
+
+### POST /api/recepciones/:id/confirmar (campo agregado: `sync_ml`)
+- Response 200 (agrega campo):
+  ```
+  {
+    "ok": true,
+    "aplicados": 5,
+    "errores": 0,
+    "sin_match": 2,
+    "resultados": [...],
+    "pendientes": [...],
+    "confirmado_en": "2026-08-26T15:30:00.000Z",
+    "solo_documento": false,
+    "sync_ml": [
+      { "sku": "FB-1234", "estado": "sincronizado", "detalle": "1/1 publicaciones actualizadas" },
+      { "sku": "FB-5678", "estado": "sin_cambios", "detalle": "Sin cambios pendientes en ML" },
+      { "sku": "FB-9999", "estado": "error", "detalle": "Fallo tras reintento: ..." }
+    ]
+  }
+  ```
+
+### POST /api/woo/stock/aplicar (campo agregado: `sync_ml`)
+- Mismo shape que `POST /api/recepciones/:id/confirmar`, agregado a la respuesta existente
+  (`ok`, `aplicados`, `errores`, `resultados`).
+
+### Bloqueo por contradicción de título en el push de stock a ML
+`syncWcToMl` devuelve `{ omitido:false, bloqueados_contradiccion:N }`: `N` es la cantidad de claves a
+las que no se les empujó stock > 0 porque el título/atributos de la publicación ML contradicen al
+producto Woo vinculado (transmisión, velocidades —como conjunto: solo contradice si los conjuntos son
+disjuntos—, color, talle, rodado). Cada bloqueo queda en `sync_log` con `estado:'bloqueado_contradiccion'`
+y `error` = JSON de los motivos; las rutas puntuales (`syncSkuPuntual`, reactivar, reintentar) devuelven
+`{ estado:'bloqueado_contradiccion', bloqueado:true, motivos }`. El stock 0 nunca se bloquea.
+
+### Shape de cada elemento de `sync_ml`
+- `sku`: identificador del producto.
+- `estado`:
+  - `'sincronizado'`: al menos una publicación de ese SKU se actualizó en ML con éxito, y
+    ninguna falló (si alguna falló, el agregado es `'error'` aunque otra sí se haya
+    sincronizado — no se reporta éxito parcial como si fuera total).
+  - `'sin_cambios'`: sin diff pendiente en ML, o ninguna publicación del SKU estaba activa.
+  - `'error'`: al menos una publicación falló tras el reintento (error real de ML, no 429).
+  - `'omitido'`: no se intentó nada — ML no está configurado, el sync general (`syncWcToMl`)
+    ya está corriendo y va a cubrir este SKU en la misma corrida, o ML devolvió 429
+    (cooldown de cuota) en TODAS las publicaciones del SKU: no es un fallo de este SKU en
+    particular, es la cuenta entera limitada, y el cron lo retoma solo.
+- `detalle`: cadena descriptiva (cantidad de publicaciones actualizadas, motivo del skip,
+  error específico). Solo aparece una entrada por SKU aunque el lote lo repita (deduplicado).
+
+### Comportamiento de `syncSkuPuntual` (función interna, reusada por ambos endpoints)
+- Busca **todas** las publicaciones/variaciones mapeadas a ese SKU con diff pendiente contra
+  ML (un SKU puede tener más de una) y empuja cada una por separado.
+- Si el sync general `syncWcToMl` está en curso (candado `_wcToMlEnCurso`), no hace nada:
+  devuelve `'omitido'` porque esa corrida ya va a cubrir el mismo diff. Si el cron arranca
+  DESPUÉS de que el push puntual ya empezó, se acepta la ventana de carrera (el PUT de stock
+  a ML es idempotente).
+- Por publicación: lee el status de `ml_publicaciones_cache` primero (mismo patrón que el
+  cron `syncWcToMl`) y solo hace un GET a ML como fallback si no está cacheada — evita una
+  llamada + 500ms de espera por publicación en el caso común. Si no está activa, o no se
+  pudo confirmar el status, no se toca (no es error, se retoma en el próximo ciclo del
+  cron). Si está activa, hace el PUT de stock.
+- Ante un 429 (cooldown de cuota) en cualquiera de los dos pasos, **no reintenta** — corta
+  de una con `estado: 'omitido'` (no `'error'`: el cooldown es de la cuenta entera, no de
+  esta publicación), mismo criterio que el cron `syncWcToMl`. Otros errores HTTP sí
+  reintentan, pero **un solo reintento** (backoff de 800ms, no el 500/1500/4000ms del resto
+  del repo): esto corre síncrono dentro del request HTTP del operario, no en un cron de
+  fondo, así que la latencia por SKU está acotada a propósito.
+- Fail-open real: cualquier fallo termina en `estado: 'error'` para esa publicación sin tirar
+  una excepción hacia el endpoint que la llama — el stock en WC ya quedó aplicado igual, y el
+  cron `syncWcToMl` reintenta ese mismo diff en su próxima corrida. Los dos endpoints además
+  envuelven la llamada en su propio try/catch por si `syncSkuPuntual` tirara algo inesperado.
+
+### Fuera de este despacho
+- Tabla `ciclos` (numeración de ciclos) — no se creó: nada en este despacho la necesita
+  todavía, `plan-hoy` trabaja directo sobre `dias_sin_contar`.
+- El "tablero" visual (% bajo régimen, deuda en días-SKU, proyección de recuperación,
+  cobertura de ubicación/etiquetas) — sin pantalla propia en este despacho; los números que
+  ya expone `plan-hoy` (`cobertura`, `ubicaciones`) son la base de datos que un tablero
+  futuro consumiría.
+- El tipo de sesión "conteo dirigido" (alcance = lista de SKUs sueltos) en `POST /sesiones`
+  — `GET /dirigido` da la lista, pero abrir una sesión sobre esa lista puntual todavía se
+  hace por categoría/marca/ubicación como cualquier otra.
+
+## API Administrativa de Incidentes Operativos (Hito 5)
+
+Sistema de detección y visualización de fallos de integración (ML/WooCommerce) sin depender
+de que un administrador mire logs de PM2 en vivo. Los incidentes son creados por `routes/ml.js`
+y `routes/woo.js` via `lib/incidentes.js` cuando una integración falla de forma clasificable.
+Estos endpoints son **lectura exclusivamente** — solo para visualización por parte de admins.
+
+### GET /api/incidentes
+Lista incidentes operativos con filtros opcionales y paginación.
+
+- Query parameters (todos opcionales):
+  - `estado`: filtrar por `'activo'` o `'resuelto'`.
+  - `integracion`: filtrar por nombre (ej. `'mercadolibre'`, `'woocommerce'`).
+  - `severidad`: filtrar por `'info'`, `'advertencia'`, o `'critico'`.
+  - `page`: número de página (1-based, default 1); valores ≤0 o no numéricos → default.
+  - `pageSize`: elementos por página (1-100, default 20); valores ≤0 o no numéricos →
+    default; >100 → clampea a 100.
+
+- Response 200 (require admin):
+  ```json
+  {
+    "ok": true,
+    "data": [
+      {
+        "id": 1,
+        "integracion": "mercadolibre",
+        "proceso": "refrescar_publicaciones",
+        "tipo_error": "rate_limit",
+        "severidad": "advertencia",
+        "estado": "activo",
+        "mensaje_tecnico": "HTTP 429",
+        "mensaje_humano": "Rate limit de ML alcanzado",
+        "contexto_json": "{\"status\":429,...}",
+        "contador_repeticiones": 3,
+        "primera_deteccion_en": "2026-08-28T10:00:00.000Z",
+        "ultima_deteccion_en": "2026-08-28T10:15:00.000Z",
+        "ultima_recuperacion_en": null,
+        "resuelto_en": null,
+        "creado_en": "2026-08-28T10:00:00.000Z",
+        "actualizado_en": "2026-08-28T10:15:00.000Z"
+      }
+    ],
+    "page": 1,
+    "pageSize": 20,
+    "total": 42
+  }
+  ```
+
+- Response 403: `{ "ok": false, "error": "Requiere administrador" }` — no autenticado o no admin.
+- Response 500: `{ "ok": false, "error": "<mensaje>" }` — error interno.
+
+Notas:
+- `contexto_json` y `mensaje_tecnico` ya están sanitizados por `lib/incidentes.js` (secretos
+  redactados, strings truncados).
+- `clave_dedupe` es un detalle interno de dedupe y no se expone en la API.
+- Ordenado por `ultima_deteccion_en DESC, id DESC` (incidentes más recientes primero).
+- `pageSize` tiene un tope duro de 100 para evitar respuestas gigantes.
+- Valores inválidos de `page`/`pageSize` (strings no numéricos, negativos, muy grandes) no
+  rompen el endpoint — se comportan con gracefully (default/clamping).
+- Query params repetidos (ej. `?estado=activo&estado=resuelto`) se normalizan tomando el
+  último valor; no se devuelve error.
+
+### GET /api/incidentes/:id
+Detalle de un incidente específico, incluyendo su historial completo.
+
+- Path parameter:
+  - `id`: entero positivo, identificador del incidente.
+
+- Response 200 (require admin):
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "id": 1,
+      "integracion": "mercadolibre",
+      "proceso": "refrescar_publicaciones",
+      "tipo_error": "rate_limit",
+      "severidad": "advertencia",
+      "estado": "activo",
+      "mensaje_tecnico": "HTTP 429",
+      "mensaje_humano": "Rate limit de ML alcanzado",
+      "contexto_json": "{\"status\":429,...}",
+      "contador_repeticiones": 3,
+      "primera_deteccion_en": "2026-08-28T10:00:00.000Z",
+      "ultima_deteccion_en": "2026-08-28T10:15:00.000Z",
+      "ultima_recuperacion_en": null,
+      "resuelto_en": null,
+      "creado_en": "2026-08-28T10:00:00.000Z",
+      "actualizado_en": "2026-08-28T10:15:00.000Z",
+      "historial": [
+        {
+          "id": 1,
+          "incidente_id": 1,
+          "evento": "abierto",
+          "detalle_json": "{\"severidad\":\"advertencia\",...}",
+          "creado_en": "2026-08-28T10:00:00.000Z"
+        },
+        {
+          "id": 2,
+          "incidente_id": 1,
+          "evento": "repetido",
+          "detalle_json": "{\"repeticiones\":2,...}",
+          "creado_en": "2026-08-28T10:05:00.000Z"
+        }
+      ]
+    }
+  }
+  ```
+
+- Response 400: `{ "ok": false, "error": "ID inválido" }` — `id` no es un entero positivo.
+- Response 403: `{ "ok": false, "error": "Requiere administrador" }` — no admin.
+- Response 404: `{ "ok": false, "error": "no encontrado" }` — incidente con ese `id` no existe.
+- Response 500: `{ "ok": false, "error": "<mensaje>" }` — error interno.
+
+Notas:
+- `historial` está ordenado cronológicamente (más antiguo primero).
+- `evento` puede ser: `'abierto'` (creación), `'repetido'` (falló de nuevo sin cambio de
+  severidad), `'escalado'` (severidad aumentó), `'resuelto'` (ciclo sano de la integración).
+- `detalle_json` puede ser `null` (ej. en eventos de resolución).
+
+### Diseño de paginación y validación
+- `page` y `pageSize` llegan como **strings** desde `req.query` (Express siempre stringifica
+  query params); se validan con `Number.isSafeInteger` (no `Number.isInteger`) antes de usarse
+  como OFFSET/LIMIT en SQL, rechazando valores muy grandes (1e21) que causarían datatype
+  mismatch en sqlite.
+- Comportamiento fallido → graceful degradation (default/clamping), **no 400** — un cliente que
+  mande `pageSize=abc` obtiene `pageSize=20`, no un error. La validación de segundo nivel en
+  `lib/incidentes.js` garantiza cotas aún si alguien bypassea `routes/incidentes.js`.
+
+### Decisión fail-open: el registro de incidentes nunca bloquea la integración
+Si `abrirOActualizarIncidente` falla (disco lleno, DB bloqueada), devuelve `{ error: true }` sin
+lanzar una excepción. La integración que disparó el incidente (ML/Woo) continúa: el incidente
+no se registró, pero tampoco cortó la sincronización (comentario explícito en `lib/incidentes.js` línea 137-140: "FAIL-OPEN a propósito"). El admin verá un hueco en la línea de
+tiempo (falta un evento), pero el sistema de integraciones no colapsa. Mismo criterio para
+`confirmarCicloSano` — si el registro de la resolución falla, devuelve `{ error: true }` sin
+interrumpir el ciclo exitoso que la llamó.
+
+## Hito 7: Notificaciones Push (iOS, Android, Web)
+
+Infraestructura backend para enviar notificaciones push a dispositivos móviles registrados.
+Contrato con `openapi/mobile-v1.yaml`. Los endpoints móviles implementados se sirven bajo
+`/api/v1/` con `Authorization: Bearer <JWT>`; las rutas `/api/` legacy del panel conservan
+sesión por cookie. El inbox y la lectura operativa de Claims comparten el mismo middleware
+móvil y el permiso `notificaciones-ml`.
+
+### POST /api/v1/auth/login
+Inicia una sesión móvil y liga el refresh token a un dispositivo. El request debe incluir un
+`device_id` vigente del usuario o `platform` + `push_token` para registrar/asociar el dispositivo
+durante el primer login; nunca se emite un refresh token sin dispositivo.
+
+- Request: `{ "username": "juan", "password": "...", "device_id": "12" }` o
+  `{ "username": "juan", "password": "...", "platform": "android", "push_token": "...", "device_name": "..." }`.
+- Response 200: `{ "access_token": "...", "refresh_token": "...", "expires_in": 900, "device_id": "12", "user": { ... } }`.
+- Response 401: credenciales inválidas.
+- Response 422: body inválido o dispositivo ausente/no perteneciente al usuario.
+- Response 429: demasiados intentos fallidos para usuario + IP, o límite agregado de la IP;
+  incluye `Retry-After`. El límite agregado permite 30 fallos entre usuarios antes de aplicar
+  el backoff, para no bloquear a una oficina/NAT por errores legítimos aislados.
+- Response 500: error interno.
+
+La emisión de dispositivo, refresh token y access token se valida y persiste como una sola
+operación: si falla el alta del refresh, no queda un dispositivo parcialmente registrado.
+`device_id` y `platform`/`push_token`/`device_name` son alternativas mutuamente excluyentes;
+combinarlos responde 422 con `error.code = "body_invalido"`.
+
+### POST /api/v1/auth/refresh
+Rota un refresh token vigente y devuelve un nuevo access/refresh token ligado al mismo dispositivo.
+
+- Request: `{ "refresh_token": "..." }`.
+- Response 200: tokens renovados, incluyendo `device_id`.
+- Response 401: refresh token inválido, expirado o revocado (incluye logout y revocación del dispositivo).
+- Response 422: `{ "error": { "code": "body_invalido", "message": "refresh_token es requerido" } }` — falta `refresh_token`.
+- Response 500: error interno.
+
+### POST /api/v1/auth/logout
+Revoca la sesión móvil actual. Requiere Bearer access token y el refresh token correspondiente
+en el body; ambos deben pertenecer a la misma sesión.
+
+- Request: `{ "refresh_token": "..." }`.
+- Response 200: `{ "ok": true }`.
+- Response 401: access/refresh token inválido, no correspondiente o ya revocado.
+- Response 422: falta `refresh_token`.
+- Response 500: error interno.
+
+### POST /api/v1/devices
+Registra un dispositivo para recibir notificaciones push.
+
+- Request:
+  ```json
+  {
+    "platform": "ios" | "android" | "web",
+    "push_token": "string (token del proveedor APNs/FCM)",
+    "device_name": "string (opcional, ej. 'iPhone de Juan' o 'Navegador')"
+  }
+  ```
+
+- Response 200:
+  ```json
+  {
+    "id": "1",
+    "platform": "ios",
+    "device_name": "iPhone de Juan",
+    "creado_en": "2026-08-28T15:30:00Z"
+  }
+  ```
+
+- Response 401: No autenticado (sin Bearer JWT válido).
+- Response 422:
+  - `{ "error": { "code": "platform_invalido", "message": "..." } }` — `platform` no es uno de: 'ios', 'android', 'web'.
+  - `{ "error": { "code": "push_token_invalido", "message": "..." } }` — `push_token` vacío o no string.
+- Response 500: Error interno.
+
+Notas:
+- Solo usuarios autenticados pueden registrar dispositivos (Bearer JWT válido).
+- Cada usuario es dueño de sus propios dispositivos; no puede ver ni modificar los de otros.
+- Si el mismo `push_token` ya está activo para el mismo usuario, se actualiza su fila activa;
+  si la fila anterior está revocada, el re-registro crea una fila activa nueva y conserva el
+  historial revocado.
+- Un usuario puede tener múltiples dispositivos simultáneamente (ej. iPhone + iPad).
+- **Reasignación de tokens (ALTO 1, 7ª pasada revisor):** a lo sumo puede haber una fila ACTIVA (`revocado_en IS NULL`) por token; registrar un `push_token` que otro usuario tiene activo lo REASIGNA: se revoca la fila del usuario anterior y se crea una fila NUEVA para el usuario actual. **Consecuencia para el usuario anterior:** deja de recibir notificaciones push en silencio (su dispositivo queda activo en la app, pero el token es inválido en el backend). Las filas revocadas persisten como historial puro — un token revocado que se re-registra crea una fila nueva, no reutiliza la vieja.
+
+### DELETE /api/v1/devices/{id}
+Revoca/elimina un dispositivo, deteniendo futuras notificaciones hacia ese token.
+
+- Path parameter: `id` (string, ID del dispositivo a revocar).
+- Request: sin body.
+
+- Response 200: `{ "ok": true }`
+
+- Response 401: No autenticado.
+- Response 403: `{ "error": { "code": "sin_permiso", "message": "..." } }` — el dispositivo no pertenece al usuario autenticado.
+- Response 422: `{ "error": { "code": "id_invalido", "message": "El ID del dispositivo debe ser un entero positivo" } }` — el path no contiene un ID entero completo.
+- Response 404: `{ "error": { "code": "no_encontrado", "message": "..." } }` — el dispositivo con ese ID no existe.
+- Response 500: Error interno.
+
+Notas:
+- Revoca seteando la columna `revocado_en` (soft-delete, registro persiste para auditoría).
+- El token queda inactivo y no recibe más notificaciones.
+- Todos los refresh tokens ligados al dispositivo se revocan en la misma transacción.
+
+### GET /api/v1/notifications
+Lista notificaciones del usuario autenticado, paginadas por cursor.
+
+- Query params:
+  - `cursor` (opcional): cursor de paginación (opaco, devuelto en `next_cursor` de respuesta anterior).
+
+- Response 200:
+  ```json
+  {
+    "items": [
+      {
+        "id": "1",
+        "tipo": "nuevo",
+        "titulo": "⚠️ Incidente en ML",
+        "cuerpo": "Un error fue detectado en la integración.",
+        "deep_link": "incidentes/123",
+        "leida": false,
+        "creado_en": "2026-08-28T15:00:00Z"
+      }
+    ],
+    "next_cursor": "base64url(ISO_TIMESTAMP:id)-or-null"
+  }
+  ```
+
+- Response 401: No autenticado.
+- Response 403: Sin permiso `notificaciones-ml`.
+- Response 422: Cursor inválido o mal formado.
+- Response 500: Error interno.
+
+Notas:
+- Solo el usuario autenticado ve sus propias notificaciones.
+- Paginación por cursor (no offset), más eficiente en bases de datos.
+- Ordenadas por `creado_en DESC` (más recientes primero).
+- Cada notificación tiene un `deep_link` a un detalle exacto (para incidentes: `incidentes/{id}`); si el contexto trae `correlation_id`, se agrega como query string (`?correlation_id=...`).
+- `leida` es un booleano (no entero).
+- Si no hay más resultados, `next_cursor` es `null`.
+
+### POST /api/v1/notifications/{id}/read
+Marca una notificación como leída.
+
+- Path parameter: `id` (string, ID de la notificación).
+- Request: sin body.
+
+- Response 200: `{ "ok": true }`
+
+- Response 401: No autenticado.
+- Response 403: Sin permiso `notificaciones-ml`.
+- Response 422: `{ "error": { "code": "id_invalido", "message": "El id de la notificación debe ser un entero positivo" } }` — el path no contiene un ID entero completo.
+- Response 404: `{ "error": { "code": "no_encontrado", "message": "..." } }` — la notificación no existe o no pertenece al usuario.
+- Response 500: Error interno.
+
+Notas:
+- Idempotente: marcar leída una notificación ya leída no es error, devuelve 200 igual.
+- Solo el propietario de la notificación puede marcarla como leída.
+
+### Arquitectura: Desacoplamiento entre envío y visualización
+
+Las notificaciones son **dos tablas separadas**:
+
+1. **`notificaciones_enviadas`** (log de intentos de delivery):
+   - Registra cada intento de envío a cada dispositivo.
+   - Estados: `'pendiente'`, `'enviado'`, `'simulado'`, `'fallido'`, `'agotado'` (supera reintentos).
+   - Reintentos con backoff creciente (2 min, 10 min, 30 min; máx. 3 reintentos por dispositivo).
+   - Si se agotan los reintentos, marcado como `'agotado'` para evitar re-procesamiento.
+   - Contiene deduplicación: tipos 'nuevo' y 'resuelto' tienen una fila única por dispositivo e incidente;
+     'reaviso' crea una fila por ciclo exitoso, y reutiliza la fila fallida/agotada del ciclo anterior
+     cuando corresponde un nuevo intervalo.
+
+2. **`notificaciones_usuario`** (lo que ve el usuario en la app):
+   - Registra notificaciones VISIBLES para el usuario.
+   - Independiente del delivery: aunque un `notificaciones_enviadas` tenga estado='fallido',
+     la notificación sigue en `notificaciones_usuario`.
+   - Campo `leida` para tracking de lo que el usuario vio.
+
+**Separación consciente:** un error de delivery a FCM (proveedor caído, token inválido) no borra
+la notificación de la vista del usuario. El usuario sigue siendo consciente de que algo pasó,
+aunque no le llegara el push en el dispositivo.
+
+### Worker: `procesarNotificacionesPush`
+
+Cron cada 2 minutos (configuración en `server.js` con `cron.schedule('*/2 * * * *')`).
+
+**Lógica (dos pasos independientes):**
+
+1. **Paso FEED** — por cada incidente:
+   - Busca incidentes en estado 'activo' sin notificación 'nuevo' en el feed → envía 'nuevo'.
+   - Busca incidentes en estado 'activo' con última notificación en el feed > intervalo de reaviso → envía 'reaviso'.
+     - Intervalo de reaviso: configurable via `REAVISO_INCIDENTE_MIN` (default 30 min).
+   - Busca incidentes en estado 'resuelto' sin notificación 'resuelto' en el feed → envía 'resuelto'.
+
+2. **Paso REINTENTOS** — independiente del feed, busca filas de `notificaciones_enviadas` con:
+   - `estado = 'fallido'` cuyo backoff ha vencido.
+   - Reintentar el envío físico a cada dispositivo, sin importar si el feed ya tiene la notificación creada.
+
+**Backoff creciente en reintentos de push:**
+- Si intento 1 falla: reintentar después de 2 min.
+- Si intento 2 falla: reintentar después de 10 min.
+- Si intento 3 falla: reintentar después de 30 min.
+- Si intento 4 falla: marcar dispositivo como 'agotado', no reintentar más.
+
+**Semántica de 'agotado':**
+El primer envío y hasta tres reintentos son cuatro intentos físicos como máximo. Si el cuarto
+intento falla, la fila queda con `intentos = 4`; en el siguiente barrido se marca
+`estado = 'agotado'` sin otro envío. Es terminal para los tipos de ciclo único `nuevo` y
+`resuelto`. Para `reaviso`, cada intervalo vencido inicia un ciclo nuevo: el worker puede
+reutilizar una fila `fallido`/`agotado`, ponerla en `pendiente` y volver a intentar; un
+`agotado` de un ciclo anterior no bloquea el próximo reaviso. El feed mantiene una sola fila
+visible por usuario, tipo e incidente y actualiza su fecha/cuerpo.
+
+**Destinatarios:** usuarios activos con permiso `notificaciones-ml` y
+`preferencias_notificacion.incidentes_criticos = 1` (ausencia de fila equivale a habilitado).
+La app consulta/actualiza esa preferencia en `GET/PATCH /api/v1/notifications/preferences`.
+
+**Proveedor y dispositivo:** `PUSH_PROVIDER=mock` es solo desarrollo y persiste `simulado`;
+nunca se presenta como entrega enviada. `PUSH_PROVIDER=fcm` usa FCM HTTP v1 y requiere
+credenciales seguras de entorno. Tokens y payloads no se escriben en logs. Cada delivery se
+reserva antes del side effect mediante una clave de idempotencia; una reserva `pendiente` queda
+en estado incierto y no se reenvía automáticamente si no se pudo persistir el resultado. Cada
+dispositivo activo pertenece a un usuario y tiene un token activo único; reasignar ese token
+revoca la fila anterior y sus refresh tokens, mientras DELETE revoca el dispositivo y todos sus
+refresh tokens en una única transacción.
+
+**FAIL-OPEN:** cualquier error en el envío del worker (proveedor caído, DB busy) nunca lanza
+una excepción. El worker continúa procesando otros incidentes. Errores se loguean en consola.
+
+### Decisión de diseño: Opción (c) preferida
+
+El worker es un **cron periódico que escanea** `incidentes_operativos` (no requiere tocar
+`abrirOActualizarIncidente`/`confirmarCicloSano`). Esto permite:
+- **Desacoplamiento total:** el ciclo de sync ML/Woo + incidentes nunca aguarda al worker de push.
+- **Independencia de errores:** un fallo del proveedor push (FCM timeout) no bloquea nada.
+- **Simplicidad:** sin callbacks, sin wiring, sin threads adicionales (el cron es async, mismo
+  hilo que Express).
+- **Compatibilidad:** cero cambios en `lib/incidentes.js`, la librería productiva.
+
+Las otras opciones consideradas:
+- (a) Wrapper en los callers (`routes/woo.js`, `routes/matcher.js`) → requería modificar rutas
+  ya estables y rechazado en revisión por acoplamiento innecesario.
+- (b) Callback opcional → parámetro nuevo en firmas de funciones, mayor complejidad, sin
+  beneficio claro vs. (c).
+
+## Estado de conformidad Hito 7
+
+Las rutas móviles implementadas, su autenticación y sus tipos de notificación quedan alineados
+con `openapi/mobile-v1.yaml`. El panel web conserva su contrato legacy y sus cookies.
+
+### Contrato implementado
+
+`Notification.tipo` usa `nuevo`, `reaviso` y `resuelto`, igual que el worker y el OpenAPI.
+Los paths implementados son `/api/v1/devices`, `/api/v1/notifications` y sus subrutas,
+protegidos por Bearer JWT. Los paths restantes del OpenAPI son contratos de entregas posteriores.
+
+### Refresh y revocación
+
+`mobile_refresh_tokens` guarda solo hashes, rota el token en una transacción y lo liga al
+dispositivo. DELETE revoca dispositivo y refresh tokens asociados atómicamente.
+
+### Configuración
+
+La API móvil usa JWT de acceso con 15 minutos de vida y errores `{error:{code,message}}`.
+La producción debe aportar `MOBILE_JWT_SECRET` (mínimo 32 caracteres) y credenciales FCM fuera
+del repositorio. `PUSH_PROVIDER=mock` solo registra `simulado`, nunca una entrega enviada.
+
+La app debe consumir `/api/v1` con `Authorization: Bearer <access_token>`; el refresh token
+solo se envía a `/api/v1/auth/refresh` y `/api/v1/auth/logout`.
+
+## Contrato móvil heredado U0.C — Inventario y Preparación
+
+> La etiqueta U0.C es histórica y fue sustituida por el programa E0–E24. Esta sección conserva el
+> contrato ejecutable/heredado y sus estados de implementación; la planificación vigente está en
+> `/opt/fusionbikes/herramientas/docs/superpowers/plans/plan-maestro-v2.md`. Renombrar la entrega no
+> convierte adaptadores pendientes en implementados.
+
+Esta sección define el contrato versionado que consumirán App 1 (Preparación) y App 2
+(Inventario). La especificación formal está en `openapi/mobile-v1.yaml`. Las rutas móviles
+se sirven bajo `/api/v1` cuando exista el adaptador correspondiente; mientras tanto, el
+backend vigente continúa exponiendo las rutas legacy indicadas en cada fila.
+
+### Estado de implementación y mapa de adaptadores
+
+| Recurso móvil | Contrato `/api/v1` | Implementación actual | Estado |
+| --- | --- | --- | --- |
+| Plan, sesiones, detalle y escaneos de Inventario | `/inventory/today`, `/inventory/sessions`, `/inventory/sessions/{id}`, `/inventory/sessions/{id}/scans` | `/api/inventario/plan-hoy`, `/api/inventario/sesiones`, `/api/inventario/sesiones/:id`, `/api/inventario/sesiones/:id/escanear` | Adaptador pendiente |
+| Cierre, corrección y diferencias de Inventario | `/inventory/sessions/{id}/close`, `/inventory/sessions/{id}/items/{itemId}`, `/inventory/differences`, `/inventory/differences/{id}/history` | `/api/inventario/sesiones/:id/confirmar`, `/cerrar-sin-stock`, `/api/inventario/sesiones/:id/items/:itemId`, `/api/inventario/diferencias/*` | Adaptador pendiente |
+| Ubicaciones y trabajos de etiquetas | `/inventory/locations`, `/inventory/label-jobs` | `/api/inventario/ubicaciones`; `/api/preparacion/etiquetas` (`routes/preparacion.js:757`) | Adaptador pendiente |
+| Cola y detalle de Preparación | `/preparation/queue`, `/preparation/{id}` | `/api/preparacion/pendientes`, `/api/preparacion/:id` | Adaptador pendiente |
+| Toma, escaneo, confirmación manual y evidencia | `/preparation/{id}/take`, `/preparation/{id}/scans`, `/preparation/{id}/items/{itemId}/confirm-manual`, `/preparation/{id}/evidence` | No hay toma móvil exclusiva; `/api/preparacion/:id/escanear`, `/item/:itemId/confirmar-manual` y `/api/preparacion/:id/foto` | Adaptador pendiente |
+| Finalización, despacho e incidencias | `/preparation/{id}/complete`, `/preparation/{id}/dispatch` | `/api/preparacion/:id/completar`, `/api/preparacion/seguimientos/:wcOrderId`; el despacho/incidencia unificado aún no existe | Adaptador pendiente |
+| Trabajos de etiquetas de Preparación | `/preparation/label-jobs` | `/api/preparacion/etiquetas` (`routes/preparacion.js:757`) | Adaptador pendiente |
+
+La base URL del contrato es `/api/v1`; por eso los paths relativos `/inventory/*` y
+`/preparation/*` se sirven como `/api/v1/inventory/*` y `/api/v1/preparation/*`. No se deben interpretar
+como
+rutas ya disponibles: `x-implementation-status: adapter-pending` en OpenAPI es obligatorio
+hasta que un adaptador real sea implementado y sus gates vuelvan a ejecutarse. La app no
+debe llamar las rutas legacy directamente como solución permanente.
+
+Los contratos móviles heredados que también aparecen en OpenAPI están marcados explícitamente
+como `x-implementation-status: adapter-pending`: `/products/lookup` no tiene hoy un buscador
+legacy equivalente (el único endpoint parecido es `/api/cobertura/productos/:id_woo/buscar-ml`,
+que requiere otro identificador y finalidad), por lo que debe implementarse un adaptador de
+catálogo; `/stock/adjustments` no tiene una ruta legacy única y se compone actualmente de
+`POST /api/inventario/sesiones/:id/confirmar` y `POST /api/inventario/diferencias/:id/aprobar`,
+por lo que también requiere un adaptador explícito; `/orders` se alimenta del endpoint legacy de pedidos y `/today` sigue siendo un agregado
+pendiente sobre sus fuentes legacy. Estos mapeos son informativos y no habilitan el consumo
+directo de rutas legacy desde la app.
+El detalle móvil de pedidos (`GET /api/v1/orders/{id}`) también permanece pendiente:
+se adapta temporalmente desde `GET /api/pedidos/:id` según `routes/pedidos.js`. Hasta
+que exista ese adaptador, no debe considerarse una ruta móvil operativa.
+
+### Convenciones comunes
+
+- Autenticación: `Authorization: Bearer <access_token>` y permiso mínimo del módulo. El
+  servidor debe volver a comprobar el permiso en cada request; nunca confiar solo en la
+  visibilidad de la pantalla.
+- Errores: `{ "error": { "code": "...", "message": "...", "details": {} } }`. `message`
+  es seguro para mostrar; `details` puede incluir datos de recuperación, pero nunca secretos,
+  tokens ni payloads completos de MercadoLibre/WooCommerce.
+- Mutaciones reintentables: header obligatorio `Idempotency-Key` con UUID v4. El mismo UUID
+  y la misma intención devuelve el resultado original; reutilizarlo con otra intención es
+  error `409` (`idempotency_key_reused`).
+- Concurrencia: toda edición que parte de una lectura incluye `expected_version` en el body.
+  Una versión vieja devuelve `409` (`version_conflict`) con la versión actual y no sobrescribe
+  datos. La app debe recargar y mostrar el conflicto, nunca aplicar last-write-wins silencioso.
+- Listados: `cursor` es opaco, `limit` queda entre 1 y 100 (por defecto 20) y la respuesta
+  siempre tiene `{ "items": [], "next_cursor": null }` cuando no quedan resultados. No se
+  usa `offset` en el contrato móvil.
+- Conectividad: Preparación puede cachearse para lectura, pero todas sus mutaciones requieren
+  red. Inventario puede conservar una cola offline cifrada y acotada por siete días; solo se
+  reintentan mutaciones idempotentes y el servidor decide los conflictos.
+
+### Inventario — reglas verificables
+
+`POST /api/v1/inventory/sessions` recibe una o más categorías, una o más marcas, o
+`ubicacion_id`; puede combinar categorías y marcas, pero no combina ubicación con filtros ni
+acepta un alcance vacío.
+Al abrir, el alcance queda congelado. La respuesta expone `estado`, `categorias`, `marcas` y
+la ubicación, y un `409` informa si el alcance se solapa con otra sesión.
+
+`GET /api/v1/inventory/sessions/{id}` devuelve `items`, `pendientes` y `resumen`. Cada ítem
+conserva `estado_codigo`: `ok`, `fuera_de_alcance`, `sin_asociar` o `desconocido`. Un código
+desconocido o sin asociar bloquea el cierre hasta asociarlo o quitarlo; estar fuera de alcance
+es un aviso y no descarta el conteo.
+
+`POST /api/v1/inventory/sessions/{id}/scans` unifica escaneo y asociación, pero el adaptador
+debe conservar la semántica real de `/escanear` y `/asociar`, incluido el conflicto explícito
+al reemplazar un GTIN existente. `close` debe conservar el ajuste por delta contra stock
+live, el aislamiento de fallos por ítem y los resultados `ajustados`/`fallidos`; nunca debe
+declarar éxito global si hay ítems sin ajustar.
+
+`GET /api/v1/inventory/differences/{id}/history` devuelve el historial completo paginado de
+creación, cambios, decisiones y ajustes de una diferencia.
+
+Las ubicaciones se consultan con `cursor` y `limit`, y siempre devuelven `items` y `next_cursor`.
+El mismo recurso permite crear una ubicación nueva o mapear SKUs a una existente; ambas mutaciones
+requieren `Idempotency-Key` y permiso de administrador.
+
+El descarte de una sesión requiere enviar `expected_version` en el body, además de
+`Idempotency-Key`; una versión obsoleta devuelve `409` sin sobrescribir la sesión.
+
+Las decisiones sobre diferencias (`approve`, `reject`, `discard`) requieren permiso de
+administrador cuando impliquen aprobar un sobrante grande. La app debe mostrar claramente
+los estados vacío, error recuperable, reintento, conflicto `409`, código desconocido,
+pendientes de stock y sesión ya cerrada.
+
+### Preparación — reglas verificables
+
+La cola usa la fuente local de pedidos y debe conservar `canal`, `pack_id` cuando exista,
+estado, comprador y datos de envío sin inventar información ausente. `take` es un contrato
+futuro de toma exclusiva; mientras no haya adaptador, no se debe simular una asignación en el
+cliente.
+
+El recurso resumido de Preparación expone `id`, `canal`, `estado`, `pack_id` (nullable cuando
+no existe, como en pedidos web) y `envio`. `envio` conserva el shape normalizado de la ruta
+legacy (`pedido`, destinatario, dirección, localidad/provincia, CP, teléfono, email, DNI/CUIT
+y notas); los valores faltantes llegan vacíos y no se inventan. Los campos estructurales del
+recurso son obligatorios en el contrato, aunque sus valores puedan ser vacíos o `null` cuando
+la fuente no los proporciona.
+
+Los escaneos devuelven `match`, `no_coincide` o `sobrante`. La confirmación manual móvil se
+expone como `POST /api/v1/preparation/{id}/items/{itemId}/confirm-manual` y exige un
+motivo (`codigo_ilegible`, `sin_etiqueta` u `otro`; cuando es `otro`, `detalle_texto` es
+obligatorio). La
+evidencia se acepta como multipart y conserva estados de cola (`pendiente`, `procesando`,
+`listo`, `error`) para permitir reintento visible.
+
+`complete` debe respetar faltantes, fotos requeridas, delegación a depósito y los estados
+`pendiente_deposito`, `completada`, `despachada_sin_verificar` y
+`cerrada_sin_evidencia`. `dispatch` recibe obligatoriamente `expected_version` y un discriminador
+`tipo` (`tracking` o `incidencia`); debe distinguir seguimiento de incidencia y nunca afirmar
+un tracking confirmado si la respuesta de Woo es incierta. Todos los estados de carga, vacío,
+sin red, permiso insuficiente, conflicto y reintento forman parte del handoff de App 1.
+
+### Permisos y handoff a App 1/App 2
+
+| Capacidad | Inventario | Preparación | Notas |
+| --- | --- | --- | --- |
+| Consultar cola/plan/detalle | permiso de inventario | permiso de preparación | Revalidar en backend |
+| Mutar sesión, escanear, evidencias | permiso de inventario | permiso de preparación | UUID de idempotencia |
+| Aprobar/rechazar diferencias | administrador | no aplica | El cliente no puede elevar permisos |
+| Crear/mapear ubicaciones | administrador | no aplica | Backend actual limita ambas operaciones |
+| Tomar, completar y despachar | no aplica | permiso de preparación | `expected_version` y `409` |
+
+App 1 debe generar su cliente TypeScript desde OpenAPI y probar conexión obligatoria para
+mutaciones. App 2 debe generar el mismo cliente, implementar la cola offline cifrada de siete
+días y hacer visible la resolución de conflictos. Fixtures, estados y criterios E2E deben
+derivarse de los schemas, no de respuestas inventadas por cada pantalla.
+## Horarios de corte de despacho
+
+### Hoja de despachos
+
+`GET /api/preparacion/despacho/cola` requiere permiso `preparacion` de lectura. Acepta
+`fecha=YYYY-MM-DD|sin_fecha`, `estado=pendiente|escaneado|confirmado`, `canal` y `q`
+(búsqueda por grupo, clave o número de pedido). La jornada se resuelve por
+`pedidos_cache.fecha_despacho`, que es `fecha_despacho` o el SLA normalizado a
+`America/Argentina/Buenos_Aires`; si ambos faltan se clasifica como `sin_fecha`. No usa
+`creado_en` como sustituto. La respuesta incluye `jornada`, `resumen` con total y conteos
+por estado, y `data` con controles enriquecidos y confirmados incluidos.
+
+Los pedidos web con seguimiento ya confirmado (tracking cargado, paso 2 de Woo sin pendientes y
+pedido enviado) no aparecen en `data` ni cuentan en `resumen` (Andreani los retira; el viaje es solo
+ML). Aplica con y sin `fecha`. Los lotes web (`POST /despacho/lotes`) siguen soportados.
+
+Las mutaciones de escaneo y confirmación requieren permiso `preparacion` de escritura, toma
+vigente y conservan los códigos `409` e idempotencia documentados en el contrato existente.
+
+`GET /api/preparacion/horarios-despacho` requiere permiso de lectura de Preparación;
+`PUT` requiere permiso de escritura (administradores pasan el guard global). El `PUT`
+recibe los siete días y `expected_version`; una versión desactualizada responde `409`
+con `code: VERSION_CONFLICT` y no aplica cambios. La pantalla debe recargar antes de
+reintentar para no sobrescribir una edición concurrente.
+
+`GET /api/preparacion/pendientes` devuelve también `fecha_despacho_limite` (timestamp ISO
+del límite interno), `estado_despacho` (`activo`, `diferido` o `excluido`),
+`despacho_motivo` y `shipment_limite_original` (timestamp original de ML, cuando existe).
+Un SLA de ML/Andreani sin hora exacta queda `diferido` con razón
+`SLA_SHIPMENT_HORA_FALTANTE`; no se transforma en un horario artificial.
+`fecha_despacho` se deriva del límite interno en zona `America/Argentina/Buenos_Aires`;
+no se obtiene cortando el texto UTC. ML y Andreani aplican 30 minutos de margen cuando
+existe un timestamp confirmado. Web sin timestamp externo usa explícitamente el corte
+operativo fijo de preparación de 15:00 (no se inventa un SLA de transporte).
+
+La fecha SLA de ML usada como sugerencia es solo el límite de preparación, nunca la fecha
+estimada de entrega (`date_estimated_delivery`). La precedencia implementada es:
+`shipment.sla.expected_date`, `shipment.expected_date`,
+`shipment.shipping_option.estimated_handling_limit.date`,
+`shipment.estimated_handling_limit.date`, `shipment.handling_limit.date` y
+`shipment.buffering.date`; se usa el primer valor ISO válido (`YYYY-MM-DD` o timestamp
+ISO) y se normaliza a fecha local de calendario. Esta precedencia queda cubierta por tests
+de unidad, pero la confirmación de qué campo entrega ML en cada modalidad requiere payloads
+reales representativos y queda pendiente de verificación operativa.
+## E1 — jornada, olas y picking de mesa
+
+Las rutas `/api/jornada` son compatibles con las tablas legacy de E1. Las respuestas nuevas
+exponen `estado_operativo` (`disponible`, `en_busqueda`, `en_mesa`, `cerrada`) sin eliminar
+`estado` (`congelada`, `en_picking`, `completada`). Las mutaciones aceptan `operation_id` para
+repetición idempotente y `expected_version`; una versión desactualizada responde `409
+WAVE_VERSION_CONFLICT`. E1 no cambia evidencia, aprobación ni stock.
+
+- `GET /api/jornada/zonas` → `{ ok, zonas }`.
+- `POST /api/jornada/zonas` body `{ nombre, verificada? }` → crea/repite `{ ok, zona }`.
+- `POST /api/jornada/ola/:id/iniciar-busqueda` body `{ expected_version?, operation_id? }`.
+- `POST /api/jornada/ola/:id/pedir-ayuda` body `{ zonaId, ayudante, expected_version?, operation_id? }`.
+- `POST /api/jornada/ayuda/:id/recibir` body `{ expected_version?, operation_id? }`. El ayudante
+  queda identificado; no modifica cantidades ni pedidos.
+- `POST /api/jornada/ola/:id/pasar-a-mesa` body `{ expected_version?, operation_id? }`.
+- `POST /api/jornada/ola/:id/mesa/asignar` body `{ pedidoClave, sku, cantidad?, zonaId?, expected_version?, operation_id? }`.
+- `POST /api/jornada/ola/:id/faltante` body `{ pedidoClave, sku, motivo, nota?, expected_version?, operation_id? }`.
+- `POST /api/jornada/ola/:id/cerrar` body `{ derivados: ['asignado'|'devuelto'|'faltante_bloqueado'|'resguardo'], expected_version?, operation_id? }`.
+- `GET /api/jornada/ola/:id/eventos` → eventos auditables de la ola.
+
+El contrato de asignación devuelve solo pedido/SKU/cantidad/zona y no inventa disponibilidad ni
+ubicaciones: el stock físico queda fuera de E1. La apertura sigue creando la ola inicial con los
+pedidos elegibles y la sincronización crea mini-olas normales o `ml_urgente`.
+
+## UM1 — Guardia ML y cobertura
+
+La Guardia usa la clave exacta `publicación|variación`. En modo inicial `lectura` no escribe en
+MercadoLibre, WooCommerce ni pedidos: solo inspecciona el cache local después de una lectura
+completa de publicaciones y registra casos locales idempotentes.
+
+- `GET /api/guardia-ml/estado` → estado de frescura, modo, cantidad urgente, `degradado` y `sano`.
+- `GET /api/guardia-ml/casos?urgentes=1` → casos abiertos ordenados por severidad y exposición.
+- `GET /api/guardia-ml/casos/:id/opciones?q=...` → devuelve la publicación ML completa
+  (imagen, variante, SKU, stock y enlace) y hasta 30 productos Woo con SKU único,
+  nombre, imagen, stock y datos de identificación para la comparación manual.
+- `GET /api/guardia-ml/casos/:id/eventos` → historial append-only del caso.
+- `POST /api/guardia-ml/escanear` → fuerza lectura local de cobertura (Admin).
+- `POST /api/guardia-ml/habilitar-acciones` → habilita el modo posterior a la validación (Admin designado).
+- `POST /api/guardia-ml/casos/:id/tomar` body `{ motivo? }` → toma o releva, con conflicto si el caso pertenece a otro y no se informa motivo.
+- `POST /api/guardia-ml/casos/:id/excepcion` body `{ motivo, nota }` → excepción hasta el cierre operativo, con categoría y nota obligatorias.
+- `POST /api/guardia-ml/casos/:id/vincular` body `{ sku }` → requiere modo `acciones`; escribe el SKU en ML y confirma localmente solo después de respuesta 200.
+- `POST /api/guardia-ml/casos/:id/pausar` body `{ confirmado? }` → requiere modo `acciones`; si hay hermanas devuelve `409` con cantidad afectada hasta recibir confirmación explícita.
+- `GET /api/guardia-ml/pedidos-retenidos` → lista ventas ML retenidas por falta de cobertura exacta.
+- `POST /api/guardia-ml/pedidos-retenidos/:orderId/liberar|cancelar` body `{ motivo }` → salida humana auditada; liberar permite reprocesar la venta y cancelar cierra su retención.
+- `GET /api/guardia-ml/stock-compartido` → consulta registro de SKUs compartidos entre múltiples publicaciones (histórico informativo, no bloquea escrituras).
+- `POST /api/guardia-ml/stock-compartido/:sku/confirmar` body `{ motivo }` → **DEPRECADO**: antes era obligatorio confirmar stock compartido para vincular. Ahora el compartir SKU es operación NORMAL: esta ruta queda como legado solo para auditoría y documentación de decisiones.
+- Vínculos manuales de Guardia (`vincular-clave`, `casos/:id/vincular` y los cierres que escriben SKU): si la clave tiene una decisión `omitir`, responden 409 `omitir_requiere_override` salvo que el body incluya `override_omitir:true`; si los atributos del título contradicen al producto Woo responden 409 `contradiccion_titulo` con `motivos`. Si un humano marca "No sincronizar" mientras la operación remota está en vuelo, el worker la deja `cancelada` (evento `operacion_cancelada_por_omitir`) y no pisa el `omitir`, tampoco con override.
+- `POST /api/guardia-ml/vincular-clave` body `{ clave, sku }` → vincula un SKU a una publicación que NO tiene caso abierto (el matcher puede usarlo directamente sin pasar por Guardia). Crea el caso al vuelo, asigna responsable automático y encolma la vinculación con auditoría completa. Requiere modo `acciones` habilitado. La clave debe existir en ML y el SKU debe ser único en Woo. Responde 202 (operación encolada) o 4xx/5xx en caso de error.
+
+La API nunca considera `omitir` o una marca histórica como cobertura. Las escrituras remotas de
+vínculo, stock o pausa pertenecerán a una segunda fase durable y permanecerán bloqueadas durante
+el primer rollout de UM1.
+
+### Compartición de SKUs entre publicaciones (2026-09-03)
+
+**Decisión de negocio:** compartir un SKU entre múltiples publicaciones de ML es la operación
+NORMAL del negocio (511 SKUs compartidos entre 1.176 publicaciones). No hay excepción ni bloqueo.
+Cuando un SKU está en N publicaciones y Woo tiene X unidades:
+- **Todas las publicaciones muestran X** (decisión anterior).
+- **Cuando se vende en una, se re-sincroniza el stock de las hermanas inmediatamente** (nuevo en 2026-09-03): tras procesar la venta y crear el pedido en Woo, se dispara `syncSkuPuntual()` para cada SKU vendido, que actualiza ML con el stock disponible ACTUAL para TODAS las publicaciones que comparten ese SKU. Falla abierta (si ML rechaza, se registra en `sync_log` y el cron de 10 min lo retoma).
+
+El registro en `guardia_ml_stock_compartido` es ahora **informativo**: se guarda si se detecta compartición, pero **no bloquea** ninguna operación de vínculo, auto-vínculo o pausa.
+
+### Bloqueo de claves detectadas y sincronización de ventas retenidas (2026-09-03)
+
+**Fail-closed:** antes de cualquier escritura remota en ML (escritura de SKU, desvinculación,
+pausa de publicación), se verifica si la clave está bloqueada por un caso abierto de Guardia.
+Si lo está, la operación es rechazada localmente sin intentar contactar ML.
+
+- `lib/matcherPush.js::escribirSkuEnMl()` → rechaza si clave bloqueada (status 0, error explícito).
+- `lib/matcherPush.js::desvincularSkuEnMl()` → rechaza si clave bloqueada (status 0, error explícito).
+- `lib/matcherPush.js::pausarPublicacionMl()` → rechaza si cualquier variación del item está bloqueada (status 0).
+- `routes/sync.js::_syncMlToWc()` → retiene cualquier pedido que contenga claves bloqueadas, con registro de evento en `logSync`.
+
+**Ruta legacy bloqueada:** `POST /api/matcher/decisiones` ahora devuelve `409 CONFLICT` con
+guía de migración. Las decisiones de vínculo deben hacerse vía `/api/guardia-ml/casos/:id/vincular`
+(requiere modo `acciones` habilitado por Admin). El cambio es obligatorio: no hay mutación
+directa de `sku_matcher_decisiones` fuera del servicio Guardia.
+
+### Superficies legacy retiradas de escritura (2026-09-03)
+
+Las rutas mutables de Cobertura y Sync responden `410 Gone` con `ok:false`, `error` y
+`migracion`. Las consultas `GET` siguen disponibles para historia y diagnóstico. También
+responden `410`:
+
+- `POST /api/matcher/push-sku`
+- `POST /api/matcher/push-skus-pendientes`
+- `POST /api/sync/desvincular`
+- Toda mutación de `/api/cobertura`, incluido su refresco manual.
+
+La única vía de escritura de vínculo o pausa es una operación encolada desde Guardia ML;
+el cron legacy de push fue retirado. La detección periódica queda a cargo del cron de Guardia
+y de `POST /api/guardia-ml/escanear` para Admin.
+
+## Recepciones
+
+### GET /api/recepciones/catalogo
+Devuelve el catálogo de productos para búsqueda en recepciones (soporte a combobox con búsqueda backend).
+
+**Query params:**
+- `?q=<texto>` (opcional): búsqueda case-insensible por SKU o nombre (normalización de acentos y caracteres especiales).
+  - Sin `q`: devuelve todo el catálogo.
+  - Con `q`: filtra por coincidencia en SKU o nombre, devuelve máximo 20 resultados, ordenados por relevancia (exacto de SKU primero, luego prefijo, luego substring).
+  - `?q=` o `?q=   ` (vacío/espacios): se comporta como sin `q`.
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "data": [
+    {
+      "id_woo": <número>,
+      "sku": "<SKU>",
+      "nombre": "<nombre>",
+      "stock": <número>
+    },
+    ...
+  ]
+}
+```
+
+Máximo 20 resultados cuando hay búsqueda (`q` no vacío).
+Todas las columnas retornadas son obligatorias y exactamente éstas (no agregar más campos).
+
+**Comportamiento de la búsqueda:**
+- Normaliza tanto el query como el SKU/nombre del catálogo (minúsculas, descomposición de acentos, eliminación de diacríticos, colapso de espacios).
+- Matchea si el texto normalizado está presente (substring) en SKU o nombre.
+- Relevancia: exacto SKU > prefijo SKU > prefijo nombre > substring cualquiera.
+- En caso de empate de relevancia, ordena por id_woo ascendente.
+
+Fail-open: si la búsqueda no tiene coincidencias, devuelve `{ ok: true, data: [] }` sin error.
+
+### POST /api/recepciones/:id/items/:itemId/conciliar-stock (PUNTO 3)
+Concilia un ítem en estado `operacion_incierta` leyendo el stock real de WooCommerce.
+Resuelve la incertidumbre tras un timeout del PATCH de stock: si el stock en Woo coincide
+con lo esperado (`stock_objetivo`), marca `aplicado`; si difiere, marca `conflicto_stock`
+para que un humano lo resuelva.
+
+**Validación:**
+- El ítem debe existir y pertenecer a la recepción (mismo patrón que `POST .../resolver`).
+- Status 404 si el ítem no existe o no pertenece a la recepción.
+- Status 409 si el estado_item no es `operacion_incierta`.
+- Atomicidad contra concurrencia: si otro request ya concilió el ítem entre el leer y el
+  actualizar, esta llamada devuelve el estado actual (idempotencia correcta, no duplica).
+
+**Request:**
+```json
+{}
+```
+(body vacío)
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "estado": "aplicado" | "conflicto_stock",
+  "stock_nuevo": <número> | null
+}
+```
+
+- `estado`: resultado de la conciliación (`aplicado` si el stock en Woo coincidió con
+  `stock_objetivo`, o `conflicto_stock` si hay desacuerdo).
+- `stock_nuevo`: el valor de stock que se registró (presente si `estado='aplicado'`, null si
+  conflicto que requiere intervención manual).
+
+**Comportamiento fail-closed:**
+- Si WooCommerce no devuelve `stock_quantity` válido, marca `conflicto_stock` (no reintentar
+  a ciegas asumiendo "no llegó").
+- Si hay un error de red/timeout al consultar Woo, la excepción se propaga como 502.
+
+### POST /api/recepciones/:id/items/:itemId/resolver-conflicto (PUNTO 3, HUECOS 1-2)
+Resuelve un ítem en estado `conflicto_stock` — un desacuerdo entre el stock esperado
+y el que WooCommerce realmente tiene. El operador elige: aceptar el stock actual de Woo
+como definitivo, o marcar para reintento limpio desde cero.
+
+**Validación:**
+- El ítem debe existir y pertenecer a la recepción.
+- Status 404 si el ítem no existe o no pertenece a la recepción.
+- Status 409 si el estado_item no es `conflicto_stock`.
+- Status 400 si `decision` no es válido, o si `motivo` falta.
+- **HUECO 1 (Seguridad 'reintentar'):** si `decision='reintentar'`, antes de permitir se verifica
+  el stock actual en Woo. Si coincide con `stock_objetivo` (el PATCH anterior ya se aplicó),
+  rechaza con Status 409 y mensaje claro. Solo si `stock_actual !== stock_objetivo` permite pasar
+  a `error_reintentable`.
+- Atomicidad: si otro request ya resolvió el ítem, devuelve el estado actual sin duplicar.
+
+**Request:**
+```json
+{
+  "decision": "aceptar_woo" | "reintentar",
+  "motivo": "explicación obligatoria (string no vacío)"
+}
+```
+
+- `decision`:
+  - `"aceptar_woo"`: consulta el stock real de WooCommerce AHORA (refresco), lo marca
+    como `aplicado` (`stock_nuevo=<stock real>`), y actualiza `catalogo_cache.stock`.
+    Fallback: si Woo no devuelve `stock_quantity` válido, lanza excepción (fail-closed).
+    **HUECO 2:** Inserta auditoría en `recepcion_conciliaciones_stock` con tipo='resolver_conflicto',
+    decision='aceptar_woo', motivo, stock_leido, actor (usuario de sesión), estado_resultante='aplicado'.
+  - `"reintentar"`: primero verifica que el stock real de Woo **NO coincida** con `stock_objetivo`
+    (para evitar duplicar stock en caso de que el PATCH anterior sí haya llegado). Si coinciden,
+    rechaza con 409. Si no coinciden, marca el ítem como `error_reintentable` y limpia `operation_id`
+    para un intento limpio en la próxima confirmación de recepción.
+    **HUECO 2:** Inserta auditoría con tipo='resolver_conflicto', decision='reintentar', motivo,
+    stock_leido (stock real leído antes de resolver), actor, estado_resultante='error_reintentable'.
+
+- `motivo`: texto explicativo obligatorio (no puede estar vacío o ser null). Es de riesgo decidir
+  reintentar o aceptar, así que la auditoría persiste qué motivó cada decisión.
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "estado": "aplicado" | "error_reintentable",
+  "stock_nuevo": <número> | null
+}
+```
+
+- `estado`: resultado de la resolución.
+- `stock_nuevo`: presente si `estado='aplicado'` (el stock aceptado de Woo), null si
+  `error_reintentable`.
+
+**Response 409 (HUECO 1):**
+```json
+{
+  "ok": false,
+  "error": "el PATCH ya se aplicó en WooCommerce (stock_actual === stock_objetivo); no se puede reintentar sin duplicar. Usá 'aceptar_woo' en lugar de 'reintentar'."
+}
+```
+Ocurre solo si `decision='reintentar'` y el stock actual en Woo es igual a `stock_objetivo`.
+Previene la duplicación silenciosa de stock.
+
+### GET /api/recepciones/:id/items/:itemId/stock-actual-woo (HUECO 3)
+Lectura de solo referencia: obtiene el stock actual de un producto en WooCommerce sin modificar
+nada. Útil para mostrar al operador el stock real antes de que decide resolver un conflicto.
+
+**Validación:**
+- El ítem debe existir y pertenecer a la recepción (mismo patrón que otros endpoints).
+- Status 404 si el ítem no existe o no pertenece a la recepción.
+- Status 400 si el ítem no tiene `id_woo` (sin match, no se puede consultar Woo).
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "stock_actual": <número>
+}
+```
+
+- `stock_actual`: el valor de `stock_quantity` leído directamente de WooCommerce en este momento.
+
+**Comportamiento:**
+- Solo lectura: no actualiza `recepcion_items` ni `catalogo_cache`.
+- Si WooCommerce no devuelve `stock_quantity` válido, Status 502 (error de integración, fail-closed).
+- Puede llamarse múltiples veces sin efectos colaterales (idempotente por definición).
+
+## HUECO 4: Transición automática confirmada_con_pendientes → confirmada
+
+Cuando se resuelve un ítem en `conflicto_stock` (usando `POST .../resolver-conflicto`), si la
+recepción está en estado `confirmada_con_pendientes` y ya no le queda ningún ítem en uno de
+estos estados pendientes:
+- `sin_match`, `pendiente_creacion`, `error_reintentable`, `operacion_incierta`, `conflicto_stock`
+
+Entonces la recepción transiciona automáticamente a `confirmada` dentro de la misma transacción
+del endpoint `resolver-conflicto`. Esto simplifica el flujo: el operador solo necesita resolver
+los ítems problemáticos; cuando el último se resuelve, la recepción pasa a estado definitivo sin
+necesidad de pasos adicionales.
+
+La lógica es **atomic**: si otro request resuelve el último ítem entre el check y el UPDATE,
+no hay duplicados (el check ocurre dentro de la misma transacción).
+
+### POST /api/recepciones/:id/confirmar (comportamiento cambiado: idempotencia)
+
+**PUNTO 5 (2026-09-23): idempotencia para confirmaciones ya completadas**
+
+Cuando una recepción ya está en estado `confirmada` (completamente procesada, sin pendientes),
+un reintento de `/confirmar` (ej. doble click, timeout de red con reintento automático) devuelve
+ahora 200 con la respuesta reconstruida, en lugar de 400 `'ya confirmada'`. Patrón igual al de
+`aplicarStockItemInterno` línea ~53-60: si la acción YA se ejecutó exitosamente, devolver el
+resultado conocido, no un error.
+
+**Contrato:**
+- Si la recepción ya está en estado `confirmada`:
+  - Status 200.
+  - Response: `{ "ok": true, "estado": "confirmada", "aplicados": N, "errores": 0,
+    "sin_match": 0, "resultados": [...], "pendientes": [], "confirmado_en": "<ISO grabado>",
+    "solo_documento": <bool>, "sync_ml": [], "replay": true }`.
+  - `confirmado_en` es el timestamp guardado en la BD (no uno nuevo).
+  - `sync_ml` es array vacío (`[]`) — no se re-sincronizó.
+  - `replay: true` indica que es una reconstrucción idempotente, no una ejecución nueva.
+  - `stock_previo`/`stock_nuevo` en `resultados` vienen como `null` (no se persistieron
+    originalmente, desconocidos en replay).
+  - `alta_borrador` se reconstruye consultando `recepcion_altas_woo` (mismo patrón que en
+    ejecución normal).
+
+- Si la recepción está en estado `confirmada_con_pendientes`:
+  - Se reintenta el procesamiento normal (algunos ítems en `error_reintentable`, etc.,
+    siguen siendo reintentables). No es una reconstrucción: produce nuevos `resultados`,
+    posible nuevo `sync_ml`, etc.
+
+- Si la recepción está en estado `procesando`:
+  - Status 409 (Conflict). El confirmar está en curso — hay una confirmación en progreso sobre
+    esta recepción. Reintentar después.
+  - Response: `{ "ok": false, "error": "confirmación en curso" }`.
+
+- Si no existe:
+  - Status 404 (sin cambios).
+
+**PUNTO 6 (2026-09-23): recuperación de recepciones huérfanas al arrancar + 409 para conflicto**
+
+Cuando una recepción queda en estado `procesando` (el proceso Node mató durante la confirmación,
+antes de llegar al UPDATE final del estado), necesita recuperación al arrancar el servidor.
+La lógica es idéntica a la del punto 2 (recuperación de ítems 'aplicando' huérfanos): observar
+el estado final de cada ítem y decidir el estado de la recepción.
+
+**Mecanismo de recuperación (automático al montar el router):**
+1. Recorrer todas las filas en `recepciones` con `estado='procesando'`.
+2. Para cada recepción:
+   - Si `solo_documento=1` (no toca stock): cambiar a `estado='confirmada'` directo.
+   - Si `solo_documento=0`: contar ítems pendientes (estado_item en
+     `'pendiente','creado','sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock'`).
+     Esto incluye estados de trabajo previo sin intentar aplicar (`'pendiente'`, `'creado'`) — crítico
+     si el proceso murió en el loop de /:id/confirmar ANTES de procesar un ítem (quedó sin tocarse).
+   - Si no hay pendientes: `estado='confirmada'`.
+   - Si hay al menos uno: `estado='confirmada_con_pendientes'`.
+3. En ambos casos, grabar `confirmado_en = <ahora>` (el timestamp de recuperación, no el
+   de ejecución original; se desconoce el original).
+
+**409 Conflict para intento de confirmación en curso:**
+Cuando se llama `POST /api/recepciones/:id/confirmar` a una recepción que YA está en estado
+`procesando` (recuperación de arranque aún no corrió, o dos confirmaciones concurrentes, o
+la recuperación de arranque recién corrió pero todavía está en `procesando` momentáneamente),
+la respuesta es ahora 409 en lugar de 400. Esto diferencia claramente "hay una confirmación
+en progreso" (conflicto transitorio, reintentar) de "el estado es inválido" (no reintentable).
+
+### GET /api/sync/cambios-formato/:id/comparacion
+Compara los productos de catálogo de un aviso de migración (`catalog_product_id`). Lee `GET /products/{viejo}` y
+`/{nuevo}` de ML con caché sqlite (`ml_productos_cache`, 6 h; 1 h si ML devolvió 404; 429/5xx no se cachean).
+Devuelve `{ ok, viejo, nuevo, diferencias[], veredicto: coincide|no_coincide|sin_datos, comparados }`; cada producto trae
+`{ id, nombre, borrado, activo, link }` (`link` solo si está activo). `ok:false` con `error` ante fallo de ML.
+
+### GET /api/bandeja-identidad/casos/:id y GET /api/bandeja-identidad/variantes (estación de decisión)
+Proxy firmado (HMAC) a la plataforma; el actor sale de la sesión.
+- `GET /casos/:id`: `publicacion.foto` (URL de la primera imagen vigente de ML en `catalog.model_images`, o `null`) y `tipo` (tipo del caso).
+- `GET /variantes?q=<texto>[&caso_id=<uuid>]`: búsqueda manual (SKU exacto primero, luego título, máx. 20; cada variante trae `foto`, `precio`, `stock`). Con `caso_id` agrega `explicacion` (`atributos`, `otros_atributos`) contra la publicación ML del caso. Errores: 400 `caso_id` no-UUID, 404 caso de otra empresa o inexistente, 422 `caso_sin_publicacion`.
+
+### GET /api/sync/pausadas-con-stock
+Publicaciones pausadas en ML con stock en Woo, agrupables por causa. Permiso `sync-ml`.
+
+- Query opcional: `?causa=<causa>` (`vigia`, `solo_local`, `sin_vinculo`, `pausa_app`, `paused_by_seller`, `pausa_vieja`, `out_of_stock`, `otra`).
+- Response 200: `{ "ok": true, "total": N, "resumen": { "<causa>": n, ... }, "data": [ ... ] }`. Cada elemento: `item_id`, `titulo`, `thumbnail` y `permalink` (sólo `http(s)`; la miniatura siempre `https`, si no `null`), `status`, `sub_status`, `causa`, `texto_causa`, `detalle: { actor, origen, desde } | null` (de `ml_pausas_log`), `stock_woo`, `stock_ml` (`null` si ML no informó), `en_juego` (unidades × precio de contado, ARS), `sin_precio`, `reactivable`, `motivo_no_reactivable` (`solo_local` | `sin_vinculo` | `aviso_abierto` | `sin_stock_disponible` | `null`) y `variaciones: [{ clave, variation_id, variations_texto, sku, vinculado, stock_woo, stock_ml, stock_disponible_ml, precio_contado, aviso_abierto }]`.
+- Orden: `en_juego` descendente y luego título; **el cliente conserva ese orden**.
+
+### POST /api/sync/pausadas-con-stock/reactivar
+Reactivación manual de publicaciones de la lista anterior. Nunca corre sola.
+
+- Request: `{ "itemIds": ["MLA123", ...] }`, 1 a 50 ids; si no, 400.
+- Sólo se procesan las `reactivable`; el resto vuelve en `no_reactivables`. Corre de a un pedido: otro en curso responde 409.
+- Response 200: `{ "ok": true, "actor", "no_reactivables": [...], "procesados": N, "resultados": [{ "item_id", "ok", "error"?, "omitido"?, "motivo"? }] }`. Fail-closed ante el precio: sin precio web o neto bajo, la publicación no se reactiva y trae `error`.
+
+### Cambios para la pantalla Sincronización ML (2026-10-05)
+- `GET /api/sync/dashboard` suma `pausadas_con_stock` (el `resumen` por causa) y `solo_local: { skus, publicaciones }`.
+- `GET /api/sync/cambios-formato` devuelve además `nota` (texto informativo de un aviso sin pausa) y los avisos con `solo_aviso=1` no bloquean al reactivador.
+- `POST /api/sync/cambios-formato/:id/revisar` con `reactivar:true` verifica antes del PUT: si la publicación sigue pausada y no hay stock en Woo, hay otro aviso trabante, o su causa es `solo_local`/`sin_vinculo`, cierra el aviso sin llamar a ML y responde `pendiente_stock:true` con `motivo_pendiente` (`sin_stock_woo` | `otro_aviso` | `solo_local` | `sin_vinculo` | `ml_sin_stock`). Además puede devolver `oferta_reactivar: { item_id, stock_woo }` cuando se cierra un aviso y hay stock: la pantalla la ofrece en línea («Reactivar ahora» llama al POST de arriba).
+- La pantalla ya no llama a `GET /api/sync/reactivables` ni a `/reactivables/conteo` (siguen existiendo; los cubre Pausadas). Siguen en uso `/frenadas`, `/frenadas/forzar`, `/reactivar`, `/api/precios/objetivo`, `/api/precios/actualizar-precio`, `/ml-wc`, `/wc-ml`, `/ml-cancelaciones` y `/limpiar-variaciones-muertas`.

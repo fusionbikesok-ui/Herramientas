@@ -1,0 +1,20 @@
+{
+  "caso": "Timeout antes del PATCH - simulación para E2E: match resuelto pero Woo no responde al crear/actualizar",
+  "items": [
+    {
+      "linea_id": "12",
+      "nombre_doc": "Producto con Timeout Antes",
+      "codigo_proveedor": "TIMEOUT-BEFORE-PATCH",
+      "variacion": "",
+      "cantidad": 5,
+      "marca": "Marca C",
+      "talle": null,
+      "color": null
+    }
+  ],
+  "escenario_e2e": {
+    "descripcion": "El matching resuelve automáticamente, pero al intentar sincronizar el stock Woo no responde (timeout)",
+    "mock_woo_comportamiento": "no_responde_a_patch",
+    "esperado": "bloquea la operación, muestra error de timeout, permite reintentar"
+  }
+}

@@ -98,7 +98,7 @@ describe('Rutas de publicaciones frenadas por precio', () => {
     it('el precio SIGUE mal: no reactiva, la frenada sigue en la tabla, y el resultado la marca bloqueada', async () => {
       sembrarFrenada({ precioWc: 900000 }); // precio web alto → neto por debajo, sigue bloqueada
       mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        if (metodo === 'get' && path.startsWith('/items/bulk?ids=')) {
           return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 200000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
         }
         if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 30000 } };
@@ -118,7 +118,7 @@ describe('Rutas de publicaciones frenadas por precio', () => {
     it('camino feliz: precio ya corregido → reactiva y borra la frenada', async () => {
       sembrarFrenada({ precioWc: 300000 }); // precio web bajo → neto pasa el chequeo
       mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        if (metodo === 'get' && path.startsWith('/items/bulk?ids=')) {
           return { status: 200, data: [{ code: 200, body: { id: 'MLA1', status: 'paused', sub_status: ['out_of_stock'], price: 400000, category_id: 'MLA1234', listing_type_id: 'gold_special', shipping: { free_shipping: false } } }] };
         }
         if (metodo === 'get' && path.includes('listing_prices')) return { status: 200, data: { sale_fee_amount: 40000 } };
@@ -139,7 +139,7 @@ describe('Rutas de publicaciones frenadas por precio', () => {
         sembrarFrenada({ clave: `MLA${i}|`, itemId: `MLA${i}`, sku: `FB-${i}`, precioWc: 300000 });
       }
       mlFetch.mockImplementation(async (_db, _cfg, metodo, path) => {
-        if (metodo === 'get' && path.startsWith('/items?ids=')) {
+        if (metodo === 'get' && path.startsWith('/items/bulk?ids=')) {
           const ids = path.match(/ids=([^&]*)/)[1].split(',');
           return {
             status: 200,
@@ -282,7 +282,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(res.body.data[0].senales.map(s => s.senal)).toContain('seller_sku');
   });
 
-  it('POST /api/cobertura/vinculos/revisado sin el campo valor responde 400 y no crea descarte', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST /api/cobertura/vinculos/revisado sin el campo valor responde 400 y no crea descarte', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
     const res = await request(app).post('/api/cobertura/vinculos/revisado')
       .send({ clave: 'MLA1|10', senal: 'seller_sku' });
@@ -290,7 +297,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
   });
 
-  it('marcar revisado OK saca al sospechoso de la lista', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('marcar revisado OK saca al sospechoso de la lista', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
     // El contrato real: el cliente reenvía el `valor` tal cual lo recibió de la señal,
     // no un dato inventado a mano.
@@ -314,7 +328,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(res.body.data).toHaveLength(1);
   });
 
-  it('el sospechoso REAPARECE si cambia el dato aunque el nuevo valor "contenga" texto del viejo', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('el sospechoso REAPARECE si cambia el dato aunque el nuevo valor "contenga" texto del viejo', async () => {
     // Caso que una comparación por contención (substring) rompería: usamos la señal `precio`
     // (valor compuesto puramente numérico "precioMl|precioWc") porque ahí es fácil construir
     // una colisión real de substring. precioWc fijo en 100000; precioMl pasa de 50000 (valor
@@ -337,7 +358,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(res.body.data).toHaveLength(1); // reaparece: es una discrepancia distinta
   });
 
-  it('reasignar cambia el SKU del vínculo y borra los descartes viejos', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('reasignar cambia el SKU del vínculo y borra los descartes viejos', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
     db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)
       VALUES (777777, 'Otro producto', 'FB-9999', 'simple', 2, 218700, '2026-07-30T00:00:00Z')`).run();
@@ -352,7 +380,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
   });
 
-  it('POST /api/cobertura/vinculos/:clave/desvincular (admin) borra también los descartes de esa clave', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST /api/cobertura/vinculos/:clave/desvincular (admin) borra también los descartes de esa clave', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
     const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
     const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
@@ -365,7 +400,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(db.prepare("SELECT COUNT(*) n FROM ml_vinculos_revisados WHERE clave='MLA1|10'").get().n).toBe(0);
   });
 
-  it('POST /api/cobertura/vinculos/:clave/desvincular sin ser admin responde 403', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST /api/cobertura/vinculos/:clave/desvincular sin ser admin responde 403', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
     const appNoAdmin = express();
     appNoAdmin.use(express.json());
@@ -376,7 +418,14 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(db.prepare("SELECT COUNT(*) n FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().n).toBe(1); // no se tocó
   });
 
-  it('POST /api/sync/desvincular sigue vivo (lo usa Sync ML Detalle) y borra también los descartes', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST /api/sync/desvincular sigue vivo (lo usa Sync ML Detalle) y borra también los descartes', async () => {
     sembrarVinculo({ sellerSku: 'FB-9999' });
     const sosp = await request(app).get('/api/cobertura/vinculos-sospechosos');
     const senal = sosp.body.data[0].senales.find(s => s.senal === 'seller_sku');
@@ -395,14 +444,28 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     expect(res.body.vinculos_sospechosos).toBe(1);
   });
 
-  it('reasignar con SKU inexistente responde 400 y no toca nada', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('reasignar con SKU inexistente responde 400 y no toca nada', async () => {
     sembrarVinculo();
     const res = await request(app).post('/api/cobertura/vinculos/reasignar').send({ clave: 'MLA1|10', sku: 'NO-EXISTE', expected_sku: 'FB-6411' });
     expect(res.status).toBe(400);
     expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|10'").get().sku).toBe('FB-6411');
   });
 
-  it('reasignar con clave inexistente responde 400 y no crea un vínculo fantasma', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('reasignar con clave inexistente responde 400 y no crea un vínculo fantasma', async () => {
     // La publicación con esta clave nunca se sembró en ml_publicaciones_cache (typo, o se
     // borró de ML entre que se renderizó la pantalla y el click).
     db.prepare(`INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, stock, precio, actualizado_en)

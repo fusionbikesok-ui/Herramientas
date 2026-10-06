@@ -1,0 +1,207 @@
+# Operaciones de depósito, preparación y stock
+
+## Fuente canónica
+
+La hoja de ruta vigente está en `/opt/fusionbikes/herramientas/docs/superpowers/plan-maestro.md`.
+Este módulo conserva decisiones aprobadas para entregas futuras y el estado actual explícito;
+la historia de cambios pertenece a Git. Las reglas bajo “Modelo objetivo” todavía no están
+implementadas como un único libro de stock.
+
+## Preparación y despacho
+
+- La arquitectura separa Gestión de pedidos (Home: importar y administrar pedidos, ventas físicas, clientes, productos, incidencias, decisión de envío y consulta de fotos) de Gestión de envíos (recolección, preparación, evidencia, embalaje, tracking, grupos y salida). Ambas comparten el modelo relacional.
+- Se importan todos los pedidos de WooCommerce y MercadoLibre del último mes. Importar no crea tarea logística: solo entran a Gestión de envíos los Woo en “listo para enviar Andreani” o los pedidos derivados manualmente por un usuario autorizado.
+
+- Los pedidos ingresan continuamente durante el día y se notifican al área de preparación.
+- Desde el 2026-09-08, preparación usa una cola continua sin olas: MercadoLibre primero y antigüedad después. Los pedidos nuevos aparecen en la próxima actualización.
+- La pantalla primero consolida todos los productos pendientes por SKU y muestra imagen, cantidad total y cantidad de pedidos. Después el operario abre un pedido, adquiere su claim y completa una checklist escaneando cada unidad. La línea muestra cantidad escaneada/esperada; excedentes y códigos ajenos o desconocidos no modifican cantidades.
+- Las olas nunca tuvieron adopción operativa y se retiraron de la UI, del contrato de pendientes y del montaje de `/api/jornada`. Sus tablas y eventos históricos se conservan como auditoría, sin trabajo nuevo.
+- El escaneo del checklist (`POST /api/preparacion/:id/escanear`) acepta SKU, el GTIN del catálogo y los EAN asociados a mano (`ean_sku`). Compara por la forma canónica de 14 dígitos de `lib/gtin.js`, así que UPC-12 y EAN-13 con cero adelante son el mismo código. Hasta el 2026-09-11 solo aceptaba SKU.
+- El operario encuentra unidades, las asigna al pedido, escanea, toma evidencia y aprueba la
+  preparación antes del despacho.
+- La evidencia incluye requisitos por ítem y fotos del paquete cuando corresponda. Un error de
+  red conserva el borrador/previsualización y ofrece reintento idempotente.
+- Objetivo E3: al aprobar evidencia, generar una única etiqueta interna 50×25 y enviarla a una
+  computadora Windows del depósito con impresora USB y agente local.
+- Objetivo E3: si la impresión falla, conservar la aprobación, dejar alerta persistente y permitir
+  reimpresión manual autorizada sin repetir fotos.
+- Objetivo E4: generar/reconciliar lotes de transporte después de que los paquetes aprobados estén listos.
+- ML Full queda fuera. El transporte único retira ML, Andreani y Flex. Para MercadoEnvíos la hora máxima no es fija y puede variar por paquete; se usa la hora máxima de entrega en el centro de acopio. ML y Andreani requieren 30 minutos de margen. Flex debe salir como máximo a las 17:00 para permitir el regreso del transporte antes del cierre de las 19:00. Web mantiene máximo normal de preparación a las 15:00.
+- Un Flex fuera de margen se prepara igualmente y queda para el día siguiente; no se descarta ni se fuerza un despacho tardío.
+- E1 se redefine como cola continua, checklist por pedido y escaneo unitario. Continúa sin aceptación hasta completar pruebas focalizadas, recorrido responsive y validación operativa real.
+- Cancelaciones o cambios que afectan un pedido preparado invalidan evidencia y etiquetas; una
+  unidad reasignada a un ML urgente puede exigir rehacer la preparación web desplazada.
+- Un faltante es incidente urgente y dispara búsqueda/conteo escalonado; no se oculta como pedido
+  simplemente pendiente.
+- E1 documenta fallos operativos y técnicos relevantes, reintentos agrupados y correcciones inmutables con actor, hora, antes/después y motivo.
+
+## Modelo físico y comercial: objetivo E8–E18
+
+La validación histórica de jornada/olas queda obsoleta para aceptación funcional. Los archivos y migraciones históricos pueden servir para auditoría, pero no forman parte del runtime ni de los gates focalizados de la checklist.
+
+- Fusion mantiene físico por ubicación y libro inmutable de movimientos.
+- WooCommerce es autoridad de disponible comercial; Fusion separa físico, disponible,
+  comprometido, no disponible y entrante.
+- La creación del pedido o reducción de Woo no vuelve a descontar físicamente la unidad. El físico
+  baja al entregar al transportista.
+- Hay múltiples depósitos, ubicación base y overflow; las transferencias se confirman al llegar.
+- Las ubicaciones se seleccionan manualmente de forma jerárquica; no se requieren QR.
+- Las correcciones se hacen con movimientos inversos, nunca editando historia o un saldo absoluto.
+- El rollout del modelo nuevo es por familia o SKU y no mezcla escrituras legacy y nuevas.
+- Productos no publicados pueden tener físico interno, pero el canal comercial permanece bloqueado.
+- No se elimina/desvincula un producto con físico, compromiso o entrante.
+
+## Recepción, devoluciones y conteos: objetivo E14–E18
+
+Corrección operativa 2026-09-05: la sesión de conteo 31 (Santini) quedó confirmada después de
+ajustar únicamente sus fallidos. `FB-62881` se fijó en Woo a 2 unidades (dos filas del mismo
+SKU); `FB-65097`, `FB-65098` y `FB-65099` eran variaciones eliminadas y se descartaron como no
+aplicables, conservando sus diferencias históricas. La sesión quedó sin filas pendientes.
+
+- E18 tiene integrado el núcleo durable y una segunda fase: `/api/stock-exceptions` y
+  `lib/stockExceptions.js` persisten incidentes físicos, tareas, versiones, `operation_id` y
+  auditoría append-only mediante `migrations/066_stock_exceptions.sql`; `migrations/067_stock_exception_returns.sql`
+  agrega recepción idempotente de devoluciones, clasificación disponible/no disponible/condicionado
+  y daño urgente con tarea de inspección. La migración `migrations/068_stock_exception_woo_outbox.sql`
+  agrega una cola durable para deltas comerciales y `procesarWooOutbox` implementa claim,
+  reintento y confirmación/fallo con adaptador inyectable. `crearSenderWooExcepciones` usa el
+  cliente Woo existente con stock live, delta y verificación posterior, actualizando cache solo
+  tras PUT exitoso; falta resolver concurrencia previa al PUT. `migrations/069_supplier_returns_disposals.sql` y su API registran
+  devoluciones a proveedor y descartes irreversibles con idempotencia/auditoría; falta completar
+  estados de seguimiento versionados hasta recibida/cancelada y eventos propios de proveedor;
+  falta completar recepción/inspección, permisos finos y E2E; `/excepciones/` ofrece consulta y
+  acciones básicas protegidas, por lo que E18 continúa en desarrollo.
+
+- La recepción se procesa por línea; documentos pueden llegar antes, durante o después de la
+  mercadería.
+- La extracción de comprobantes de recepción acepta fotos, PDF, CSV, XLSX y XML. Los XML se
+  envían como texto a Gemini (en vez de como adjunto binario), para que los listados que emiten
+  proveedores puedan extraerse y vincularse al número de pedido detectado.
+- Cada línea confirma identidad, cantidad y condición visible, con modo directo, acumulado o unitario.
+- SKU desconocido en Woo queda como físico provisional no vendible hasta catalogación.
+- Devoluciones entran a inspección/no disponible y solo pasan a vendible tras aprobación.
+- Daño interno mueve a no disponible, reduce Woo y abre revisión con foto.
+- El primer conteo es ciego. Movimientos posteriores al snapshot se reconcilian, no se pierden.
+- Diferencias de alto riesgo requieren reconteo, motivo y confirmación reforzada; se prefiere otro operario, pero la misma persona puede repetir si no hay reemplazo y queda marcado.
+- No se lleva a cero lo no contado sin confirmación explícita.
+- Objetivo E17: el conteo offline conservará eventos cifrados hasta siete días, reproducirá en orden
+  y se detendrá ante conflictos incompatibles; no usará last-write-wins.
+
+## Estado real del matcher y del alta en recepción (verificado 2026-09-21)
+
+Verificado leyendo el código, no la documentación. Contradice lo que sugieren las fichas:
+
+- **El matching automático de recepción corre entero en el navegador.**
+  `public/recepcion/index.html:608-644`: `matchItem` usa SKU exacto contra `codigo_proveedor` y,
+  si falla, `fuzzyMatchItem`, que cuenta substrings de palabras >2 caracteres sobre el catálogo
+  completo y acepta con `mejorScore >= 2`. Sin IDF, sin atributos, sin desempate entre hermanos de
+  variación, sin confianza. **Ningún test lo cubre.** El backend (`routes/recepciones.js`) recibe
+  `id_woo` ya resuelto y nunca matchea.
+- **`lib/ingresoMatcher.js` existe, está probado y está huérfano.** 168 líneas con TF-IDF,
+  atributos estructurados, contradicción de color/talle y detección de empate entre hermanos;
+  devuelve confianza y razones. 252 líneas de test en `test/ingreso-matcher.test.js`. Su docblock
+  dice que reemplaza el `score >= 2` del prototipo y fue escrito contra el incidente real de los
+  talles 41/43/45 (todo el stock a una sola variación). **Ninguna ruta Express lo importa.**
+- **No existe tabla de alias por proveedor.** `recepcion_items.codigo_proveedor` se guarda y jamás
+  se relee, así que ninguna corrección manual se reutiliza. `mapeo_fusion` es de otro dominio y no
+  tiene columna proveedor.
+- **El alta de productos está a medio cablear.** `routes/nuevosProductos.js` analiza con IA y
+  devuelve una ficha, pero no hace `POST /products` a Woo. `estado_item='pendiente_creacion'` y
+  `ficha_json` existen en el esquema y el front de recepción no los usa nunca. El alta real es
+  100 % manual.
+- **XLSX no está soportado pese a lo que dice este módulo más arriba.** No hay parser de Excel en
+  el repo; el front lo mandaría como binario a Gemini. PDF e imagen van por `inline_data`;
+  CSV/XML/TXT por la rama de texto.
+- `cargarCatalogo()` (`public/recepcion/index.html:396`) baja el catálogo completo al navegador y
+  `fuzzyMatchItem` lo barre entero por cada línea. Mover el matching al backend elimina ambas
+  cosas.
+
+## Integraciones y excepciones: objetivo E11–E22
+
+- E20 inició el núcleo de taller en `workshop_jobs`, `workshop_events` y `workshop_parts`:
+  trabajos, diagnóstico/presupuesto y repuestos con estados versionados. La bandeja `/taller/`
+  permite consultar, cargar diagnóstico/presupuesto y avanzar estados con `expected_version` e
+  idempotencia. E20 registra consumo instalado como salida contable y devolución como entrada
+  inversa desde ubicación, enlazados al repuesto e idempotentes. La venta del service ya tiene
+  outbox durable idempotente y worker con recuperación/reintento para Woo, pero aún falta el
+  payload/adaptador de creación remota, tarifas, checklists y piloto.
+
+- E19 inició su núcleo durable en `warranty_cases`/`warranty_events`: alta idempotente,
+  estados versionados y timeline mediante `/api/warranties`. Continúa en desarrollo; faltan
+  inspección, carga de evidencia bajo `uploads/warranty` y compromisos de reemplazo separados del stock; faltan
+  consumo/liberación en el ledger, carga real de adjuntos, Woo, UI y E2E; consumir un compromiso
+  ya crea un outbox Woo durable con delta negativo, sin llamada remota dentro de la transacción;
+  `procesarWooOutboxGarantia` lo reclama, reintenta y confirma/falla con un adaptador aislable.
+
+- Si Woo está caído, los cambios pendientes son durables e idempotentes; no se publican aumentos
+  hasta reconciliar.
+- Divergencias o negativos bloquean selectivamente el SKU y abren incidente; no se sobreescribe
+  automáticamente el modelo interno.
+- No se presupone una reserva fija de canal ML. Mientras publicaciones independientes anuncien stock completo no se garantiza cero sobreventa; una sobreventa real bloquea ventas en ambos canales y abre incidente urgente.
+- MercadoLibre Full, lotes, vencimientos, serialización, consignación, kits y órdenes de compra
+  automáticas quedan fuera del primer programa.
+
+## Retención y alertas
+
+- En preparación, volver a la cola conserva el claim del operador. La tarjeta queda como `Continuar` y el reingreso usa `/tomar` de forma idempotente para renovar el claim; otro operador sigue bloqueado hasta liberación o vencimiento.
+- Las etiquetas Web/Andreani se generan fuera del VPS: durante el embalaje el preparador escanea código interno y tracking, confirma la asociación y el sistema bloquea duplicados/conflictos. Despacho solo reconcilia el código interno al retirar. Decisión José 2026-10-02: el preparador escanea el seguimiento Andreani al terminar (o después desde Cargar seguimientos) y la notificación a Woo/mail de enviado ocurre al CONFIRMAR ese escaneo (POST /seguimientos/:wcOrderId); ese escaneo cierra el ciclo del pedido web. Andreani retira los pedidos web, así que no hay viaje web: la hoja de Despacho (`/despacho/cola`) no lista ni cuenta como pendientes los web con tracking confirmado; el soporte de lotes web (`POST /despacho/lotes`) se conserva pero no se exige. El viaje aplica solo a MercadoLibre, que no carga tracking en este sistema.
+
+## Seguimiento inline después de preparación Web (2026-10-02)
+
+- Al completar una preparación `web` en estado `completada`, la UI ofrece escanear el tracking Andreani antes de volver a Cargar seguimientos. ML y `pendiente_deposito` conservan el flujo anterior.
+- El flujo valida 10–20 dígitos y rechaza solo códigos que coinciden con SKU/EAN/GTIN/código de producto real de los ítems cargados; un GTIN válido ajeno al pedido puede ser tracking. Confirma mostrando datos de `GET /seguimientos` sin bloquear si faltan y guarda mediante el POST existente.
+- Mientras el POST está en vuelo se bloquean input, Confirmar, Escanear de nuevo, Lo cargo después y Escape; `enviando` se libera al terminar la respuesta. El backend mantiene una reserva en memoria por `wcOrderId`, responde `409 EN_CURSO` sin tocar Woo ante un segundo POST y libera la reserva en `finally`.
+- Un `502` con `colgado:true, incierto:true` se muestra como resultado incierto y no afirma guardado/mail; solo `colgado:true` sin incertidumbre informa que se guardó y falta un paso interno. La misma semántica se usa desde Cargar seguimientos.
+
+- El flujo "Escaneá el seguimiento" vive dentro de `#cuerpo`: mientras `TRACKING_FLUJO.activo` ni `renderDetalle` ni `renderSeguimientos` pintan (el estado se actualiza igual), y un `refrescarDetalle` tardío no repinta si el operario ya salió del detalle. `completar()` espera a que terminen las subidas de foto en vuelo antes de llamar `/completar` (hotfix 2026-10-02, pedido web 70502 cuyo overlay se borró).
+
+## Reconciliación de preparaciones abiertas (2026-09-29)
+
+- El worker `reconciliarPreparacionesAbiertas` consulta directamente WooCommerce o MercadoLibre
+  y su shipment. Solo un estado explícito de salida o cancelación permite una transición; los
+  errores y estados desconocidos se registran en `preparacion_reconciliaciones` para reintento.
+- Los envíos pasan a `completada` si la evidencia existente está completa y, si no, a
+  `despachada_sin_verificar`. Las cancelaciones con unidades escaneadas/embaladas conservan el
+  flujo `cancelada_pendiente_devolucion`; sin retiro registrado pasan a
+  `cancelada_sin_retiro_registrado` y se muestran en el historial.
+- Cada corrida consulta como máximo 50 pedidos y no se solapa por conexión. La simulación
+  `scripts/preview-preparacion-reconciliacion.mjs` informa IDs/estados sin mutar preparaciones.
+  El cron requiere `PREPARACION_RECONCILIACION_ACTIVA=true` para habilitarse después de un
+  respaldo verificado y de revisar la vista previa. Las migraciones 115 y 116 quedaron aplicadas
+  en producción el 2026-09-29 tras respaldo verificado. Vista previa viva: 11 preparaciones abiertas
+  (10 Web `enviadoandreani`, 1 ML `cancelled`), cero errores. El primer tick a las 23:58 UTC cerró
+  el lote: diez `despachada_sin_verificar`, una `cancelada_sin_retiro_registrado`, cero errores;
+  quedó exactamente un evento de transición por prep, con ítems, fotos y auditoría previos intactos.
+  Cron activo cada 10 minutos, bandera `PREPARACION_RECONCILIACION_ACTIVA=true`, PM2 online y
+  `/healthz` 200. La vista previa y la corrida usaron la credencial Woo vigente; la rotación
+  preventiva acordada por el usuario para otro día no bloquea esta operación.
+
+- Movimientos y auditoría se conservan indefinidamente.
+- Fotos operativas se conservan 180 días; reclamos, incidentes, garantías o auditorías activas suspenden la purga.
+- Las alertas se muestran en App, panel y sonido, distinguen reconocimiento de resolución y
+  pueden transferirse a otro usuario autorizado.
+
+## Escaneo que no coincide (2026-09-14)
+
+- `POST /api/preparacion/:id/escanear` con resultado `no_coincide` devuelve `producto_codigo`
+  ({sku, nombre} del catálogo o `null`) y registra el evento `escaneo_no_coincide` con el código leído.
+- `confirmar-manual` responde **409 `NO_COINCIDE_PREVIO`** (con `lecturas`) si la preparación tiene
+  lecturas que no coincidieron, salvo `pese_a_no_coincide:true`; esa confirmación guarda
+  `no_coincide_previo` en su evento. Motivo: una Podium Chill FB-69004 se confirmó "sin etiqueta"
+  tras tres lecturas de otro código.
+- En iPhone la cámara usa ZXing (Safari no tiene BarcodeDetector). El banco sintético mostró que la
+  configuración del lector casi no cambia la tasa de lectura; decide la nitidez/tamaño del código.
+
+## Etiquetado posterior a confirmación manual (2026-09-29)
+
+- `confirmar-manual` conserva el motivo/autoría existente y crea una tarea durable con producto y
+  unidades que no se escanearon antes de completar el ítem. La tarea se puede consultar y marcar
+  hecha con usuario/fecha incluso después de completar o despachar la preparación; el control
+  requiere solo el permiso general de escritura y su botón mantiene el mínimo de 44 px. No bloquea
+  el despacho y una tarea pendiente queda para revisión. Los retries sobre la línea verificada no
+  duplican, pero cada nueva confirmación después de reabrirla crea su propio registro.
+- No existe backfill automático para confirmaciones históricas. Preparaciones sin líneas no se
+  pueden iniciar desde pedidos del canal ni completar manualmente.
+- El callback diferido de 4,5 segundos fija el ID de preparación al programarse y no usa un PREP
+  mutable después de navegación; los errores de envío muestran reintento/estado en vez de excepción
+  sin manejar.

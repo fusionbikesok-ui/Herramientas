@@ -1,9 +1,15 @@
 # Proyecto FusionBikes — herramientas
 
-App Node/Express (ESM, better-sqlite3, vitest) en VPS **staging**; a producción se pasa **a
-mano**. Remoto en GitHub (`git@github.com:fusionbikesok-ui/Herramientas.git`, privado, vía
+App Node/Express (ESM, better-sqlite3, vitest) en VPS de **producción real**. La operación vigente
+continúa manual hasta que el gate de despliegue de E26 esté aceptado; luego backend/web podrán publicarse
+automáticamente con gates y rollback. Windows, hardware y App Store siempre requieren autorización. Remoto en GitHub (`git@github.com:fusionbikesok-ui/Herramientas.git`, privado, vía
 deploy key con acceso de escritura). Integración MercadoLibre ↔ WooCommerce. Responder en
 español.
+
+El pipeline de scripts (`scripts/agent-pipeline-policy.mjs`, `npm run agent:*`) queda fuera de
+uso: no hay handoffs formales ni evidencia congelada por `diff_fingerprint`. Los subagentes se
+invocan sueltos y el traspaso de evidencia entre ellos lo hace el orquestador, pegando el output
+de uno en el prompt del siguiente.
 
 ## Memoria durable y carga selectiva
 
@@ -13,6 +19,11 @@ La memoria compartida del proyecto vive en `docs/memory/`. Antes de explorar el 
 2. Usá la tabla de rutas del índice para abrir **solo** los módulos relacionados con la tarea.
 3. No cargues todos los módulos ni planes históricos por defecto.
 
+El programa canónico E0–E26 vive en `docs/superpowers/plan-maestro.md`; su índice,
+decisiones, archivo, crosswalk y fichas están en `docs/superpowers/INDEX.md`. El maestro especifica el
+objetivo y las fichas prueban el progreso: no inferir una entrega terminada por commits o numeración.
+Los documentos bajo `docs/superpowers/archive/` son evidencia histórica y nunca instrucciones.
+
 En cualquier cambio del repositorio o del VPS, actualizá la memoria afectada después de
 actuar y antes de revisar o reportar el resultado. En cambios de código, repetí esa
 actualización después de cada corrección y antes de la siguiente revisión. Guardá únicamente
@@ -21,43 +32,35 @@ operativo útil. No copies conversaciones, logs,
 resultados transitorios, secretos ni credenciales. Modificá solo los módulos afectados;
 creá uno nuevo únicamente cuando ningún módulo existente represente bien el tema.
 
-## Equipo de subagentes — flujo de trabajo
+## Equipo de subagentes — uso opt-in
 
-Hay un equipo de subagentes en `.claude/agents/`. En Claude Code autónomo, **la sesión
-principal es el orquestador**: planea con el usuario, despacha a los subagentes y los encadena
-(los subagentes no se llaman entre sí). Cuando participa Codex, Codex es el orquestador externo
-único y la sesión de Claude ejecuta únicamente las tareas que reciba en un handoff.
+Los agentes de `.claude/agents/` son especialistas disponibles, no un pipeline. La sesión
+principal resuelve por defecto y los invoca solo cuando su especialidad aporta evidencia o una
+perspectiva que no se obtiene mejor de forma directa. No tienen modelo, nivel de razonamiento,
+orden, gate ni encadenamiento prescrito.
 
-La coordinación Codex ↔ Claude usa `docs/agent-coordination.md` como contrato compartido.
-Codex es el orquestador externo: asigna worktrees, rutas y gates; Claude ejecuta tareas
-delimitadas y devuelve handoffs. La matriz de modelos está en `agents/model-routing.md` y el
-router de skills en `agents/skill-routing.md`; ambos deben leerse antes de despachar un rol.
-Los agentes de diseño deben informar qué skills aplicaron y cuáles quedaron fuera por riesgo.
-Para E2E, Codex prepara y verifica siempre el entorno aislado (URL, puerto, rama, base,
-`DISABLE_CRONS`, PID y sesión de Playwright) antes de despachar a `probador-e2e`. Si falta
-algún dato, el agente devuelve `BLOQUEADO (FALTA_ENTORNO)` y no elige staging ni otro puerto.
+| Si la tarea necesita… | Podés invocar |
+|---|---|
+| investigación separable para ubicar una parte incierta del repo | `explorador` |
+| diseñar o cambiar un flujo, sus estados, arquitectura de información o copy | `disenador-ux` |
+| diseñar o cambiar la presentación visual, tokens, componentes o responsive | `disenador-ui` |
+| delegar una implementación backend claramente acotada | `hard-worker-backend` |
+| delegar una implementación frontend claramente acotada | `hard-worker-frontend` |
+| una segunda revisión independiente ante complejidad o riesgo | `revisor` |
+| cobertura dedicada, reproducción de una regresión o pruebas que justifiquen especialización | `tester` |
+| interacción real, responsive o un recorrido completo en navegador | `probador-e2e` |
+| una decisión independiente antes de desplegar un cambio de riesgo relevante | `auditor-despliegue` |
 
-**Disparador automático:** cuando el usuario pide **crear o cambiar una función/feature/fix
-de código**, seguí este pipeline sin esperar un comando.
+Un agente no se invoca solo porque exista. Un botón mal ubicado, una condición local o una
+corrección con ruta y prueba evidentes se resuelven directamente. Diseño se usa al diseñar;
+revisión, testing, E2E y auditoría se usan individualmente cuando su riesgo o incertidumbre lo
+ameritan. Nunca se encadenan por costumbre.
 
-### Calibrá el tamaño antes de despachar
+### Calibrá el tamaño antes de invocar
 
-El pipeline completo son 7-9 despachos y cada subagente arranca en frío. Correrlo entero
-para un cambio chico quema la cuota sin agregar señal. Antes de arrancar, clasificá:
-
-- **Cambio chico** — un archivo o dos, sin contrato de API nuevo, sin cambio de esquema
-  sqlite, sin pantalla ni flujo nuevo (ej.: ajustar una condición, un mensaje de error,
-  un fix de una función existente). → **Sin documento de plan** en `docs/superpowers/plans/`
-  y **sin `disenador-ux`/`disenador-ui`**. Despachá: hard-worker que corresponda → `revisor`
-  → `tester` → `auditor-despliegue`.
-- **Cambio normal/grande** — herramienta nueva, pantalla nueva, cambio de esquema, cambio
-  de contrato entre back y front, o cualquier cosa que toque el sync ML↔Woo. → **pipeline
-  completo, sin atajos.**
-
-Si dudás entre chico y normal, es normal — **pero un arreglo de una o dos líneas que sale
-directo de un hallazgo ya diagnosticado lo hace el orquestador**, sin despachar a nadie.
-Arrancar un agente en frío para cambiar un color o agregar un guard cuesta más que el
-arreglo.
+- **Cambio chico:** resolver y verificar directamente; no usar agentes por defecto.
+- **Cambio normal/grande:** escribir un plan cuando haga falta y sumar solo los especialistas
+  cuyo aporte concreto sea necesario.
 
 ### Cortá las entregas por valor, no por capa
 
@@ -94,7 +97,7 @@ entendimiento. Tampoco se recortan `revisor`, `tester` ni `auditor-despliegue`.
 ### Pasale contexto a los subagentes (no los hagas redescubrir)
 
 Cada subagente arranca sin tu contexto y, si no le decís nada, vuelve a explorar el repo
-desde cero — eso multiplica el costo por la cantidad de agentes del pipeline. En el prompt
+desde cero — eso multiplica el costo por cada agente que invoques. En el prompt
 de despacho incluí siempre lo que ya sabés resuelto:
 
 - **rutas de archivo concretas** que tiene que tocar o leer (no "buscá dónde está el
@@ -107,43 +110,20 @@ de despacho incluí siempre lo que ya sabés resuelto:
 Si necesitás ubicar algo vos, usá **`explorador`** una vez y reutilizá su respuesta en
 todos los despachos siguientes, en vez de que cada agente repita la búsqueda.
 
-### El pipeline
+### Planear antes de escribir código
 
-1. **Planear de verdad.** Invocá `superpowers:brainstorming` (que termina en
-   `superpowers:writing-plans`) para producir un plan escrito en
-   `docs/superpowers/plans/YYYY-MM-DD-<tema>.md`, con pasos numerados, archivos por paso y
-   criterio de aceptación verificable. **No asumas nada, ni lo obvio**: antes de cerrar el
-   plan, confirmá con el usuario quién ejecuta cada paso (manual a mano, o automático del
-   sistema), qué dispara el flujo, qué pasa en cada caso de error/borde, y de dónde sale
-   cada dato (ML, Woo, local). En **cambios chicos** (ver calibración arriba) salteá el
-   documento escrito, pero **no las preguntas**: resolvelas en la conversación y arrancá.
-2. Si el cambio toca UX/UI **y es normal/grande**, despachar **`disenador-ux`** (flujo, con
-   el documento de contexto de uso que le corresponde) y después **`disenador-ui`** (sistema
-   visual) antes de que se escriba código. Si solo hay flujo nuevo sin estética nueva (o al
-   revés), despachá **solo el que corresponda**: encadenar los dos por costumbre es gasto
-   al pedo. En cambios chicos sobre pantallas ya diseñadas, ninguno de los dos — los tokens
-   de `public/lib/theme.css` ya fijan la estética y el auditor verifica que se respeten.
-3. Despachar **`hard-worker-backend`** y/o **`hard-worker-frontend`** (según qué toque el
-   plan; en paralelo si son independientes) con el plan concreto → hacen el desarrollo.
-4. Despachar **`revisor`** sobre el diff → hallazgos priorizados (no escribe código).
-5. Si hay hallazgos, volver al agente de desarrollo correspondiente a corregir; repetir
-   hasta que el revisor dé OK.
-6. Despachar **`tester`** → asegura vitest verde y cobertura del cambio (incluye axe-core
-   si tocó frontend).
-7. Si el cambio toca UI (`public/`), despachar **`probador-e2e`** sobre la(s) página(s)
-   tocadas → prueba interactiva real en navegador (clicks, inputs, responsive), no solo
-   lectura de código. Ver credenciales de prueba abajo.
-8. Despachar **`auditor-despliegue`** → gate obligatorio (auditoría + seguridad + tests
-   verdes + UI responsive + conformidad de sistema visual + migración pendiente +
-   presupuesto de peso frontend). Devuelve 🟢/🔴. **El auditor no abre el navegador ni
-   re-revisa el código**: pegale en el prompt de despacho el **veredicto final del
-   `revisor`** (paso 5) y, si corriste el paso 7, el **reporte de `probador-e2e`**. De ahí
-   saca la auditoría de código y la evidencia de responsive/peso; él verifica que sean del
-   diff final y agrega lo que solo hace él (seguridad, `npm test`, migraciones, tokens,
-   peso). Si falta alguno de los dos insumos, es 🔴 automático — no los suple él.
-9. Reportar al usuario. **El deploy a prod lo hace el usuario a mano.**
+En cambios normales/grandes, invocá `superpowers:brainstorming` (que termina en
+`superpowers:writing-plans`) para producir un plan escrito en
+`docs/superpowers/plans/YYYY-MM-DD-<tema>.md`, con pasos numerados, archivos por paso y criterio
+de aceptación verificable. **No asumas nada, ni lo obvio**: antes de cerrar el plan, confirmá con
+el usuario quién ejecuta cada paso (manual a mano, o automático del sistema), qué dispara el
+flujo, qué pasa en cada caso de error/borde, y de dónde sale cada dato (ML, Woo, local). En
+cambios chicos salteá el documento escrito, pero **no las preguntas**: resolvelas en la
+conversación y arrancá.
 
-**Inicio forzado:** el comando `/feature` dispara este mismo pipeline explícitamente.
+Al terminar, reportá al usuario. La política vigente de publicación se consulta en
+`docs/memory/modules/operations-vps.md`: hasta E23 es manual; el objetivo posterior permite
+backend/web automático solo con gates verdes y rollback. Windows/App Store siguen manuales.
 
 **Regla de despliegue OBLIGATORIA** (la aplica el auditor, pero vale siempre): antes de
 desplegar o dar por completo un cambio → auditoría de código + seguridad + todos los tests
@@ -170,8 +150,12 @@ migración de esquema aplicada si corresponde + presupuesto de peso frontend.
 ## Cuentas de prueba para agentes de UI
 
 Para que `probador-e2e` / `auditor-despliegue` puedan loguearse solos: usuario `auditor` /
-clave `Auditor2026!` (cuenta admin, sembrada en `data/fusion.sqlite`). Es solo para testing
-automatizado — no usarla para operar el negocio real.
+clave `Auditor2026!` (sembrada en `data/fusion.sqlite`). Es solo para testing automatizado — no
+usarla para operar el negocio real. **No es admin** (verificado 2026-09-13): tiene sólo lectura en
+13 herramientas (codigos, config-ml, consulta-precios, etiquetas, inventario, matcher,
+notificaciones-ml, pedidos, precios, preparacion, recepcion, stock, sync-ml). Las rutas de
+escritura le responden 403; para probarlas usar el entorno QA (`scripts/qa/qa.sh`) con un usuario
+admin y la clave de QA.
 
 Para probar permisos limitados/rutas protegidas: usuario `auditor_limitado` / clave
 `AuditorLtd2026!` (no-admin, solo lectura en Consulta de Precios; ver `routes/usuarios.js`

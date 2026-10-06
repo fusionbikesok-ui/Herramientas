@@ -131,11 +131,17 @@ body {
 .btn-logout:hover { border-color: var(--muted); color: var(--text); }
 
 /* ── Main ── */
+/* ANCHO COMPLETO (pedido del usuario, 2026-09-12). La grilla aprovecha todo el ancho —más
+   tarjetas por fila, menos scroll— pero el TEXTO CORRIDO queda acotado: 45-75 caracteres por
+   línea es el rango legible, y una descripción que cruza un monitor de 2560px no se lee.
+   Ver docs/superpowers/specs/2026-09-12-home-rediseno-design.md */
 .main {
-  max-width: 920px;
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   padding: 2.75rem 2rem 5rem;
 }
+/* Lo que se LEE, acotado. Lo que se ESCANEA (la grilla), no. */
+.page-desc, .card-desc { max-width: 68ch; }
 
 /* ── Page header ── */
 .page-header {
@@ -213,6 +219,25 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
   gap: 12px;
+}
+/* En pantallas anchas el problema NO es que falte ancho para las tarjetas: es que un grupo de
+   3 las apila a la izquierda y deja media pantalla vacía. La solución es poner los GRUPOS en
+   columnas, no estirar las tarjetas: una tarjeta de 700px con una descripción de dos renglones
+   se ve rota, y el texto ya está topeado en 68ch por legibilidad. */
+@media (min-width: 1700px) {
+  #grupos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 2.5rem; align-items: start; }
+}
+@media (min-width: 2300px) {
+  #grupos { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Herramienta incompleta: se muestra, pero con su estado a la vista. Esconderla es cómo
+   llegamos a tener cuatro pantallas construidas que nadie podía alcanzar. */
+.card--parcial { opacity: .82; }
+.card-estado {
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+  border-radius: 20px; background: rgba(245,185,66,.14); color: var(--amber, #F5B942);
+  margin-left: 8px; vertical-align: middle;
 }
 
 /* Card: left color border via box-shadow inset */
@@ -446,6 +471,42 @@ body {
 .prog-bar { height:7px; border-radius:6px; background:var(--surface2); overflow:hidden; }
 .prog-fill { height:100%; border-radius:6px; transition:width .8s cubic-bezier(.16,1,.3,1); }
 .prog-sub { font-size:.7rem; color:var(--muted); margin-top:7px; }
+
+/* ── Bloque de alertas de incidentes ── */
+.incidentes-container { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; margin-bottom:14px; }
+
+.incidentes-group { margin-bottom:14px; }
+.incidentes-group:last-child { margin-bottom:0; }
+.incidentes-glabel { font-size:.68rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+
+.incidente-item { background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:11px 14px; margin-bottom:8px; display:flex; gap:11px; align-items:flex-start; }
+.incidente-item:last-child { margin-bottom:0; }
+.incidente-item.crit { border-color:var(--critical-bd); background:var(--critical-bg); }
+.incidente-item.warn { border-color:var(--warning-bd); background:var(--warning-bg); }
+.incidente-item.info { border-color:var(--success-bd); background:var(--success-bg); }
+
+.incidente-icon { flex-shrink:0; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:.9rem; }
+.incidente-item.crit .incidente-icon { color:var(--critical); }
+.incidente-item.warn .incidente-icon { color:var(--warning); }
+.incidente-item.info .incidente-icon { color:var(--success); }
+
+.incidente-body { flex:1; min-width:0; }
+.incidente-msg { font-size:.82rem; color:var(--text); line-height:1.4; margin-bottom:4px; overflow-wrap:anywhere; word-break:break-word; }
+.incidente-meta { font-size:.72rem; color:var(--muted); display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+.incidente-severity { font-weight:700; text-transform:capitalize; color:var(--text); }
+.incidente-rep { display:inline-flex; align-items:center; gap:4px; }
+
+/* Estados de carga/error/vacío */
+.incidentes-loading { display:flex; align-items:center; gap:8px; font-size:.85rem; color:var(--muted); padding:10px 0; }
+.incidentes-spinner { width:14px; height:14px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+.incidentes-error { background:var(--critical-bg); border:1px solid var(--critical-bd); border-radius:10px; padding:10px 14px; font-size:.85rem; color:var(--critical); }
+.incidentes-error--info { background:var(--surface2); border:1px solid var(--border); color:var(--text); }
+
+.incidentes-empty { background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px 14px; font-size:.85rem; color:var(--muted); text-align:center; }
+
+.incidentes-overflow { font-size:.75rem; color:var(--muted); padding:6px 0; font-style:italic; }
 </style>
 </head>
 <body>
@@ -480,6 +541,12 @@ body {
   <!-- ESTADO DEL TOKEN ML — arriba de todo dentro de la zona de atención -->
   <div id="token-ml-banner"></div>
 
+  <!-- PREGUNTAS Y MENSAJES ML SIN RESPONDER -->
+  <div id="notif-ml-banner"></div>
+
+  <!-- ALERTAS DE INCIDENTES ACTIVOS — solo admins -->
+  <div id="incidentes-alertas" role="region" aria-live="polite" aria-label="Alertas de incidentes activos del sistema"></div>
+
   <!-- REQUIERE TU ATENCIÓN -->
   <section id="panel-atencion" style="display:none;margin-bottom:22px">
     <div class="attn-header">
@@ -495,247 +562,10 @@ body {
   </section>
 
   <!-- INGRESO -->
-  <section class="category" data-admin-only>
-    <div class="category-header">
-      <span class="category-label label-ingreso">Ingreso</span>
-      <div class="category-line"></div>
-    </div>
-    <div class="cards">
-      <a class="card card-ingreso" href="/herramientas/stock/">
-        <div class="card-top">
-          <div class="card-icon icon-ingreso">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/>
-              <path d="M16 3l-4 4-4-4"/>
-              <path d="M12 7v7"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Ingreso de Stock</div>
-        <div class="card-desc">Subí archivos del proveedor (CSV, PDF, XLSX, imagen), mapeá al catálogo WooCommerce y generá el CSV de importación.</div>
-        <div class="card-footer">
-          <span class="card-tag">Catálogo · Mapeo · CSV</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-ingreso" href="/herramientas/recepcion/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-ingreso">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 3h15v13H1z"/>
-              <path d="M16 8h4l3 3v5h-7V8z"/>
-              <circle cx="5.5" cy="18.5" r="2.5"/>
-              <circle cx="18.5" cy="18.5" r="2.5"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Recepción de Mercadería</div>
-        <div class="card-desc">Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic.</div>
-        <div class="card-footer">
-          <span class="card-tag">Facturas · Remitos · Stock</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-ingreso" href="/herramientas/pedidos/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-ingreso">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="3" width="20" height="18" rx="2"/>
-              <path d="M8 7h8M8 11h8M8 15h5"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Pedidos de Compra</div>
-        <div class="card-desc">Seguí el estado de cada pedido: documentos recibidos, recepciones confirmadas y mercadería pendiente de llegada.</div>
-        <div class="card-footer">
-          <span class="card-tag">Pedidos · OC · Importadores</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-ingreso" href="/herramientas/preparacion/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-ingreso">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/>
-              <path d="M3 8l9 5 9-5"/>
-              <path d="M12 13v8"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Preparación de Pedidos</div>
-        <div class="card-desc">Escaneá y fotografiá cada pedido antes de embalarlo (web Andreani + ML Flex/colecta) y armá las etiquetas de Andreani en lote.</div>
-        <div class="card-footer">
-          <span class="card-tag">Escaneo · Fotos · Etiquetas</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-    </div>
-  </section>
-
-  <!-- CONTROL -->
-  <section class="category">
-    <div class="category-header">
-      <span class="category-label label-control">Control</span>
-      <div class="category-line"></div>
-    </div>
-    <div class="cards">
-      <a class="card card-control" href="/herramientas/cobertura/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M8 12h8M12 8v8"/>
-              <path d="M4.93 4.93l4.24 4.24M14.83 14.83l4.24 4.24"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Cobertura de Catálogo</div>
-        <div class="card-desc">Verificá qué productos están en WooCommerce, en MercadoLibre o en ambos, y si los SKUs coinciden.</div>
-        <div class="card-footer">
-          <span class="card-tag">WC · ML · SKU</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" data-admin-only href="/herramientas/inventario/">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 11l3 3L22 4"/>
-              <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Contador de Inventario</div>
-        <div class="card-desc">Conteo físico de stock uno por uno. Registrá cantidades para conciliar el inventario real contra WooCommerce.</div>
-        <div class="card-footer">
-          <span class="card-tag">Conteo · Auditoría</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" href="/herramientas/consulta-precios/">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <path d="M21 21l-4.35-4.35"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Consulta de Precios</div>
-        <div class="card-desc">Escaneá o tipeá un SKU o código EAN y mirá al instante el precio web, con foto, marca y categoría del producto.</div>
-        <div class="card-footer">
-          <span class="card-tag">SKU · EAN · Precio</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" href="/herramientas/codigos/">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 5v14M7 5v14M11 5v14M15 5v14M19 5v14"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Carga de Códigos Universales</div>
-        <div class="card-desc">Recorré el depósito escaneando el código de barras (GTIN) de cada producto sin cargar y guardalo en WooCommerce al instante.</div>
-        <div class="card-footer">
-          <span class="card-tag">GTIN · Cámara · Woo</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-control" href="/herramientas/etiquetas/">
-        <div class="card-top">
-          <div class="card-icon icon-control">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/>
-              <line x1="7" y1="7" x2="7.01" y2="7"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Etiquetas de Productos</div>
-        <div class="card-desc">Generá e imprimí etiquetas de precio. Catálogo completo, búsqueda por SKU, y filtro por categoría con stock.</div>
-        <div class="card-footer">
-          <span class="card-tag">Impresión · Etiquetas</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-    </div>
-  </section>
-
-  <!-- SINCRONIZACIÓN -->
-  <section class="category">
-    <div class="category-header">
-      <span class="category-label label-sync">Sincronización</span>
-      <div class="category-line"></div>
-    </div>
-    <div class="cards">
-      <a class="card card-sync" href="/herramientas/matcher/">
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
-              <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">SKU Matcher ML ↔ WooCommerce</div>
-        <div class="card-desc">Vinculá publicaciones de MercadoLibre con productos WooCommerce por score de similitud. Confirmás SKUs y exportás el CSV.</div>
-        <div class="card-footer">
-          <span class="card-tag">Mapeo · SKU · ML</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-sync" href="/herramientas/config-ml/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-              <path d="M9 12l2 2 4-4"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Config ML — Reservas Locales</div>
-        <div class="card-desc">Marcá SKUs individuales como "solo local" o reservá N unidades para el local. El resto del stock se sincroniza normalmente a MercadoLibre.</div>
-        <div class="card-footer">
-          <span class="card-tag">SKU · Reserva · Stock</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-sync" href="/herramientas/precios/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="1" x2="12" y2="23"/>
-              <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Precios ML — Auditoría</div>
-        <div class="card-desc">Compará el neto que recibís en MercadoLibre (precio − comisión − envío) contra el precio de contado. Detectá dónde perdés margen o hay precios mal puestos.</div>
-        <div class="card-footer">
-          <span class="card-tag">Neto · Comisión · Envío</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-      <a class="card card-sync" href="/herramientas/sync-ml/" data-admin-only>
-        <div class="card-top">
-          <div class="card-icon icon-sync">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="1 4 1 10 7 10"/>
-              <polyline points="23 20 23 14 17 14"/>
-              <path d="M20.49 9A9 9 0 005.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 013.51 15"/>
-            </svg>
-          </div>
-        </div>
-        <div class="card-title">Sincronización ML — Estado</div>
-        <div class="card-desc">Estado en vivo de la integración con MercadoLibre: stock sincronizado, pedidos de ML en WooCommerce, cancelaciones y qué necesita tu atención.</div>
-        <div class="card-footer">
-          <span class="card-tag">Stock · Pedidos · Alertas</span>
-          <svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </div>
-      </a>
-    </div>
-  </section>
+  <!-- GRUPOS DE HERRAMIENTAS — se arman solos desde la lista declarativa del script.
+       Antes eran tres bloques de HTML escritos a mano: agregar una herramienta era copiar
+       y pegar ~10 líneas, y por eso Auditoría de publicaciones quedó meses sin enlace. -->
+  <div id="grupos"></div>
 </main>
 
 <script src="../lib/format.js"></script>
@@ -751,6 +581,7 @@ function logout() {
 
 // Deriva el id de herramienta desde el href de una tarjeta (/herramientas/<tool>/).
 function toolDeHref(href) {
+  if ((href || '').indexOf('/herramientas/gestion-pedidos/') === 0) return 'pedidos';
   var m = (href || '').match(/\/herramientas\/([a-z0-9-]+)\//);
   return m ? m[1] : null;
 }
@@ -769,6 +600,100 @@ fetch('/api/auth/me').then(function(r) {
 
   function tienePermiso(tool) { return isAdmin || !!permitidas[tool]; }
 
+  /* ── LAS HERRAMIENTAS, COMO DATOS ──────────────────────────────────────────
+     Agrupadas por TAREA, no por parte del sistema. NN/g, sobre 77 intranets: las estructuras
+     por tarea resistieron mejor que las organizadas por departamento y se aprenden más rápido.
+     "Control" y "Sincronización" —los grupos viejos— no son cosas que alguien haga.
+     Seis grupos, bajo la mediana de 7 que midió NN/g.
+
+     Dentro de cada grupo, PRIMERO LO QUE MÁS SE USA, medido contra la base el 2026-09-12:
+     preparación 294, conteo 38 sesiones, gestión de pedidos 2.124. No alfabético.
+
+     `parcial` marca lo que funciona a medias y por qué. Taller, garantías y excepciones dejan
+     avanzar un caso existente pero NINGUNA permite crear el primero: por eso tienen 0 filas.
+     Se muestran sólo a admin y con el estado a la vista — esconderlas es cómo llegamos a tener
+     cuatro pantallas construidas que nadie podía alcanzar. */
+  var GRUPOS = [
+    { titulo: 'Gestión en el VPS', color: 'control', adminOnly: true, tools: [
+      { tool: 'gestion-vps', href: 'gestion-vps', t: 'Gestión VPS — POS, Facturador y Taller', d: 'Consultá el historial copiado de presupuestos, comprobantes y trabajos. Todavía no se actualiza automáticamente; para operar, usá la web habitual.', tag: 'Presupuestos · Comprobantes · Taller', parcial: 'solo consulta' },
+    ]},
+    { titulo: 'Vender y despachar', color: 'ingreso', tools: [
+      { tool: 'preparacion', href: 'preparacion', t: 'Preparación de pedidos', d: 'Buscá los productos, escaneá cada unidad, embalá y dejá el pedido listo para despachar.', tag: 'Picking · Embalaje · Evidencia' },
+      { tool: 'gestion-pedidos', href: 'gestion-pedidos', t: 'Gestión de pedidos', d: 'Todos los pedidos de la web y de MercadoLibre en un solo lugar, con su estado y su cliente.', tag: 'Woo · ML · Clientes' },
+      { tool: 'etiquetas', href: 'etiquetas', t: 'Etiquetas de productos', d: 'Cola de etiquetas para imprimir con el SKU y el código de barras.', tag: 'Impresión · SKU' },
+    ]},
+    { titulo: 'Stock y depósito', color: 'ingreso', tools: [
+      { tool: 'inventario', href: 'inventario', t: 'Contador de inventario', d: 'Conteo a ciegas por marca o categoría, con ajuste controlado del stock publicado.', tag: 'Conteo · Ajustes · Diferencias' },
+      { tool: 'recepcion', href: 'recepcion', t: 'Recepción de mercadería', d: 'Registrá lo que llega del proveedor contra el remito y sumalo al stock.', tag: 'Remitos · Ingreso' },
+      { tool: 'stock', href: 'stock', t: 'Ingreso de stock', d: 'Consulta rápida y carga puntual de existencias.', tag: 'Stock · Consulta' },
+      { tool: 'pedidos', href: 'pedidos', t: 'Pedidos de compra', d: 'Qué hay que reponer y qué está en camino.', tag: 'Reposición · Proveedores' },
+    ]},
+    { titulo: 'Precios y catálogo', color: 'control', tools: [
+      { tool: 'consulta-precios', href: 'consulta-precios', t: 'Consulta de precios', d: 'Buscá un producto y mirá su precio de lista, de contado y en cuotas.', tag: 'Mostrador · Contado · Cuotas' },
+      { tool: 'precios', href: 'precios', t: 'Precios ML — auditoría', d: 'Dónde estás perdiendo margen en MercadoLibre y qué precio deja el neto que querés.', tag: 'Neto · Comisión · Envío' },
+      { tool: 'codigos', href: 'codigos', t: 'Códigos universales', d: 'Asociá el EAN o UPC del producto a su SKU para poder escanearlo en todas las herramientas.', tag: 'EAN · UPC · GTIN' },
+      { tool: 'identidad-productos', href: 'identidad-productos', t: 'Identidad de productos', d: 'Casos donde el código, el SKU o el stock no coinciden entre canales.', tag: 'GTIN · SKU · Canales' },
+    ]},
+    { titulo: 'MercadoLibre', color: 'sync', tools: [
+      { tool: 'sync-ml', href: 'sync-ml', t: 'Sincronización ML', d: 'Estado del stock y los pedidos entre MercadoLibre y la web, y qué necesita atención.', tag: 'Stock · Pedidos · Reactivación' },
+      // Guardia retiene ventas pagas de ML que no puede convertir en pedido, y NADA las libera
+      // solo: hay que entrar y liberarlas a mano. No estaba enlazada desde el home —ni en el
+      // diseño viejo ni en el nuevo— y por eso dos ventas quedaron retenidas 8 y 1 días sin que
+      // nadie se enterara (Jersey Santini $218.000 y una caramañola Camelbak, 2026-09-12).
+      { tool: 'guardia-ml', href: 'guardia-ml', t: 'Guardia ML', d: 'Ventas retenidas que todavía no se convirtieron en pedido, y publicaciones que necesitan una decisión.', tag: 'Retenidas · Casos · Bloqueos' },
+      // Cobertura de catálogo NO es una herramienta aparte desde el 2026-08-14: se unificó
+      // dentro del Matcher como su dirección Woo→ML, y /cobertura sólo redirige ahí. Tenerla
+      // como tarjeta propia mandaba a una pantalla que ya no existe por separado.
+      { tool: 'matcher', href: 'matcher', t: 'Matcher (solo lectura)', d: 'Consulta de vínculos y cobertura entre ML y Woo. Para decidir una publicación usá la Bandeja de identidad.', tag: 'Consulta · ML ↔ Woo' },
+      { tool: 'matcher', href: 'bandeja-identidad', t: 'Bandeja de identidad', d: 'Cola de decisión sobre publicaciones de ML: vinculá, omitís o indicá que no existe en el catálogo.', tag: 'Identidad · ML · Vinculación' },
+      { tool: 'config-ml', href: 'config-ml', t: 'Config ML — reservas', d: 'Cuánto stock reservás para el local y qué política sigue cada SKU.', tag: 'Reservas · Política' },
+    ]},
+    { titulo: 'Posventa', color: 'control', adminOnly: true, tools: [
+      { tool: 'taller', href: 'taller', t: 'Taller', d: 'Trabajos, diagnóstico y repuestos.', tag: 'Trabajos · Diagnóstico', parcial: 'sin alta de trabajos' },
+      { tool: 'garantias', href: 'garantias', t: 'Garantías', d: 'Casos, inspecciones y compromisos de reemplazo.', tag: 'Casos · Inspección', parcial: 'sin alta de casos' },
+      { tool: 'excepciones', href: 'excepciones', t: 'Excepciones físicas', d: 'Incidentes, daños y devoluciones a proveedor.', tag: 'Incidentes · Proveedor', parcial: 'sin alta de incidentes' },
+    ]},
+    { titulo: 'Administración', color: 'control', adminOnly: true, tools: [
+      { tool: 'usuarios', href: 'usuarios', t: 'Usuarios y permisos', d: 'Las cuentas del equipo y qué herramienta puede abrir cada una.', tag: 'Cuentas · Permisos' },
+    ]},
+  ];
+
+  var FLECHA = '<svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
+
+  function tarjetaHtml(x) {
+    return '<a class="card card-' + x._color + (x.parcial ? ' card--parcial' : '') + '"'
+      + ' href="/herramientas/' + x.href + '/" data-tool="' + x.tool + '">'
+      + '<div class="card-title">' + escHtml(x.t)
+      + (x.parcial ? '<span class="card-estado">' + escHtml(x.parcial) + '</span>' : '') + '</div>'
+      + '<div class="card-desc">' + escHtml(x.d) + '</div>'
+      + '<div class="card-footer"><span class="card-tag">' + escHtml(x.tag) + '</span>' + FLECHA + '</div></a>';
+  }
+
+  function escHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /* Un grupo sin ninguna herramienta permitida NO se dibuja. Miguel tiene un solo permiso:
+     mostrarle cinco encabezados vacíos sería peor que el panel de hoy. */
+  function renderGrupos() {
+    var host = document.getElementById('grupos');
+    if (!host) return;
+    var html = '';
+    GRUPOS.forEach(function (g) {
+      if (g.adminOnly && !isAdmin) return;
+      var visibles = g.tools.filter(function (x) { return tienePermiso(x.tool); });
+      if (!visibles.length) return;
+      html += '<section class="category"><div class="category-header">'
+        + '<span class="category-label label-' + g.color + '">' + escHtml(g.titulo) + '</span>'
+        + '<div class="category-line"></div></div><div class="cards">'
+        + visibles.map(function (x) { x._color = g.color; return tarjetaHtml(x); }).join('')
+        + '</div></section>';
+    });
+    host.innerHTML = html;
+  }
+
   // Chip de usuario + saludo (para todos)
   var chip = document.getElementById('user-chip');
   if (chip) {
@@ -779,35 +704,10 @@ fetch('/api/auth/me').then(function(r) {
   document.getElementById('page-eyebrow').textContent = 'Hola, ' + d.user;
   document.getElementById('page-title').innerHTML = isAdmin ? 'Panel de <em>herramientas</em>' : 'Tus <em>herramientas</em>';
 
-  // Tarjeta de gestión de usuarios: solo admins
-  if (isAdmin) {
-    var host = document.querySelector('.category .cards') || document.querySelector('.cards');
-    if (host) {
-      var a = document.createElement('a');
-      a.className = 'card card-control';
-      a.href = '/herramientas/usuarios/';
-      a.innerHTML = '<div class="card-top"><div class="card-icon icon-control">'
-        + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
-        + '</div></div><div class="card-title">Usuarios y Permisos</div>'
-        + '<div class="card-desc">Gestioná las cuentas del equipo y qué herramientas puede usar cada una. Solo administradores.</div>'
-        + '<div class="card-footer"><span class="card-tag">Cuentas · Permisos · Admin</span>'
-        + '<svg class="card-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></div>';
-      host.appendChild(a);
-    }
-  }
-
-  // Mostrar/ocultar cada tarjeta según permiso; luego ocultar secciones vacías.
-  document.querySelectorAll('.card[href^="/herramientas/"]').forEach(function(card) {
-    var tool = toolDeHref(card.getAttribute('href'));
-    if (!tool || tool === 'usuarios' || tool === 'home') return;
-    if (!tienePermiso(tool)) card.style.display = 'none';
-  });
-  document.querySelectorAll('section.category').forEach(function(sec) {
-    var visibles = Array.prototype.filter.call(sec.querySelectorAll('.card'), function(c) {
-      return c.style.display !== 'none';
-    });
-    if (visibles.length === 0) sec.style.display = 'none';
-  });
+  // Las tarjetas y el filtrado por permiso los resuelve renderGrupos() con la lista
+  // declarativa de GRUPOS: ya no hay tarjetas en el HTML que haya que esconder a mano, ni una
+  // tarjeta de Usuarios inyectada aparte.
+  renderGrupos();
 
   // ── Progreso (contexto, subordinado) ──
   function peBarra(label, valor, total, colorVar, sub) {
@@ -860,7 +760,7 @@ fetch('/api/auth/me').then(function(r) {
   function cargarPanelSoloMatcher() {
     fetch('/api/matcher/push-skus-pendientes/count').then(function(r){return r.json();}).then(function(d){
       if (!d.ok) return;
-      var chips = [peChip(d.pendientes, 'SKUs por escribir en ML', 'warn', '/herramientas/sync-detalle/?cat=push_pendientes', null)].filter(Boolean);
+      var chips = [peChip(d.pendientes, 'SKUs decididos que ML no refleja', 'warn', '/herramientas/identidad-productos/', null)].filter(Boolean);
       document.getElementById('pe-atencion').innerHTML = chips.length ? renderChips(chips)
         : '<span class="attn-ok">✓ Todo al día — nada requiere tu atención.</span>';
       peMostrarAtencion();
@@ -882,13 +782,17 @@ fetch('/api/auth/me').then(function(r) {
       ].join('');
       peMostrarProgreso();
 
+      var idq = d.identidad_encoladas || {};
+      var idEnc = idq.n || 0, idTrab = idq.procesando_vencidas || 0;
+      var idEtiqueta = 'correcciones de SKU: ' + [idEnc ? idEnc + ' encoladas sin ejecutar' : '', idTrab ? idTrab + ' trabadas en proceso' : ''].filter(Boolean).join(' · ');
       var chips = [
+        peChip(at.ventas_retenidas_guardia, 'ventas retenidas en Guardia ML', 'crit', '/herramientas/guardia-ml/', 'guardia-ml'),
         peChip(at.errores_reales, 'errores de sync', 'crit', '/herramientas/sync-detalle/?cat=errores', 'sync-ml'),
         peChip(at.requiere_atencion_ml, 'con exceso de fotos', 'crit', '/herramientas/sync-detalle/?cat=requiere_atencion_ml', 'sync-ml'),
         peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
         peChip(d.frenadas, 'pausadas frenadas por precio', 'warn', '/herramientas/sync-ml/#frenadas', 'sync-ml'),
-        peChip(d.vinculos_sospechosos, 'vínculos sospechosos', 'warn', '/herramientas/vinculos/#sospechosos', 'sync-ml'),
-        peChip(sk.pendientes, 'SKUs por escribir en ML', 'warn', '/herramientas/sync-detalle/?cat=push_pendientes', 'matcher'),
+        peChip(idEnc + idTrab, idEtiqueta, 'warn', '/herramientas/identidad-productos/', 'matcher'),
+        peChip(sk.pendientes, 'SKUs decididos que ML no refleja', 'warn', '/herramientas/identidad-productos/', 'matcher'),
         peChip(at.sin_mapeo, 'ventas sin mapear', 'warn', '/herramientas/sync-detalle/?cat=sin_mapeo', 'sync-ml'),
         peChip(at.remapeo_requerido, 'a re-mapear', 'warn', '/herramientas/sync-detalle/?cat=remapeo_requerido', 'sync-ml')
       ].filter(Boolean);
@@ -956,6 +860,54 @@ fetch('/api/auth/me').then(function(r) {
     renderTokenBanner(t);
   }).catch(function() { /* degradar en silencio: nunca mostrar un banner falso */ });
 
+  // ── Novedades ML pendientes (aviso liviano, permiso 'notificaciones-ml') ──
+  // Alcance decidido con el usuario (2026-08-26): solo avisar cuánto hay pendiente y hace
+  // cuánto llegó lo más viejo — responder se hace en Mercado Libre, no acá. El link de abajo
+  // apunta a la sección de preguntas del panel de vendedor de ML; si no coincide con la URL
+  // real de la cuenta, ajustarla (no se pudo verificar en vivo contra el panel).
+  function renderNotifMlBanner(d) {
+    var host = document.getElementById('notif-ml-banner');
+    if (!d || (!d.total && !d.reclamos_sin_confirmar)) { host.innerHTML = ''; return; }
+    var partes = [];
+    if (d.preguntas) partes.push(d.preguntas + (d.preguntas === 1 ? ' pregunta respondible' : ' preguntas respondibles'));
+    if (d.mensajes) partes.push(d.mensajes + (d.mensajes === 1 ? ' mensaje' : ' mensajes'));
+    if (d.reclamos) partes.push(d.reclamos + (d.reclamos === 1 ? ' reclamo' : ' reclamos'));
+    var desc = partes.join(' · ');
+    var detalle = [];
+    // Las preguntas de publicaciones pausadas o sin stock se separan: siguen siendo
+    // consultas sin responder, pero no se resuelven vendiendo y no deben competir con
+    // las que si. Decision del usuario (2026-09-06).
+    if (d.preguntas_no_accionables) detalle.push(d.preguntas_no_accionables + ' preguntas no accionables');
+    // Jobs de integracion que agotaron reintentos y quedaron muertos. Hasta ahora NADA los
+    // mostraba: se quedaban ahi para siempre y nadie se enteraba.
+    if (d.dead_letters) {
+      var nombresAvisos = {'message.project':'mensajes', 'question.project':'preguntas', 'catalog.woo_product_sync':'sincronizaciones de catálogo'};
+      var gruposAvisos = (d.dead_letter_groups || []).map(function(g) {
+        return g.n + ' ' + (nombresAvisos[g.job_type] || g.job_type);
+      });
+      detalle.push('Avisos técnicos: ' + gruposAvisos.join(', '));
+    }
+    if (d.reclamos_sin_confirmar) detalle.push('Reclamos por consultar: '
+      + d.reclamos_sin_confirmar + (d.reclamos_sin_confirmar === 1 ? ' reclamo' : ' reclamos')
+      );
+    var detalleHtml = detalle.length ? '<div class="token-banner-desc">' + esc(detalle.join(' · ')) + '</div>' : '';
+    host.innerHTML = '<div class="token-banner warn" role="status">'
+      + '<svg class="token-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>'
+      + '<div class="token-banner-body">'
+      + '<div class="token-banner-title">' + esc(desc || 'Sin pendientes accionables') + '</div>'
+      + detalleHtml
+      + '<div class="token-banner-actions">'
+      + '<a class="token-banner-btn" href="https://myaccount.mercadolibre.com.ar/questions/list" target="_blank" rel="noopener">Abrir bandeja en MercadoLibre</a>'
+      + '</div></div></div>';
+  }
+
+  if (tienePermiso('notificaciones-ml')) {
+    fetch('/api/notificaciones-ml/count').then(function(r) { return r.json(); }).then(function(d) {
+      if (!d || !d.ok) return;
+      renderNotifMlBanner(d);
+    }).catch(function() { /* degradar en silencio */ });
+  }
+
   if (!tienePermiso('sync-ml') && tienePermiso('matcher')) {
     cargarPanelSoloMatcher();
   } else if (tienePermiso('sync-ml')) {
@@ -970,6 +922,231 @@ fetch('/api/auth/me').then(function(r) {
   }).catch(function() {
     document.getElementById('sync-label').textContent = 'WooCommerce';
   });
+
+  // ── Alertas de incidentes activos (solo para admins) ──
+  if (isAdmin) {
+    var incidentesHost = document.getElementById('incidentes-alertas');
+    var incidentesPollInterval = null;
+    var yaCargoUnaVez = false; // Bandera para mostrar spinner solo en la primera carga
+    // 2da pasada del revisor (ALTO 3): con incidentes activos (que duran horas), cada poll
+    // de 90s reescribía el contenedor `aria-live` aunque los datos fueran IDÉNTICOS, porque
+    // el HTML incluía el timestamp "actualizado HH:MM" — un lector de pantalla reanunciaba
+    // el bloque completo cada 90s sin que nada relevante hubiera cambiado. Se guarda una
+    // firma de los datos (sin el timestamp) y solo se toca el DOM si la firma cambió.
+    var ultimaFirmaIncidentes = null;
+
+    // Mapas de traducción para integraciones y procesos (MEDIO 3)
+    var labelIntegracion = Object.create(null);
+    labelIntegracion['mercadolibre'] = 'MercadoLibre';
+    labelIntegracion['woocommerce'] = 'WooCommerce';
+    labelIntegracion['guardia_ml'] = 'Guardia ML';
+
+    var labelProceso = Object.create(null);
+    labelProceso['refrescar_publicaciones'] = 'Refresco de publicaciones';
+    labelProceso['refrescar_catalogo'] = 'Refresco de catálogo';
+
+    function renderIncidentes(data) {
+      if (!data || !data.data || data.data.length === 0) {
+        // Solo tocar el DOM (y disparar el anuncio de aria-live) si de verdad se pasó de
+        // "con incidentes" a "sin incidentes" — no en cada poll vacío repetido.
+        if (ultimaFirmaIncidentes !== '') incidentesHost.innerHTML = '';
+        ultimaFirmaIncidentes = '';
+        // El caso "sin incidentes activos" es el camino feliz más común (0 incidentes la
+        // mayoría del tiempo) — sin este seteo, el spinner de la primera carga (ALTO 2)
+        // seguía parpadeando en CADA poll siguiente porque `yaCargoUnaVez` nunca llegaba
+        // a ponerse en true por este return temprano.
+        yaCargoUnaVez = true;
+        return;
+      }
+
+      var incidentes = data.data;
+
+      // Agrupar por integración, usando Object.create(null) para evitar colisión (MEDIO 2)
+      var porIntegracion = Object.create(null);
+      incidentes.forEach(function(inc) {
+        var integ = inc.integracion || 'desconocida';
+        if (!porIntegracion[integ]) porIntegracion[integ] = [];
+        porIntegracion[integ].push(inc);
+      });
+
+      // Ordenar severidades: critico → advertencia → info (MEDIO 2)
+      var severidadOrder = Object.assign(Object.create(null), { 'critico': 0, 'advertencia': 1, 'info': 2 });
+      // 2da pasada del revisor (ALTO 1): `severidadOrder[sev] || 3` invertía el orden —
+      // 'critico' vale 0, y `0 || 3` da 3 (0 es falsy en JS), así que lo más urgente
+      // terminaba ordenado ÚLTIMO tanto dentro de cada grupo como en qué grupo se muestra
+      // primero. Hace falta un chequeo explícito de "¿existe la clave?", no un `||`.
+      function ordenSeveridad(sev) {
+        var v = severidadOrder[sev];
+        return typeof v === 'number' ? v : 3;
+      }
+      Object.keys(porIntegracion).forEach(function(k) {
+        porIntegracion[k].sort(function(a, b) {
+          return ordenSeveridad(a.severidad) - ordenSeveridad(b.severidad);
+        });
+      });
+
+      // Calcular severidad máxima por integración (MEDIO 1)
+      var severidadMaxPorIntegracion = Object.create(null);
+      Object.keys(porIntegracion).forEach(function(integ) {
+        var incs = porIntegracion[integ];
+        var maxSev = 3; // default si no hay incidentes
+        incs.forEach(function(inc) {
+          maxSev = Math.min(maxSev, ordenSeveridad(inc.severidad));
+        });
+        severidadMaxPorIntegracion[integ] = maxSev;
+      });
+
+      // Ordenar integraciones por severidad máxima, luego alfabético (MEDIO 1)
+      var integOrdenadas = Object.keys(porIntegracion).sort(function(a, b) {
+        var sevA = severidadMaxPorIntegracion[a];
+        var sevB = severidadMaxPorIntegracion[b];
+        if (sevA !== sevB) return sevA - sevB; // crítico primero (0 < 1 < 2)
+        return a.localeCompare(b); // desempate alfabético
+      });
+
+      // Firma determinística de los datos (ALTO 3): si es idéntica a la del poll anterior,
+      // no se toca el DOM — evita reanunciar aria-live cada 90s por un timestamp que cambia
+      // solo. Ordenada por id para que el resultado no dependa del orden de llegada.
+      // 3ra pasada del revisor (MEDIO 2): `total`/`pageSize` se muestran en el pie ("Total: X
+      // incidentes activos, mostrando Y") pero no entraban en la firma — si un incidente FUERA
+      // de la página 1 se resolvía, el total real bajaba pero los 100 mostrados no cambiaban,
+      // y el pie quedaba mintiendo indefinidamente. Se agrega al final de la firma.
+      var firma = incidentes
+        .map(function(inc) { return inc.id + '|' + inc.estado + '|' + inc.severidad + '|' + inc.contador_repeticiones; })
+        .sort()
+        .join(',') + '#' + data.total + '/' + data.pageSize;
+      var huboCambio = firma !== ultimaFirmaIncidentes;
+      if (!huboCambio) {
+        // 3ra pasada del revisor (MEDIO 1): aunque los datos no cambiaron, el timestamp
+        // "actualizado HH:MM" sí debe reflejar que el poll siguió corriendo — sin esto, un
+        // incidente crítico activo por horas sin repetirse deja el timestamp congelado en la
+        // hora del primer render, y el operador puede leer eso como "el dashboard se colgó".
+        // Actualizado por textContent (no reescribe el resto del DOM, no dispara aria-live).
+        var elTs = document.getElementById('incidentes-updated');
+        if (elTs) elTs.textContent = 'actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+        yaCargoUnaVez = true;
+        return;
+      }
+      ultimaFirmaIncidentes = firma;
+
+      var html = '<div class="incidentes-container">'
+        + '<div class="attn-header">'
+        + '<span class="attn-title">Alertas de incidentes activos</span>'
+        + '<span class="attn-updated" id="incidentes-updated" aria-hidden="true">actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) + '</span>'
+        + '</div>';
+
+      // Mostrar cada integración con sus incidentes (en orden de severidad)
+      integOrdenadas.forEach(function(integ) {
+        var incs = porIntegracion[integ];
+        var label = labelIntegracion[integ] || integ.charAt(0).toUpperCase() + integ.slice(1);
+        html += '<div class="incidentes-group">'
+          + '<div class="incidentes-glabel">' + esc(label) + '</div>';
+
+        incs.slice(0, 100).forEach(function(inc) {
+          var severidad = inc.severidad || 'info';
+          var severidadClass = severidad === 'critico' ? 'crit' : (severidad === 'advertencia' ? 'warn' : 'info');
+          var icon = severidad === 'critico' ? '⚠' : (severidad === 'advertencia' ? '◔' : 'ℹ');
+          var severidadTexto = severidad === 'critico' ? 'Crítico' : (severidad === 'advertencia' ? 'Advertencia' : 'Info');
+
+          var proceso = inc.proceso || 'proceso desconocido';
+          var procesoLabel = labelProceso[proceso] || proceso;
+
+          html += '<div class="incidente-item ' + severidadClass + '">'
+            + '<div class="incidente-icon" aria-hidden="true">' + icon + '</div>'
+            + '<div class="incidente-body">'
+            + '<div class="incidente-msg">' + esc(inc.mensaje_humano || 'Incidente sin descripción') + '</div>'
+            + '<div class="incidente-meta">'
+            + '<span class="incidente-severity">' + severidadTexto + '</span>'
+            + '<span>' + esc(procesoLabel) + '</span>';
+
+          if (inc.contador_repeticiones && Number(inc.contador_repeticiones) > 1) {
+            html += '<span class="incidente-rep">×' + Number(inc.contador_repeticiones) + '</span>';
+          }
+
+          html += '</div></div></div>';
+        });
+
+        if (incs.length > 100) {
+          html += '<div class="incidentes-overflow">+' + (incs.length - 100) + ' más no mostrados</div>';
+        }
+
+        html += '</div>';
+      });
+
+      if (data.total && Number(data.total) > Number(data.pageSize)) {
+        html += '<div class="incidentes-overflow">Total: ' + Number(data.total) + ' incidentes activos (mostrando ' + Number(data.pageSize) + ')</div>';
+      }
+
+      html += '</div>';
+      incidentesHost.innerHTML = html;
+      yaCargoUnaVez = true; // Marcar que ya cargó una vez (ALTO 2)
+    }
+
+    function cargarIncidentes() {
+      // ALTO 2: mostrar spinner solo en la primera carga
+      if (!yaCargoUnaVez) {
+        incidentesHost.innerHTML = '<div class="incidentes-container">'
+          + '<div class="incidentes-loading">'
+          + '<div class="incidentes-spinner"></div>'
+          + '<span>Cargando incidentes…</span>'
+          + '</div></div>';
+      }
+
+      fetch('/api/incidentes?estado=activo&pageSize=100').then(function(r) {
+        if (r.status === 401 || r.status === 403) {
+          var errAuth = new Error('No autorizado');
+          errAuth.noAutorizado = true;
+          throw errAuth;
+        }
+        return r.json();
+      }).then(function(d) {
+        if (d && d.ok) {
+          renderIncidentes(d);
+        } else {
+          // ALTO 1: mostrar error en vez de vaciar si d.ok === false
+          incidentesHost.innerHTML = '<div class="incidentes-container">'
+            + '<div class="incidentes-error incidentes-error--info"><span aria-hidden="true">⊛</span> No se pudo consultar el estado de incidentes. Se reintenta solo en un momento.</div>'
+            + '</div>';
+          yaCargoUnaVez = true;
+          // El DOM ya no refleja la última firma "buena" — sin este reset, si el próximo
+          // poll exitoso trae EXACTAMENTE los mismos incidentes de antes del error, el
+          // chequeo de firma del ALTO 3 los daría por "sin cambios" y dejaría el mensaje
+          // de error pegado en pantalla para siempre en vez de recuperarse.
+          ultimaFirmaIncidentes = null;
+        }
+      }).catch(function(err) {
+        // 4ta pasada del revisor (MEDIO 1): un 401/403 (sesión de admin vencida con la
+        // pestaña abierta todo el día, el uso típico de este dashboard) NUNCA se arregla
+        // reintentando — el copy genérico de abajo ("se reintenta solo") le mentía al
+        // operador, y el polling seguía golpeando el endpoint cada 90s para siempre. Corta
+        // el intervalo y muestra un mensaje que describe la acción real disponible.
+        if (err && err.noAutorizado) {
+          clearInterval(incidentesPollInterval);
+          incidentesHost.innerHTML = '<div class="incidentes-container">'
+            + '<div class="incidentes-error incidentes-error--info"><span aria-hidden="true">⊛</span> Tu sesión venció. Volvé a iniciar sesión para ver los incidentes activos.</div>'
+            + '</div>';
+          yaCargoUnaVez = true;
+          ultimaFirmaIncidentes = null;
+          return;
+        }
+        // ALTO 1 + MEDIO 7 (1ra pasada) + MEDIO 1/3 (2da pasada): error visible pero
+        // distinto de un incidente crítico real; ícono con aria-hidden (mismo criterio que
+        // el ícono de severidad); copy en voseo (convención del resto de public/) sin filtrar
+        // err.message crudo del navegador a un mensaje pensado para el operador — el detalle
+        // técnico va a la consola, no a la UI.
+        console.warn('[incidentes] no se pudo consultar el estado:', err.message);
+        incidentesHost.innerHTML = '<div class="incidentes-container">'
+          + '<div class="incidentes-error incidentes-error--info"><span aria-hidden="true">⊛</span> No se pudo consultar el estado de incidentes. Se reintenta solo en un momento.</div>'
+          + '</div>';
+        yaCargoUnaVez = true;
+        ultimaFirmaIncidentes = null; // mismo motivo que arriba: forzar el repintado al recuperarse
+      });
+    }
+
+    // Cargar inicial y luego polling cada 90 segundos
+    cargarIncidentes();
+    incidentesPollInterval = setInterval(cargarIncidentes, 90000);
+  }
 }).catch(function() {});
 </script>
 </body>

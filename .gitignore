@@ -1,8 +1,9 @@
-node_modules/
+node_modules
 data/
 uploads/
 .env
 *.sqlite
+*.sqlite-journal
 *.db
 *.bak
 *.bak.*
@@ -13,4 +14,26 @@ uploads/
 # ni evidencia que valga versionar — algunos snapshots pasan las 12.000 líneas y ya
 # se colaron una vez en un commit por un `git add -A` (73.394 líneas de ruido).
 .playwright-mcp/
+/.playwright-cli/
+/output/
 /*.png
+/*.log
+.codex/
+
+# Volcados de memoria de procesos caídos: contienen variables de entorno con credenciales.
+/core
+core.*
+
+# Espacio de trabajo de planes ejecutados por agentes (registro, briefs, reportes)
+.superpowers/
+
+# Obsidian: estado local del vault de docs/ (cambia con cada clic, no es contenido)
+docs/.obsidian/workspace.json
+docs/.obsidian/workspace-mobile.json
+docs/.obsidian/cache
+docs/.obsidian/plugins/
+docs/.obsidian/themes/
+docs/.obsidian/snippets/
+
+# Capturas de QA de auditorías: no se versionan
+docs/superpowers/audits/capturas-*/

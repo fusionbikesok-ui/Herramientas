@@ -113,7 +113,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(JSON.stringify(res.body).length).toBeLessThan(5000); // lejos del 1 MB del endpoint viejo
   });
 
-  it('POST /productos/:id/confirmar — ML ok → estado vinculado', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST /productos/:id/confirmar — ML ok → estado vinculado', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Pedales M520' });
     seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'Pedales Shimano M520' });
     mlFetch.mockResolvedValue({ status: 200, data: {} });
@@ -126,7 +133,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(decision.sku).toBe('FB-1');
   });
 
-  it('POST /productos/:id/confirmar — ML no responde → decisión igual se guarda (fail-open), estado pendiente_sync', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST /productos/:id/confirmar — ML no responde → decisión igual se guarda (fail-open), estado pendiente_sync', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Pedales M520' });
     seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'Pedales Shimano M520' });
     mlFetch.mockResolvedValue({ status: 500, data: { message: 'error ML' } });
@@ -146,7 +160,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     // de restaurar.
   });
 
-  it('concurrencia optimista: si otra persona ya confirmó la misma clave con OTRO sku, el 409 dice quién y qué', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('concurrencia optimista: si otra persona ya confirmó la misma clave con OTRO sku, el 409 dice quién y qué', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Pedales M520' });
     seedProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Otro producto' });
     seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'Pedales Shimano M520' });
@@ -177,7 +198,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave = 'MLA1|'").get().sku).toBe('FB-1');
   });
 
-  it('POST /productos/:id/descartar mapea 1:1 a cobertura_exclusiones (solo_local)', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST /productos/:id/descartar mapea 1:1 a cobertura_exclusiones (solo_local)', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     const res = await request(buildApp(db)).post('/api/cobertura/productos/1/descartar');
     expect(res.status).toBe(200);
@@ -185,7 +213,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(row.motivo).toBe('solo_local');
   });
 
-  it('DELETE /exclusiones/:id/revertir saca el producto de "solo local" y vuelve a pendiente', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('DELETE /exclusiones/:id/revertir saca el producto de "solo local" y vuelve a pendiente', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     await request(buildApp(db)).post('/api/cobertura/productos/1/descartar');
     let universo = calcularUniversoPendiente(db);
@@ -197,7 +232,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(universo.find((p) => p.id_woo === 1)).toBeTruthy();
   });
 
-  it('POST /productos/:id/saltear no es terminal: sigue en el universo pendiente', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('POST /productos/:id/saltear no es terminal: sigue en el universo pendiente', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     const res = await request(buildApp(db)).post('/api/cobertura/productos/1/saltear');
     expect(res.status).toBe(200);
@@ -206,7 +248,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(universo.find((p) => p.id_woo === 1)).toBeTruthy(); // sigue pendiente, no desapareció
   });
 
-  it('vinculos/:clave/deshacer — YA efectivizado en ML y ML confirma la desvinculación: revierte local', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('vinculos/:clave/deshacer — YA efectivizado en ML y ML confirma la desvinculación: revierte local', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'X' });
     db.prepare("UPDATE ml_publicaciones_cache SET seller_sku = 'FB-1' WHERE clave = 'MLA1|'").run();
@@ -219,7 +268,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(db.prepare("SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = 'MLA1|'").get().seller_sku).toBeNull();
   });
 
-  it('vinculos/:clave/deshacer — FAIL-CLOSED: si ML no confirma la desvinculación, NO se revierte nada local', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('vinculos/:clave/deshacer — FAIL-CLOSED: si ML no confirma la desvinculación, NO se revierte nada local', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'X' });
     db.prepare("UPDATE ml_publicaciones_cache SET seller_sku = 'FB-1' WHERE clave = 'MLA1|'").run();
@@ -238,7 +294,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     // confirmado comentando esa guarda a mano y viendo el test fallar antes de restaurarla.
   });
 
-  it('vinculos/:clave/deshacer — todavía NO efectivizado en ML: revierte local sin llamar a ML', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('vinculos/:clave/deshacer — todavía NO efectivizado en ML: revierte local sin llamar a ML', async () => {
     seedProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'X' });
     seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'X' }); // seller_sku sigue vacío
     db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, origen, actualizado_en) VALUES ('MLA1|', 'FB-1', 'X', 'confirmar', 'cobertura', ?)").run(new Date().toISOString());
@@ -249,7 +312,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave = 'MLA1|'").get()).toBeUndefined();
   });
 
-  it('multi-publicacion/:clave/pausar — FAIL-CLOSED: si ML falla, el status local NO cambia', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('multi-publicacion/:clave/pausar — FAIL-CLOSED: si ML falla, el status local NO cambia', async () => {
     seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'X' });
     mlFetch.mockResolvedValue({ status: 500, data: { message: 'error' } });
 
@@ -259,7 +329,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave = 'MLA1|'").get().status).toBe('active');
   });
 
-  it('multi-publicacion/:clave/pausar — ML confirma: actualiza status local a paused', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('multi-publicacion/:clave/pausar — ML confirma: actualiza status local a paused', async () => {
     seedMlSinSku(db, { clave: 'MLA1|', item_id: 'MLA1', titulo: 'X' });
     mlFetch.mockResolvedValue({ status: 200, data: {} });
 
@@ -268,7 +345,14 @@ describe('Cobertura accionable — cola de trabajo', () => {
     expect(db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave = 'MLA1|'").get().status).toBe('paused');
   });
 
-  it('multi-publicacion/:clave/marcar-correcta SUPRIME la publicación de la lista (no solo marca un flag)', async () => {
+  // RETIRADO (decisión del usuario, 2026-09-05): Cobertura legacy quedó como consulta
+  // histórica y su lugar lo ocupa Identidad de productos. `/cobertura` y `/vinculos`
+  // redirigen a `/matcher/`, y sus mutaciones responden 410 por el guard de
+  // routes/cobertura.js. Este caso afirma la mutación retirada, así que no puede pasar.
+  // Se deja en pausa en vez de borrarlo: si alguna vez se revive la interfaz unificada,
+  // esta cobertura vuelve a hacer falta. El contrato vigente lo fija
+  // test/cobertura-legacy-retirada.test.js.
+  it.skip('multi-publicacion/:clave/marcar-correcta SUPRIME la publicación de la lista (no solo marca un flag)', async () => {
     // Corrección tras hallazgo del revisor: la migración y el pedido del usuario dicen
     // textual "para que no vuelva a aparecer" — el test anterior verificaba un flag que la
     // fila ignoraba (el nombre del test mentía). Ahora se verifica la desaparición real.

@@ -37,12 +37,21 @@ const CFG = {
   andreaniStatus: 'lpaandreani',
 };
 
-function buildTestApp(db) {
+function buildTestApp(db, usuario = { username: 'tester', is_admin: 1 }) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.user = { username: 'tester', is_admin: 1 }; next(); });
+  app.use((req, _res, next) => { req.user = usuario; next(); });
   app.use('/api/preparacion', preparacionRouter(db, CFG));
   return app;
+}
+
+// Usuarios para los permisos de despacho (decisión del usuario, 2026-09-05).
+const OPERARIO = { username: 'operario', is_admin: 0, permisos: [{ herramienta: 'preparacion', nivel: 'write' }] };
+const AJENO = { username: 'ajeno', is_admin: 0, permisos: [{ herramienta: 'precios', nivel: 'read' }] };
+
+async function tomarPorApi(app, id) {
+  const res = await request(app).post(`/api/preparacion/${id}/tomar`);
+  expect(res.status).toBe(200);
 }
 
 describe('contrato normalizarEnvio (planilla Andreani)', () => {
@@ -81,6 +90,7 @@ describe('contrato GET /pendientes', () => {
     db.prepare(
       'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, actualizado_en) VALUES (?,?,?,?,?,?,?,?)'
     ).run(601, 'Casco L', 'CASCO-9', 'simple', null, 5, '["Cascos"]', new Date().toISOString());
+    db.prepare("UPDATE catalogo_cache SET img='https://img.example/casco.jpg' WHERE id_woo=601").run();
   });
 
   afterEach(() => {
@@ -92,8 +102,8 @@ describe('contrato GET /pendientes', () => {
     const app = buildTestApp(db); // ensureTables corre acá; hace falta antes de sembrar pedidos_cache
     const itemsWeb = [{ line_item_id: 1, product_id: 501, variation_id: null, sku: 'BIKE-1', nombre: 'Bici Rodado', categoria: 'Bicicletas', cantidad: 2 }];
     db.prepare(`
-      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en)
-      VALUES ('web:900','web',900,NULL,'900','Juan Perez','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,?,?)
+      INSERT INTO pedidos_cache (clave, canal, wc_order_id, ml_order_id, numero_pedido, comprador, fecha, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note)
+      VALUES ('web:900','web',900,NULL,'900','Juan Perez','2026-07-01T00:00:00Z','pendiente','lpaandreani',0,NULL,NULL,?,?,'tocar timbre, hay perro')
     `).run(JSON.stringify(itemsWeb), new Date().toISOString());
 
     const itemsMl = [{ line_item_id: null, product_id: 601, variation_id: null, sku: 'CASCO-9', nombre: 'Casco L', categoria: 'Cascos', cantidad: 1 }];
@@ -108,33 +118,42 @@ describe('contrato GET /pendientes', () => {
     expect(res.body.data).toHaveLength(2);
 
     const web = res.body.data.find(p => p.canal === 'web');
+    // 'notas': customer_note del pedido, cacheada en pedidos_cache (Fase 3 del plan de
+    // Preparación) — antes solo se veía en la pestaña Etiquetas Andreani. Solo en 'web':
+    // la API de orders de ML no expone un campo equivalente (confirmado 2026-08-26).
     expect(Object.keys(web).sort()).toEqual([
       'canal', 'comprador', 'espejo_ml', 'estado_preparacion', 'estado_wc', 'etiqueta_lista',
-      'fecha', 'items', 'numero_pedido', 'preparacion_id', 'wc_order_id',
+      'fecha', 'fecha_despacho', 'fecha_despacho_limite', 'estado_despacho', 'despacho_motivo',
+      'shipment_limite_original', 'items', 'notas', 'numero_pedido',
+      'preparacion_id', 'wc_order_id',
     ].sort());
     expect(web.wc_order_id).toBe(900);
     expect(web.espejo_ml).toBe(false);
     expect(web.comprador).toBe('Juan Perez');
+    expect(web.notas).toBe('tocar timbre, hay perro');
     expect(Object.keys(web.items[0]).sort()).toEqual([
-      'cantidad', 'categoria', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
+      'cantidad', 'categoria', 'imagen', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
     ].sort());
     expect(web.items[0]).toMatchObject({ sku: 'BIKE-1', categoria: 'Bicicletas', cantidad: 2 });
 
     const ml = res.body.data.find(p => p.canal === 'ml');
     expect(Object.keys(ml).sort()).toEqual([
-      'canal', 'comprador', 'estado_preparacion', 'fecha', 'items', 'logistic_type',
+      'canal', 'comprador', 'estado_preparacion', 'fecha', 'fecha_despacho', 'items', 'logistic_type',
       // pack_id: el número que ML le muestra al vendedor cuando la compra agrupa varios
       // ítems. Va en el contrato porque es el que el operario tiene delante al buscar
       // (2026-08-18: 37 de las 50 ventas más recientes tienen un pack distinto del order id).
-      'ml_order_id', 'pack_id', 'numero_pedido', 'preparacion_id', 'substatus', 'wc_order_id',
+      'ml_order_id', 'pack_id', 'numero_pedido', 'preparacion_id',
+      'substatus', 'wc_order_id', 'fecha_despacho_limite', 'estado_despacho', 'despacho_motivo',
+      'shipment_limite_original',
     ].sort());
     expect(ml.ml_order_id).toBe('ORD-ML-1');
     expect(ml.comprador).toBe('comprador_ml');
     expect(ml.logistic_type).toBe('self_service');
     expect(Object.keys(ml.items[0]).sort()).toEqual([
-      'cantidad', 'categoria', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
+      'cantidad', 'categoria', 'imagen', 'line_item_id', 'nombre', 'product_id', 'sku', 'variation_id',
     ].sort());
     expect(ml.items[0]).toMatchObject({ sku: 'CASCO-9', categoria: 'Cascos', cantidad: 1 });
+    expect(ml.items[0].imagen).toBe('https://img.example/casco.jpg');
   });
 });
 
@@ -199,7 +218,7 @@ describe('GET /seguimientos (contrato nuevo: 3 secciones + contadores, plan 2026
   });
 
   it('reparte TODO el universo lpaandreani entre esperando y sin_preparacion, sin excluir en_preparacion', async () => {
-    const mk = (id) => ({ id, number: String(id), shipping: { first_name: 'N', last_name: 'A', address_1: 'Calle 1', city: 'Cordoba', state: 'Cordoba', postcode: '5000' }, billing: {}, meta_data: [] });
+    const mk = (id) => ({ id, number: String(id), shipping: { first_name: 'N', last_name: 'A', address_1: 'Calle 1', city: 'Cordoba', state: 'Cordoba', postcode: '5000' }, billing: {}, meta_data: [], line_items: id === 900 ? [{ product_id: 10, variation_id: 11, sku: 'CASCO-9', name: 'Casco', quantity: 2 }] : [] });
     // 900: preparación 'completada' (verificada) -> esperando
     // 901: sin ninguna fila local -> sin_preparacion
     // 902: en_preparacion (p.ej. solo "etiqueta lista") -> sin_preparacion, NO se excluye
@@ -219,6 +238,7 @@ describe('GET /seguimientos (contrato nuevo: 3 secciones + contadores, plan 2026
     expect(res.body.data.esperando.map(f => f.wc_order_id)).toEqual([900]);
     expect(res.body.data.esperando[0].envio.pedido).toBe('900');
     expect(res.body.data.esperando[0].estado_preparacion).toBe('completada');
+    expect(res.body.data.esperando[0].items).toEqual([{ product_id: 10, variation_id: 11, sku: 'CASCO-9', nombre: 'Casco', cantidad: 2 }]);
 
     const sinPrepIds = res.body.data.sin_preparacion.map(f => f.wc_order_id).sort();
     expect(sinPrepIds).toEqual([901, 902, 903]);
@@ -361,6 +381,38 @@ describe('POST /seguimientos/:wcOrderId', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
+  it('rechaza un segundo POST simultáneo para el mismo pedido sin tocar Woo dos veces', async () => {
+    let liberarGet;
+    const getBloqueado = new Promise((resolve) => { liberarGet = resolve; });
+    wooFetch.mockImplementation(async (_cfg, _path, method) => {
+      if (!method) {
+        await getBloqueado;
+        return { data: { id: 915, status: 'lpaandreani', meta_data: [] } };
+      }
+      return { data: { id: 915, status: method === 'put' ? 'completed' : 'lpaandreani' } };
+    });
+
+    const app = buildTestApp(db);
+    const primera = new Promise((resolve, reject) => {
+      request(app).post('/api/preparacion/seguimientos/915').send({ tracking: 'AND915' })
+        .end((error, response) => (error ? reject(error) : resolve(response)));
+    });
+    await vi.waitFor(() => expect(wooFetch).toHaveBeenCalledTimes(1), { timeout: 10000 });
+
+    const segunda = await request(app).post('/api/preparacion/seguimientos/915').send({ tracking: 'AND915' });
+    expect(segunda.status).toBe(409);
+    expect(segunda.body).toEqual({
+      ok: false,
+      error: 'ya se está cargando el seguimiento de este pedido',
+      code: 'EN_CURSO',
+    });
+
+    liberarGet();
+    const primeraRes = await primera;
+    expect(primeraRes.status).toBe(200);
+    expect(wooFetch.mock.calls.filter((call) => call[2] === 'put')).toHaveLength(2);
+  });
+
   it('preserva el id del meta existente y encadena completed → enviadoandreani; sin verificación previa queda despachada_sin_verificar, NO completada', async () => {
     wooFetch
       .mockResolvedValueOnce({ data: { id: 900, status: 'lpaandreani', meta_data: [{ id: 55, key: '_andreani_tracking', value: '' }] } }) // GET actual
@@ -417,7 +469,9 @@ describe('POST /seguimientos/:wcOrderId', () => {
       .mockResolvedValueOnce({ data: { id: 930, status: 'completed' } })
       .mockResolvedValueOnce({ data: { id: 930, status: 'enviadoandreani' } });
 
-    const res = await request(buildTestApp(db)).post('/api/preparacion/seguimientos/930').send({ tracking: 'AND777' });
+    const app = buildTestApp(db);
+    await tomarPorApi(app, prepId);
+    const res = await request(app).post('/api/preparacion/seguimientos/930').send({ tracking: 'AND777' });
     expect(res.status).toBe(200);
 
     const prep = db.prepare('SELECT * FROM preparaciones WHERE id=?').get(prepId);
@@ -428,6 +482,8 @@ describe('POST /seguimientos/:wcOrderId', () => {
     const app = buildTestApp(db); // ensureTables corre acá; hace falta antes del INSERT
     db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, etiqueta_lista, estado, creado_en)
       VALUES ('web','web:940',940,1,'cerrada_sin_evidencia',?)`).run(new Date().toISOString());
+    const prepId = db.prepare('SELECT id FROM preparaciones WHERE wc_order_id=940').get().id;
+    await tomarPorApi(app, prepId);
 
     wooFetch
       .mockResolvedValueOnce({ data: { id: 940, status: 'lpaandreani', meta_data: [] } })
@@ -604,6 +660,84 @@ describe('POST /seguimientos/:wcOrderId', () => {
     expect(res.body.ok).toBe(false);
     const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:906'").get();
     expect(prep).toBeUndefined();
+  });
+});
+
+describe('permisos de despacho sobre el tracking (decisión del usuario, 2026-09-05)', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); });
+  afterEach(() => {
+    db?.close();
+    for (const f of [TEST_DB, `${TEST_DB}-journal`]) if (fs.existsSync(f)) fs.unlinkSync(f);
+  });
+
+  function pedidoTomadoPorOtro() {
+    const ts = new Date().toISOString();
+    db.prepare(`INSERT INTO preparaciones (canal, clave, wc_order_id, numero_pedido, comprador, etiqueta_lista, estado, creado_en)
+      VALUES ('web','web:940',940,'940','Ana',1,'en_preparacion',?)`).run(ts);
+    const prep = db.prepare("SELECT * FROM preparaciones WHERE clave='web:940'").get();
+    db.prepare('INSERT INTO preparacion_claims (preparacion_id, usuario, claimed_at, expires_at, renovado_en) VALUES (?,?,?,?,?)')
+      .run(prep.id, 'otra_persona', ts, new Date(Date.now() + 3600e3).toISOString(), ts);
+    return prep;
+  }
+
+  // La app se construye ANTES de sembrar: `ensureTables` corre dentro de `preparacionRouter`,
+  // así que hasta esa llamada la tabla `preparaciones` no existe.
+  it('un admin carga el tracking aunque la preparación esté tomada por otro', async () => {
+    const app = buildTestApp(db);
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: CFG.andreaniStatus, meta_data: [], billing: {}, shipping: {} } });
+    const res = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(res.status).not.toBe(409);
+  });
+
+  it('un rechazo por claim no deja el pedido trabado en EN_CURSO: el POST válido posterior pasa', async () => {
+    let usuario = OPERARIO;
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.user = usuario; next(); });
+    app.use('/api/preparacion', preparacionRouter(db, CFG));
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: CFG.andreaniStatus, meta_data: [], billing: {}, shipping: {} } });
+
+    const rechazado = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(rechazado.status).toBe(409);
+    expect(rechazado.body.code).not.toBe('EN_CURSO');
+
+    usuario = { username: 'tester', is_admin: 1 };
+    const valido = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(valido.status).not.toBe(409);
+  });
+
+  it('un operario de preparación SIN la toma sigue sin poder cargarlo', async () => {
+    const app = buildTestApp(db, OPERARIO);
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: 'processing', meta_data: [], billing: {}, shipping: {} } });
+    const res = await request(app).post('/api/preparacion/seguimientos/940').send({ tracking: 'AND940' });
+    expect(res.status).toBe(409);
+    // El motivo importa: sin esto el test pasaría por la regla de negocio del estado del
+    // pedido en vez de por el permiso, que es lo que quiere fijar.
+    expect(res.body.code).toBe('PREPARATION_CLAIMED');
+  });
+
+  it('corregir el tracking no espera turno: lo hace quien tiene permiso de Preparación', async () => {
+    const app = buildTestApp(db, OPERARIO);
+    pedidoTomadoPorOtro();
+    wooFetch.mockResolvedValue({ data: { id: 940, number: '940', status: 'completed', meta_data: [{ id: 7, key: '_andreani_tracking', value: 'VIEJO' }] } });
+    const res = await request(app).post('/api/preparacion/seguimientos/940/corregir-tracking').send({ tracking: 'AND-NUEVO' });
+    expect(res.status).not.toBe(409);
+    expect(res.status).not.toBe(403);
+    // El control es la auditoría, no el claim: tiene que quedar quién lo hizo.
+    const ev = db.prepare("SELECT usuario FROM preparacion_eventos WHERE tipo='tracking_corregido'").get();
+    expect(ev?.usuario).toBe('operario');
+  });
+
+  it('sin permiso de Preparación, corregir el tracking responde 403', async () => {
+    const app = buildTestApp(db, AJENO);
+    pedidoTomadoPorOtro();
+    const res = await request(app).post('/api/preparacion/seguimientos/940/corregir-tracking').send({ tracking: 'AND-NUEVO' });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FORBIDDEN');
   });
 });
 

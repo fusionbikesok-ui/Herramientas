@@ -1,6 +1,11 @@
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import { wooFetch } from './woo.js';
 import { buildWooPath } from '../lib/wooStock.js';
+import { syncSkuPuntual } from './sync.js';
+import { resolverLoteRecepcion } from '../lib/recepcionMatching.js';
+import { confirmarAlias, revocarAlias, normalizarProveedor } from '../lib/recepcionAliases.js';
+import { crearBorradorWoo } from '../lib/nuevosProductosWoo.js';
 
 // Lock en memoria por id_woo para serializar el patrón GET→calcular→PATCH.
 // Es un solo proceso Node, así que un Map<id_woo, Promise> a nivel de módulo
@@ -8,10 +13,42 @@ import { buildWooPath } from '../lib/wooStock.js';
 // se pisen las escrituras y pierdan stock recibido.
 const locksStockPorIdWoo = new Map();
 
+// Conjunto TERMINAL explícito de estado_item: un ítem NO bloquea el cierre de su recepción solo
+// si está en esta lista. Cualquier otro valor —incluidos 'pendiente', 'creado', 'aplicando', NULL,
+// o un estado que todavía no exista hoy— cuenta como pendiente por default (fail-closed): es más
+// seguro dejar una recepción de más en 'confirmada_con_pendientes' que cerrarla con una línea sin
+// resolver (el bug real que esto reemplaza era una lista POSITIVA de estados "pendientes" que
+// omitía 'pendiente'/'creado'/'aplicando'/NULL — cualquier estado nuevo que no se agregara ahí
+// cerraba la recepción por accidente).
+// - 'aplicado': stock ya aplicado en Woo, resuelto.
+// - 'no_recibido': el usuario marcó la línea como no recibida explícitamente, nada más que hacer.
+// - 'error_historico' (migración 112): fila de historia previa a esta máquina de estados, ya
+//   documentada en la migración como "estado terminal de solo lectura" — no es parte de la cola viva.
+// 'sin_match' y 'pendiente_creacion' NO son terminales: siguen requiriendo match manual o alta de
+// producto nuevo antes de poder aplicarse, así que cuentan como pendientes.
+const ESTADOS_ITEM_TERMINALES = new Set(['aplicado', 'no_recibido', 'error_historico']);
+
+function recepcionTienePendientes(db, recepcionId) {
+  const items = db.prepare('SELECT estado_item FROM recepcion_items WHERE recepcion_id=?').all(recepcionId);
+  return items.some((it) => !ESTADOS_ITEM_TERMINALES.has(it.estado_item));
+}
+
+/**
+ * HUECO 4: Intenta cerrar una recepción en 'confirmada_con_pendientes'.
+ * Si ya no hay ítems pendientes (ver ESTADOS_ITEM_TERMINALES), transiciona a 'confirmada'.
+ * Se llama DESDE DENTRO de una db.transaction() que ya está en vuelo, no es ella misma una
+ * transacción — better-sqlite3 permite anidar prepares.
+ */
+function intentarCerrarRecepcion(db, recepcionId) {
+  if (!recepcionTienePendientes(db, recepcionId)) {
+    db.prepare("UPDATE recepciones SET estado='confirmada' WHERE id=? AND estado='confirmada_con_pendientes'").run(recepcionId);
+  }
+}
+
 // Aplica el stock de un ítem recibido en WooCommerce (GET stock actual + PATCH suma).
 // Resuelve el path correcto para variaciones vía catalogo_cache/buildWooPath.
 // Actualiza recepcion_items (stock_previo/stock_nuevo/estado_item='aplicado') y catalogo_cache.
-// Lanza si la API de WC falla — el caller marca 'error'.
+// Lanza si la API de WC falla — el estado terminal ('error_reintentable'/'operacion_incierta'/'conflicto_stock') ya queda persistido antes de lanzar.
 // Serializado por id_woo: si ya hay una aplicación en curso para ese producto,
 // esta espera a que termine antes de hacer su propio GET.
 export async function aplicarStockItem(db, cfg, item) {
@@ -30,30 +67,365 @@ export async function aplicarStockItem(db, cfg, item) {
   }
 }
 
-async function aplicarStockItemInterno(db, cfg, item) {
-  const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
-  if (!prod) {
-    throw new Error(`No se encontró el producto id_woo=${item.id_woo} en catalogo_cache; no se puede determinar si es variación o simple`);
-  }
-  const apiPath = buildWooPath(prod);
+/** Un ítem que no está en un estado desde el que se pueda (re)aplicar: 'aplicado' no se reintenta nunca,
+ * y 'aplicando'/'operacion_incierta'/'conflicto_stock' necesitan conciliación, no un reintento a ciegas. */
+export class EstadoNoReintentableError extends Error {
+  constructor(estado) { super(`el ítem está en estado '${estado}': no se reintenta a ciegas`); this.estado = estado; }
+}
 
-  const get = await wooFetch(cfg, apiPath);
+async function aplicarStockItemInterno(db, cfg, item) {
+  // Claim atómico: solo una llamada (de dos concurrentes, o de un reintento tras 'aplicado') sigue de acá.
+  // Nunca sobre un 'aplicado' (se excluye siempre de todo reintento) ni sobre otro 'aplicando'/incierto/conflicto.
+  const operationId = randomUUID();
+  const inicio = new Date().toISOString();
+  const claim = db.prepare(
+    `UPDATE recepcion_items SET estado_item='aplicando', operation_id=?, aplicando_desde=?, error_wc=NULL
+      WHERE id=? AND (estado_item IS NULL OR estado_item IN ('pendiente','error_reintentable','creado'))`
+  ).run(operationId, inicio, item.id);
+  if (claim.changes === 0) {
+    const actual = db.prepare('SELECT estado_item, stock_previo, stock_objetivo FROM recepcion_items WHERE id=?').get(item.id);
+    if (actual?.estado_item === 'aplicado') {
+      // Recepción repetida / segunda confirmación concurrente: devuelve el resultado conocido, no reaplica.
+      return { stock_previo: actual.stock_previo, stock_nuevo: actual.stock_objetivo, yaAplicado: true };
+    }
+    throw new EstadoNoReintentableError(actual?.estado_item ?? 'desconocido');
+  }
+
+  let prod;
+  try {
+    prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
+    if (!prod) {
+      throw new Error(`No se encontró el producto id_woo=${item.id_woo} en catalogo_cache; no se puede determinar si es variación o simple`);
+    }
+    var apiPath = buildWooPath(prod);
+    var get = await wooFetch(cfg, apiPath);
+  } catch (e) {
+    // Error ANTES del PATCH: nada se disparó contra Woo. Es reintentable.
+    db.prepare("UPDATE recepcion_items SET estado_item='error_reintentable', error_wc=?, operation_id=NULL WHERE id=? AND operation_id=?")
+      .run(String(e?.message || e), item.id, operationId);
+    throw e;
+  }
   const stockRaw = get.data?.stock_quantity;
   const stockActual = Number(stockRaw);
   if (stockRaw === null || stockRaw === undefined || !Number.isFinite(stockActual)) {
-    throw new Error(`WooCommerce no devolvió stock_quantity para id_woo=${item.id_woo} (¿manage_stock desactivado?); no se aplica sobre un dato posiblemente desactualizado`);
+    const e = new Error(`WooCommerce no devolvió stock_quantity para id_woo=${item.id_woo} (¿manage_stock desactivado?); no se aplica sobre un dato posiblemente desactualizado`);
+    db.prepare("UPDATE recepcion_items SET estado_item='error_reintentable', error_wc=?, operation_id=NULL WHERE id=? AND operation_id=?")
+      .run(e.message, item.id, operationId);
+    throw e;
   }
-  const stockNuevo  = stockActual + item.cantidad;
+  const stockObjetivo = stockActual + item.cantidad;
+  // Persistido ANTES del PATCH: si el proceso muere entre acá y la verificación, la conciliación tiene
+  // con qué comparar (stock_previo vs stock_objetivo) sin tener que adivinar qué se intentó aplicar.
+  // El guard `AND operation_id=?` es redundante hoy (el claim ya es la única puerta de entrada por
+  // ítem: nadie más pudo tomar este item.id mientras seguimos en 'aplicando'), pero barato y explícito.
+  db.prepare('UPDATE recepcion_items SET stock_previo=?, stock_objetivo=? WHERE id=? AND operation_id=?')
+    .run(stockActual, stockObjetivo, item.id, operationId);
 
-  await wooFetch(cfg, apiPath, 'patch', { stock_quantity: stockNuevo, manage_stock: true });
+  try {
+    await wooFetch(cfg, apiPath, 'patch', { stock_quantity: stockObjetivo, manage_stock: true });
+  } catch (e) {
+    // Indeterminado: no sabemos si el PATCH llegó a aplicarse en Woo. NUNCA se reintenta sola.
+    db.prepare("UPDATE recepcion_items SET estado_item='operacion_incierta', error_wc=? WHERE id=? AND operation_id=?")
+      .run(String(e?.message || e), item.id, operationId);
+    const incierta = new Error(`operación incierta tras el PATCH para id_woo=${item.id_woo}: ${e?.message || e}`);
+    incierta.operacionIncierta = true;
+    throw incierta;
+  }
+
+  // Verificación: recién con el GET posterior se confirma 'aplicado'. Un timeout acá es la misma
+  // incertidumbre que un timeout en el PATCH: no se sabe si aplicó, y tampoco se reintenta sola.
+  let verif;
+  try {
+    verif = await wooFetch(cfg, apiPath);
+  } catch (e) {
+    db.prepare("UPDATE recepcion_items SET estado_item='operacion_incierta', error_wc=? WHERE id=? AND operation_id=?")
+      .run(String(e?.message || e), item.id, operationId);
+    const incierta = new Error(`no se pudo verificar el PATCH para id_woo=${item.id_woo}: ${e?.message || e}`);
+    incierta.operacionIncierta = true;
+    throw incierta;
+  }
+  const stockVerif = Number(verif.data?.stock_quantity);
+  if (!Number.isFinite(stockVerif) || stockVerif !== stockObjetivo) {
+    const motivo = `GET posterior al PATCH devolvió ${verif.data?.stock_quantity} para id_woo=${item.id_woo}; se esperaba ${stockObjetivo}`;
+    db.prepare("UPDATE recepcion_items SET estado_item='conflicto_stock', error_wc=? WHERE id=? AND operation_id=?")
+      .run(motivo, item.id, operationId);
+    const conflicto = new Error(motivo);
+    conflicto.conflictoStock = true;
+    throw conflicto;
+  }
 
   const now = new Date().toISOString();
-  db.prepare("UPDATE recepcion_items SET stock_previo=?, stock_nuevo=?, estado_item='aplicado', error_wc=NULL WHERE id=?")
-    .run(stockActual, stockNuevo, item.id);
+  // Mismo guard redundante que arriba (el claim ya serializa por item.id): explícito igual, barato.
+  db.prepare("UPDATE recepcion_items SET stock_nuevo=?, estado_item='aplicado', error_wc=NULL WHERE id=? AND operation_id=?")
+    .run(stockObjetivo, item.id, operationId);
   db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?')
-    .run(stockNuevo, now, item.id_woo);
+    .run(stockObjetivo, now, item.id_woo);
 
-  return { stock_previo: stockActual, stock_nuevo: stockNuevo };
+  return { stock_previo: stockActual, stock_nuevo: stockObjetivo };
+}
+
+/**
+ * Concilia un ítem en 'operacion_incierta' leyendo el stock real de Woo, sin volver a hacer PATCH:
+ * si coincide con el `stock_objetivo` que se persistió antes del intento, aplicó y se marca 'aplicado';
+ * cualquier otro valor —incluido que siga en `stock_previo`— es ambiguo (el PATCH pudo haber llegado
+ * y un movimiento de stock de por medio, p. ej. una venta, lo haya igualado al previo por casualidad)
+ * y queda 'conflicto_stock' para que lo resuelva una persona. Nunca se reintenta a ciegas asumiendo
+ * "no llegó" solo porque el valor coincide con el previo (defecto P0.1, corregido).
+ *
+ * PUNTO 3: arreglada la condición de carrera — el chequeo de estado ahora va en el WHERE del UPDATE
+ * (no antes del await wooFetch), para que sea atómico como el claim de aplicarStockItemInterno.
+ * Si otro request ya concilió este ítem entre nuestro SELECT inicial y nuestro UPDATE, changes===0
+ * y devolvemos el estado actual sin duplicar.
+ *
+ * HUECO 2: inserta auditoría en recepcion_conciliaciones_stock.
+ */
+export async function conciliarOperacionIncierta(db, cfg, itemId, actor = 'sistema') {
+  const item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
+  if (!item) {
+    throw new Error(`el ítem ${itemId} no existe`);
+  }
+  // Validación inicial: item debe estar en operacion_incierta para proceder
+  if (item.estado_item !== 'operacion_incierta') {
+    // Si ya fue conciliado, devolver el estado actual
+    return { estado: item.estado_item, stock_nuevo: item.stock_nuevo };
+  }
+
+  const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
+  if (!prod) throw new Error(`no se encontró el producto id_woo=${item.id_woo} en catalogo_cache`);
+  const apiPath = buildWooPath(prod);
+  const get = await wooFetch(cfg, apiPath);
+  const stockReal = Number(get.data?.stock_quantity);
+  const now = new Date().toISOString();
+
+  if (!Number.isFinite(stockReal)) {
+    // Usar transacción para atomicidad (incluyendo HUECO 4: intentar cerrar recepción)
+    const txn = db.transaction(() => {
+      const update = db.prepare("UPDATE recepcion_items SET estado_item='conflicto_stock', error_wc=? WHERE id=? AND estado_item='operacion_incierta'")
+        .run('WooCommerce no devolvió stock_quantity al conciliar', itemId);
+      if (update.changes === 0) {
+        throw new Error('item ya fue resuelto por otro request');
+      }
+      // HUECO 2: insertar auditoría
+      db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+        (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(itemId, 'conciliar_incierta', null, 'WooCommerce no devolvió stock_quantity válido', null, 'conflicto_stock', actor, now);
+      // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+      intentarCerrarRecepcion(db, item.recepcion_id);
+    });
+    try {
+      txn();
+    } catch (e) {
+      if (e.message === 'item ya fue resuelto por otro request') {
+        const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
+        return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+      }
+      throw e;
+    }
+    return { estado: 'conflicto_stock' };
+  }
+
+  if (stockReal === item.stock_objetivo) {
+    // Usar transacción para atomicidad (incluyendo HUECO 4)
+    const txn = db.transaction(() => {
+      const update = db.prepare("UPDATE recepcion_items SET estado_item='aplicado', stock_nuevo=?, error_wc=NULL WHERE id=? AND estado_item='operacion_incierta'")
+        .run(stockReal, itemId);
+      if (update.changes === 0) {
+        throw new Error('item ya fue resuelto por otro request');
+      }
+      db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?').run(stockReal, now, item.id_woo);
+      // HUECO 2: insertar auditoría
+      db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+        (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(itemId, 'conciliar_incierta', null, 'PATCH se confirmó al leer stock desde Woo', stockReal, 'aplicado', actor, now);
+      // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+      intentarCerrarRecepcion(db, item.recepcion_id);
+    });
+    try {
+      txn();
+    } catch (e) {
+      if (e.message === 'item ya fue resuelto por otro request') {
+        const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
+        return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+      }
+      throw e;
+    }
+    return { estado: 'aplicado', stock_nuevo: stockReal };
+  }
+
+  // Cualquier otro valor (incluso si coincide con stock_previo por casualidad de una venta intermedia)
+  // es indeterminado: no reintentar a ciegas.
+  const txn = db.transaction(() => {
+    const update = db.prepare("UPDATE recepcion_items SET estado_item='conflicto_stock', error_wc=? WHERE id=? AND estado_item='operacion_incierta'")
+      .run(`conciliación ambigua: Woo tiene ${stockReal}; se esperaba stock_objetivo=${item.stock_objetivo} pero se lee ${stockReal}. Posible venta intermedia después del PATCH.`, itemId);
+    if (update.changes === 0) {
+      throw new Error('item ya fue resuelto por otro request');
+    }
+    // HUECO 2: insertar auditoría
+    db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+      (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(itemId, 'conciliar_incierta', null, `Woo tiene ${stockReal} pero se esperaba ${item.stock_objetivo} - posible venta intermedia`, stockReal, 'conflicto_stock', actor, now);
+    // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+    intentarCerrarRecepcion(db, item.recepcion_id);
+  });
+  try {
+    txn();
+  } catch (e) {
+    if (e.message === 'item ya fue resuelto por otro request') {
+      const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
+      return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+    }
+    throw e;
+  }
+  return { estado: 'conflicto_stock' };
+}
+
+/**
+ * PUNTO 3: Resuelve un ítem en 'conflicto_stock' — un desacuerdo real entre lo esperado y lo que Woo tiene.
+ * Un humano elige: 'aceptar_woo' (usar el stock actual de Woo como definitivo, marcar aplicado)
+ * o 'reintentar' (volver a error_reintentable para un intento limpio desde cero).
+ *
+ * decision: 'aceptar_woo' | 'reintentar'
+ * Devuelve: { estado, stock_nuevo?, stockReal? }
+ *
+ * HUECOS 1 y 2: antes de 'reintentar', verifica que el PATCH anterior no se aplicó ya (compara
+ * stock actual de Woo con stock_objetivo); solo si distintos permite pasar a error_reintentable.
+ * Inserta auditoría en recepcion_conciliaciones_stock (motivo y actor son obligatorios).
+ */
+async function resolverConflictoStock(db, cfg, itemId, decision, motivo, actor) {
+  const item = db.prepare('SELECT * FROM recepcion_items WHERE id=?').get(itemId);
+  if (!item) {
+    throw new Error(`el ítem ${itemId} no existe`);
+  }
+  if (item.estado_item !== 'conflicto_stock') {
+    // Si ya fue resuelto, devolver estado actual
+    return { estado: item.estado_item, stock_nuevo: item.stock_nuevo };
+  }
+
+  const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
+  if (!prod) throw new Error(`no se encontró el producto id_woo=${item.id_woo} en catalogo_cache`);
+  const apiPath = buildWooPath(prod);
+
+  if (decision === 'aceptar_woo') {
+    // Relee stock real de Woo, marca aplicado, actualiza catalogo_cache
+    const get = await wooFetch(cfg, apiPath);
+    const stockReal = Number(get.data?.stock_quantity);
+    if (!Number.isFinite(stockReal)) {
+      throw new Error(`WooCommerce no devolvió stock_quantity válido al resolver conflicto`);
+    }
+
+    // Transacción: ambos UPDATE deben suceder juntos o ninguno. Si otro request ya lo resolvió,
+    // el primero UPDATE tendrá changes===0 y lanzaremos un error que revierte la txn.
+    // HUECO 2 y 4: insertar auditoría e intentar cerrar recepción
+    const txn = db.transaction(() => {
+      const update = db.prepare("UPDATE recepcion_items SET estado_item='aplicado', stock_nuevo=?, error_wc=NULL WHERE id=? AND estado_item='conflicto_stock'")
+        .run(stockReal, itemId);
+      if (update.changes === 0) {
+        // Otro request ya lo resolvió: lanzar error para revertir la txn
+        throw new Error('item ya fue resuelto por otro request');
+      }
+      // Actualizar catalogo_cache con el stock aceptado (dentro de la txn para consistencia)
+      const now = new Date().toISOString();
+      db.prepare('UPDATE catalogo_cache SET stock=?, actualizado_en=? WHERE id_woo=?')
+        .run(stockReal, now, item.id_woo);
+      // HUECO 2: insertar auditoría dentro de la transacción
+      db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+        (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(itemId, 'resolver_conflicto', 'aceptar_woo', motivo || null, stockReal, 'aplicado', actor || 'sistema', now);
+      // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+      intentarCerrarRecepcion(db, item.recepcion_id);
+    });
+
+    try {
+      txn();
+    } catch (e) {
+      if (e.message === 'item ya fue resuelto por otro request') {
+        // Otro request ganó: devolver estado actual
+        const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
+        return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+      }
+      throw e; // Propagar otros errores (ej. fallo de Woo, SQL error, etc.)
+    }
+
+    return { estado: 'aplicado', stock_nuevo: stockReal, stockReal };
+  } else if (decision === 'reintentar') {
+    // HUECO 1: antes de permitir reintentar, verificar que el PATCH anterior no se aplicó ya
+    const get = await wooFetch(cfg, apiPath);
+    const stockReal = Number(get.data?.stock_quantity);
+    if (!Number.isFinite(stockReal)) {
+      throw new Error(`WooCommerce no devolvió stock_quantity válido al resolver conflicto`);
+    }
+    // Si el stock actual de Woo coincide con el stock_objetivo (lo que se intentó aplicar),
+    // significa que el PATCH anterior ya se aplicó. NO se puede reintentar sin duplicar stock.
+    if (stockReal === item.stock_objetivo) {
+      const err = new Error('el PATCH ya se aplicó en WooCommerce (stock_actual === stock_objetivo); no se puede reintentar sin duplicar. Usá "aceptar_woo" en lugar de "reintentar".');
+      err.status = 409;
+      throw err;
+    }
+
+    // Marcar error_reintentable, limpiar operation_id para próximo intento desde cero
+    // Transacción para atomicidad (HUECO 2 y 4)
+    const now = new Date().toISOString();
+    const txn = db.transaction(() => {
+      const update = db.prepare("UPDATE recepcion_items SET estado_item='error_reintentable', operation_id=NULL WHERE id=? AND estado_item='conflicto_stock'")
+        .run(itemId);
+      if (update.changes === 0) {
+        throw new Error('item ya fue resuelto por otro request');
+      }
+      // HUECO 2: insertar auditoría dentro de la transacción
+      db.prepare(`INSERT INTO recepcion_conciliaciones_stock
+        (recepcion_item_id, tipo, decision, motivo, stock_leido, estado_resultante, actor, creado_en)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(itemId, 'resolver_conflicto', 'reintentar', motivo || null, stockReal, 'error_reintentable', actor || 'sistema', now);
+      // HUECO 4: intentar cerrar recepción si todos los ítems fueron resueltos
+      intentarCerrarRecepcion(db, item.recepcion_id);
+    });
+
+    try {
+      txn();
+    } catch (e) {
+      if (e.message === 'item ya fue resuelto por otro request') {
+        const actual = db.prepare('SELECT estado_item, stock_nuevo FROM recepcion_items WHERE id=?').get(itemId);
+        return { estado: actual.estado_item, stock_nuevo: actual.stock_nuevo };
+      }
+      throw e;
+    }
+
+    return { estado: 'error_reintentable', stockReal };
+  } else {
+    throw new Error(`decisión inválida: ${decision} (esperado 'aceptar_woo' o 'reintentar')`);
+  }
+}
+
+/**
+ * P0.3: antes de aplicar stock sobre un ítem 'creado', verificar de nuevo contra Woo — no basta con
+ * que la fila en recepcion_items diga 'creado' con un alta_operation_id verificado al guardar (eso
+ * pudo cambiar desde entonces: alguien lo tocó a mano, un rollback, etc.). Se comprueba: la alta
+ * existe, está 'creado', el id_woo corresponde a ESTE ítem, y sigue en draft en Woo AHORA MISMO.
+ * Lanza si algo no cierra — el caller decide qué hacer (nunca aplica stock ni sincroniza a ML sobre
+ * una alta que no pudo verificar).
+ */
+async function verificarAltaCreado(db, cfg, item) {
+  if (!item.alta_operation_id) {
+    throw new Error(`ítem ${item.id} marcado 'creado' sin alta_operation_id: no hay nada que verificar`);
+  }
+  const alta = db.prepare('SELECT * FROM recepcion_altas_woo WHERE operation_id=?').get(item.alta_operation_id);
+  if (!alta || alta.estado !== 'creado') {
+    throw new Error(`alta no verificada para el ítem ${item.id}: estado=${alta?.estado ?? 'inexistente'}`);
+  }
+  if (alta.id_woo !== item.id_woo) {
+    throw new Error(`la alta ${item.alta_operation_id} no corresponde a este ítem: id_woo esperado ${item.id_woo}, alta tiene ${alta.id_woo}`);
+  }
+  const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
+  if (!prod) throw new Error(`producto de la alta no está en catalogo_cache: id_woo=${item.id_woo}`);
+  const verif = await wooFetch(cfg, buildWooPath(prod));
+  if (verif.data?.status !== 'draft') {
+    throw new Error(`la alta ya no está en draft en Woo: status=${verif.data?.status}`);
+  }
+  return true;
 }
 
 // Normaliza número de pedido para matching tolerante:
@@ -73,21 +445,323 @@ function normalizarNumeroPedido(num) {
     .replace(/\s+/g, ' ') || null;
 }
 
+/**
+ * P0.3: nunca confiar en que el cliente dice `estado_item: 'creado'`. El browser ya demostró en el
+ * flujo de matching manual que no es autoridad de identidad — puede mandar cualquier id_woo. Un ítem
+ * solo puede quedar 'creado' si trae un `alta_operation_id` que corresponde a una fila real y 'creado'
+ * en recepcion_altas_woo, con el MISMO id_woo. Si no se puede verificar, se degrada: con id_woo queda
+ * 'pendiente' (matcheo manual normal), sin id_woo queda 'sin_match' — nunca se pierde silenciosamente,
+ * pero tampoco se le cree al cliente algo que no puede probar.
+ */
+function estadoItemAlGuardar(db, it, recepcionId = null) {
+  const idWoo = it.id_woo || null;
+  if (it.estado_item === 'creado') {
+    const opId = it.alta_operation_id || null;
+    const alta = opId ? db.prepare('SELECT * FROM recepcion_altas_woo WHERE operation_id=?').get(opId) : null;
+    if (alta && alta.estado === 'creado' && alta.id_woo === idWoo) {
+      return { estado_item: 'creado', alta_operation_id: opId };
+    }
+    return { estado_item: idWoo ? 'pendiente' : 'sin_match', alta_operation_id: null };
+  }
+  return { estado_item: it.estado_item || (idWoo ? 'pendiente' : 'sin_match'), alta_operation_id: opIdSiVerificable(db, it, idWoo, recepcionId) };
+}
+
+// Conserva alta_operation_id en ítems que no reclaman 'creado' pero sí lo traen (p.ej. quedaron en
+// 'pendiente' tras una alta previa) — solo si sigue correspondiendo a la misma alta e id_woo.
+// Si el payload NO trae alta_operation_id (p.ej. la UI perdió el estado al retomar un borrador,
+// o simplemente re-guarda con un objeto item nuevo), no hay que confiar ciegamente en eso para
+// borrar el vínculo: se busca por id_woo si existe una alta 'creado' real para ese producto — pero
+// SOLO entre las altas vinculadas a ESTA recepción (recepcion_altas_woo.recepcion_id=recepcionId).
+// Sin ese filtro, dos recepciones distintas que dieron de alta el mismo id_woo (p.ej. reintento tras
+// un error) se pisarían el vínculo entre sí. No se usa recepcion_item_id como filtro: /actualizar
+// hace DELETE+INSERT de recepcion_items en cada guardado, así que ese id queda viejo de inmediato.
+// recepcionId es null en la creación de una recepción nueva (POST /): ahí no hay fallback posible
+// porque la recepción todavía no existe cuando se guardan sus ítems.
+// La exclusión de ML en /confirmar depende de que este id_woo quede vinculado — perderlo por un
+// payload incompleto haría que el primer stock de un producto nuevo se sincronice a ML por error.
+function opIdSiVerificable(db, it, idWoo, recepcionId) {
+  const opId = it.alta_operation_id || null;
+  if (opId) {
+    const alta = db.prepare('SELECT * FROM recepcion_altas_woo WHERE operation_id=?').get(opId);
+    // El camino explícito (el payload trae alta_operation_id) también tiene que exigir que el alta
+    // sea de ESTA recepción, no solo el mismo id_woo — si no, un item podría reclamar un
+    // alta_operation_id ajeno (de otra recepción) con solo acertarle al id_woo. recepcionId es null
+    // en la creación (POST /), donde la recepción todavía no existe: ahí no hay nada que comparar.
+    if (alta && alta.id_woo === idWoo && (recepcionId == null || alta.recepcion_id === recepcionId)) return opId;
+  }
+  if (!idWoo || !recepcionId) return null;
+  // recepcion_altas_woo.operation_id es TEXT PRIMARY KEY — no hay columna 'id' numérica; se ordena
+  // por creado_en para quedarse con el alta más reciente si hubiera más de una (no debería, pero
+  // por las dudas no toma una al azar).
+  const altaPorIdWoo = db.prepare(
+    "SELECT operation_id FROM recepcion_altas_woo WHERE id_woo=? AND estado='creado' AND recepcion_id=? ORDER BY creado_en DESC LIMIT 1"
+  ).get(idWoo, recepcionId);
+  return altaPorIdWoo ? altaPorIdWoo.operation_id : null;
+}
+
+// P1: persiste la intención "usar y recordar" marcada por línea al guardar/actualizar una recepción
+// (no solo vía /resolver para recepciones ya guardadas). `it.aprender_alias`/`it.motivo_alias` son los
+// nombres que ya manda el frontend (public/recepcion/index.html, payloadRecepcion()) para el toggle
+// "usar y recordar", desmarcado por defecto; sin id_woo (sin match, o alta de producto nuevo) no hay
+// nada que aprender todavía. Un fallo al aprender el alias (p.ej. motivo requerido para reasignar y no
+// vino) no debe tirar abajo el guardado de la recepción entera — la línea igual queda guardada — pero
+// SÍ se devuelve en la respuesta (no se traga en silencio): la UI necesita poder decirle al usuario
+// que su "recordar" no se guardó y por qué, en vez de dejarlo creer que sí se aprendió.
+function aprenderAliasSiCorresponde(db, it, { proveedor, id_woo, recepcion_item_id, actor }) {
+  if (!it?.aprender_alias || !id_woo) return null;
+  try {
+    confirmarAlias(db, {
+      proveedor, nombre_doc: it.nombre_doc || it.nombre, codigo_proveedor: it.codigo_proveedor,
+      id_woo, sku: it.sku_wc || it.sku || null, recepcion_item_id, actor, motivo: it.motivo_alias,
+    });
+    return null;
+  } catch (e) {
+    return { recepcion_item_id, nombre_doc: it.nombre_doc || it.nombre, error: e.message };
+  }
+}
+
 export function recepcionesRouter(db, cfg) {
   const router = express.Router();
 
+  router.post('/matchear', (req, res) => {
+    const { proveedor, items } = req.body || {};
+    if (typeof proveedor !== 'string' || !proveedor.trim() || !Array.isArray(items) || !items.length || items.length > 250) return res.status(400).json({ ok:false, code:'payload_invalido', error:'proveedor e items válidos requeridos' });
+    if (items.some(i => JSON.stringify(i).length > 500)) return res.status(400).json({ ok:false, code:'linea_demasiado_larga', error:'línea demasiado larga' });
+    return res.json({ ok:true, resultados: resolverLoteRecepcion(db, proveedor, items) });
+  });
+
+  // Normaliza texto (idéntica a normalizar() del frontend public/recepcion/index.html):
+  // 1. minúsculas
+  // 2. NFD descompone acentos (ó → o + diacrítico, ñ → n + combining tilde) y luego se eliminan
+  // 3. Búsqueda "nino" encontrará "Canasta niño", "direccion" encontrará "Dirección", etc.
+  function normalizar(s) {
+    return (s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')  // elimina marcas diacríticas y combining marks
+      .replace(/[^a-z0-9\s]/g, ' ')     // reemplaza caracteres no alfanuméricos con espacio
+      .replace(/\s+/g, ' ')              // collapsa espacios múltiples
+      .trim();
+  }
+
+  // P1.3 (revisión post-E2E): "sin padres variables" — un producto tipo 'variable' es el
+  // contenedor de familia, nunca algo que se recibe/vende directo; ofrecerlo en el combobox de
+  // recepción dejaría match_estado apuntando a un id_woo que Woo rechaza al intentar tocarle stock.
+  const CATALOGO_SIN_PADRES = "(tipo IS NULL OR tipo <> 'variable')";
+
+  router.get('/catalogo', (req, res) => {
+    const q = String(req.query.q || '').trim();
+
+    // Si no hay query param, devolver todo el catálogo (sin padres variables)
+    if (!q) {
+      const rows = db.prepare(`SELECT id_woo,sku,nombre,stock FROM catalogo_cache WHERE ${CATALOGO_SIN_PADRES} ORDER BY id_woo`).all();
+      return res.json({ ok: true, data: rows });
+    }
+
+    // Con query param: filtrar por SKU, GTIN o nombre (normalizado) y limitar a 20 resultados
+    const rows = db.prepare(`SELECT id_woo,sku,nombre,stock,gtin FROM catalogo_cache WHERE ${CATALOGO_SIN_PADRES} ORDER BY id_woo`).all();
+    const qNorm = normalizar(q);
+    // Nombre por tokens: cada palabra de la búsqueda tiene que aparecer en el nombre, en
+    // cualquier orden — "casco negro" tiene que encontrar "Casco MTB Negro Talle M".
+    const qTokens = qNorm.split(' ').filter(Boolean);
+
+    // Filtrar y ordenar por relevancia
+    const filtrados = rows
+      .map(row => ({
+        row,
+        skuNorm: normalizar(row.sku),
+        nombreNorm: normalizar(row.nombre),
+        gtinNorm: normalizar(row.gtin),
+      }))
+      .filter(({ skuNorm, nombreNorm, gtinNorm }) => {
+        // SKU/GTIN: substring continuo (son códigos, no frases). Nombre: por tokens.
+        const matchNombre = qTokens.length > 0 && qTokens.every(t => nombreNorm.includes(t));
+        return skuNorm.includes(qNorm) || (gtinNorm && gtinNorm.includes(qNorm)) || matchNombre;
+      })
+      .map(({ row, skuNorm, nombreNorm, gtinNorm }) => {
+        // Calcular relevancia: exacto de SKU primero, luego GTIN exacto, prefijo de SKU,
+        // prefijo de GTIN, prefijo de nombre, y por último el resto (substring/tokens).
+        let relevancia;
+        if (skuNorm === qNorm) relevancia = 1000; // exacto SKU
+        else if (gtinNorm === qNorm) relevancia = 950; // exacto GTIN
+        else if (skuNorm.startsWith(qNorm)) relevancia = 900; // prefijo SKU
+        else if (gtinNorm.startsWith(qNorm)) relevancia = 850; // prefijo GTIN
+        else if (nombreNorm.startsWith(qNorm)) relevancia = 800; // prefijo nombre
+        else relevancia = 100; // substring/tokens en nombre, SKU o GTIN
+        return { ...row, relevancia };
+      })
+      .sort((a, b) => {
+        // Ordenar por relevancia descendente, luego por id_woo para consistencia
+        if (b.relevancia !== a.relevancia) return b.relevancia - a.relevancia;
+        return a.id_woo - b.id_woo;
+      })
+      .slice(0, 20)
+      .map(({ id_woo, sku, nombre, stock }) => ({ id_woo, sku, nombre, stock }));
+
+    res.json({ ok: true, data: filtrados });
+  });
+
+  router.get('/aliases', (req, res) => {
+    const proveedor = String(req.query.proveedor || '').trim();
+    if (!proveedor) return res.status(400).json({ ok:false, error:'proveedor requerido' });
+    res.json({ ok:true, data: db.prepare('SELECT * FROM recepcion_aliases_proveedor WHERE proveedor_norm=? AND vigente_hasta IS NULL ORDER BY id').all(normalizarProveedor(proveedor)) });
+  });
+
+  router.post('/aliases/:aliasId/revocar', (req, res) => {
+    try { const ok=revocarAlias(db, Number(req.params.aliasId), { motivo:req.body?.motivo, actor:req.user?.username || 'sistema' }); return ok ? res.json({ok:true}) : res.status(404).json({ok:false,error:'alias no vigente'}); }
+    catch (e) { return res.status(400).json({ok:false,error:e.message}); }
+  });
+
+  router.post('/:id/items/:itemId/resolver', (req, res) => {
+    const id=Number(req.params.id), itemId=Number(req.params.itemId), item=db.prepare('SELECT * FROM recepcion_items WHERE id=? AND recepcion_id=?').get(itemId,id);
+    if (!item) return res.status(404).json({ok:false,error:'item no encontrado'});
+    if (!['sin_match','pendiente','error_reintentable'].includes(item.estado_item)) return res.status(409).json({ok:false,error:'item no pendiente'});
+    const prod=db.prepare('SELECT id_woo,id_padre,sku,tipo FROM catalogo_cache WHERE id_woo=?').get(req.body?.id_woo);
+    if (!prod || !['simple','variation'].includes(prod.tipo)) return res.status(409).json({ok:false,error:'producto no vendible'});
+    const now=new Date().toISOString();
+    db.prepare("UPDATE recepcion_items SET id_woo=?,sku=?,estado_item='pendiente',error_wc=NULL,resuelto_en=? WHERE id=?").run(prod.id_woo,prod.sku,now,itemId);
+    if (req.body?.aprender) confirmarAlias(db,{proveedor:db.prepare('SELECT proveedor FROM recepciones WHERE id=?').get(id)?.proveedor,nombre_doc:item.nombre_doc,codigo_proveedor:item.codigo_proveedor,id_woo:prod.id_woo,sku:prod.sku,recepcion_item_id:itemId,actor:req.user?.username || 'sistema',motivo:req.body.motivo});
+    return res.json({ok:true,id_woo:prod.id_woo,sku:prod.sku});
+  });
+
+  /**
+   * P0.3: dispara el alta en Woo para UN ítem de la recepción, con exclusión de doble alta a nivel
+   * de ítem (no solo a nivel de operation_id). recepcion_altas_woo ya es idempotente por operation_id,
+   * pero eso no evita que el mismo ítem dispare DOS operation_id distintos (doble click, dos pestañas,
+   * un reintento) y termine con dos productos borrador en Woo para la misma línea. La exclusión real
+   * va acá: un claim atómico sobre el ítem, mismo patrón que aplicarStockItemInterno (P0.1) — solo una
+   * llamada por ítem pasa de acá, antes de tocar Woo.
+   */
+  router.post('/:id/items/:itemId/crear-alta', async (req, res) => {
+    const id = Number(req.params.id), itemId = Number(req.params.itemId);
+    const item = db.prepare('SELECT * FROM recepcion_items WHERE id=? AND recepcion_id=?').get(itemId, id);
+    if (!item) return res.status(404).json({ ok: false, error: 'item no encontrado' });
+
+    if (item.alta_operation_id) {
+      const previa = db.prepare('SELECT * FROM recepcion_altas_woo WHERE operation_id=?').get(item.alta_operation_id);
+      if (previa && previa.estado === 'creado') {
+        return res.json({ ok: true, id_woo: previa.id_woo, sku: previa.sku, ya_creado: true });
+      }
+      if (previa && previa.estado !== 'fallido') {
+        // 'procesando' o 'incierto': ya hay una alta en vuelo o de resultado desconocido para este
+        // ítem — no se dispara una segunda a ciegas. 'fallido' es el único estado que libera reintento.
+        return res.status(409).json({ ok: false, error: `alta '${previa.estado}': no se reintenta a ciegas`, operation_id: item.alta_operation_id });
+      }
+    }
+
+    const operationId = randomUUID();
+    const claim = db.prepare(
+      'UPDATE recepcion_items SET alta_operation_id=? WHERE id=? AND (alta_operation_id IS NULL OR alta_operation_id=?)'
+    ).run(operationId, itemId, item.alta_operation_id);
+    if (claim.changes === 0) {
+      // Otra llamada concurrente ganó el claim entre nuestro SELECT y este UPDATE.
+      return res.status(409).json({ ok: false, error: 'otra alta ya está en curso para este ítem' });
+    }
+
+    try {
+      const result = await crearBorradorWoo({ db, cfg, operationId, ficha: req.body?.ficha, actor: req.user?.username || 'sistema', recepcionId: id, recepcionItemId: itemId });
+      db.prepare("UPDATE recepcion_items SET id_woo=?, sku=?, estado_item='creado', error_wc=NULL, ficha_json=?, resuelto_en=? WHERE id=?")
+        .run(result.id_woo, result.sku, JSON.stringify(req.body?.ficha || {}), new Date().toISOString(), itemId);
+      return res.json({ ok: true, id_woo: result.id_woo, sku: result.sku });
+    } catch (e) {
+      const status = /inexistente/.test(e.message) ? 404 : /bloqueada|operationId|reutilizado/.test(e.message) ? 409 : /inválido|required|atributos|precio|padre/.test(e.message) ? 400 : 502;
+      return res.status(status).json({ ok: false, error: e.message, operation_id: operationId });
+    }
+  });
+
+  // PUNTO 3: Endpoint para conciliar un ítem en 'operacion_incierta'
+  router.post('/:id/items/:itemId/conciliar-stock', async (req, res) => {
+    const id = Number(req.params.id), itemId = Number(req.params.itemId);
+    const item = db.prepare('SELECT * FROM recepcion_items WHERE id=? AND recepcion_id=?').get(itemId, id);
+    if (!item) return res.status(404).json({ ok: false, error: 'item no encontrado' });
+    if (item.estado_item !== 'operacion_incierta') return res.status(409).json({ ok: false, error: 'item no está en operacion_incierta' });
+
+    try {
+      const actor = req.user?.username || 'sistema';
+      const result = await conciliarOperacionIncierta(db, cfg, itemId, actor);
+      return res.json({ ok: true, estado: result.estado, stock_nuevo: result.stock_nuevo });
+    } catch (e) {
+      return res.status(502).json({ ok: false, error: e.message });
+    }
+  });
+
+  // PUNTO 3: GET endpoint para leer el stock actual de WooCommerce (HUECO 3)
+  router.get('/:id/items/:itemId/stock-actual-woo', async (req, res) => {
+    const id = Number(req.params.id), itemId = Number(req.params.itemId);
+    const item = db.prepare('SELECT * FROM recepcion_items WHERE id=? AND recepcion_id=?').get(itemId, id);
+    if (!item) return res.status(404).json({ ok: false, error: 'item no encontrado' });
+    if (!item.id_woo) return res.status(400).json({ ok: false, error: 'item sin id_woo: no hay stock en WooCommerce' });
+
+    try {
+      const prod = db.prepare('SELECT id_woo, id_padre, tipo FROM catalogo_cache WHERE id_woo=?').get(item.id_woo);
+      if (!prod) throw new Error(`no se encontró el producto id_woo=${item.id_woo} en catalogo_cache`);
+      const apiPath = buildWooPath(prod);
+      const get = await wooFetch(cfg, apiPath);
+      const stockActual = Number(get.data?.stock_quantity);
+      if (!Number.isFinite(stockActual)) {
+        return res.status(502).json({ ok: false, error: 'WooCommerce no devolvió stock_quantity válido' });
+      }
+      return res.json({ ok: true, stock_actual: stockActual });
+    } catch (e) {
+      return res.status(502).json({ ok: false, error: e.message });
+    }
+  });
+
+  // PUNTO 3: Endpoint para resolver un ítem en 'conflicto_stock'
+  router.post('/:id/items/:itemId/resolver-conflicto', async (req, res) => {
+    const id = Number(req.params.id), itemId = Number(req.params.itemId);
+    const item = db.prepare('SELECT * FROM recepcion_items WHERE id=? AND recepcion_id=?').get(itemId, id);
+    if (!item) return res.status(404).json({ ok: false, error: 'item no encontrado' });
+    if (item.estado_item !== 'conflicto_stock') return res.status(409).json({ ok: false, error: 'item no está en conflicto_stock' });
+
+    const decision = String(req.body?.decision || '').trim();
+    if (!['aceptar_woo', 'reintentar'].includes(decision)) {
+      return res.status(400).json({ ok: false, error: 'decision debe ser "aceptar_woo" o "reintentar"' });
+    }
+
+    // HUECO 2: motivo es obligatorio en ambas decisiones
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!motivo) {
+      return res.status(400).json({ ok: false, error: 'motivo es obligatorio' });
+    }
+
+    try {
+      const actor = req.user?.username || 'sistema';
+      const result = await resolverConflictoStock(db, cfg, itemId, decision, motivo, actor);
+      // HUECO 4: la transición confirmada_con_pendientes→confirmada ahora ocurre DENTRO de
+      // la transacción de resolverConflictoStock (vía intentarCerrarRecepcion), no aquí.
+      return res.json({ ok: true, estado: result.estado, stock_nuevo: result.stock_nuevo });
+    } catch (e) {
+      // HUECO 1: manejar el error 409 cuando se intenta reintentar y el PATCH ya se aplicó
+      if (e.status === 409) {
+        return res.status(409).json({ ok: false, error: e.message });
+      }
+      return res.status(502).json({ ok: false, error: e.message });
+    }
+  });
+
   // Migraciones
-  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN recibido INTEGER NOT NULL DEFAULT 1').run(); } catch (_) {}
-  try { db.prepare('ALTER TABLE recepciones ADD COLUMN solo_documento INTEGER NOT NULL DEFAULT 0').run(); } catch (_) {}
-  try { db.prepare('ALTER TABLE recepciones ADD COLUMN numero_pedido_norm TEXT').run(); } catch (_) {}
-  try { db.prepare('ALTER TABLE pedidos ADD COLUMN numero_pedido_norm TEXT').run(); } catch (_) {}
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN recibido INTEGER NOT NULL DEFAULT 1').run(); } catch (_) { /* compatible con bases existentes */ }
+  try { db.prepare('ALTER TABLE recepciones ADD COLUMN solo_documento INTEGER NOT NULL DEFAULT 0').run(); } catch (_) { /* compatible con bases existentes */ }
+  try { db.prepare('ALTER TABLE recepciones ADD COLUMN numero_pedido_norm TEXT').run(); } catch (_) { /* compatible con bases existentes */ }
+  try { db.prepare('ALTER TABLE pedidos ADD COLUMN numero_pedido_norm TEXT').run(); } catch (_) { /* compatible con bases existentes */ }
 
   // Migración estados de ítem (recepción confiable, sin pérdidas silenciosas)
   let estadoItemNuevo = false;
-  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN estado_item TEXT').run(); estadoItemNuevo = true; } catch (_) {}
-  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN ficha_json TEXT').run(); } catch (_) {}
-  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN error_wc TEXT').run(); } catch (_) {}
-  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN resuelto_en TEXT').run(); } catch (_) {}
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN estado_item TEXT').run(); estadoItemNuevo = true; } catch (_) { /* compatible con bases existentes */ }
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN ficha_json TEXT').run(); } catch (_) { /* compatible con bases existentes */ }
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN error_wc TEXT').run(); } catch (_) { /* compatible con bases existentes */ }
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN resuelto_en TEXT').run(); } catch (_) { /* compatible con bases existentes */ }
+
+  // P0.1: máquina de estados durable para la aplicación de stock. `operation_id` y `stock_objetivo`
+  // se persisten ANTES del PATCH a WooCommerce, para poder conciliar un `operacion_incierta` sin adivinar.
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN operation_id TEXT').run(); } catch (_) { /* compatible con bases existentes */ }
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN stock_objetivo INTEGER').run(); } catch (_) { /* compatible con bases existentes */ }
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN aplicando_desde TEXT').run(); } catch (_) { /* compatible con bases existentes */ }
+
+  // P0.3: relación durable entre el ítem y la alta que lo respalda. Sin esto, un 'creado' persistido
+  // es solo lo que el cliente afirmó — nunca una identidad verificable contra recepcion_altas_woo.
+  try { db.prepare('ALTER TABLE recepcion_items ADD COLUMN alta_operation_id TEXT').run(); } catch (_) { /* compatible con bases existentes */ }
 
   // Backfill idempotente: corre una sola vez, cuando la columna estado_item recién se crea.
   // Vuelve visibles los históricos perdidos (sin_match) y los fallos WC silenciosos (error).
@@ -101,7 +775,9 @@ export function recepcionesRouter(db, cfg) {
       db.prepare(`UPDATE recepcion_items SET estado_item='sin_match'
         WHERE recibido=1 AND id_woo IS NULL
         AND recepcion_id IN (SELECT id FROM recepciones WHERE solo_documento=0 AND estado='confirmada')`).run();
-      db.prepare(`UPDATE recepcion_items SET estado_item='error'
+      // No sabemos si el PATCH llegó a aplicarse en estos históricos: 'operacion_incierta' (conciliar
+      // leyendo Woo), nunca 'error_reintentable' — eso habilitaría un reintento a ciegas y el doble stock.
+      db.prepare(`UPDATE recepcion_items SET estado_item='operacion_incierta'
         WHERE recibido=1 AND id_woo IS NOT NULL AND stock_nuevo IS NULL
         AND recepcion_id IN (SELECT id FROM recepciones WHERE solo_documento=0 AND estado='confirmada')`).run();
       db.prepare(`UPDATE recepcion_items SET estado_item='pendiente'
@@ -111,6 +787,95 @@ export function recepcionesRouter(db, cfg) {
     backfill();
   }
 
+  // P0.1 (rows ya existentes): cualquier 'error' que haya quedado de la implementación previa
+  // (GET→PATCH→UPDATE sin verificación) es de historia ambigua. Se convierte a 'error_historico'
+  // (estado terminal de solo lectura) mediante migración 112 en db/index.js, en vez de
+  // 'operacion_incierta', para evitar contaminar la cola de conciliación viva con historia
+  // ambigua. Error_wc se conserva como evidencia. Verificado en data/fusion.sqlite el
+  // 2026-09-21: 0 filas en 'error' en producción hoy.
+
+  // P0.2 (recuperación al arrancar): un 'aplicando' huérfano (quedó atrapado si el proceso murió entre el claim
+  // y el UPDATE final) necesita salida. Si stock_objetivo es NULL, nunca se llegó a persistir el intento (nunca
+  // se mandó PATCH) → es seguro pasar a 'error_reintentable'. Si stock_objetivo está persistido, no se sabe si
+  // el PATCH llegó a Woo → pasa a 'operacion_incierta' para que la conciliación real lo resuelva.
+  const huérfanos = db.prepare(
+    "SELECT id, stock_objetivo FROM recepcion_items WHERE estado_item='aplicando'"
+  ).all();
+  if (huérfanos.length > 0) {
+    for (const huerfano of huérfanos) {
+      if (huerfano.stock_objetivo === null) {
+        // Nunca se persistió el intento: seguro pasar a error_reintentable
+        db.prepare(
+          "UPDATE recepcion_items SET estado_item='error_reintentable', operation_id=NULL WHERE id=?"
+        ).run(huerfano.id);
+      } else {
+        // stock_objetivo persistido: no se sabe si el PATCH llegó → operacion_incierta para conciliación real
+        db.prepare(
+          "UPDATE recepcion_items SET estado_item='operacion_incierta' WHERE id=?"
+        ).run(huerfano.id);
+      }
+    }
+  }
+
+  // PUNTO 6 (recuperación al arrancar): una recepción en 'procesando' huérfana (quedó atrapada si el proceso
+  // murió durante el loop de ítems o antes del UPDATE final del estado) necesita recuperación.
+  // Por cada recepción en 'procesando', evaluar si sus ítems tienen pendientes. La lista de estados
+  // "pendientes" debe incluir TODOS los que indica "no se ha resuelto completamente":
+  // - 'pendiente': nunca se intentó aplicar (el proceso murió antes de procesarlo)
+  // - 'creado': fue creado en Woo, nunca se intentó aplicar stock
+  // - 'error_reintentable': se intentó, falló, falta reintento
+  // - 'operacion_incierta': se intentó, no se sabe si llegó el PATCH
+  // - 'conflicto_stock': se intentó, conflicto sin resolver
+  // - 'sin_match': no tiene id_woo, no se puede aplicar
+  // - 'pendiente_creacion': pendiente crear el producto en Woo
+  // Las recepciones 'solo_documento=1' pasan directo a 'confirmada' sin evaluar ítems.
+  const recepcionesHuerfanas = db.prepare(
+    "SELECT id, solo_documento FROM recepciones WHERE estado='procesando'"
+  ).all();
+  if (recepcionesHuerfanas.length > 0) {
+    const now = new Date().toISOString();
+    for (const rec of recepcionesHuerfanas) {
+      let estadoFinal = 'confirmada';
+      // Si no es 'solo_documento', verificar si quedan ítems pendientes (mismo criterio TERMINAL
+      // que intentarCerrarRecepcion — ver ESTADOS_ITEM_TERMINALES).
+      if (!rec.solo_documento && recepcionTienePendientes(db, rec.id)) {
+        estadoFinal = 'confirmada_con_pendientes';
+      }
+      db.prepare(
+        "UPDATE recepciones SET estado=?, confirmado_en=? WHERE id=?"
+      ).run(estadoFinal, now, rec.id);
+    }
+  }
+
+  // PUNTO 7 (recuperación al arrancar): un alta en 'procesando' huérfana (quedó atrapada si el proceso
+  // murió durante crearBorradorWoo) necesita recuperación. TODA fila 'procesando' huérfana pasa a
+  // estado='incierto' — nunca a 'fallido' desde aquí. La razón: crearBorradorWoo persiste un SKU
+  // provisional (skuProvisional + metaOperacion) en el MISMO POST que crea el recurso final, ANTES
+  // de que sepamos su id_woo. Si ese POST llega a Woo pero la respuesta se pierde (el proceso muere
+  // antes de la línea 222 que persiste id_woo), el recurso EXISTE en Woo, buscable por ese SKU
+  // provisional — pero nuestro bloque solo ve "sin evidencia local" (id_woo null, o id_padre null
+  // para familia_variable) y marcaría 'fallido', permitiendo un reintento que crearía duplicado.
+  //
+  // conciliarAltaIncierta (lib/nuevosProductosWoo.js:262-310) ES la única vía que decide 'fallido',
+  // porque esa función VERIFICA contra Woo primero (buscarIdPorMarca línea 106-119) antes de concluir.
+  try {
+    const altasHuerfanas = db.prepare(
+      "SELECT operation_id FROM recepcion_altas_woo WHERE estado='procesando'"
+    ).all();
+    if (altasHuerfanas.length > 0) {
+      const now = new Date().toISOString();
+      for (const alta of altasHuerfanas) {
+        const error = 'Recuperado al arrancar: estado procesando huérfano, requiere conciliación';
+        db.prepare(
+          "UPDATE recepcion_altas_woo SET estado='incierto', error=?, actualizado_en=? WHERE operation_id=? AND estado='procesando'"
+        ).run(error, now, alta.operation_id);
+      }
+    }
+  } catch (err) {
+    // BD vieja que no tiene la tabla recepcion_altas_woo. La migración la creará al ejecutarse.
+    if (!err.message.includes('no such table')) throw err;
+  }
+
   // Lista historial de recepciones
   router.get('/', (req, res) => {
     const rows = db.prepare(`
@@ -118,7 +883,7 @@ export function recepcionesRouter(db, cfg) {
         (SELECT COUNT(*) FROM recepcion_items WHERE recepcion_id = r.id) AS total_items,
         (SELECT COUNT(*) FROM recepcion_documentos WHERE recepcion_id = r.id) AS total_docs,
         (SELECT COUNT(*) FROM recepcion_items WHERE recepcion_id = r.id
-           AND estado_item IN ('sin_match','pendiente_creacion','error')) AS pendientes
+           AND estado_item IN ('sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock')) AS pendientes
       FROM recepciones r ORDER BY r.creado_en DESC LIMIT 100
     `).all();
     res.json({ ok: true, data: rows });
@@ -131,6 +896,13 @@ export function recepcionesRouter(db, cfg) {
     if (!rec) return res.status(404).json({ ok: false, error: 'no encontrada' });
     const docs  = db.prepare('SELECT * FROM recepcion_documentos WHERE recepcion_id=?').all(id);
     const items = db.prepare('SELECT * FROM recepcion_items WHERE recepcion_id=? ORDER BY id').all(id);
+    // Retomar un borrador necesita saber si un ítem ya tiene una alta creada para restaurar el
+    // vínculo en la UI (si no, el primer stock de un producto nuevo puede sincronizarse a ML por
+    // error al reconfirmar) — alta_operation_id ya es columna propia; alta_estado sale del join.
+    const altaEstadoStmt = db.prepare('SELECT estado FROM recepcion_altas_woo WHERE operation_id=?');
+    for (const it of items) {
+      it.alta_estado = it.alta_operation_id ? (altaEstadoStmt.get(it.alta_operation_id)?.estado || null) : null;
+    }
     res.json({ ok: true, data: { ...rec, documentos: docs, items } });
   });
 
@@ -172,10 +944,11 @@ export function recepcionesRouter(db, cfg) {
     const insDoc  = db.prepare('INSERT INTO recepcion_documentos (recepcion_id,tipo,numero,nombre_archivo,drive_url,creado_en) VALUES (?,?,?,?,?,?)');
     const insItem = db.prepare(`
       INSERT INTO recepcion_items
-        (recepcion_id,id_woo,sku,nombre_doc,codigo_proveedor,cantidad,precio_unitario,stock_previo,stock_nuevo,recibido,creado_en)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        (recepcion_id,id_woo,sku,nombre_doc,codigo_proveedor,cantidad,precio_unitario,stock_previo,stock_nuevo,recibido,estado_item,alta_operation_id,creado_en)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     `);
 
+    const aliasesNoAprendidos = [];
     const saveAll = db.transaction(() => {
       for (const d of documentos) {
         // Sanitizar file_url: rechazar path traversal
@@ -186,14 +959,18 @@ export function recepcionesRouter(db, cfg) {
         const recibido = it.recibido === false || it.recibido === 0 ? 0 : 1;
         // Validar cantidad: debe ser entero positivo
         const cantidad = Math.max(1, parseInt(it.cantidad) || 1);
-        insItem.run(recId, it.id_woo || null, it.sku || null, it.nombre_doc || it.nombre || '',
+        const { estado_item, alta_operation_id } = estadoItemAlGuardar(db, it);
+        const itemId = insItem.run(recId, it.id_woo || null, it.sku || null, it.nombre_doc || it.nombre || '',
           it.codigo_proveedor || null, cantidad,
-          it.precio_unitario || null, it.stock_previo || null, it.stock_nuevo || null, recibido, now);
+          it.precio_unitario || null, it.stock_previo || null, it.stock_nuevo || null, recibido,
+          estado_item, alta_operation_id, now).lastInsertRowid;
+        const fallo = aprenderAliasSiCorresponde(db, it, { proveedor, id_woo: it.id_woo || null, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
+        if (fallo) aliasesNoAprendidos.push(fallo);
       }
     });
     saveAll();
 
-    res.json({ ok: true, id: recId, pedido_id: pedidoId });
+    res.json({ ok: true, id: recId, pedido_id: pedidoId, aliases_no_aprendidos: aliasesNoAprendidos });
   });
 
   // Re-persiste items/docs de un borrador existente (para cuando el usuario editó post-save)
@@ -203,35 +980,144 @@ export function recepcionesRouter(db, cfg) {
     if (!rec) return res.status(404).json({ ok: false, error: 'no encontrada' });
     if (rec.estado !== 'borrador') return res.status(400).json({ ok: false, error: 'solo borradores' });
 
-    const { items: newItems = [], documentos: newDocs = [] } = req.body || {};
+    const { items: newItems = [], documentos: newDocs = [], solo_documento } = req.body || {};
     const now = new Date().toISOString();
 
+    const aliasesNoAprendidos = [];
     const updateRec = db.transaction(() => {
+      if (solo_documento !== undefined) {
+        db.prepare('UPDATE recepciones SET solo_documento=? WHERE id=?').run(solo_documento ? 1 : 0, id);
+      }
+      // DEFECTO 3: recepcion_altas_woo.recepcion_item_id (migración 111) referencia recepcion_items(id)
+      // sin ON DELETE, y la conexión corre con foreign_keys=ON. El DELETE de abajo violaría esa FK en
+      // cualquier recepción que ya tuvo una alta vinculada vía /crear-alta. Se desvincula ANTES del
+      // DELETE (recepcion_item_id=NULL no rompe nada: recepcion_id sigue identificando la recepción) y
+      // se re-vincula más abajo al id nuevo del ítem reinsertado que la reclame por operation_id.
+      db.prepare('UPDATE recepcion_altas_woo SET recepcion_item_id=NULL WHERE recepcion_id=?').run(id);
       db.prepare('DELETE FROM recepcion_items WHERE recepcion_id=?').run(id);
       db.prepare('DELETE FROM recepcion_documentos WHERE recepcion_id=?').run(id);
 
       const insDoc  = db.prepare('INSERT INTO recepcion_documentos (recepcion_id,tipo,numero,nombre_archivo,drive_url,creado_en) VALUES (?,?,?,?,?,?)');
       const insItem = db.prepare(`
         INSERT INTO recepcion_items
-          (recepcion_id,id_woo,sku,nombre_doc,codigo_proveedor,cantidad,precio_unitario,stock_previo,stock_nuevo,recibido,creado_en)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+          (recepcion_id,id_woo,sku,nombre_doc,codigo_proveedor,cantidad,precio_unitario,stock_previo,stock_nuevo,recibido,estado_item,alta_operation_id,creado_en)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
       `);
 
       for (const d of newDocs) {
         const fileUrl = d.file_url ? String(d.file_url).replace(/\.\.\//g, '').replace(/\.\.$/g, '') : null;
         insDoc.run(id, d.tipo || 'otro', d.numero || null, d.nombre_archivo || null, fileUrl, now);
       }
+      const proveedorRec = db.prepare('SELECT proveedor FROM recepciones WHERE id=?').get(id)?.proveedor;
       for (const it of newItems) {
         const recibido = it.recibido === false || it.recibido === 0 ? 0 : 1;
         const cantidad = Math.max(1, parseInt(it.cantidad) || 1);
-        insItem.run(id, it.id_woo || null, it.sku_wc || it.sku || null, it.nombre_doc || it.nombre || '',
+        const idWooEfectivo = it.id_woo || null;
+        const { estado_item, alta_operation_id } = estadoItemAlGuardar(db, { ...it, id_woo: idWooEfectivo }, id);
+        const itemId = insItem.run(id, idWooEfectivo, it.sku_wc || it.sku || null, it.nombre_doc || it.nombre || '',
           it.codigo_proveedor || null, cantidad,
-          it.precio_unitario || null, it.stock_wc ?? null, null, recibido, now);
+          it.precio_unitario || null, it.stock_wc ?? null, null, recibido,
+          estado_item, alta_operation_id, now).lastInsertRowid;
+        // DEFECTO 3: re-vincular el alta (si la hay) al id NUEVO del ítem reinsertado, para que la
+        // exclusión de ML en /confirmar salga con motivo 'excluido_alta' y no 'vinculo_inconsistente'.
+        if (alta_operation_id) {
+          db.prepare('UPDATE recepcion_altas_woo SET recepcion_item_id=? WHERE operation_id=? AND recepcion_id=?')
+            .run(itemId, alta_operation_id, id);
+        }
+        const fallo = aprenderAliasSiCorresponde(db, it, { proveedor: proveedorRec, id_woo: idWooEfectivo, recepcion_item_id: itemId, actor: req.user?.username || 'sistema' });
+        if (fallo) aliasesNoAprendidos.push(fallo);
       }
     });
     updateRec();
-    res.json({ ok: true, id });
+    res.json({ ok: true, id, aliases_no_aprendidos: aliasesNoAprendidos });
   });
+
+  // Reconstruir respuesta idempotente cuando una recepción ya está completamente confirmada
+  function reconstruirConfirmacionIdempotente(id, estadoRec, soloDoc) {
+    const rec = db.prepare('SELECT confirmado_en FROM recepciones WHERE id=?').get(id);
+
+    // Contar aplicados y errores solo si NO es solo_documento (igual que ejecución original)
+    let aplicados = 0;
+    let errores = 0;
+    if (!soloDoc) {
+      const aplicadosResult = db.prepare(
+        'SELECT COUNT(*) as cnt FROM recepcion_items WHERE recepcion_id=? AND estado_item=\'aplicado\''
+      ).get(id);
+      aplicados = aplicadosResult?.cnt || 0;
+
+      // Contar errores: items en estados terminales de error
+      const erroresResult = db.prepare(
+        `SELECT COUNT(*) as cnt FROM recepcion_items WHERE recepcion_id=?
+         AND estado_item IN ('error_reintentable','operacion_incierta','conflicto_stock')`
+      ).get(id);
+      errores = erroresResult?.cnt || 0;
+    }
+
+    // Pendientes: reutilizar la misma query del código principal (línea ~1016-1021)
+    const pendientes = soloDoc ? [] : db.prepare(`
+      SELECT id, id_woo, sku, nombre_doc, codigo_proveedor, cantidad, estado_item, error_wc
+      FROM recepcion_items
+      WHERE recepcion_id=? AND estado_item IN ('sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock')
+      ORDER BY id
+    `).all(id);
+    const sin_match = pendientes.filter(p => p.estado_item === 'sin_match').length;
+
+    // Reconstruir resultados: solo de los items que se aplicaron exitosamente
+    const resultados = [];
+    if (!soloDoc) {
+      const itemsAplicados = db.prepare(
+        'SELECT id, id_woo, sku, nombre_doc, alta_operation_id, stock_previo, stock_nuevo FROM recepcion_items WHERE recepcion_id=? AND estado_item=\'aplicado\' ORDER BY id'
+      ).all(id);
+      for (const it of itemsAplicados) {
+        // Determinar alta_borrador igual que en el código principal (línea ~951-953)
+        // Tarea 2: traer recepcion_item_id para validar el vínculo
+        let altaBorrador = false;
+        let altaBorradorMotivo = null;
+        if (it.alta_operation_id) {
+          const altaRow = db.prepare(
+            'SELECT recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=? AND estado=\'creado\' AND id_woo=?'
+          ).get(it.alta_operation_id, it.id_woo);
+          if (altaRow) {
+            altaBorrador = true;
+            // Determinar el motivo según el vínculo
+            if (altaRow.recepcion_item_id === null) {
+              // Fila vieja sin vínculo (de antes de migración 111)
+              altaBorradorMotivo = 'excluido_alta_sin_vinculo';
+            } else if (altaRow.recepcion_item_id === it.id) {
+              // Vínculo correcto: el ítem actual es el dueño de esta alta
+              altaBorradorMotivo = 'excluido_alta';
+            } else {
+              // Vínculo inconsistente: la alta pertenece a otro ítem
+              altaBorradorMotivo = 'excluido_alta_vinculo_inconsistente';
+            }
+          }
+        }
+        resultados.push({
+          sku: it.sku,
+          nombre: it.nombre_doc,
+          ok: true,
+          alta_borrador: altaBorrador,
+          alta_borrador_motivo: altaBorradorMotivo,  // Nuevo campo: motivo de exclusión
+          stock_previo: it.stock_previo,
+          stock_nuevo: it.stock_nuevo
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      estado: estadoRec,
+      aplicados,
+      errores,
+      sin_match,
+      resultados,
+      pendientes,
+      confirmado_en: rec.confirmado_en,
+      solo_documento: soloDoc === 1,
+      sync_ml: [],  // No se re-sincronizó
+      replay: true  // Marca que es una reconstrucción idempotente, no una ejecución nueva
+    };
+  }
 
   // Confirma una recepción: actualiza stock en WooCommerce ítem a ítem
   router.post('/:id/confirmar', async (req, res) => {
@@ -239,33 +1125,79 @@ export function recepcionesRouter(db, cfg) {
 
     // Marcar como 'procesando' atómicamente — si ya fue confirmada o no existe, changes=0
     const lock = db.prepare(
-      "UPDATE recepciones SET estado='procesando' WHERE id=? AND estado='borrador'"
+      "UPDATE recepciones SET estado='procesando' WHERE id=? AND estado IN ('borrador','confirmada_con_pendientes')"
     ).run(id);
 
     if (lock.changes === 0) {
-      const rec = db.prepare('SELECT estado FROM recepciones WHERE id=?').get(id);
+      const rec = db.prepare('SELECT estado, solo_documento FROM recepciones WHERE id=?').get(id);
       if (!rec) return res.status(404).json({ ok: false, error: 'no encontrada' });
-      return res.status(400).json({ ok: false, error: rec.estado === 'confirmada' ? 'ya confirmada' : 'ya en proceso' });
+
+      // PUNTO 5: Idempotencia — si ya está completamente confirmada (sin pendientes), reconstruir respuesta en lugar de error
+      if (rec.estado === 'confirmada') {
+        return res.json(reconstruirConfirmacionIdempotente(id, rec.estado, rec.solo_documento));
+      }
+
+      // PUNTO 6: 409 Conflicto — hay una confirmación en curso (estado 'procesando')
+      if (rec.estado === 'procesando') {
+        return res.status(409).json({ ok: false, error: 'confirmación en curso' });
+      }
+
+      // Otro estado: no reintentable
+      return res.status(400).json({ ok: false, error: 'ya confirmada con pendientes' });
     }
 
     const recMeta = db.prepare('SELECT pedido_id, solo_documento FROM recepciones WHERE id=?').get(id);
     const resultados = [];
+    const sync_ml = [];
 
     // Solo actualiza WC si no es "solo documento"
     if (!recMeta?.solo_documento) {
-      const items = db.prepare('SELECT * FROM recepcion_items WHERE recepcion_id=? AND id_woo IS NOT NULL AND recibido=1').all(id);
+      const items = db.prepare("SELECT * FROM recepcion_items WHERE recepcion_id=? AND id_woo IS NOT NULL AND recibido=1 AND (estado_item IS NULL OR estado_item IN ('pendiente','creado','error_reintentable'))").all(id);
       for (const it of items) {
         try {
+          // P0.3: nunca aplicar stock sobre un 'creado' sin volver a verificar contra Woo — no confiar
+          // en que la fila diga 'creado' porque en algún momento (al guardar) se pudo comprobar.
+          if (it.estado_item === 'creado') {
+            await verificarAltaCreado(db, cfg, it);
+          }
           const r = await aplicarStockItem(db, cfg, it);
-          resultados.push({ sku: it.sku, nombre: it.nombre_doc, ok: true, stock_previo: r.stock_previo, stock_nuevo: r.stock_nuevo });
+          // PUNTO 4: alta_borrador debe verificarse contra recepcion_altas_woo (fuente durable),
+          // no contra it.estado_item (transitorio). Usa el patrón de verificación que ya existe
+          // en verificarAltaCreado / estadoItemAlGuardar / opIdSiVerificable.
+          // Tarea 2: traer recepcion_item_id para validar el vínculo
+          let altaBorrador = false;
+          let altaBorradorMotivo = null;
+          if (it.alta_operation_id) {
+            const altaRow = db.prepare(
+              'SELECT recepcion_item_id FROM recepcion_altas_woo WHERE operation_id=? AND estado=\'creado\' AND id_woo=?'
+            ).get(it.alta_operation_id, it.id_woo);
+            if (altaRow) {
+              altaBorrador = true;
+              // Determinar el motivo según el vínculo
+              if (altaRow.recepcion_item_id === null) {
+                // Fila vieja sin vínculo (de antes de migración 111)
+                altaBorradorMotivo = 'excluido_alta_sin_vinculo';
+              } else if (altaRow.recepcion_item_id === it.id) {
+                // Vínculo correcto: el ítem actual es el dueño de esta alta
+                altaBorradorMotivo = 'excluido_alta';
+              } else {
+                // Vínculo inconsistente: la alta pertenece a otro ítem
+                altaBorradorMotivo = 'excluido_alta_vinculo_inconsistente';
+              }
+            }
+          }
+          resultados.push({ sku: it.sku, nombre: it.nombre_doc, ok: true, alta_borrador: altaBorrador, alta_borrador_motivo: altaBorradorMotivo, stock_previo: r.stock_previo, stock_nuevo: r.stock_nuevo });
         } catch (e) {
-          db.prepare("UPDATE recepcion_items SET estado_item='error', error_wc=? WHERE id=?")
-            .run(String(e?.message || e), it.id);
+          // aplicarStockItemInterno ya persistió el estado terminal correcto ('error_reintentable' /
+          // 'operacion_incierta' / 'conflicto_stock') antes de lanzar, o no tocó nada si el ítem ya
+          // estaba en un estado no reintentable (EstadoNoReintentableError). Pisarlo acá a 'error' a
+          // ciegas borraría esa distinción y volvería a hacer elegible para reintento algo que no debe.
           resultados.push({ sku: it.sku, nombre: it.nombre_doc, ok: false, error: e.message });
         }
       }
+
       // Marcar explícitamente los ítems que NO se aplicaron — nada se pierde en silencio.
-      // (los 'pendiente_creacion' ya marcados se conservan; los 'error' ya tienen id_woo y no matchean el WHERE de sin_match)
+      // (los 'pendiente_creacion' ya marcados se conservan; los ítems con estado terminal ('error_reintentable'/'aplicando'/'operacion_incierta'/'conflicto_stock'/'aplicado') ya tienen id_woo y no matchean el WHERE de sin_match)
       db.prepare(`UPDATE recepcion_items SET estado_item='sin_match'
         WHERE recepcion_id=? AND recibido=1 AND id_woo IS NULL
         AND (estado_item IS NULL OR estado_item NOT IN ('pendiente_creacion','creado'))`).run(id);
@@ -281,22 +1213,52 @@ export function recepcionesRouter(db, cfg) {
     }
 
     const now = new Date().toISOString();
-    db.prepare("UPDATE recepciones SET estado='confirmada', confirmado_en=? WHERE id=?").run(now, id);
+
+    // Sincronizar a ML DESPUÉS de confirmar la recepción (no antes): esto son llamadas de
+    // red que pueden tardar decenas de segundos con un lote grande, y no tienen que dejar
+    // la recepción en 'procesando' sin salida si el proceso muere en el medio (el lock de
+    // la línea ~242 solo acepta reabrir desde 'borrador', no hay recuperación de
+    // 'procesando' hoy). Un solo push por SKU (no por ítem): si dos ítems son el mismo
+    // SKU, se lee el stock FINAL de catalogo_cache (ya actualizado arriba), el orden no
+    // importa. Solo para SKUs que sí se aplicaron con éxito — si aplicarStockItem falló,
+    // catalogo_cache sigue con el stock viejo y no hay nada correcto que empujar.
+    // Los productos creados desde Recepción son drafts locales: su primer stock no se
+    // publica en Mercado Libre. El resto del legado conserva su sincronización normal.
+    // P0.3: evidencia explícita de la exclusión — no un silencio indistinguible de "no había nada para
+    // sincronizar". `syncSkuPuntual` NUNCA se llama para estos SKUs (ver el filtro `!r.alta_borrador`
+    // de abajo); esta entrada es solo un registro de que se excluyó a propósito, no una llamada a ML.
+    for (const r of resultados.filter(r => r.ok && r.sku && r.alta_borrador)) {
+      // Tarea 2: usar el motivo específico en lugar de hardcodear 'excluido_alta'
+      const estado = r.alta_borrador_motivo || 'excluido_alta';
+      sync_ml.push({ sku: r.sku, estado, detalle: 'primer stock de una alta nueva: no se sincroniza a Mercado Libre' });
+    }
+    const skusAplicados = [...new Set(resultados.filter(r => r.ok && r.sku && !r.alta_borrador).map(r => r.sku))];
+    for (const sku of skusAplicados) {
+      try {
+        sync_ml.push(await syncSkuPuntual(db, cfg, sku));
+      } catch (eSync) {
+        // syncSkuPuntual no debería tirar, pero un fallo acá nunca debe tocar `resultados`
+        // ni el estado de la recepción — la escritura a Woo y la confirmación ya se hicieron.
+        sync_ml.push({ sku, estado: 'error', detalle: `Excepción inesperada: ${eSync.message}` });
+      }
+    }
 
     const errores = resultados.filter(r => !r.ok).length;
     const aplicados = resultados.filter(r => r.ok).length;
     const soloDoc = recMeta?.solo_documento === 1;
+    const estadoFinal = errores ? 'confirmada_con_pendientes' : 'confirmada';
+    db.prepare("UPDATE recepciones SET estado=?, confirmado_en=? WHERE id=?").run(estadoFinal, now, id);
 
     // Ítems que quedaron pendientes de resolver (visibles, no perdidos)
     const pendientes = soloDoc ? [] : db.prepare(`
       SELECT id, id_woo, sku, nombre_doc, codigo_proveedor, cantidad, estado_item, error_wc
       FROM recepcion_items
-      WHERE recepcion_id=? AND estado_item IN ('sin_match','pendiente_creacion','error')
+      WHERE recepcion_id=? AND estado_item IN ('sin_match','pendiente_creacion','error_reintentable','operacion_incierta','conflicto_stock')
       ORDER BY id
     `).all(id);
     const sin_match = pendientes.filter(p => p.estado_item === 'sin_match').length;
 
-    res.json({ ok: true, aplicados, errores, sin_match, resultados, pendientes, confirmado_en: now, solo_documento: soloDoc });
+    res.json({ ok: true, estado: estadoFinal, aplicados, errores, sin_match, resultados, pendientes, confirmado_en: now, solo_documento: soloDoc, sync_ml });
   });
 
   return router;

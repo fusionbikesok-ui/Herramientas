@@ -7,7 +7,7 @@
 -- el cacheo sea reciente (< 7 días; después se re-verifica contra ML). 'not_delivered' NO
 -- se trata como terminal: es una visita fallida con reintento, y para envíos locales
 -- (self_service/Flex) el envío puede volver a ready_to_ship.
--- Ver docs/superpowers/plans/2026-08-08-rafaga-ml-pendientes.md, paso 1.
+-- Decisión vigente consolidada en docs/superpowers/plans/plan-maestro-v2.md.
 --
 -- Aplicación: igual convención que 001_*.sql — este proyecto no usa runner de migraciones ni
 -- PRAGMA user_version; todas son idempotentes y corren al arrancar (db/index.js, CREATE TABLE

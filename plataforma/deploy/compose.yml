@@ -1,0 +1,161 @@
+# E1 tramo 1. Sólo api publica un puerto local; worker y scheduler comparten imagen y red interna.
+name: fusion-plataforma
+x-servicio: &servicio
+  build: { context: .., dockerfile: deploy/Dockerfile }
+  image: fusion-plataforma:local
+  init: true
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  stop_grace_period: 15s
+  environment: &env
+    INSTANCIA: ${INSTANCIA_PREFIX:-plataforma}-service
+    VERSION: ${VERSION:-0.1.0}
+    PG_HOST: ${PG_HOST:-pg}
+    PG_PORT: 5432
+    PG_DATABASE: plataforma
+    PG_USER: plataforma_app
+    PG_PASSWORD_FILE: /run/fusion-plataforma/app-pass
+    ESTADO_PG_DIR: /estado-pg
+  volumes:
+    - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
+    - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
+  mem_limit: 128m
+  cpus: 0.20
+
+services:
+  api:
+    <<: *servicio
+    environment:
+      <<: *env
+      SERVICIO: api
+      INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-api"
+      API_PUERTO: 3201
+      # API interna de señales (T3 C3): vacías = la ruta no existe.
+      SENALES_KEYRING_FILE: ${SENALES_KEYRING_FILE:-}
+      SENALES_CUENTAS: ${SENALES_CUENTAS:-}
+      SENALES_ORIGENES: ${SENALES_ORIGENES:-}
+      # El mismo registro que usa el worker: la API no arranca si sus cuentas no coinciden con SENALES_CUENTAS.
+      # Nombre propio a propósito: pasarle BARRIDOS_REGISTRO_FILE a la API activa la configuración de barridos.
+      SENALES_REGISTRO_FILE: ${BARRIDOS_REGISTRO_FILE:-}
+      # E3 corte 1: la autoridad de identidad en la API interna de eventos/copias. Vive top-level en
+      # config.ts (no dentro de catalogo), así que la API la lee aunque no tenga CATALOGO_* configurado.
+      # Hallazgo ALTO de Codex sobre T2: sin esta línea, el .env podía tener E3_BANDEJA=1 y el contenedor
+      # nunca lo veía, la bandeja quedaba apagada en producción pasara lo que pasara el operador.
+      E3_BANDEJA: ${E3_BANDEJA:-0}
+    volumes:
+      - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
+      - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
+      - ${KEYRING_DIR:?KEYRING_DIR requerido}:/run/fusion-keyring:ro
+    command: ["node", "src/api/main.ts"]
+    ports: ["127.0.0.1:${API_PORT:-3201}:3201"]
+  worker:
+    <<: *servicio
+    environment:
+      <<: *env
+      SERVICIO: worker
+      INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-worker"
+      # Barridos multi-cuenta (T3 C4/C5): vacías = el worker no reclama nada.
+      BARRIDOS_REGISTRO_FILE: ${BARRIDOS_REGISTRO_FILE:-}
+      BARRIDOS_KEYRING_FILE: ${BARRIDOS_KEYRING_FILE:-}
+      BARRIDOS_GATEWAY_KEYRING_FILE: ${BARRIDOS_GATEWAY_KEYRING_FILE:-}
+      # Catálogo (E2 T1): el proyector y el bootstrap viven en el worker. Ausentes = apagado, que es el
+      # estado por omisión; `CATALOGO_PROYECTOR=1` o `CATALOGO_BOOTSTRAP=1` sin keyring no arranca.
+      # Sin estas líneas la configuración del host no llega al contenedor y el catálogo queda apagado
+      # en silencio, aunque `plataforma.env` diga lo contrario.
+      #
+      # Sin `:-` a propósito: el esquema las declara `z.string().min(1).optional()`, así que una cadena
+      # VACÍA no es lo mismo que ausente y rompe el arranque con "configuración inválida". Con esta
+      # forma, una variable que no está en `plataforma.env` no se le pasa al contenedor.
+      CATALOGO_PROYECTOR: ${CATALOGO_PROYECTOR}
+      CATALOGO_BOOTSTRAP: ${CATALOGO_BOOTSTRAP}
+      CATALOGO_KEYRING_FILE: ${CATALOGO_KEYRING_FILE}
+      CATALOGO_LOTE: ${CATALOGO_LOTE:-20}
+      CATALOGO_PAUSA_MS: ${CATALOGO_PAUSA_MS:-1000}
+      CATALOGO_CANARIO: ${CATALOGO_CANARIO:-0}
+      CATALOGO_BOOTSTRAP_RPM: ${CATALOGO_BOOTSTRAP_RPM:-10}
+      CATALOGO_BOOTSTRAP_CEDE_SENALES: ${CATALOGO_BOOTSTRAP_CEDE_SENALES:-20}
+      CATALOGO_UMBRAL_ERROR: ${CATALOGO_UMBRAL_ERROR:-10}
+      # E2 T2: comparar atributos entre canales y abrir `atributo_divergente`. Nace apagada: primero se
+      # captura y se verifica, después se enciende. Sin `:-` por la misma razón que las de arriba.
+      CATALOGO_COMPARAR_ATRIBUTOS: ${CATALOGO_COMPARAR_ATRIBUTOS}
+      # E3 corte 1: la bandeja de decisiones humanas. En el worker requiere CATALOGO_PROYECTOR=1 (config.ts
+      # lo valida al arrancar); ver la nota igual en el bloque de la API.
+      E3_BANDEJA: ${E3_BANDEJA:-0}
+      # E3 T4: el ciclo del motor en sombra. Sólo el worker (config.ts lo rechaza en la API); requiere
+      # CATALOGO_PROYECTOR=1 igual que E3_BANDEJA, mismo motivo por el que esa línea existe (hallazgo de
+      # Codex sobre 447126b6): sin esta declaración, .env podía decir E3_MOTOR=1 y el contenedor nunca
+      # lo veía.
+      E3_MOTOR: ${E3_MOTOR:-0}
+      E3_MOTOR_PAUSA_MS: ${E3_MOTOR_PAUSA_MS:-1800000}
+    volumes:
+      - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
+      - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
+      - ${KEYRING_DIR:?KEYRING_DIR requerido}:/run/fusion-keyring:ro
+    command: ["node", "src/worker/main.ts"]
+    # E1 T3 C5: el worker lee canales por el gateway del legado en el host (plano de control).
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  scheduler:
+    <<: *servicio
+    environment:
+      <<: *env
+      SERVICIO: scheduler
+      INSTANCIA: "${INSTANCIA_PREFIX:-plataforma}-scheduler"
+      # Informes firmados (E1 T4). Todo o nada: vacías = el scheduler no los emite; con una sola cargada,
+      # el arranque falla con la lista de las que faltan. Las rutas son las de adentro del contenedor.
+      INFORMES_CLAVE_FIRMA_FILE: ${INFORMES_CLAVE_FIRMA_FILE:-}
+      INFORMES_PENDIENTES_DIR: ${INFORMES_PENDIENTES_DIR:-}
+      INFORMES_CLAVE_PUBLICA_UBICACION: ${INFORMES_CLAVE_PUBLICA_UBICACION:-}
+      B2_ENDPOINT: ${B2_ENDPOINT:-}
+      B2_REGION: ${B2_REGION:-}
+      B2_BUCKET: ${B2_BUCKET:-}
+      B2_ESCRITURA_ID_FILE: ${B2_ESCRITURA_ID_FILE:-}
+      B2_ESCRITURA_CLAVE_FILE: ${B2_ESCRITURA_CLAVE_FILE:-}
+      B2_LECTURA_ID_FILE: ${B2_LECTURA_ID_FILE:-}
+      B2_LECTURA_CLAVE_FILE: ${B2_LECTURA_CLAVE_FILE:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PUERTO: ${SMTP_PUERTO:-}
+      SMTP_SEGURO: ${SMTP_SEGURO:-}
+      SMTP_USUARIO_FILE: ${SMTP_USUARIO_FILE:-}
+      SMTP_CLAVE_FILE: ${SMTP_CLAVE_FILE:-}
+      SMTP_DESDE: ${SMTP_DESDE:-}
+      INFORMES_PARA: ${INFORMES_PARA:-}
+    volumes:
+      - ${SECRET_DIR:?SECRET_DIR requerido}/app-pass:/run/fusion-plataforma/app-pass:ro
+      - ${ESTADO_PG_DIR:?ESTADO_PG_DIR requerido}:/estado-pg:ro
+      # Archivo por archivo, no la carpeta de secretos entera: así el scheduler no ve la contraseña del
+      # migrador ni nada que no use. Si el archivo del host no existe, Docker crea una carpeta vacía en su lugar
+      # y el arranque falla en la guarda de "archivo regular", que es lo que se quiere.
+      - ${KEYRING_DIR:?KEYRING_DIR requerido}/firma-informes.pem:/run/fusion-informes/firma-informes.pem:ro
+      - ${SECRET_DIR}/b2-escritura-id:/run/fusion-informes/b2-escritura-id:ro
+      - ${SECRET_DIR}/b2-escritura-clave:/run/fusion-informes/b2-escritura-clave:ro
+      - ${SECRET_DIR}/b2-lectura-id:/run/fusion-informes/b2-lectura-id:ro
+      - ${SECRET_DIR}/b2-lectura-clave:/run/fusion-informes/b2-lectura-clave:ro
+      - ${SECRET_DIR}/smtp-usuario:/run/fusion-informes/smtp-usuario:ro
+      - ${SECRET_DIR}/smtp-clave:/run/fusion-informes/smtp-clave:ro
+      # La pública que se anuncia en el email; el scheduler verifica al arrancar que sea pareja de la privada.
+      - ${INFORMES_CLAVE_PUBLICA_HOST:-../../docs/superpowers/specs/e1/firma-informes/e1-2026-09.pub}:/run/fusion-informes/firma-informes.pub:ro
+      # Único montaje de escritura: los informes firmados que todavía no se pudieron subir a B2.
+      - ${INFORMES_PENDIENTES_HOST:?INFORMES_PENDIENTES_HOST requerido}:/var/lib/fusion-informes
+    command: ["node", "src/scheduler/main.ts"]
+  migrate:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    image: fusion-plataforma:local
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+    environment:
+      PG_HOST: ${PG_HOST:-pg}
+      PG_PORT: 5432
+      PG_DATABASE: plataforma
+      PG_USER: plataforma_migrador
+      PG_PASSWORD_FILE: /run/fusion-plataforma/migrador-pass
+    volumes:
+      - ${SECRET_DIR:?SECRET_DIR requerido}/migrador-pass:/run/fusion-plataforma/migrador-pass:ro
+    command: ["node", "src/db/cli-migrar.ts"]
+    mem_limit: 128m
+    cpus: 0.20
+
+networks:
+  default:
+    external: true
+    name: ${PG_NETWORK:-fusion-pg_default}

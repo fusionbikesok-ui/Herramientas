@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -103,6 +103,7 @@ input[type=file] { display:none; }
 .wc-opt { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.2rem .5rem; align-items:start; padding:.6rem .7rem; font-size:.75rem; cursor:pointer; border-bottom:1px solid var(--border); line-height:1.4; overflow-wrap:anywhere; }
 .wc-opt:last-child { border-bottom:none; }
 .wc-opt:hover { background:var(--blue-bg); }
+.wc-opt[aria-selected="true"] { background:var(--blue-bg); }
 .wc-opt-name { grid-column:1; grid-row:1; min-width:0; overflow-wrap:anywhere; }
 .wc-opt-sku { grid-column:1; grid-row:2; color:var(--gray2); font-size:.6875rem; font-family:monospace; margin-right:6px; }
 .wc-opt-stock { grid-column:2; grid-row:1; color:var(--green); font-size:.6875rem; white-space:nowrap; }
@@ -112,6 +113,10 @@ input[type=file] { display:none; }
   .wc-opt-name { grid-row:1; }
   .wc-opt-sku { grid-row:2; }
   .wc-opt-stock { grid-row:3; }
+  .field { min-width: 0 !important; }
+  .pill-tabs { flex-wrap: wrap; }
+  .sync-ml-grid { grid-template-columns: 1fr; }
+  .header { padding: 0 12px; }
 }
 
 .qty-input { width:60px; text-align:center; padding:5px 6px; font-size:13px; font-weight:700; }
@@ -138,8 +143,42 @@ input[type=file] { display:none; }
 .summary-mini { display:flex; gap:12px; font-size:12px; color:var(--gray); margin-top:4px; }
 .summary-mini span { display:flex; align-items:center; gap:4px; }
 
+/* Feedback visual de sincronización a MercadoLibre */
+.sync-ml-section { margin-top:16px; padding-top:16px; border-top:1px solid var(--border); }
+.sync-ml-title { font-size:12px; font-weight:700; color:var(--white); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:10px; }
+.sync-ml-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; }
+.sync-ml-chip { display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:6px; border:1px solid; font-size:12px; font-weight:500; }
+.sync-ml-chip.sincronizado { background:var(--green-bg); border-color:var(--green-bd); color:var(--green); }
+.sync-ml-chip.sin_cambios { background:var(--amber-bg); border-color:var(--amber-bd); color:var(--amber); }
+.sync-ml-chip.error { background:var(--red-bg); border-color:var(--red-bd); color:var(--red); }
+.sync-ml-chip.omitido { background:var(--dark3); border-color:var(--border); color:var(--white); }
+.sync-ml-icon { flex-shrink:0; font-size:14px; }
+.sync-ml-sku { font-family:monospace; font-size:11px; color:inherit; }
+
 .empty-state { text-align:center; padding:4rem 1rem; color:var(--gray2); }
 .empty-icon { font-size:40px; margin-bottom:12px; }
+
+/* Modal accesible */
+.modal-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:1000; }
+.modal-overlay.open { display:flex; align-items:center; justify-content:center; }
+.modal-content { background:var(--dark2); border:1px solid var(--border); border-radius:var(--radius-lg); padding:24px; max-width:500px; width:90%; box-shadow:0 10px 40px rgba(0,0,0,0.4); }
+.modal-title { font-size:18px; font-weight:700; margin-bottom:16px; color:var(--white); }
+.modal-body { margin-bottom:20px; }
+.modal-field { margin-bottom:14px; }
+.modal-field label { display:block; font-size:12px; color:var(--gray); margin-bottom:5px; font-weight:500; }
+.modal-field input, .modal-field textarea, .modal-field select { font-family:inherit; font-size:13px; padding:8px 11px; border:1px solid var(--border2); border-radius:var(--radius); background:var(--dark3); color:var(--white); width:100%; transition:border-color .15s,box-shadow .15s; }
+.modal-field input:focus, .modal-field textarea:focus, .modal-field select:focus { outline:none; border-color:var(--blue); box-shadow:0 0 0 3px var(--blue-bg); }
+.modal-field textarea { resize:vertical; min-height:60px; }
+.modal-errors { background:var(--red-bg,rgba(220,38,38,0.1)); border:1px solid var(--red-bd,#dc2626); border-radius:var(--radius); padding:10px 12px; margin-bottom:14px; font-size:12px; color:var(--red,#dc2626); display:none; }
+.modal-errors.show { display:block; }
+.modal-errors ul { margin:0; padding-left:20px; }
+.modal-errors li { margin:4px 0; }
+.modal-footer { display:flex; gap:10px; justify-content:flex-end; }
+.modal-btn { font-family:inherit; padding:10px 16px; font-size:13px; font-weight:600; border-radius:var(--radius); border:1px solid var(--border2); background:var(--dark3); color:var(--white); cursor:pointer; transition:all .15s; }
+.modal-btn:hover { background:var(--dark2); border-color:var(--gray2); }
+.modal-btn:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+.modal-btn.primary { background:var(--blue); border-color:var(--blue); color:var(--white); }
+.modal-btn.primary:hover { background:var(--blue-light,#2563eb); }
 </style>
 </head>
 <body>
@@ -158,18 +197,19 @@ input[type=file] { display:none; }
 
   <div class="page-head">
     <div class="page-eyebrow">Operaciones · Ingreso</div>
-    <div class="page-title">Recepción de <em>Mercadería</em></div>
+    <h1 class="page-title">Recepción de <em>Mercadería</em></h1>
     <div class="page-desc">Registrá facturas y remitos de proveedores. Gemini extrae los ítems, cruzalos con WooCommerce y actualizá el stock en un clic.</div>
   </div>
 
   <div id="banner-catalogo" role="alert" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--amber-bg,#3a2c0d);border:1px solid var(--amber-bd,#8a6d1a);color:var(--amber,#e8b93b);font-size:13px;align-items:center;gap:10px;flex-wrap:wrap">
     <span>⚠ No se pudo cargar el catálogo de WooCommerce. La búsqueda y el matcheo automático no son confiables ahora mismo: un producto puede existir aunque el buscador diga "Sin resultados".</span>
-    <button type="button" onclick="cargarCatalogo()" style="border:1px solid currentColor;background:transparent;color:inherit;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer">Reintentar</button>
   </div>
 
-  <div class="pill-tabs" role="tablist" aria-label="Secciones de recepción de mercadería">
-    <button type="button" class="pill-tab active" role="tab" aria-selected="true" id="tab-nueva" onclick="mostrarTab('nueva')">Nueva recepción</button>
-    <button type="button" class="pill-tab" role="tab" aria-selected="false" id="tab-historial" onclick="mostrarTab('historial'); cargarHistorial()">Historial</button>
+  <div class="pill-tabs">
+    <div role="tablist" aria-label="Secciones de recepción de mercadería" style="display:contents">
+      <button type="button" class="pill-tab active" role="tab" aria-selected="true" id="tab-nueva" onclick="mostrarTab('nueva')">Nueva recepción</button>
+      <button type="button" class="pill-tab" role="tab" aria-selected="false" id="tab-historial" onclick="mostrarTab('historial'); cargarHistorial()">Historial</button>
+    </div>
     <a class="pill-tab" id="tab-pedidos" href="/herramientas/pedidos/">📦 Pedidos</a>
   </div>
 
@@ -181,8 +221,9 @@ input[type=file] { display:none; }
       <div class="field-row">
         <div class="field" style="flex:2">
           <label>Proveedor / Distribuidor *
-          <input type="text" id="inp-proveedor" placeholder="Ej: Trek Argentina, Shimano, Vigo Bike..." list="proveedores-list" oninput="sincronizarImportador()"></label>
+          <input type="text" id="inp-proveedor" placeholder="Ej: Trek Argentina, Shimano, Vigo Bike..." list="proveedores-list" oninput="sincronizarImportador()" onblur="invalidarMatchesPorCambioProveedor();cargarAliasesProveedor()"></label>
           <datalist id="proveedores-list"></datalist>
+          <div id="aliases-proveedor" style="margin-top:6px"></div>
         </div>
         <div class="field" style="flex:1; min-width:140px">
           <label>Fecha
@@ -191,7 +232,7 @@ input[type=file] { display:none; }
       </div>
       <div class="field-row">
         <div class="field" style="flex:2">
-          <label>Importador <span style="color:var(--gray2);font-weight:400">(si difiere del proveedor)</span>
+          <label>Importador <span style="color:var(--gray);font-weight:400">(si difiere del proveedor)</span>
           <input type="text" id="inp-importador" placeholder="Se completa igual que proveedor por defecto" oninput="this.dataset.editadoManual=this.value?'1':'';sincronizarImportador()"></label>
         </div>
         <div class="field" style="flex:2">
@@ -235,7 +276,7 @@ input[type=file] { display:none; }
 
     <div class="card">
       <div class="card-title">Subir documento para extracción con Gemini</div>
-      <div id="status-extraccion"></div>
+      <div id="status-extraccion" role="status" aria-live="polite"></div>
       <div class="drop-zone" id="drop-zone" role="button" tabindex="0" aria-label="Subir documento: arrastrá un archivo o presioná Enter para elegirlo"
            onclick="document.getElementById('doc-file').click()"
            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('doc-file').click();}">
@@ -245,14 +286,14 @@ input[type=file] { display:none; }
           </svg>
         </div>
         <div class="drop-title">Arrastrá el documento aquí</div>
-        <div class="drop-sub">o hacé click para seleccionar · podés subir múltiples documentos</div>
+        <div class="drop-sub">o hacé click para seleccionar un documento</div>
         <div class="drop-formats">
           <span class="format-pill">JPG</span><span class="format-pill">PNG</span>
           <span class="format-pill">PDF</span><span class="format-pill">CSV</span>
-          <span class="format-pill">XLSX</span>
+          <span class="format-pill">XML</span>
         </div>
       </div>
-      <input type="file" id="doc-file" aria-label="Archivo de documento" accept="image/*,.csv,.pdf,.xlsx" onchange="handleFile(event)">
+      <input type="file" id="doc-file" aria-label="Archivo de documento" accept="image/*,.csv,.pdf,.xml" onchange="handleFile(event)">
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap">
         <button class="btn btn-sm" onclick="agregarItemManual()">+ Agregar ítem manual</button>
       </div>
@@ -262,7 +303,7 @@ input[type=file] { display:none; }
     <div id="items-section" style="display:none">
       <div class="card">
         <div class="card-title">Ítems extraídos <span id="items-count" style="font-size:12px;font-weight:400;color:var(--gray);text-transform:none;letter-spacing:0"></span></div>
-        <div id="status-match"></div>
+        <div id="status-match" role="status" aria-live="polite"></div>
         <div style="overflow-x:auto">
           <table class="items-table" id="items-table">
             <thead>
@@ -287,8 +328,9 @@ input[type=file] { display:none; }
       <button class="btn" id="btn-borrador" onclick="guardarRecepcion('borrador')" disabled>💾 Guardar borrador</button>
       <button class="btn btn-green" id="btn-confirmar" onclick="confirmarRecepcion()" disabled>✓ Registrar y actualizar stock</button>
       <button class="btn" id="btn-confirmar-solo" onclick="confirmarRecepcion()" disabled style="display:none;border-color:var(--amber-bd);color:var(--amber);background:var(--amber-bg);font-weight:600">✓ Registrar sin tocar stock</button>
-      <span id="status-confirm" style="font-size:12px; color:var(--gray); margin-left:4px"></span>
+      <span id="status-confirm" role="status" aria-live="polite" style="font-size:12px; color:var(--gray); margin-left:4px"></span>
     </div>
+    <div id="sync-ml-confirm" role="status" aria-live="polite"></div>
 
   </div>
 
@@ -310,12 +352,14 @@ input[type=file] { display:none; }
 <script>
 Api.installAuth();
 
-var catalogo = [];
-var catalogoEstado = 'cargando'; // 'cargando' | 'ok' | 'error' — todo lo que lee catalogo[] chequea esto antes de decir "no existe"
 var items = [];   // ítems de la recepción actual
 var docs  = [];   // documentos de la recepción actual
 var recepcionGuardadaId = null;
 var soloDocumento = false;
+var proveedorAnterior = null; // P1.2: guardar el proveedor anterior para detectar cambios
+var busquedaDebouncers = {}; // P1.3: mapear itemId → timeoutId para debounce de buscarWC
+var busquedaVersiones = {}; // P1.3: mapear itemId → versionId para evitar respuestas stale
+function normalizar(s) { return (s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim(); }
 
 function toggleSoloDoc() {
   soloDocumento = !soloDocumento;
@@ -343,28 +387,24 @@ function toggleSoloDoc() {
 }
 
 window.onload = function() {
-  cargarCatalogo();
   document.getElementById('inp-fecha').value = new Date().toISOString().slice(0,10);
+  // P1.3: buscarWC() ahora hace búsqueda dinámica a /api/recepciones/catalogo?q=...
+  // sin depender de un catálogo completo cargado en memoria en onload
   setupDrop();
   cargarProveedoresRecientes();
   document.getElementById('inp-numero-pedido').addEventListener('input', actualizarAvisoPedido);
+  // P1.2: inicializar proveedorAnterior con el valor actual (vacío al abrir nueva recepción)
+  sincronizarProveedorBase(document.getElementById('inp-proveedor').value.trim());
 
   // Si viene con ?retomar=ID desde la vista de pedidos, auto-cargar el borrador
   var params = new URLSearchParams(window.location.search);
   var retId  = params.get('retomar');
   if (retId) {
-    var retomado = false;
-    var t = setInterval(function() {
-      if (catalogo.length > 0) {
-        clearInterval(t);
-        if (!retomado) { retomado = true; retomar(parseInt(retId)); }
-      }
-    }, 300);
-    // Timeout de seguridad: retomar igual después de 3s aunque no haya catálogo
+    // P1.3: retomar ahora funciona sin esperar a catalogo.length > 0
+    // Timeout de seguridad: retomar después de 100ms para asegurar que el DOM esté listo
     setTimeout(function() {
-      clearInterval(t);
-      if (!retomado) { retomado = true; retomar(parseInt(retId)); }
-    }, 3000);
+      retomar(parseInt(retId));
+    }, 100);
   }
 };
 
@@ -375,35 +415,54 @@ function sincronizarImportador() {
   }
 }
 
+// P1.2: sincronizar proveedor base (reutilizable en 3 puntos: onload, retomar, confirmar)
+function sincronizarProveedorBase(valor) {
+  document.getElementById('inp-proveedor').value = valor;
+  proveedorAnterior = valor;
+}
+
+// P1.2: detectar cambio de proveedor y invalidar aliases. Se dispara al perder foco (onblur)
+// del input de proveedor. Solo invalida y re-solicita si el proveedor realmente cambió.
+function invalidarMatchesPorCambioProveedor() {
+  var proveedorActual = document.getElementById('inp-proveedor').value.trim();
+
+  // Si no cambió, no hacer nada
+  if (proveedorActual === proveedorAnterior) return;
+
+  // Actualizar el proveedor anterior
+  proveedorAnterior = proveedorActual;
+
+  // Invalidar todos los matches con origen 'alias_proveedor'
+  var invalidados = 0;
+  items.forEach(function(it) {
+    if (it.match_origen === 'alias_proveedor') {
+      it.id_woo = null;
+      it.sku_wc = null;
+      it.nombre_wc = null;
+      it.stock_wc = null;
+      it.match_estado = null;
+      it.match_origen = null;
+      it.match_resultado = null;
+      it.match_confirmado = false;
+      invalidados++;
+    }
+  });
+
+  // Si se invalidaron matches, re-renderizar y volver a pedir matcheo
+  if (invalidados > 0) {
+    renderItems();
+    actualizarBotones();
+    mostrarStatus('status-match', 'loading', 'Recalculando matches con nuevo proveedor...');
+    solicitarMatchesBackend();
+  }
+}
+
 function actualizarAvisoPedido() {
   var val = document.getElementById('inp-numero-pedido').value.trim();
   document.getElementById('aviso-sin-pedido').style.display = val ? 'none' : 'flex';
 }
 
-function cargarCatalogo() {
-  catalogoEstado = 'cargando';
-  document.getElementById('banner-catalogo').style.display = 'none';
-  fetch('/api/woo/catalogo')
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if (!d.ok) throw new Error('respuesta no-ok');
-      catalogo = (d.data || []).map(function(p){
-        // Precalculados una sola vez (no por keystroke). _busq (sku+nombre) es el texto
-        // libre para el filtro por palabras; _gtinNorm se compara aparte, solo exacto o
-        // por prefijo (un GTIN completo no debe matchear por substring arbitrario).
-        p._skuNorm  = normalizar(p.sku||'');
-        p._gtinNorm = normalizar(p.gtin||'');
-        p._busq     = p._skuNorm + ' ' + normalizar(p.nombre||'');
-        return p;
-      });
-      catalogoEstado = 'ok';
-    })
-    .catch(function(){
-      catalogo = [];
-      catalogoEstado = 'error';
-      document.getElementById('banner-catalogo').style.display = 'flex';
-    });
-}
+// Búsqueda manual explícita. Nunca se invoca al iniciar ni participa del matching automático.
 
 function cargarProveedoresRecientes() {
   fetch('/api/recepciones')
@@ -436,10 +495,28 @@ function mostrarTab(t) {
 var TIPOS_LABEL = { factura:'Factura', remito:'Remito', orden_compra:'OC', otro:'Otro' };
 
 function agregarDoc(tipo) {
-  var num = prompt('Número de ' + TIPOS_LABEL[tipo] + ' (opcional):');
-  if (num === null) return;
-  docs.push({ tipo: tipo, numero: num.trim() || null });
-  renderDocs();
+  abrirModal({
+    titulo: 'Agregar ' + (TIPOS_LABEL[tipo] || tipo),
+    bodyHtml: '<div class="modal-field">'
+      + '<label for="doc-num-input">Número (opcional):</label>'
+      + '<input type="text" id="doc-num-input" placeholder="Ej: 00001-00000456" />'
+      + '</div>',
+    textConfirm: 'Agregar',
+    textCancel: 'Cancelar',
+    onConfirm: function() {
+      var numInput = document.getElementById('doc-num-input');
+      var num = numInput ? numInput.value.trim() : '';
+
+      // Número es opcional: no se valida contenido
+
+      docs.push({ tipo: tipo, numero: num || null });
+      renderDocs();
+      _ocultarModalDom();
+    },
+    onCancel: function() {
+      // Cancelar simplemente cierra el modal
+    }
+  });
 }
 
 function quitarDoc(idx) {
@@ -527,6 +604,7 @@ function procesarArchivo(file) {
       items.push(crearItem(it));
     });
     renderItems();
+    solicitarMatchesBackend();
     actualizarBotones();
   }
 
@@ -569,9 +647,39 @@ function procesarArchivo(file) {
 
 // ---- ITEMS ----
 
+var matchRequestVersion = 0;
+function solicitarMatchesBackend() {
+  var version = ++matchRequestVersion;
+  var proveedor = document.getElementById('inp-proveedor').value.trim();
+  if (!proveedor || !items.length) return;
+  fetch('/api/recepciones/matchear', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ proveedor: proveedor, items: items.map(function(it){ return { linea_id:String(it.id), nombre_doc:it.nombre_doc, variacion:it.variacion, codigo_proveedor:it.codigo_proveedor, marca:it.marca }; }) })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (version !== matchRequestVersion || !d.ok) return;
+    (d.resultados || []).forEach(function(m){
+      var it=items.find(function(x){ return String(x.id)===String(m.linea_id); });
+      if (!it) return;
+      it.match_resultado=m;
+      it.match_estado=m.estado;
+      if (m.auto_aplicable && m.candidato) {
+        it.id_woo=m.candidato.id_woo;
+        it.sku_wc=m.candidato.sku;
+        it.nombre_wc=m.candidato.nombre;
+        it.stock_wc=m.candidato.stock;
+        it.match_origen=m.origen;
+        // P1.4 fix: cuando el backend dice que es seguro (auto_aplicable), confiar en eso
+        it.match_confirmado = true;
+      }
+    });
+    renderItems(); actualizarBotones();
+  }).catch(function(){ mostrarStatus('status-extraccion','err','No se pudo resolver el matching; reintentá.'); });
+}
+
 function crearItem(raw) {
   var it = {
     id: Date.now() + Math.random(),
+    db_id: null, // P1.3: id real en recepcion_items — solo lo tienen los ítems de una recepción ya
+                 // guardada (ver retomar()); sin esto no hay forma de llamar a /resolver.
     nombre_doc: raw.nombre || '(sin nombre)',
     variacion: raw.variacion || '',
     cantidad: parseInt(raw.cantidad) || 1,
@@ -581,62 +689,66 @@ function crearItem(raw) {
     id_woo: null, sku_wc: null, nombre_wc: null, stock_wc: null,
   recibido: true
   };
-  // Intentar match automático
-  var match = matchItem(it);
-  if (match) {
-    it.id_woo   = match.id_woo;
-    it.sku_wc   = match.sku;
-    it.nombre_wc= match.nombre;
-    it.stock_wc = match.stock;
-  }
+  it.match_estado = 'pendiente_backend';
   return it;
 }
 
-function matchItem(it) {
-  if (!catalogo.length) return null;
-  // 1. Por codigo_proveedor vs SKU
-  if (it.codigo_proveedor) {
-    var cod = it.codigo_proveedor.trim().toLowerCase();
-    var porSku = catalogo.find(function(p){ return (p.sku||'').toLowerCase() === cod; });
-    if (porSku) return porSku;
-  }
-  // 2. Fuzzy por nombre
-  return fuzzyMatchItem(it.nombre_doc + (it.variacion ? ' ' + it.variacion : ''));
+// P1.3: en una recepción YA guardada, un cambio de match/alias sobre un ítem persistido tiene que ir
+// por /api/recepciones/:id/items/:itemId/resolver (server-side, con su propia validación y el
+// aprendizaje de alias) en vez de esperar al próximo /actualizar completo. Sin db_id (ítem todavía no
+// guardado) o sin recepcionGuardadaId (recepción todavía no guardada) no hay nada que sincronizar
+// todavía — el guardado inicial se encarga.
+function sincronizarAliasGuardado(id) {
+  var it = items.find(function(i){ return String(i.id)===String(id); });
+  if (!it || !it.db_id || !recepcionGuardadaId || !it.id_woo) return;
+  fetch('/api/recepciones/' + recepcionGuardadaId + '/items/' + it.db_id + '/resolver', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id_woo: it.id_woo, aprender: !!it.aprender_alias, motivo: it.motivo_alias || undefined })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (!d.ok) mostrarStatus('status-match', 'err', 'No se guardó el cambio en el servidor: ' + d.error);
+  }).catch(function(){ mostrarStatus('status-match', 'err', 'No se pudo sincronizar el cambio con el servidor.'); });
 }
 
-function normalizar(s) {
-  return (s||'').toLowerCase()
-    .replace(/[áàä]/g,'a').replace(/[éèë]/g,'e').replace(/[íìï]/g,'i')
-    .replace(/[óòö]/g,'o').replace(/[úùü]/g,'u').replace(/ñ/g,'n')
-    .replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
-}
-
-// Talles/tallas cortas que también deben participar en el match aunque tengan 1-2 letras
-var TALLES_SET = new Set(['s','m','l','xl','xs','xxl','xxxl','sm','md','lg','xm']);
-
-function fuzzyMatchItem(nombre) {
-  var palabras = normalizar(nombre).split(' ').filter(function(w){
-    return w.length > 2 || TALLES_SET.has(w);
-  });
-  if (!palabras.length) return null;
-  var mejor = null, mejorScore = 0;
-  for (var i=0; i<catalogo.length; i++) {
-    var p = catalogo[i];
-    var hayNombre = normalizar(p.nombre);
-    var score = 0;
-    palabras.forEach(function(w){ if (hayNombre.indexOf(w) !== -1) score++; });
-    if (score > mejorScore) { mejorScore = score; mejor = p; }
-  }
-  return (mejorScore >= 2) ? mejor : null;
-}
 
 function agregarItemManual() {
-  var nombre = prompt('Nombre del producto:');
-  if (!nombre || !nombre.trim()) return;
-  var cant = parseInt(prompt('Cantidad:', '1') || '1');
-  items.push(crearItem({ nombre: nombre.trim(), cantidad: cant || 1 }));
-  renderItems();
-  actualizarBotones();
+  abrirModal({
+    titulo: 'Agregar ítem manual',
+    bodyHtml: '<div class="modal-field">'
+      + '<label for="item-nombre-input">Nombre del producto:</label>'
+      + '<input type="text" id="item-nombre-input" placeholder="Ej: Llanta 27.5 x 2.2" />'
+      + '</div>'
+      + '<div class="modal-field">'
+      + '<label for="item-cantidad-input">Cantidad:</label>'
+      + '<input type="number" id="item-cantidad-input" value="1" min="1" />'
+      + '</div>',
+    textConfirm: 'Agregar',
+    textCancel: 'Cancelar',
+    onConfirm: function() {
+      var nombreInput = document.getElementById('item-nombre-input');
+      var cantidadInput = document.getElementById('item-cantidad-input');
+
+      var nombre = nombreInput ? nombreInput.value.trim() : '';
+      var cantidad = cantidadInput ? parseInt(cantidadInput.value) : 1;
+
+      if (!nombre) {
+        mostrarErroresModal(['El nombre del producto es obligatorio']);
+        return; // Modal permanece abierto
+      }
+
+      if (!cantidad || cantidad < 1) {
+        mostrarErroresModal(['La cantidad debe ser mayor a 0']);
+        return; // Modal permanece abierto
+      }
+
+      items.push(crearItem({ nombre: nombre, cantidad: cantidad }));
+      renderItems();
+      actualizarBotones();
+      _ocultarModalDom();
+    },
+    onCancel: function() {
+      // Cancelar simplemente cierra el modal
+    }
+  });
 }
 
 function quitarItem(id) {
@@ -660,20 +772,89 @@ function renderItems() {
   tbody.innerHTML = '';
   items.forEach(function(it, idx) {
     var tr = document.createElement('tr');
-    var matchBadge = it.id_woo
-      ? '<span class="match-badge match-ok">✓ Match</span>'
-      : '<span class="match-badge match-no">Sin match</span>';
+
+    // P1.4: Estados visuales claros por ítem
+    // Verde: resuelto (confirmado o alta creada, o match_estado === 'resuelto')
+    // Ámbar: requiere revisión manual (match_estado === 'revisar', o candidato con match_confirmado !== true)
+    // Rojo: sin match, sin candidato
+    // Error: alta fallida/incierta o conflictos en match (sku_duplicado, contradiccion, error)
+    var matchBadge;
+    var razonesExtra = '';
+
+    // Primero: chequeamos errores críticos
+    if (it.alta_estado === 'incierto' || it.alta_estado === 'fallido') {
+      matchBadge = '<span class="match-badge match-no">⚠ Error: alta ' + esc(it.alta_estado) + '</span>';
+    } else if (it.match_estado === 'sku_duplicado') {
+      matchBadge = '<span class="match-badge match-no">⛔ SKU duplicado</span>';
+    } else if (it.match_estado === 'contradiccion') {
+      matchBadge = '<span class="match-badge match-no">⛔ Contradicción</span>';
+    }
+    // Luego: si tiene match (id_woo o alta creada), determinar si está resuelto o requiere revisión
+    else if (it.id_woo && (it.alta_estado === 'creado' || it.match_estado === 'resuelto')) {
+      // Verde: resuelto (alta creada O estado backend 'resuelto')
+      matchBadge = '<span class="match-badge match-ok">✓ Resuelto</span>';
+    } else if (it.id_woo && it.match_estado === 'revisar') {
+      // Ámbar: backend dice que hay que revisar; mostrar razones si existen
+      var razones = (it.match_resultado && it.match_resultado.candidato && it.match_resultado.candidato.razones) ? it.match_resultado.candidato.razones : [];
+      // Las razones son objetos {tipo, resultado, documento?, producto?}
+      // Mapear a texto legible: "tipo: resultado"
+      var razonesTexto = razones.length > 0
+        ? razones.map(function(r){
+            return (r.tipo || '?') + ': ' + (r.resultado || '?');
+          }).join('; ')
+        : 'Revisar candidato';
+      matchBadge = '<span class="match-badge match-warn" title="' + esc(razonesTexto) + '">⚠ Revisar candidato</span>';
+      if (razones.length > 0) {
+        razonesExtra = '<div style="font-size:10px;color:var(--amber);margin-top:3px">Razones: ' +
+          esc(razonesTexto) + '</div>';
+      }
+    } else if (it.id_woo && it.match_confirmado === true) {
+      // Verde: confirmado manualmente (aunque no sea 'resuelto' del backend)
+      matchBadge = '<span class="match-badge match-ok">✓ Confirmado</span>';
+    } else if (it.id_woo) {
+      // Ámbar: tiene candidato pero no está confirmado (debería haber sido tratado por la lógica anterior, pero por seguridad)
+      matchBadge = '<span class="match-badge match-warn">⚠ Confirmar asignación</span>';
+    }
+    // Si llegamos aquí sin matchBadge, no tiene id_woo
+    else if (it.match_estado === 'error') {
+      matchBadge = '<span class="match-badge match-no">⚠ Error recuperable</span>';
+    } else if (!it.id_woo && !it.alta_estado) {
+      // Rojo: sin match y sin alta
+      matchBadge = '<span class="match-badge match-no">Sin candidato</span>';
+    } else if (!it.id_woo) {
+      // Rojo: sin match pero con alta pendiente
+      matchBadge = '<span class="match-badge match-no">Sin match</span>';
+    } else {
+      // Fallback (no debería llegar aquí)
+      matchBadge = '<span class="match-badge">Pendiente</span>';
+    }
     var wcCell;
     if (it.id_woo) {
+      // P1.4: la clave completa que se va a aprender — proveedor + código (o descripción+variación) →
+      // producto Woo — para que el usuario vea exactamente qué asociación está creando, no solo un
+      // fragmento. Mismo criterio de clave que claveAlias() en lib/recepcionAliases.js (código si hay,
+      // si no descripción+variación).
+      var proveedorActual = (document.getElementById('inp-proveedor').value || '').trim() || '(sin proveedor)';
+      var claveAlias = it.codigo_proveedor ? esc(it.codigo_proveedor) : (esc(it.nombre_doc||'') + (it.variacion ? ' ' + esc(it.variacion) : ''));
+      var productoAlias = esc(it.nombre_wc || '') + (it.sku_wc ? ' (' + esc(it.sku_wc) + ')' : '');
       wcCell = '<div class="cell-main">' + esc(it.nombre_wc||'') + '</div>'
         + '<div class="cell-sub">SKU: ' + esc(it.sku_wc||'—') + ' · Stock: ' + (it.stock_wc||0) + ' → ' + ((it.stock_wc||0)+it.cantidad) + '</div>'
-        + '<button class="btn btn-sm" style="margin-top:5px;font-size:11px;padding:3px 9px;color:var(--gray)" onclick="limpiarMatch(\'' + it.id + '\')">✎ Cambiar</button>';
+        + '<button class="btn btn-sm" style="margin-top:5px;font-size:11px;padding:3px 9px;color:var(--gray)" onclick="limpiarMatch(\'' + it.id + '\')">✎ Cambiar</button>'
+        + '<div style="margin-top:6px;font-size:11px">'
+          + '<label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--gray)">'
+            + '<input type="checkbox" ' + (it.aprender_alias ? 'checked' : '') + ' onchange="toggleAprenderAlias(this,\'' + it.id + '\')" style="width:15px;height:15px">'
+            + 'Recordar: ' + esc(proveedorActual) + ' «' + claveAlias + '» → ' + productoAlias
+          + '</label>'
+          + (it.aprender_alias ? '<input type="text" class="cell-sub" aria-label="Motivo, si reemplaza una asociación existente" placeholder="Motivo (solo si reemplaza una asociación anterior)" value="' + esc(it.motivo_alias||'') + '" oninput="cambiarMotivoAlias(this,\'' + it.id + '\')" onblur="sincronizarAliasGuardado(\'' + it.id + '\')" style="width:100%;margin-top:4px;padding:4px 6px;font-size:11px;border:1px solid var(--border);border-radius:4px">' : '')
+        + '</div>';
     } else {
+      var ddId = 'dd-' + it.id;
       wcCell = '<div class="wc-search-wrap">'
-        + '<input class="wc-search-input" type="text" aria-label="Buscar producto en catálogo WooCommerce" placeholder="Buscar en catálogo..." oninput="buscarWC(this,\'' + it.id + '\')" onfocus="abrirDropdown(this)" onblur="cerrarDropdown(this)">'
-        + '<div class="wc-dropdown" id="dd-' + it.id + '"></div>'
+        + '<input class="wc-search-input" type="text" id="wc-search-' + it.id + '" role="combobox" aria-autocomplete="list" aria-controls="' + ddId + '" aria-expanded="false" aria-activedescendant="" aria-label="Buscar producto en catálogo WooCommerce" placeholder="Buscar en catálogo..." oninput="buscarWC(this,\'' + it.id + '\')" onfocus="abrirDropdown(this)" onblur="cerrarDropdown(this)" onkeydown="navegarBusqueda(event,\'' + it.id + '\')">'
+        + '<div class="wc-dropdown" id="' + ddId + '" role="listbox"></div>'
         + '</div>'
-        + '<div style="margin-top:5px;font-size:11px;color:var(--gray2)">Sin match: si es producto nuevo, cargalo manualmente y luego vinculalo. Al confirmar queda como <span style="color:var(--orange)">pendiente</span>, no se pierde.</div>';
+        + '<div style="margin-top:5px;font-size:11px;color:var(--gray2)">Sin match: buscá un producto existente o creá un borrador seguro.</div>'
+        + '<button class="btn btn-sm" type="button" style="margin-top:6px" onclick="abrirAltaBorrador(\'' + it.id + '\')">Crear borrador</button>';
     }
     var reciCls = it.recibido
       ? 'style="font-family:inherit;background:none;border:none;padding:0;font-size:20px;cursor:pointer;user-select:none" title="Marcado como recibido — click para desmarcar"'
@@ -681,7 +862,7 @@ function renderItems() {
     tr.innerHTML = '<td style="color:var(--gray2);font-size:11px">' + (idx+1) + '</td>'
       + '<td>' + (it.codigo_proveedor ? '<span class="cell-code">' + esc(it.codigo_proveedor) + '</span>' : '<span style="color:var(--gray2)">—</span>') + '</td>'
       + '<td><div class="cell-main">' + esc(it.nombre_doc) + (it.variacion ? ' <span style="color:var(--blue);font-weight:400">'+esc(it.variacion)+'</span>' : '') + '</div>'
-        + '<div class="cell-sub">' + matchBadge + (it.marca ? ' · '+esc(it.marca) : '') + '</div></td>'
+        + '<div class="cell-sub">' + matchBadge + (it.marca ? ' · '+esc(it.marca) : '') + razonesExtra + '</div></td>'
       + '<td>' + wcCell + '</td>'
       + '<td style="text-align:center"><input class="qty-input" type="number" aria-label="Cantidad de ' + esc(it.nombre_doc) + '" min="1" value="' + it.cantidad + '" onchange="cambiarCantidad(this,\'' + it.id + '\')" style="width:60px"></td>'
       + '<td style="text-align:center"><button type="button" onclick="toggleRecibido(\'' + it.id + '\')" aria-pressed="' + (!!it.recibido) + '" aria-label="' + (it.recibido ? 'Marcado como recibido, click para desmarcar' : 'No recibido, click para marcar') + '" ' + reciCls + '>' + (it.recibido ? '✅' : '⬜') + '</button></td>'
@@ -691,15 +872,268 @@ function renderItems() {
   });
 }
 
+function toggleAprenderAlias(chk, id) {
+  var it = items.find(function(i){ return String(i.id)===String(id); });
+  if (!it) return;
+  it.aprender_alias = chk.checked;
+  if (!chk.checked) it.motivo_alias = null;
+  renderItems();
+  // Al desmarcar no hay nada que aprender (motivo_alias ya quedó en null); al marcar sin motivo se
+  // sincroniza igual — confirmarAlias() exige motivo solo si reemplaza un alias vigente distinto, y
+  // el rechazo (si lo hay) se muestra al usuario vía sincronizarAliasGuardado().
+  sincronizarAliasGuardado(id);
+}
+function cambiarMotivoAlias(inp, id) {
+  var it = items.find(function(i){ return String(i.id)===String(id); });
+  if (it) it.motivo_alias = inp.value || null;
+}
+
+// P1.2: lista/revoca los aliases vigentes del proveedor actual (para que el usuario pueda ver qué
+// se aprendió y deshacerlo si se aprendió mal, sin tener que buscar en la base a mano).
+function cargarAliasesProveedor() {
+  var proveedor = document.getElementById('inp-proveedor').value.trim();
+  var cont = document.getElementById('aliases-proveedor');
+  if (!proveedor) { cont.innerHTML = ''; return; }
+  fetch('/api/recepciones/aliases?proveedor=' + encodeURIComponent(proveedor))
+    .then(function(r){ return r.json(); })
+    .then(function(d){ renderAliasesProveedor(d.ok ? (d.data || []) : []); })
+    .catch(function(){ renderAliasesProveedor([]); });
+}
+function renderAliasesProveedor(lista) {
+  var cont = document.getElementById('aliases-proveedor');
+  if (!lista.length) { cont.innerHTML = ''; return; }
+  cont.innerHTML = '<div style="font-size:11px;color:var(--gray2);margin-bottom:3px">Aliases aprendidos de este proveedor:</div>'
+    + lista.map(function(a){
+      var clave = a.codigo_norm ? a.codigo_norm : (a.descripcion_norm + (a.variacion_norm ? ' ' + a.variacion_norm : ''));
+      return '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gray);padding:2px 0">'
+        + '<span>«' + esc(clave) + '» → id_woo ' + a.id_woo + (a.sku ? ' (' + esc(a.sku) + ')' : '') + '</span>'
+        + '<button type="button" class="btn btn-sm" style="padding:1px 7px;font-size:10px" onclick="revocarAliasUI(' + a.id + ')">Olvidar</button>'
+        + '</div>';
+    }).join('');
+}
+function revocarAliasUI(aliasId) {
+  abrirModal({
+    titulo: 'Revocar alias',
+    bodyHtml: '<div class="modal-field">'
+      + '<label for="motivo-input">Motivo para dejar de recordar este alias:</label>'
+      + '<textarea id="motivo-input" placeholder="Explicá brevemente..."></textarea>'
+      + '</div>',
+    textConfirm: 'Revocar',
+    textCancel: 'Cancelar',
+    onConfirm: function() {
+      var motivoInput = document.getElementById('motivo-input');
+      var motivo = motivoInput ? motivoInput.value.trim() : '';
+
+      if (!motivo) {
+        mostrarErroresModal(['Completá el motivo']);
+        return; // Modal permanece abierto, usuario puede corregir
+      }
+
+      fetch('/api/recepciones/aliases/' + aliasId + '/revocar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motivo: motivo })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (d.ok) {
+            mostrarStatus('status-match', 'ok', 'Alias revocado correctamente.');
+            cargarAliasesProveedor();
+            _ocultarModalDom(); // Cerrar solo si es exitoso
+          } else {
+            mostrarErroresModal(['No se pudo revocar: ' + (d.error || '')]);
+          }
+        })
+        .catch(function() {
+          mostrarErroresModal(['No se pudo revocar el alias.']);
+        });
+    },
+    onCancel: function() {
+      // cancelarModal ya oculta el DOM
+    }
+  });
+}
+
 function cambiarCantidad(inp, id) {
   var it = items.find(function(i){ return i.id == id; });
   if (it) { it.cantidad = parseInt(inp.value) || 1; actualizarBotones(); }
+}
+
+function abrirAltaBorrador(id) {
+  var it = items.find(function(x) { return String(x.id) === String(id); });
+  if (!it) return;
+
+  // Cargar categorías desde el backend
+  mostrarStatus('status-match', 'loading', 'Cargando categorías...');
+  fetch('/api/nuevos-productos/categorias-woo')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (!d.ok || !d.categorias) {
+        mostrarStatus('status-match', 'err', 'No se pudieron cargar las categorías.');
+        return;
+      }
+
+      var categorias = d.categorias || [];
+      var categoriasHtml = '<option value="">-- Seleccionar categoría --</option>';
+      categorias.forEach(function(cat) {
+        categoriasHtml += '<option value="' + cat.id + '|' + esc(cat.name) + '">' + esc(cat.name) + '</option>';
+      });
+
+      abrirModal({
+        titulo: 'Crear borrador de producto nuevo',
+        bodyHtml: '<div class="modal-field">'
+          + '<label for="titulo-input">Título del producto:</label>'
+          + '<input type="text" id="titulo-input" value="' + esc(it.nombre_doc || '') + '" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="marca-input">Marca:</label>'
+          + '<input type="text" id="marca-input" value="" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="categoria-select">Categoría WooCommerce:</label>'
+          + '<select id="categoria-select">' + categoriasHtml + '</select>'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="precio-input">Precio positivo:</label>'
+          + '<input type="number" id="precio-input" value="1" step="0.01" min="0.01" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="modo-select">Modo de producto:</label>'
+          + '<select id="modo-select">'
+          + '<option value="simple">simple</option>'
+          + '<option value="familia_variable">familia_variable</option>'
+          + '<option value="variacion_existente">variacion_existente</option>'
+          + '</select>'
+          + '</div>'
+          + '<div class="modal-field" id="parent-field" style="display:none;">'
+          + '<label for="parent-input">ID del producto padre variable:</label>'
+          + '<input type="number" id="parent-input" value="" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="atributo-nombre-input">Atributo (nombre), p. ej. Talle o Color — obligatorio solo en familia/variación:</label>'
+          + '<input type="text" id="atributo-nombre-input" value="" />'
+          + '</div>'
+          + '<div class="modal-field">'
+          + '<label for="atributo-valor-input">Atributo (valor):</label>'
+          + '<input type="text" id="atributo-valor-input" value="" />'
+          + '</div>',
+        textConfirm: 'Crear borrador',
+        textCancel: 'Cancelar',
+        onConfirm: function() {
+          var errores = [];
+          var titulo = (document.getElementById('titulo-input').value || '').trim();
+          var marca = (document.getElementById('marca-input').value || '').trim();
+          var categoriaSelect = document.getElementById('categoria-select').value;
+          var precio = Number(document.getElementById('precio-input').value);
+          var modo = document.getElementById('modo-select').value;
+          var atributoNombre = (document.getElementById('atributo-nombre-input').value || '').trim();
+          var atributoValor = (document.getElementById('atributo-valor-input').value || '').trim();
+          var parentId = null;
+
+          // Parsear categoría (formato: "id|nombre")
+          var categoria = null;
+          var categoriaNombre = null;
+          if (categoriaSelect) {
+            var parts = categoriaSelect.split('|');
+            categoria = parts[0];
+            categoriaNombre = parts.slice(1).join('|');
+          }
+
+          // Validación
+          if (!titulo) errores.push('El título es obligatorio');
+          if (!marca) errores.push('La marca es obligatoria');
+          if (!categoria || !categoriaNombre) errores.push('Selecciona una categoría');
+          if (!(precio > 0)) errores.push('El precio debe ser positivo');
+          // El atributo solo es obligatorio para familia/variación (Woo lo necesita para
+          // distinguir variaciones); un producto simple no tiene variaciones.
+          var requiereAtributo = modo === 'familia_variable' || modo === 'variacion_existente';
+          if (requiereAtributo && (!atributoNombre || !atributoValor)) errores.push('El atributo del producto (nombre y valor) es obligatorio para familia/variación');
+          if ((atributoNombre || atributoValor) && (!atributoNombre || !atributoValor)) errores.push('Si cargás un atributo, nombre y valor son obligatorios los dos');
+
+          if (modo === 'variacion_existente') {
+            var parentInput = document.getElementById('parent-input');
+            parentId = Number(parentInput.value) || null;
+            if (!parentId) errores.push('La variación existente requiere un ID de producto padre válido');
+          }
+
+          if (errores.length > 0) {
+            mostrarErroresModal(errores);
+            return; // Modal permanece abierto, usuario puede corregir
+          }
+
+          // Crear borrador
+          var operationId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + String(Math.random()).slice(2);
+          it.alta_operation_id = operationId;
+          it.alta_estado = 'procesando';
+          renderItems();
+          // NO llamar a cerrarModal aquí — esperar a que el fetch sea exitoso
+
+          fetch('/api/nuevos-productos/crear-borrador', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              operation_id: operationId,
+              ficha: {
+                modo: modo,
+                titulo: titulo,
+                marca: marca,
+                categoria_id: Number(categoria),
+                categoria_nombre: categoriaNombre,
+                precio: String(precio),
+                descripcion: '',
+                parent_id: parentId,
+                atributos: atributoNombre && atributoValor ? [{ nombre: atributoNombre, valor: atributoValor }] : []
+              }
+            })
+          })
+            .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+            .then(function(r) {
+              if (!r.data.ok) {
+                it.alta_estado = r.status === 409 ? 'incierto' : 'error';
+                mostrarStatus('status-match', 'err', r.data.error || 'No se pudo crear el borrador. Operación: ' + operationId);
+                return;
+              }
+              it.id_woo = r.data.id_woo;
+              it.sku_wc = r.data.sku;
+              it.nombre_wc = it.nombre_doc;
+              it.stock_wc = 0;
+              it.alta_estado = 'creado';
+              it.match_estado = 'manual_confirmado';
+              it.match_confirmado = true;
+              renderItems();
+              actualizarBotones();
+              mostrarStatus('status-match', 'ok', 'Borrador creado con stock 0. Operación ' + operationId + '.');
+              _ocultarModalDom(); // Cerrar solo si el fetch fue exitoso
+            })
+            .catch(function() {
+              it.alta_estado = 'incierto';
+              mostrarStatus('status-match', 'err', 'No pudimos confirmar WooCommerce. No repitas la operación ' + operationId + '; verificá su estado.');
+            });
+        },
+        onCancel: function() {
+          // cancelarModal ya oculta el DOM
+        }
+      });
+
+      // Mostrar/ocultar campo parentId según el modo
+      var modoSelect = document.getElementById('modo-select');
+      var parentField = document.getElementById('parent-field');
+      modoSelect.onchange = function() {
+        parentField.style.display = modoSelect.value === 'variacion_existente' ? 'block' : 'none';
+      };
+
+      mostrarStatus('status-match', 'ok', '');
+    })
+    .catch(function() {
+      mostrarStatus('status-match', 'err', 'No se pudieron cargar las categorías.');
+    });
 }
 
 function limpiarMatch(id) {
   var it = items.find(function(i){ return i.id == id; });
   if (!it) return;
   it.id_woo = null; it.nombre_wc = null; it.sku_wc = null; it.stock_wc = null;
+  it.aprender_alias = false; it.motivo_alias = null;
   renderItems();
   actualizarBotones();
 }
@@ -714,60 +1148,228 @@ function toggleRecibido(id) {
 
 // ---- BÚSQUEDA WC ----
 
+function limpiarActivedescendant(inp) {
+  inp.setAttribute('aria-activedescendant', '');
+}
+
 function buscarWC(inp, itemId) {
   var q = normalizar(inp.value);
   var dd = document.getElementById('dd-' + itemId);
-  if (!q || q.length < 2) { dd.innerHTML=''; dd.classList.remove('open'); return; }
-  if (catalogoEstado !== 'ok') {
-    dd.innerHTML='<div class="wc-opt" style="color:var(--amber,#e8b93b);pointer-events:none">⚠ Catálogo no disponible — no se puede buscar. <a href="javascript:void(0)" onmousedown="event.preventDefault();cargarCatalogo()" style="color:inherit;text-decoration:underline">Reintentar</a></div>';
-    dd.classList.add('open'); return;
+
+  // Limpiar búsqueda anterior si hay
+  if (!q || q.length < 2) {
+    dd.innerHTML='';
+    dd.classList.remove('open');
+    inp.setAttribute('aria-expanded', 'false');
+    limpiarActivedescendant(inp);
+    // Cancelar debounce si estaba pendiente
+    if (busquedaDebouncers[itemId]) {
+      clearTimeout(busquedaDebouncers[itemId]);
+      delete busquedaDebouncers[itemId];
+    }
+    return;
   }
-  // Se conservan los fragmentos de 1 carácter: descartarlos dejaba `palabras` vacío para
-  // consultas como "A-1" (normalizar() parte por el guión), y un every() sobre un array
-  // vacío da true para TODO el catálogo — devolvía 20 productos sin relación con lo buscado.
-  var palabras = q.split(' ').filter(function(w){ return w.length>0; });
-  var resultados = catalogo.filter(function(p){
-    if (palabras.every(function(w){ return p._busq.indexOf(w)!==-1; })) return true;
-    // GTIN: solo exacto o por prefijo (evita falsos positivos por substring en medio del código)
-    return !!p._gtinNorm && (p._gtinNorm === q || p._gtinNorm.indexOf(q) === 0);
-  }).sort(function(a,b){
-    var scoreA = (a._skuNorm===q) ? 2 : (a._skuNorm.indexOf(q)===0 ? 1 : 0);
-    var scoreB = (b._skuNorm===q) ? 2 : (b._skuNorm.indexOf(q)===0 ? 1 : 0);
-    return scoreB - scoreA;
-  }).slice(0, 20);
-  if (!resultados.length) {
-    dd.innerHTML='<div class="wc-opt" style="color:var(--gray2);pointer-events:none">Sin resultados</div>';
-    dd.classList.add('open'); return;
+
+  // P1.3: cancelar el debounce anterior y lanzar uno nuevo (~300ms)
+  if (busquedaDebouncers[itemId]) {
+    clearTimeout(busquedaDebouncers[itemId]);
   }
-  dd.innerHTML = resultados.map(function(p){
-    // Solo pasamos itemId e idWoo — seleccionarWC busca los demás datos en catalogo[]
-    return '<div class="wc-opt" onmousedown="seleccionarWC(event,\'' + itemId + '\',' + p.id_woo + ')">'
-      + '<span class="wc-opt-name">' + esc(p.nombre) + '</span>'
-      + '<span class="wc-opt-sku">' + esc(p.sku||'—') + '</span>'
-      + '<span class="wc-opt-stock">' + (p.stock||0) + '</span>'
-      + '</div>';
-  }).join('');
+
+  // Mostrar spinner mientras se hace fetch
+  dd.innerHTML='<div class="wc-opt" role="option" aria-disabled="true" style="color:var(--gray);pointer-events:none"><span class="spinner" style="margin-right:8px"></span>Buscando...</div>';
   dd.classList.add('open');
+  inp.setAttribute('aria-expanded', 'true');
+  limpiarActivedescendant(inp);
+
+  // P1.3: generar versión única para esta búsqueda (evitar stale responses)
+  var version = (busquedaVersiones[itemId] || 0) + 1;
+  busquedaVersiones[itemId] = version;
+
+  busquedaDebouncers[itemId] = setTimeout(function() {
+    delete busquedaDebouncers[itemId];
+
+    // P1.3: búsqueda dinámica al backend con ?q=...
+    fetch('/api/recepciones/catalogo?q=' + encodeURIComponent(q))
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        // P1.3: guard contra respuestas stale — comparar versión y valor actual
+        if (busquedaVersiones[itemId] !== version || normalizar(inp.value) !== q) return;
+        if (!d.ok || !d.data) throw new Error('respuesta inválida');
+
+        var resultados = d.data || [];
+        if (!resultados.length) {
+          dd.innerHTML='<div class="wc-opt" role="option" aria-disabled="true" style="color:var(--gray2);pointer-events:none">Sin resultados</div>';
+          // P1.9: Limpiar aria-activedescendant tras repintar
+          limpiarActivedescendant(inp);
+          dd.classList.add('open');
+          inp.setAttribute('aria-expanded', 'true');
+          return;
+        }
+
+        // P1.3: los datos (nombre, sku, stock) vienen en la respuesta, pasarlos directamente
+        dd.innerHTML = resultados.map(function(p, idx){
+          // Para atributos data-* y JavaScript inline, necesitamos escaping diferente:
+          // - nombreRaw/skuRaw: sin escaping, para data-* (getAttribute NO decodifica backslash)
+          // - nombreEsc/skuEsc: con escaping de backslash y comilla, solo para JS inline de onmousedown
+          var nombreRaw = (p.nombre||'');
+          var skuRaw = (p.sku||'');
+          var nombreEsc = nombreRaw.replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          var skuEsc = skuRaw.replace(/\\/g,'\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          var optId = 'dd-' + itemId + '-opt-' + idx;
+          return '<div class="wc-opt" id="' + optId + '" role="option" aria-selected="false" data-id-woo="' + p.id_woo + '" data-nombre="' + esc(nombreRaw) + '" data-sku="' + esc(skuRaw) + '" data-stock="' + (p.stock||0) + '" onmousedown="seleccionarWC(event,\'' + itemId + '\',' + p.id_woo + ',\'' + nombreEsc + '\',\'' + skuEsc + '\',' + (p.stock||0) + ')">'
+            + '<span class="wc-opt-name">' + esc(p.nombre) + '</span>'
+            + '<span class="wc-opt-sku">' + esc(p.sku||'—') + '</span>'
+            + '<span class="wc-opt-stock">' + (p.stock||0) + '</span>'
+            + '</div>';
+        }).join('');
+        // P1.9: Limpiar aria-activedescendant tras repintar con nuevos resultados
+        limpiarActivedescendant(inp);
+        dd.classList.add('open');
+        inp.setAttribute('aria-expanded', 'true');
+      })
+      .catch(function(err) {
+        // P1.3: guard anti-stale en catch también — no pintar error obsoleto
+        if (busquedaVersiones[itemId] !== version || normalizar(inp.value) !== q) return;
+        // P1.3: usar closure para ref estable a inp, y agregar id al input para selector
+        dd.innerHTML='<div class="wc-opt" role="option" aria-disabled="true" style="color:var(--red,#f87171)">⚠ Error al buscar. <button type="button" onclick="var inp=document.getElementById(\'wc-search-' + itemId + '\'); if(inp) buscarWC(inp, \'' + itemId + '\');" style="background:none;border:none;color:inherit;text-decoration:underline;cursor:pointer;font-family:inherit;padding:0;margin:0">Reintentar</button></div>';
+        // P1.9: Limpiar aria-activedescendant tras repintar con error
+        limpiarActivedescendant(inp);
+        dd.classList.add('open');
+      });
+  }, 300);
 }
 
-function seleccionarWC(evt, itemId, idWoo) {
+function seleccionarWC(evt, itemId, idWoo, nombre, sku, stock) {
   evt.preventDefault();
   var it = items.find(function(i){ return i.id == itemId; });
   if (!it) return;
-  var prod = catalogo.find(function(p){ return p.id_woo === idWoo; });
-  if (!prod) return;
+
+  // P1.3: los datos (nombre, sku, stock) se reciben como argumentos sin buscar en catalogo[]
   it.id_woo   = idWoo;
-  it.nombre_wc= prod.nombre;
-  it.sku_wc   = prod.sku || '';
-  it.stock_wc = prod.stock || 0;
+  it.nombre_wc= nombre || '';
+  it.sku_wc   = sku || '';
+  it.stock_wc = parseInt(stock || '0', 10);
+  it.match_estado = 'manual_confirmado';
+  it.match_confirmado = true;
+  it.match_origen = 'seleccion_manual';
+
+  // Cerrar dropdown y limpiar ARIA activedescendant
+  var inp = document.getElementById('wc-search-' + itemId);
+  var dd = document.getElementById('dd-' + itemId);
+  if (inp) {
+    inp.setAttribute('aria-expanded', 'false');
+    inp.setAttribute('aria-activedescendant', '');
+  }
+  if (dd) {
+    dd.classList.remove('open');
+  }
+
   renderItems();
   actualizarBotones();
+  sincronizarAliasGuardado(itemId); // P1.3: si el ítem ya está guardado, persiste el cambio ya mismo
 }
 
-function abrirDropdown(inp) { /* dropdown abre on input */ }
+function abrirDropdown(inp) {
+  // Abrir dropdown si el input tiene texto y hay opciones
+  var dd = document.getElementById(inp.getAttribute('aria-controls'));
+  if (!dd) return;
+  var q = normalizar(inp.value);
+  if (q.length >= 2) {
+    dd.classList.add('open');
+    inp.setAttribute('aria-expanded', 'true');
+  }
+}
+
+function navegarBusqueda(evt, itemId) {
+  var inp = document.getElementById('wc-search-' + itemId);
+  var dd = document.getElementById('dd-' + itemId);
+  if (!dd || !inp) return;
+
+  // Verificar si el evento es de tecla
+  if (!evt.key) return;
+
+  // ArrowDown/ArrowUp: navegar entre opciones
+  if (evt.key === 'ArrowDown' || evt.key === 'ArrowUp') {
+    evt.preventDefault();
+    var opts = Array.from(dd.querySelectorAll('[role="option"]'));
+    // P1.10: Filtrar opciones deshabilitadas (placeholders como "Buscando...", "Sin resultados", "⚠ Error...")
+    opts = opts.filter(function(o) { return o.getAttribute('aria-disabled') !== 'true'; });
+    if (!opts.length) return;
+
+    // Encontrar índice actual desde aria-activedescendant
+    var currentId = inp.getAttribute('aria-activedescendant');
+    var currentIdx = currentId ? opts.findIndex(function(o) { return o.id === currentId; }) : -1;
+
+    // Calcular siguiente índice
+    var nextIdx;
+    if (evt.key === 'ArrowDown') {
+      nextIdx = currentIdx < opts.length - 1 ? currentIdx + 1 : 0; // wrap to start
+    } else {
+      nextIdx = currentIdx > 0 ? currentIdx - 1 : opts.length - 1; // wrap to end
+    }
+
+    // Actualizar aria-activedescendant y aria-selected
+    opts.forEach(function(opt, idx) {
+      opt.setAttribute('aria-selected', idx === nextIdx ? 'true' : 'false');
+    });
+
+    inp.setAttribute('aria-activedescendant', opts[nextIdx].id);
+
+    // Abrir dropdown si no estaba abierto
+    if (!dd.classList.contains('open')) {
+      dd.classList.add('open');
+      inp.setAttribute('aria-expanded', 'true');
+    }
+  }
+
+  // Enter: seleccionar opción resaltada
+  if (evt.key === 'Enter') {
+    evt.preventDefault();
+    var currentId = inp.getAttribute('aria-activedescendant');
+    if (!currentId) return;
+
+    var selectedOpt = document.getElementById(currentId);
+    if (!selectedOpt) return;
+
+    // Disparar selección
+    var idWoo = selectedOpt.getAttribute('data-id-woo');
+    var nombre = selectedOpt.getAttribute('data-nombre');
+    var sku = selectedOpt.getAttribute('data-sku');
+    var stock = selectedOpt.getAttribute('data-stock');
+
+    // P1.9: Validar solo idWoo (sku puede ser cadena vacía legítima)
+    // Mismo criterio que en seleccionarWC mousedown: permitir productos sin SKU o sin nombre
+    if (idWoo != null) {
+      // Disparar mousedown para que use el mismo handler que el click
+      var fakeEvt = { preventDefault: function() {} };
+      seleccionarWC(fakeEvt, itemId, parseInt(idWoo, 10), nombre, sku || '', parseInt(stock || '0', 10));
+
+      // Cerrar dropdown y limpiar activedescendant
+      dd.classList.remove('open');
+      inp.setAttribute('aria-expanded', 'false');
+      inp.setAttribute('aria-activedescendant', '');
+    }
+  }
+
+  // Escape: cerrar dropdown
+  if (evt.key === 'Escape') {
+    evt.preventDefault();
+    dd.classList.remove('open');
+    inp.setAttribute('aria-expanded', 'false');
+    inp.setAttribute('aria-activedescendant', '');
+  }
+}
+
 function cerrarDropdown(inp) {
-  var dd = inp.nextElementSibling;
-  if (dd) setTimeout(function(){ dd.classList.remove('open'); }, 150);
+  var ddId = inp.getAttribute('aria-controls');
+  var dd = ddId ? document.getElementById(ddId) : inp.nextElementSibling;
+  if (dd) {
+    setTimeout(function(){
+      dd.classList.remove('open');
+      inp.setAttribute('aria-expanded', 'false');
+      inp.setAttribute('aria-activedescendant', '');
+    }, 150);
+  }
 }
 
 // ---- ACCIONES ----
@@ -775,13 +1377,39 @@ function cerrarDropdown(inp) {
 function actualizarBotones() {
   var hayItems = items.length > 0;
   var hayProv  = document.getElementById('inp-proveedor').value.trim().length > 0;
-  var habilitado = hayItems && hayProv;
-  document.getElementById('btn-borrador').disabled = !habilitado;
-  document.getElementById('btn-confirmar').disabled = !habilitado;
-  document.getElementById('btn-confirmar-solo').disabled = !habilitado;
-  var recibidos    = items.filter(function(i){ return i.recibido; }).length;
+
+  // P1.4: Un ítem es bloqueante si está recibido pero no está resuelto.
+  // Se considera resuelto si: tiene id_woo Y (match_estado==='resuelto' O esAltaCreada OR estaConfirmado)
+  var tieneBloqueantes = items.some(function(i){
+    if (!i.recibido) return false;
+    if (!i.id_woo) return true; // Sin match y sin alta
+    // Tiene id_woo: chequear si está resuelto por backend, creado, o confirmado manualmente
+    var estaConfirmado = i.match_confirmado === true;
+    var esAltaCreada = i.alta_estado === 'creado';
+    var esResuelto = i.match_estado === 'resuelto'; // Backend aseguró que es seguro
+    return !(esResuelto || esAltaCreada || estaConfirmado); // Bloqueante si NO es resuelto
+  });
+
+  // P1.5: En modo "solo documento", los matches no importan porque el stock no se actualiza.
+  // Solo exigimos items y proveedor. En modo normal, exigimos que no haya items bloqueantes.
+  var habilitadoNormal = hayItems && hayProv && !tieneBloqueantes;
+  var habilitadoSolo = hayItems && hayProv;
+
+  document.getElementById('btn-borrador').disabled = !(hayItems && hayProv);
+  document.getElementById('btn-confirmar').disabled = !habilitadoNormal;
+  document.getElementById('btn-confirmar-solo').disabled = soloDocumento ? !habilitadoSolo : !habilitadoNormal;
+
+  var recibidos = items.filter(function(i){ return i.recibido; }).length;
+
+  // Conteos independientes y explícitos para mayor claridad
   var conMatchReci = items.filter(function(i){ return i.recibido && i.id_woo; }).length;
-  var sinMatchReci = recibidos - conMatchReci;
+  var sinMatchReci = items.filter(function(i){ return i.recibido && !i.id_woo; }).length;
+
+  // P1.4: Ítems recibidos que requieren revisión manual (match_estado==='revisar' sin confirmación)
+  var requierenRevision = items.filter(function(i){
+    return i.recibido && i.match_estado === 'revisar' && i.match_confirmado !== true;
+  }).length;
+
   var noRecibidos  = items.length - recibidos;
   var msg;
   if (soloDocumento) {
@@ -789,7 +1417,8 @@ function actualizarBotones() {
   } else {
     msg = recibidos + ' de ' + items.length + ' marcados como recibidos · '
       + conMatchReci + ' actualizarán stock en WC';
-    if (sinMatchReci) msg += ' · ' + sinMatchReci + ' sin match WC';
+    if (requierenRevision) msg += ' · ⚠ ' + requierenRevision + ' requieren confirmación manual: revisar candidatos antes de confirmar';
+    if (sinMatchReci) msg += ' · ' + sinMatchReci + ' sin match: buscá o creá borrador antes de confirmar';
     if (noRecibidos)  msg += ' · ' + noRecibidos + ' sin recibir';
   }
   document.getElementById('status-confirm').textContent = msg;
@@ -817,7 +1446,24 @@ function payloadRecepcion() {
         precio_unitario: it.precio_unitario || null,
         stock_previo: it.stock_wc != null ? it.stock_wc : null,
         stock_nuevo: it.id_woo != null ? (it.stock_wc||0) + it.cantidad : null,
-        recibido: it.recibido ? 1 : 0
+        recibido: it.recibido ? 1 : 0,
+        // Un ítem con alta de producto nuevo ya confirmada por Woo (abrirAltaBorrador) tiene que
+        // viajar como 'creado', con su alta_operation_id — si no, el backend lo trata como un match
+        // común: nunca vuelve a verificar la alta contra Woo antes de aplicar stock (P0.3,
+        // verificarAltaCreado) y el primer stock de esa alta se sincroniza a Mercado Libre por error
+        // (la exclusión de P0.3 depende de que llegue como 'creado').
+        // P1.8: Un ítem con match_estado==='revisar' sin confirmar no debe tocar stock
+        // (su id_woo es solo un candidato, no confirmado) — viaja como 'sin_match'.
+        estado_item: it.alta_estado === 'creado'
+          ? 'creado'
+          : (it.id_woo && !(it.match_estado === 'revisar' && it.match_confirmado !== true)
+              ? 'pendiente'
+              : 'sin_match'),
+        alta_operation_id: it.alta_estado === 'creado' ? (it.alta_operation_id || null) : null,
+        match_origen: it.match_origen || null,
+        match_confirmado: it.match_confirmado ? 1 : 0,
+        aprender_alias: it.aprender_alias ? 1 : 0,
+        motivo_alias: it.motivo_alias || null
       };
     })
   };
@@ -859,30 +1505,68 @@ function confirmarRecepcion() {
   if (!payload.proveedor) { alert('Ingresá el proveedor.'); return; }
   if (!payload.items.length) { alert('Agregá al menos un ítem.'); return; }
 
+  // P1.8: Desglose de 4 categorías de ítems
   var recibidos = items.filter(function(i){ return i.recibido !== false && i.recibido !== 0; });
-  var conMatch = recibidos.filter(function(i){ return i.id_woo; }).length;
-  var sinMatch = recibidos.filter(function(i){ return !i.id_woo; }).length;
-  if (conMatch === 0 && sinMatch === 0) {
+
+  // Seguros: recibidos con (match_estado==='resuelto' OR match_confirmado===true) sin alta
+  var seguros = recibidos.filter(function(i){
+    return i.id_woo && (i.match_estado === 'resuelto' || i.match_confirmado === true) && i.alta_estado !== 'creado';
+  }).length;
+
+  // Manuales: recibidos con alta_estado==='creado' (estos tocan stock también)
+  var manuales = recibidos.filter(function(i){
+    return i.alta_estado === 'creado';
+  }).length;
+
+  // Pendientes: por construcción, el resto de recibidos que no son Seguros ni Manuales
+  // (esto asegura que la suma siempre sea = recibidos.length, sin depender de filtros complementarios)
+  var pendientes = recibidos.length - seguros - manuales;
+
+  // No recibidos: ítems del documento no marcados como recibidos
+  var noRecibidos = items.filter(function(i){
+    return i.recibido === false || i.recibido === 0;
+  }).length;
+
+  if (recibidos.length === 0) {
     alert('No hay ítems recibidos para procesar. Marcá al menos un ítem como recibido.');
     return;
   }
-  var msg = 'Se actualizará el stock de ' + conMatch + ' producto(s) en WooCommerce.';
-  if (sinMatch > 0) {
-    msg += '\n\n⚠️ ' + sinMatch + ' ítem(s) SIN match quedarán PENDIENTES (sin cargar stock). '
-         + 'Quedan visibles en el Historial para resolver después. ¿Confirmar igual?';
-  } else {
-    msg += ' ¿Confirmar?';
+
+  // Armar mensaje con desglose claro
+  var actualizaran = seguros + manuales;
+  var msg = '';
+  if (actualizaran > 0) {
+    var lineas = [];
+    if (seguros > 0) lineas.push(seguros + ' seguro' + (seguros > 1 ? 's' : '') + ' (match automático)');
+    if (manuales > 0) lineas.push(manuales + ' manual' + (manuales > 1 ? 's' : '') + ' (alta nueva)');
+    msg = lineas.join(' + ') + ' actualizarán stock en WooCommerce.';
   }
+
+  if (pendientes > 0) {
+    if (msg) msg += ' ';
+    msg += pendientes + ' quedará' + (pendientes > 1 ? 'n' : '') + ' pendiente' + (pendientes > 1 ? 's' : '') + ' sin match (visible en Historial para resolver después).';
+  }
+
+  if (noRecibidos > 0) {
+    if (msg) msg += ' ';
+    msg += noRecibidos + ' ítem' + (noRecibidos > 1 ? 's' : '') + ' no recibido' + (noRecibidos > 1 ? 's' : '') + ' no se procesa' + (noRecibidos > 1 ? 'n' : '') + '.';
+  }
+
+  msg += '\n\n¿Confirmar?';
   if (!confirm(msg)) return;
 
   document.getElementById('btn-borrador').disabled  = true;
   document.getElementById('btn-confirmar').disabled = true;
   mostrarStatus('status-confirm','loading','Guardando recepción...');
+  // Limpiar los chips de sync_ml de un intento anterior: si este reintento falla antes
+  // de llegar a /confirmar (o la red se corta), no deben quedar describiendo un estado
+  // de ML que ya no corresponde a nada.
+  renderSyncMl('sync-ml-confirm', null);
 
   var pasos = recepcionGuardadaId
     ? fetch('/api/recepciones/' + recepcionGuardadaId + '/actualizar', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ items: payload.items, documentos: payload.documentos })
+        body: JSON.stringify({ items: payload.items, documentos: payload.documentos, solo_documento: payload.solo_documento })
       }).then(function(r){ return r.json(); })
     : fetch('/api/recepciones', {
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -892,11 +1576,16 @@ function confirmarRecepcion() {
   pasos.then(function(d) {
     if (!d.ok) throw new Error(d.error);
     var rid = d.id;
-    mostrarStatus('status-confirm','loading','Actualizando stock en WooCommerce (' + conMatch + ' productos)...');
+    mostrarStatus('status-confirm','loading','Actualizando stock en WooCommerce (' + actualizaran + ' productos)...');
     return fetch('/api/recepciones/' + rid + '/confirmar', { method:'POST' })
       .then(function(r){ return r.json(); })
       .then(function(conf){
         document.getElementById('btn-borrador').disabled  = false;
+        // Feedback de sincronización a ML: independiente de conf.ok — si Woo falló para
+        // algún ítem, los SKUs que SÍ se aplicaron pueden igual tener resultado en sync_ml,
+        // y es justo el caso donde el operario más necesita verlo (no ocultarlo en la rama
+        // de error).
+        renderSyncMl('sync-ml-confirm', conf.sync_ml);
         if (conf.ok) {
           var msgOk = conf.solo_documento
             ? '✓ Documento registrado. Recepción #' + rid + ' confirmada sin cambios en stock.'
@@ -908,7 +1597,8 @@ function confirmarRecepcion() {
           mostrarStatus('status-confirm', (conf.pendientes && conf.pendientes.length) ? 'err' : 'ok', msgOk);
           // Limpiar para nueva recepción
           items = []; docs = []; recepcionGuardadaId = null;
-          document.getElementById('inp-proveedor').value = '';
+          // P1.2: sincronizar proveedor base al resetear
+          sincronizarProveedorBase('');
           var impEl = document.getElementById('inp-importador');
           impEl.value = '';
           impEl.dataset.editadoManual = '';
@@ -999,7 +1689,8 @@ function retomar(id) {
       var rec = d.data;
 
       // Poblar encabezado
-      document.getElementById('inp-proveedor').value    = rec.proveedor || '';
+      // P1.2: sincronizar proveedor base ANTES de setear importador (que depends del input)
+      sincronizarProveedorBase(rec.proveedor || '');
       document.getElementById('inp-importador').value   = rec.importador || rec.proveedor || '';
       document.getElementById('inp-numero-pedido').value = rec.numero_pedido || '';
       document.getElementById('inp-fecha').value        = rec.fecha || new Date().toISOString().slice(0,10);
@@ -1014,22 +1705,34 @@ function retomar(id) {
       });
 
       // Restaurar items (con sus matches ya guardados)
+      // P1.3: no depende de catalogo[] en memoria — usa nombre_doc como fallback
       items = (rec.items || []).map(function(it){
-        // Buscar nombre del producto en el catálogo si hay match WC
-        var catItem = it.id_woo ? catalogo.find(function(c){ return c.id_woo === it.id_woo; }) : null;
+        // P0.4: restaurar el vínculo del alta y el estado de match — si se pierden acá, un
+        // reguardado (payloadRecepcion) manda el ítem como un match común (sin alta_operation_id)
+        // y el primer stock de un producto nuevo puede sincronizarse a Mercado Libre por error.
+        // El backend tiene su propia defensa (opIdSiVerificable busca por id_woo si esto falla),
+        // pero acá además evita forzar una reconfirmación manual innecesaria de ítems ya resueltos.
+        var esAltaCreada  = it.alta_estado === 'creado';
+        var eraMatchOk    = it.id_woo && it.estado_item && it.estado_item !== 'sin_match';
         return {
           id:               Date.now() + Math.random(),
+          db_id:            it.id, // P1.3: id real de recepcion_items — habilita /resolver sobre este ítem
           nombre_doc:       it.nombre_doc,
           codigo_proveedor: it.codigo_proveedor || null,
           cantidad:         it.cantidad,
           precio_unitario:  it.precio_unitario || null,
           id_woo:           it.id_woo || null,
           sku_wc:           it.sku || null,
-          nombre_wc:        catItem ? catItem.nombre : it.nombre_doc,
+          nombre_wc:        it.nombre_doc, // P1.3: fallback a nombre_doc sin depender de catálogo
           stock_wc:         it.stock_previo != null ? it.stock_previo : null,
           match_tipo:       it.id_woo ? 'guardado' : null,
           match_score:      it.id_woo ? 99 : 0,
-          recibido:         it.recibido === 1 || it.recibido === true
+          recibido:         it.recibido === 1 || it.recibido === true,
+          alta_operation_id: it.alta_operation_id || null,
+          alta_estado:       it.alta_estado || null,
+          match_confirmado:  esAltaCreada || eraMatchOk,
+          match_estado:      esAltaCreada || eraMatchOk ? 'resuelto' : null,
+          match_origen:      null // no se persiste server-side; no crítico para la exclusión de ML
         };
       });
 
@@ -1038,12 +1741,138 @@ function retomar(id) {
       renderItems();
       actualizarBotones();
 
+      // P1.3: resolver nombres reales de Woo de forma asincrónica para items con id_woo
+      items.forEach(function(item) {
+        if (item.id_woo && item.sku_wc) {
+          fetch('/api/recepciones/catalogo?q=' + encodeURIComponent(item.sku_wc))
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (d.ok && d.data && d.data.length > 0) {
+                var prod = d.data.find(function(p) { return p.id_woo === item.id_woo; });
+                if (prod && prod.nombre) {
+                  item.nombre_wc = prod.nombre;
+                  // TODO/nota: renderItems() completo puede pisar inputs del usuario (ej. cantidad sin blur)
+                  // si se dispara mientras tanto. Refactor: actualizar solo el item en DOM en lugar de re-render completo.
+                  renderItems();
+                }
+              }
+            })
+            .catch(function() {}); // Silenciar errores, ya tenemos nombre_doc como fallback
+        }
+      });
+
       // Cambiar al tab Nueva recepción
       mostrarTab('nueva');
 
       mostrarStatus('status-confirm','ok','Borrador #' + id + ' cargado. Revisá los ítems y confirmá.');
     })
     .catch(function(){ alert('Error al cargar el borrador.'); });
+}
+
+// PUNTO 3: Conciliar un ítem en operacion_incierta
+function conciliarStockItem(event, recId, itemId) {
+  event.stopPropagation();
+  event.preventDefault();
+  mostrarStatus('status-hist', 'loading', 'Conciliando con WooCommerce...');
+  fetch('/api/recepciones/' + recId + '/items/' + itemId + '/conciliar-stock', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  })
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+    .then(function(r) {
+      if (!r.data.ok) {
+        var errMsg = r.status === 404 ? 'Ítem no encontrado' : r.status === 409 ? 'El ítem no está en estado "operacion_incierta"' : r.data.error;
+        mostrarStatus('status-hist', 'err', 'Error: ' + errMsg);
+        return;
+      }
+      mostrarStatus('status-hist', 'ok', '✓ Ítem conciliado — estado: ' + r.data.estado + (r.data.stock_nuevo != null ? ', stock: ' + r.data.stock_nuevo : ''));
+      // Recargar historial para ver cambios
+      setTimeout(function() { cargarHistorial(); }, 500);
+    })
+    .catch(function(e) {
+      mostrarStatus('status-hist', 'err', 'Error: ' + e.message);
+    });
+}
+
+// PUNTO 3: Mostrar stock actual de Woo antes de resolver conflicto (HUECO 3)
+function mostrarDialogoResolverConflicto(recId, itemId, item) {
+  // Primero cargar el stock actual de Woo
+  mostrarStatus('status-hist', 'loading', 'Leyendo stock actual desde WooCommerce...');
+  fetch('/api/recepciones/' + recId + '/items/' + itemId + '/stock-actual-woo')
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+    .then(function(r) {
+      if (!r.data.ok) {
+        mostrarStatus('status-hist', 'err', 'Error al leer stock actual: ' + r.data.error);
+        return;
+      }
+      var stockActual = r.data.stock_actual;
+      var stockPrevio = item.stock_previo || '?';
+      var stockObjetivo = item.stock_objetivo || '?';
+
+      // Mostrar un diálogo con opciones
+      var titulo = 'Resolver conflicto de stock';
+      var msg = 'Stock previo: ' + stockPrevio + '\nStock objetivo (intentado): ' + stockObjetivo + '\nStock actual en Woo: ' + stockActual + '\n\n';
+
+      // Usar confirm() nativo para escoger opción
+      var opcion = confirm(msg + 'Click "Aceptar" para aceptar el stock de Woo, o "Cancelar" para reintentar.\n\nNOTA: Si elegís Reintentar y el PATCH anterior YA se aplicó, el stock se duplicará. Solo reintentar si estás seguro de que no llegó.');
+
+      if (opcion) {
+        // Aceptar stock de Woo
+        pedirMotivoYResolver(recId, itemId, 'aceptar_woo');
+      } else {
+        // Reintentar
+        pedirMotivoYResolver(recId, itemId, 'reintentar');
+      }
+    })
+    .catch(function(e) {
+      mostrarStatus('status-hist', 'err', 'Error: ' + e.message);
+    });
+}
+
+// PUNTO 3: Pedir motivo y resolver conflicto (HUECO 2)
+function pedirMotivoYResolver(recId, itemId, decision) {
+  var decisionLabel = decision === 'aceptar_woo' ? 'Aceptar stock de WooCommerce' : 'Reintentar desde cero';
+  var motivo = prompt('Explicá el motivo de esta decisión (' + decisionLabel + '):');
+  if (motivo === null) {
+    // Cancelado
+    mostrarStatus('status-hist', 'ok', 'Operación cancelada');
+    return;
+  }
+  if (motivo.trim() === '') {
+    mostrarStatus('status-hist', 'err', 'El motivo es obligatorio');
+    return;
+  }
+
+  mostrarStatus('status-hist', 'loading', 'Resolviendo conflicto (' + decisionLabel + ')...');
+  fetch('/api/recepciones/' + recId + '/items/' + itemId + '/resolver-conflicto', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision: decision, motivo: motivo })
+  })
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+    .then(function(r) {
+      if (!r.data.ok) {
+        var errMsg = '';
+        if (r.status === 404) errMsg = 'Ítem no encontrado';
+        else if (r.status === 409) {
+          // HUECO 1: El PATCH ya se aplicó, no se puede reintentar
+          errMsg = 'No se puede reintentar: ' + r.data.error;
+        } else if (r.status === 400) errMsg = r.data.error;
+        else errMsg = r.data.error;
+        mostrarStatus('status-hist', 'err', 'Error: ' + errMsg);
+        return;
+      }
+      var msg = decision === 'aceptar_woo'
+        ? '✓ Conflicto resuelto — se aceptó stock de WooCommerce (' + r.data.stock_nuevo + ')'
+        : '✓ Ítem marcado para reintentar aplicación desde cero';
+      mostrarStatus('status-hist', 'ok', msg);
+      // Recargar historial para ver cambios
+      setTimeout(function() { cargarHistorial(); }, 500);
+    })
+    .catch(function(e) {
+      mostrarStatus('status-hist', 'err', 'Error: ' + e.message);
+    });
 }
 
 function toggleHist(id) {
@@ -1066,17 +1895,25 @@ function toggleHist(id) {
             + (TIPOS_LABEL[doc.tipo]||doc.tipo) + (doc.numero ? ' #'+esc(doc.numero) : '') + fileLink + '</span>';
         }).join('');
         var items_html = (rec.items||[]).map(function(it, i){
+          var accionesHtml = '';
+          // PUNTO 3: botones de acción para ítems en estados especiales
+          if (it.estado_item === 'operacion_incierta') {
+            accionesHtml = '<button class="btn btn-sm" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="conciliarStockItem(event,' + id + ',' + it.id + ')">Conciliar</button>';
+          } else if (it.estado_item === 'conflicto_stock') {
+            accionesHtml = '<button class="btn btn-sm" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-bd);padding:4px 8px;font-size:11px;cursor:pointer" onclick="event.stopPropagation(); event.preventDefault(); mostrarDialogoResolverConflicto(' + id + ',' + it.id + ', {stock_previo:' + (it.stock_previo != null ? it.stock_previo : 'null') + ',stock_objetivo:' + (it.stock_objetivo != null ? it.stock_objetivo : 'null') + '})">Resolver conflicto</button>';
+          }
           return '<tr>'
             + '<td style="color:var(--gray2)">'+(i+1)+'</td>'
             + '<td>'+(it.codigo_proveedor?'<span style="font-family:monospace;color:var(--blue)">'+esc(it.codigo_proveedor)+'</span>':'—')+'</td>'
             + '<td>'+esc(it.nombre_doc)+'</td>'
-            + '<td>'+(it.sku?esc(it.sku):'<span style="color:var(--red)">sin match</span>')+'</td>'
+            + '<td>'+(it.sku?esc(it.sku)+'<span style="font-size:10px;color:var(--gray2);margin-left:6px">'+esc(it.estado_item||'—')+'</span>':'<span style="color:var(--red)">sin match</span>')+'</td>'
             + '<td style="text-align:center">'+it.cantidad+'</td>'
-            + '<td style="text-align:center">'+(it.stock_previo!=null?it.stock_previo+'→'+it.stock_nuevo:'—')+'</td>'
+            + '<td style="text-align:center">'+(it.stock_previo!=null?it.stock_previo+'→'+(it.stock_nuevo!=null?it.stock_nuevo:'?'):'—')+'</td>'
+            + '<td style="text-align:center;font-size:12px">' + (accionesHtml || '—') + '</td>'
             + '</tr>';
         }).join('');
         detail.innerHTML = (docs_html?'<div style="margin-bottom:8px">'+docs_html+'</div>':'')
-          + '<table class="hist-items-table"><thead><tr><th>#</th><th>Cód. prov.</th><th>Descripción</th><th>SKU WC</th><th>Cant.</th><th>Stock</th></tr></thead><tbody>'+items_html+'</tbody></table>';
+          + '<table class="hist-items-table"><thead><tr><th>#</th><th>Cód. prov.</th><th>Descripción</th><th>SKU WC</th><th>Cant.</th><th>Stock</th><th>Acción</th></tr></thead><tbody>'+items_html+'</tbody></table>';
       })
       .catch(function(){ detail.textContent = 'Error cargando detalle'; });
   }
@@ -1095,6 +1932,179 @@ function mostrarStatus(id, tipo, msg) {
   el.innerHTML = (tipo==='loading' ? '<span class="spinner"></span>' : '') + '<span>' + esc(msg) + '</span>';
   el.style.display = '';
 }
+
+// ---- MODAL ACCESIBLE ----
+
+var modalState = { isOpen: false, triggerElement: null, onConfirm: null, onCancel: null, focusTrap: null };
+
+function abrirModal(config) {
+  var overlay = document.getElementById('modal-overlay');
+  var dialog = document.getElementById('modal-dialog');
+  var title = document.getElementById('modal-title');
+  var body = document.getElementById('modal-body');
+  var errorContainer = document.getElementById('modal-errors');
+  var confirmBtn = document.getElementById('modal-confirm-btn');
+  var cancelBtn = document.getElementById('modal-cancel-btn');
+
+  if (!overlay || !dialog) return;
+
+  // Guardar elemento que abrió el modal para devolver foco después
+  modalState.triggerElement = document.activeElement;
+  modalState.onConfirm = config.onConfirm || function() {};
+  modalState.onCancel = config.onCancel || function() {};
+
+  // Actualizar contenido del modal
+  title.textContent = config.titulo || '';
+  body.innerHTML = config.bodyHtml || '';
+  errorContainer.innerHTML = '';
+  errorContainer.classList.remove('show');
+
+  // Actualizar textos de botones si se especifican
+  confirmBtn.textContent = config.textConfirm || 'Confirmar';
+  cancelBtn.textContent = config.textCancel || 'Cancelar';
+
+  // Abrir modal
+  overlay.classList.add('open');
+  modalState.isOpen = true;
+
+  // Hacer foco en el primer input
+  setTimeout(function() {
+    var firstInput = body.querySelector('input, textarea, select');
+    if (firstInput) firstInput.focus();
+    else confirmBtn.focus();
+  }, 50);
+
+  // Limpiar handlers viejos
+  confirmBtn.onclick = null;
+  cancelBtn.onclick = null;
+
+  // Asignar handlers nuevos
+  confirmBtn.onclick = function() { confirmarModal(); };
+  cancelBtn.onclick = function() { cancelarModal(); };
+}
+
+// Funciones internas para manejar confirmación y cancelación
+function confirmarModal() {
+  if (modalState.onConfirm) {
+    modalState.onConfirm();
+  }
+  // El callback decide si cerrar (llamando a _ocultarModalDom)
+  // Si la validación falla, el modal queda abierto
+}
+
+function cancelarModal() {
+  // Cancelar siempre cierra sin validación
+  if (modalState.onCancel) {
+    modalState.onCancel();
+  }
+  _ocultarModalDom();
+}
+
+// Función interna que sólo oculta el DOM, sin disparar callbacks
+function _ocultarModalDom() {
+  var overlay = document.getElementById('modal-overlay');
+  if (!overlay) return;
+
+  overlay.classList.remove('open');
+  modalState.isOpen = false;
+
+  // Devolver foco al elemento que abrió el modal
+  if (modalState.triggerElement) {
+    modalState.triggerElement.focus();
+  }
+}
+
+// Función pública para cerrar manualmente (usada por Escape)
+function cerrarModal(confirmar) {
+  if (confirmar) {
+    confirmarModal();
+  } else {
+    cancelarModal();
+  }
+}
+
+function mostrarErroresModal(errores) {
+  var errorContainer = document.getElementById('modal-errors');
+  if (!errorContainer) return;
+  if (!errores || errores.length === 0) {
+    errorContainer.classList.remove('show');
+    return;
+  }
+  var html = '<ul>';
+  errores.forEach(function(err) {
+    html += '<li>' + esc(err) + '</li>';
+  });
+  html += '</ul>';
+  errorContainer.innerHTML = html;
+  errorContainer.classList.add('show');
+}
+
+// Trap focus dentro del modal y cerrar con Escape
+document.addEventListener('keydown', function(e) {
+  if (!modalState.isOpen) return;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    cerrarModal(false);
+    return;
+  }
+
+  // Implementar focus trap para Tab/Shift+Tab
+  if (e.key === 'Tab') {
+    var dialog = document.getElementById('modal-dialog');
+    if (!dialog) return;
+
+    // Obtener todos los elementos focuseables dentro del modal
+    var focusableSelectors = 'input, textarea, select, button:not([disabled])';
+    var focusableElements = Array.from(dialog.querySelectorAll(focusableSelectors))
+      .filter(function(el) {
+        // Excluir elementos ocultos
+        return el.offsetParent !== null || el.type === 'hidden';
+      });
+
+    if (focusableElements.length === 0) return;
+
+    var firstElement = focusableElements[0];
+    var lastElement = focusableElements[focusableElements.length - 1];
+    var activeElement = document.activeElement;
+
+    // Si se presiona Shift+Tab en el primer elemento, ir al último
+    if (e.shiftKey && activeElement === firstElement) {
+      e.preventDefault();
+      lastElement.focus();
+    }
+    // Si se presiona Tab en el último elemento, ir al primero
+    else if (!e.shiftKey && activeElement === lastElement) {
+      e.preventDefault();
+      firstElement.focus();
+    }
+  }
+});
+
+// Chips de feedback del array sync_ml (push puntual de stock a MercadoLibre, ver
+// docs/api-contrato.md). El contenedor debe ser un role="status" aria-live PREEXISTENTE
+// (no alcanza con ponerle el role al nodo recién insertado: una región viva que aparece
+// recién en el momento del cambio no dispara el anuncio del lector de pantalla).
+function renderSyncMl(containerId, syncMl) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  if (!syncMl || !syncMl.length) { el.innerHTML = ''; return; }
+  var iconos = { sincronizado: '✓', sin_cambios: '○', error: '⚠', omitido: '⏱' };
+  var html = '<div class="sync-ml-section">'
+    + '<div class="sync-ml-title">Sincronización con MercadoLibre</div>'
+    + '<div class="sync-ml-grid">';
+  syncMl.forEach(function(item) {
+    var det = esc(item.detalle);
+    var icon = iconos[item.estado] || '−';
+    html += '<div class="sync-ml-chip '+esc(item.estado)+'" title="'+det+'">'
+      + '<div class="sync-ml-icon">'+icon+'</div>'
+      + '<div><div class="sync-ml-sku">'+esc(item.sku)+'</div>'
+      + '<div style="font-size:11px;opacity:0.85">'+det.substring(0,40)+(det.length>40?'...':'')+'</div></div>'
+      + '</div>';
+  });
+  html += '</div></div>';
+  el.innerHTML = html;
+}
 </script>
 
 <script>
@@ -1112,5 +2122,19 @@ function mostrarStatus(id, tipo, msg) {
   }).catch(function(){});
 })();
 </script>
+
+<!-- Modal genérico accesible -->
+<div id="modal-overlay" class="modal-overlay" role="presentation">
+  <div id="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title" class="modal-content">
+    <h2 id="modal-title" class="modal-title"></h2>
+    <div class="modal-errors" id="modal-errors"></div>
+    <div id="modal-body" class="modal-body"></div>
+    <div class="modal-footer">
+      <button id="modal-cancel-btn" class="modal-btn">Cancelar</button>
+      <button id="modal-confirm-btn" class="modal-btn primary">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

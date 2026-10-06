@@ -1,0 +1,29 @@
+# E3 corte 1 — verificación previa y lista de puesta en producción
+
+## Verificación (2026-09-24, sin tocar producción)
+- Plataforma `npm test`: 81 archivos, 847 verdes, 3 todo (corte 3). Salida cruda: `/tmp/claude-0/e3-plataforma.log`.
+- Legado `npm test`: 165 archivos verdes (1 salteado), 3086 tests. Salida cruda: `/tmp/claude-0/e3-legado.log`. Se corrió con cambios ajenos sin commitear en el árbol.
+- `npm run test:e3` (plataforma): 143 verdes + 3 `it.todo` (relectura con cambio, 5xx → parked, 401 aborta el canario: corte 3).
+- QA con Postgres real: `node --experimental-strip-types scripts/qa/e3-bandeja-real.mjs` → 7/7. La pantalla real pasa por el proxy firmado del legado hacia la plataforma Fastify real; se verifica en la base la decisión con el actor de la sesión, la versión del caso, el vínculo, el deshacer (original superada + reversión) y omitir. Sin errores de consola.
+- Contenedores de prueba: `rm -f -v` + verificación de que no queden volúmenes propios (los dangling previos —9— no crecieron).
+
+## Pasos de producción (cada uno requiere OK de José; ninguno ejecutado)
+1. Gate: suites verdes (hecho arriba) + `revisor` sobre el diff + Codex read-only + `auditor-despliegue`.
+2. Migración 0020: `build` desde un worktree limpio, `migrate`, verificar `schema_migrations=20`. Antes: etiquetar la imagen actual `fusion-plataforma:antes-e3c1`.
+3. Worker con `E3_MOTOR=1` y `E3_BANDEJA=0`: verificar una corrida del motor y los candidatos guardados.
+4. Desplegar API y legado; luego `E3_BANDEJA=1` en worker y API. José decide 3 casos de prueba; verificar vínculo y auditoría.
+5. Arrancar la ventana de calibración: registrar la fecha en la ficha E3 y en `docs/memory/active.md`.
+
+Rollback: `E3_BANDEJA=0` (vuelve el legado, las decisiones se conservan); `E3_MOTOR=0`; imagen `antes-e3c1`.
+
+Pendiente de configuración en el legado: `SOMBRA_PLATAFORMA_URL` y `SOMBRA_KEYRING_FILE` deben estar definidos para que el proxy no responda 503 `bandeja_no_configurada`.
+
+## Deuda para el corte 3 (marcada por revisión)
+- Si el SKU observado deja de resolver (ninguna o varias), la `auto_sku` en sombra anterior sigue vigente. En sombra no daña; en el canario `vincularMl` la leería, así que la relectura D4 tiene que invalidarla o superarla.
+
+## Hallazgo del paso 3 (2026-09-24): título ML observado y deuda de las 492
+La primera corrida del motor en producción (18:42Z, 500 casos) guardó 0 candidatos: las representaciones vendibles de ML tienen `model_id` NULL y los tests sembraban lo contrario. El título observado de ML vive en un modelo `ml_*` (ml_simple / ml_clasico) al que se llega por (a) `model_id` propio si es ml_*, (b) el contenedor de ML con el mismo (cuenta, recurso), (c) la variante SÓLO si su modelo es ml_*; nunca `woo_*` (fuga de la verdad: el top-1 acertaría por construcción). Si (b) y (c) difieren, gana el contenedor. Código: `plataforma/src/identidad/modelo-ml.ts`; el motor loguea `codigo: sin_titulo_ml` por caso y un resumen por corrida (`sin_titulo_ml`, `contenedor_difiere_variante`, `fuente_titulo`).
+
+Cobertura medida en producción (sólo lectura), sobre los tipos que procesa el motor (4346 abiertos): sku_pendiente 2095/2095, sku_inexistente_en_woo 17/17, omitida_revisar 1731/2223 → 3843/4335 (89 %).
+
+**Deuda:** 492 casos `omitida_revisar` sin variante, sin contenedor y con `model_id` NULL no tienen ninguna fuente de título observado de ML; el motor los deja sin candidatos (`sin_titulo_ml`). Hay que revisar aparte cómo se proyectan (¿falta el contenedor? ¿publicaciones viejas?). El contador por corrida sirve para medirlos.

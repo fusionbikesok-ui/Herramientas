@@ -1,0 +1,16 @@
+{
+  "version": 5,
+  "status": "retired",
+  "note": "El enrutamiento de motor, modelo, esfuerzo, sandbox, escaladas y pipelines fue retirado. Este archivo no es configuración ejecutable y los scripts agent:* no deben usarse para despachar trabajo nuevo.",
+  "roles": [
+    "explorador",
+    "disenador-ux",
+    "disenador-ui",
+    "hard-worker-backend",
+    "hard-worker-frontend",
+    "revisor",
+    "tester",
+    "probador-e2e",
+    "auditor-despliegue"
+  ]
+}

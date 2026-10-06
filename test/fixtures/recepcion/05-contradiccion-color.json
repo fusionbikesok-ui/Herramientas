@@ -1,0 +1,15 @@
+{
+  "caso": "Contradicción de color - el documento menciona color Azul pero el mejor candidato es Negro",
+  "items": [
+    {
+      "linea_id": "5",
+      "nombre_doc": "Zapatilla Base Negro",
+      "codigo_proveedor": "",
+      "variacion": "Color Azul",
+      "cantidad": 1,
+      "marca": "Marca B",
+      "talle": "41",
+      "color": "Azul"
+    }
+  ]
+}

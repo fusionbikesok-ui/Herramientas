@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
  * Cierra las preparaciones viejas colgadas (nunca completadas, ni en pendiente_deposito)
- * pasándolas a 'cerrada_sin_evidencia' — ver docs/superpowers/plans/2026-08-12-escaneo-
- * obligatorio.md, sección "Decisiones del usuario (segunda ronda)".
+ * pasándolas a 'cerrada_sin_evidencia'.
  *
  * NO se marcan 'completada': el usuario decidió explícitamente que la herramienta tiene
  * que poder decir la verdad si entra un reclamo (se cerró sin poder verificar), nunca

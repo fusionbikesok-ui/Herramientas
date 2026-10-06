@@ -7,11 +7,28 @@
   "scripts": {
     "start": "node server.js",
     "test": "vitest run",
-    "verify:agents": "node scripts/verify-agent-pipeline.mjs",
-    "agent:claude": "node scripts/orchestrate-claude.mjs",
-    "agent:e2e": "node scripts/run-isolated-claude-e2e.mjs",
+    "verify:mobile-contract": "node scripts/verify-mobile-contract.mjs",
+    "docs:generate-deliveries": "node scripts/generate-deliveries.mjs",
+    "docs:validate-deliveries": "node scripts/validate-deliveries.mjs",
+    "e2e:e2": "node scripts/e2-browser-smoke.mjs",
+    "design:preview": "node scripts/design-preview.mjs",
+    "e2e:e4": "node scripts/e4-browser-smoke.mjs",
+    "e2e:e19": "node scripts/e19-browser-smoke.mjs",
+    "e2e:e20": "node scripts/e20-browser-smoke.mjs",
+    "e1:demo": "node scripts/e1-operational-demo.mjs",
+    "um1:demo": "node scripts/um1-isolated-demo.mjs",
+    "e2e:um1": "node scripts/um1-browser-smoke.mjs",
+    "e2e:um11:responsive": "for width in 390 768 1440; do UM11_VIEWPORT_WIDTH=$width node scripts/um11-browser-smoke.mjs || exit 1; done",
+    "e2e:um1:responsive": "for width in 390 768 1440; do UM1_VIEWPORT_WIDTH=$width node scripts/um1-browser-smoke.mjs || exit 1; done",
     "audit": "node scripts/audit-matcher.mjs",
-    "cerrar-preparaciones-sin-evidencia": "node scripts/cerrar-preparaciones-sin-evidencia.mjs"
+    "cerrar-preparaciones-sin-evidencia": "node scripts/cerrar-preparaciones-sin-evidencia.mjs",
+    "lint": "eslint .",
+    "lint:diff": "bash -c 'base=$(git merge-base origin/conteo-confiable HEAD); f=$(git diff --name-only --diff-filter=ACMR $base -- \"*.js\" \"*.mjs\"); [ -z \"$f\" ] && echo \"sin archivos JS en el diff\" || npx eslint $f'",
+    "test:e0": "bash scripts/postgres/test-e0.sh",
+    "test:e1": "bash scripts/test-e1.sh",
+    "verificar-informe": "node scripts/verificar-informe.mjs",
+    "test:e2": "bash scripts/test-e2.sh",
+    "test:e3": "npm --prefix plataforma run test:e3"
   },
   "keywords": [],
   "author": "",
@@ -28,9 +45,16 @@
     "multer": "^2.2.0",
     "node-cron": "^4.5.0",
     "nodemailer": "^9.0.3",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@eslint/js": "^10.0.1",
+    "axe-core": "^4.13.0",
+    "eslint": "^10.10.0",
+    "globals": "^17.12.0",
+    "playwright": "^1.62.1",
     "supertest": "^7.2.2",
     "vitest": "^4.1.9"
   }

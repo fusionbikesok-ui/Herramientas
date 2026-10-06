@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "handoff-probador-e2e",
+  "type": "object",
+  "properties": {
+    "estado": {
+      "type": "string",
+      "enum": [
+        "APROBADO",
+        "BLOQUEADO",
+        "WAITING_FOR_ORCHESTRATOR"
+      ]
+    },
+    "base": {
+      "type": "string"
+    },
+    "head": {
+      "type": "string"
+    },
+    "diff_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "codigo_bloqueo": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "FALTA_ENTORNO",
+        "FALTA_DATOS",
+        "FALTA_DECISION",
+        "PERMISO",
+        "FALLO_REPRODUCIBLE",
+        null
+      ]
+    },
+    "siguiente_accion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "evidencia": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
+    "anchos_riesgos": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "estado",
+    "base",
+    "head",
+    "diff_fingerprint",
+    "codigo_bloqueo",
+    "siguiente_accion",
+    "evidencia",
+    "anchos_riesgos"
+  ],
+  "additionalProperties": false
+}

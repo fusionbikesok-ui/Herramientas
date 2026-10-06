@@ -289,9 +289,18 @@ async function asignar(idWoo, cardEl){
   try{
     r = await fetch('/api/codigos/asignar', {
       method:'POST', headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
       body: JSON.stringify({ id_woo: idWoo, gtin: gtin }),
     });
-    d = await r.json();
+    // Una respuesta HTTP (401/403/502/500) no es un error de red. Leer el
+    // cuerpo aunque el status no sea 2xx permite mostrar la causa real.
+    var tipo = r.headers.get('content-type') || '';
+    if(tipo.includes('application/json')) d = await r.json();
+    else {
+      var texto = await r.text();
+      d = { ok:false, error: texto || ('Error HTTP ' + r.status) };
+    }
+    if(!r.ok) d.ok = false;
   }catch(e){ d = { ok:false, error:'Error de red' }; }
   if(!d.ok){
     msg.className='cardmsg err'; msg.textContent = d.error || 'No se pudo guardar';

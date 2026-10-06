@@ -2,19 +2,297 @@
 
 ## Hechos durables
 
-- El VPS ejecuta el entorno de staging; el despliegue a producción es manual.
+- Ajuste E1 contra 429 de ML desplegado el 2026-09-30: worker en imagen `fusion-plataforma:e1-ml429-20260930T031014Z` y gateway legado recargado en PM2; sin migraciones ni cambios de RPM. API y scheduler no se recrearon. Rollback e IDs de imagen constan en `docs/superpowers/evidence/e1/2026-09-30-E1-429-api-fix-deploy.md`. La medición Tarea 0 de 24–48 horas todavía decide la calibración y el inicio de PM-186; el despliegue no equivale a aceptación E1.
+- Preparaciones desplegadas el 2026-09-29: commits 7678096a-57272c22 en conteo-confiable; migraciones 115-116 aplicadas tras el respaldo `/opt/fusionbikes/backups/db/predeploy-preparacion-20260929T200500Z.sqlite` (`quick_check` e `integrity_check`: ok). Vista previa en vivo de 11 preparaciones: diez Web enviadas y una ML cancelada, sin errores. Cron activo (`PREPARACION_RECONCILIACION_ACTIVA=true`); primer tick 23:58 UTC procesó las 11 con cero errores: diez `despachada_sin_verificar`, una `cancelada_sin_retiro_registrado`, cero abiertas, once intentos y un evento de transición por prep. PM2 online, `/healthz` 200; ítems, fotos y auditoría conservados. El usuario rotará preventivamente la credencial Woo otro día; esa rotación no bloquea la operación. Prep 446 / pedido 70312 sigue fuera del lote y sin reparación; revisar su evidencia por separado.
+
+- El VPS `/opt/fusionbikes/herramientas` es producción real y sirve la rama
+  `conteo-confiable`; cualquier referencia histórica que lo llame staging está obsoleta.
+- Política objetivo: un pipeline verde podrá publicar backend/web con migración compatible,
+  health/smoke y rollback automático. Hasta que E23 lo implemente y audite, la operación vigente
+  sigue requiriendo confirmación manual. Windows, hardware y App Store siempre requieren autorización explícita.
 - El repositorio local `/opt/fusionbikes/herramientas` usa como remoto `origin` el repositorio
   privado `fusionbikesok-ui/Herramientas` en GitHub, mediante SSH.
+- El tramo 1 de E1 se verificó exclusivamente con PostgreSQL, secretos, estado y red Docker efímeros mediante `npm run test:e1`; no creó roles, bases, secretos ni contenedores persistentes en el VPS. Cualquier puesta en sombra requiere autorización explícita, línea base contemporánea y el SOP de E1.
 - `bubblewrap` está instalado en `/usr/bin/bwrap`, versión 0.9.0.
+- El commit `80e14eb` desplegó la ingesta de chat y aplicó la migración
+  `chat_events_inbox_093`; `/api/v1/meta` conserva contrato `1.0.0`. La ruta queda
+  deliberadamente fail-closed (`503`) hasta coordinar en producción
+  `FUSION_CHAT_EVENTS_API_KEY` y `FUSION_CHAT_EVENTS_SECRET` con WordPress.
+- **Auditoría automática de precios desplegada (2026-09-16):** commit `cd8f141`, migración
+  `auditoria_precios_107`, PM2 reiniciado y guardado. Verificaciones posteriores: SQLite
+  `quick_check=ok`, health interno y externo OK, `/herramientas/precios/` 200. Backup previo:
+  `/opt/fusionbikes/backups/db/predeploy-auditoria-precios-20260916T163605Z.sqlite`; snapshot
+  de código anterior en `/opt/fusionbikes/deploy-backups/auditoria-precios-20260916T163605Z`.
+  Corrección posterior `07b9652`: retirado el corte de 1.000 filas de `GET /api/precios`, que
+  hacía incompletos los filtros locales (Pirelli: 6 visibles de 21 auditadas). Suite completa
+  2.679/2.679, PM2 reiniciado/guardado y health interno/externo OK.
+
+## Backups y DR (desde 2026-09-13)
+
+- `/opt/fusionbikes/backups/backup.sh`, cron `/etc/cron.d/fusion-backup` 06:00 UTC bajo flock.
+  Local: base 14 días, tarball de uploads 2 días (14 si la nube falló).
+- Nube: Backblaze B2, bucket `Herramientas-Fusion` (versionado, Object Lock, SSE-B2), prefijo
+  `herramientas/crypt` vía remoto rclone crypt (nombres y contenido cifrados con
+  `/root/.config/fusion-backup/passphrase`; copia de la passphrase guardada fuera del VPS por el usuario, confirmado 2026-09-13).
+  `db/` y `env/` una copia diaria; `uploads/` espejo incremental con `copy` (nunca borra).
+- La clave del VPS (`B2_*` en `.env`, nombre `fusion-backup-vps`) sólo tiene
+  listBuckets/listFiles/readFiles/writeFiles: borrar versiones da 401. Se crea con
+  `backups/crear-clave-b2.py` (API nativa, pide la clave maestra por consola).
+- Estado de la última corrida: `backups/estado-nube.json`. Procedimiento: `backups/RESTAURAR.md`.
+- Restauración probada 2026-09-13: base y .env byte a byte, `integrity_check` ok; uploads
+  3.736/3.736 por `cryptcheck`. La descarga completa de uploads cortó por el **tope diario de
+  descarga de la cuenta B2** (403 `download_cap_exceeded`): una restauración real exige subir ese
+  tope en Caps & Alerts.
+- El tope diario de descarga también cuenta los HEAD de rclone: `copyto` sin `--no-check-dest`
+  falló con 403 el 2026-09-13 06:00 tras la prueba de restauración. El script usa
+  `--no-check-dest` en base y .env; `copy` de uploads sólo lista (no descarga).
+- Decisión 2026-09-13: la cuenta B2 sigue **sin tarjeta**. Consecuencias: topes gratis de
+  1 GB de descarga y ~2.500 transacciones clase B por día (una restauración completa de uploads
+  tarda ≥2 días, no cumple RTO 1 h) y las subidas se cortan a los 10 GB (al ritmo de
+  ~2,3 GB/mes, hacia fines de 2026). Revisar entonces tarjeta, lifecycle de `db/` o proveedor.
+  `backup.sh` registra `bucket_bytes` (con versiones) en `estado-nube.json`; el vigía abre
+  advertencia `backup/backup_nube/capacidad_bucket` por encima de 8 GB.
+- Vigía: `lib/vigiaBackup.js`, cron de la app minuto 17 de cada hora; si `ultimo_ok` > 26 h o
+  falta el estado, abre incidente crítico `backup/backup_nube/backup_vencido` (email) y lo
+  resuelve solo al volver un backup completo.
+- Monitoreo externo (Better Stack, plan gratis, cuenta del usuario, desde 2026-09-13):
+  monitor keyword `"ok":true` sobre `https://herramientas.fusionbikes.com.ar/herramientas/healthz`
+  cada 3 min (NA + Europa, confirmación 1–2 min para no alertar en reinicios de pm2) y heartbeat
+  diario con 3 h de gracia que `backup.sh` envía sólo si la nube quedó completa
+  (`BACKUP_HEARTBEAT_URL` en `.env`, tratarla como secreto). Cubre la caída total del VPS, que
+  el vigía interno no puede avisar. Alertas por email.
+- `/healthz` es público (sin sesión) y sirve para monitoreo externo: `SELECT 1` en cada
+  llamada e `integrity_check` cacheado 5 min (sin caché bloqueaba el event loop ~0,5 s por
+  llamada; commit `0df724d`).
+- Producción corre con **Node 24.21.0** (NodeSource `node_24.x`) desde 2026-09-13; pm2 levanta
+  `start.sh` con intérprete bash y la lista está guardada en `/root/.pm2/dump.pm2`.
+  Vuelta atrás: `/opt/fusionbikes/rollback-node20/` (paquete .deb de Node 20 + tarball de
+  `node_modules` compilado para Node 20).
+- **Lección del cambio de Node (caída de 13 min, 15:16–15:29 UTC):** `apt-get install nodejs`
+  reinicia el daemon de pm2 (`pm2-root.service` corre `pm2 kill` / `resurrect`) **antes** de
+  recompilar los módulos nativos; la app murió por `NODE_MODULE_VERSION` de `better-sqlite3` y
+  pm2 la dejó fuera de la lista. En un próximo cambio de versión: `pm2 stop herramientas`,
+  instalar, `npm rebuild better-sqlite3 sharp`, `pm2 start` + `pm2 save`, y verificar
+  `/healthz` en el momento.
+- **QA bajo demanda** (plan `2026-09-13-qa-bajo-demanda.md`): `scripts/qa/qa.sh up [rama] | down |
+  status`. Sólo `127.0.0.1:3101` (túnel SSH para mirar), snapshot anonimizado de la base,
+  MercadoLibre/Woo simulados (`scripts/qa/simulador-canales.mjs`, control en `/__qa/llamadas` y
+  `/__qa/fallas`), usuarios con la clave de `/root/.config/fusion-qa/clave`, apagado solo a las
+  8 h. Lo levanta el asistente cuando una prueba lo necesita; `down` al terminar.
+  La cuenta `auditor` **no es admin** (`is_admin=0`, sólo lectura en algunas herramientas; medido
+  2026-09-13 en producción y en QA): para probar rutas de escritura en QA usar un usuario admin con
+  la clave de QA.
+- **E0 nivel 1 ensayado en QA (2026-09-13, sin desplegar en producción):** `deploy/postgres/`
+  (PostgreSQL 18.6 por digest `sha256:1c59e2c3…e1af` + pgBackRest 2.59.1 del repo PGDG de la
+  imagen, `pgbackrest.conf` con archive-push asíncrono, spool 5 GiB, zstd, aes-256-cbc,
+  retención 2 completos) y `npm run test:e0` (`scripts/postgres/test-e0.sh`, proyecto y
+  directorio temporales, se borra solo; `E0_KEEP=1` conserva). Resultado limpio: 7/7 escenarios,
+  demora de archivado 1 s, segmento cerrado durante la caída del push archivado en 57 s sin perder
+  WAL, restauración PITR exacta (1.500/1.500 filas, 0 posteriores) con RTO 5 s, RPO estimado ≤ 61 s,
+  legacy intacto; registro sha256 `e43f7869e9b9…5792`. Firma criptográfica del registro pendiente.
+- **E0 nivel 1 en producción desde 2026-09-13 22:36 UTC:** `docker compose -f
+  deploy/postgres/compose.prod.yml -p fusion-pg` (PostgreSQL 18.6 + pgBackRest 2.59.1, init,
+  `127.0.0.1:5432`, 768 MB, datos en `/opt/fusionbikes/postgres/{pgdata,repo,spool,log}`). Secretos
+  en `/root/.config/fusion-pg/` (`cipher-pass` creada por José y guardada fuera del VPS;
+  `postgres-pass` uid 999; `firma-ed25519.pem`, pública en `deploy/postgres/firma-ed25519.pub`).
+  Cron `/etc/cron.d/fusion-backup`: `backup-diario.sh` 05:30 UTC (full domingo / diff; verify,
+  manifiesto `repo/MANIFEST-fusion.sha256`, registro firmado en `/opt/fusionbikes/backups/pg-registros/`)
+  y `estado-archivo.sh` cada 5 min (archivos `.ready` pendientes). Vigía `revisarBackupPostgres`
+  cada 5 min; se activa porque existe `/opt/fusionbikes/postgres`. Ninguna app conecta todavía.
+  Comandos: `... exec -T pg pgbr info|check|backup`. Nivel 2 (Mac): `deploy/postgres/mac/INSTALAR-NIVEL-2.md`.
+- **SSH sólo por clave desde 2026-09-13** (José entra por clave; 8/8 ingresos aceptados eran
+  `publickey`): `/etc/ssh/sshd_config.d/00-fusion-hardening.conf` con `PasswordAuthentication no`,
+  `KbdInteractiveAuthentication no` y `PermitRootLogin prohibit-password`. Prefijo `00-` porque sshd
+  toma el primer valor y `50-cloud-init.conf` habilitaba la contraseña. Aplicado con reload tras
+  `sshd -t`; revertir = borrar el archivo y `systemctl reload ssh`.
+- El gid 999 del contenedor PostgreSQL es `systemd-journal` en el host: no usar pertenencia a grupo para
+  dar lectura al repositorio (nivel 2 usa ACL).
+- Vigía PostgreSQL activo tras reinicio de la app (2026-09-13 22:42 UTC): desplegado, sanos backup,
+  archivado y spool; 0 incidentes. Primer tick del cron de medición a las 22:40 UTC con 0 pendientes.
+- **Lección:** el contenedor de PostgreSQL necesita **init como PID 1** (`init: true`). Sin init,
+  el push asíncrono de pgBackRest queda huérfano de postgres y su muerte (kill/OOM) provoca
+  recuperación de arranque con corte de todas las conexiones (medido). Además `failed_count` de
+  `pg_stat_archiver` es acumulado e incluye intentos previos a `stanza-create`: medir por ventana.
 
 ## Restricciones
 
 - No iniciar `node server.js` contra `data/fusion.sqlite` real.
-- No desplegar automáticamente ni hacer push directo o forzado a `master`.
+- No hacer push forzado a `master` ni usar una tarea documental como autorización de despliegue.
 - No dejar servidores o procesos de pruebas vivos.
+- Una actualización documental no autoriza migraciones, cambios de configuración, reinicios de
+  PM2 ni pruebas que escriban datos operativos.
+- El staging objetivo es una instancia separada con snapshot sanitizado bajo demanda y sin credenciales reales de escritura. No elegir por cuenta propia producción, otro puerto o una base real como sustituto.
 
 ## Cuándo actualizar
 
 Ante cambios confirmados de infraestructura, dependencias del sistema, proceso de staging o
 despliegue, incluso cuando no haya cambios de código. El estado transitorio va en
 `../active.md` y debe verificarse en vivo antes de usarlo.
+
+## Nivel 2 DR: usuario de lectura (2026-09-14)
+
+- `fusion-offsite` existe con **uid 1999** (bloqueado, sin contraseña) y ACL `rX` sobre
+  `/opt/fusionbikes/postgres/repo` (también por defecto para archivos nuevos). Verificado: lee todo el
+  repositorio y no puede escribir. `authorized_keys` tiene sólo la clave `mac-local-fusion-offsite` (2026-09-14) con `restrict,command="/usr/bin/rrsync -ro /opt/fusionbikes/postgres/repo"`. Verificado por SSH real con clave temporal: descarga 1007/1007 y manifiesto OK; subida, shell y rutas fuera del repo rechazadas.
+- uid **999** en el host = postgres del contenedor `fusion-pg-pg-1` (dueño de `repo` y `pgdata`). Nunca
+  crear usuarios con `useradd --system` sin `--uid` explícito.
+- IP pública del VPS para el destino de la Mac: 179.197.74.83. El contenedor se llama `fusion-pg-pg-1`.
+- **SSH 2026-09-14:** apareció `/etc/ssh/sshd_config.d/00-00-local-password.conf` (13:57:50 UTC, con
+  recarga de sshd) que antepone `PermitRootLogin yes` y `PasswordAuthentication yes` al endurecimiento.
+  Los logins con contraseña de ese día vinieron de la IP del local. Por decisión de José se borró el
+  mismo día (copia en `/root/00-00-local-password.conf.bak-20260914`); efectivo otra vez
+  `passwordauthentication no`, `permitrootlogin without-password`. Si el panel de Hostinger lo vuelve a
+  crear, revisar antes de borrarlo.
+- **Primer pull de la Mac OK (2026-09-14 20:28 UTC):** `OK: 1002 archivos verificados; foto diaria
+  2026-09-14`, en ~3 s. Usuario de la Mac: `santi`; script en `~/FusionBackups/offsite-pull-mac.sh`.
+  launchd `ar.com.fusionbikes.offsite-pull` instalado y cargado (corrida automática 20:29 UTC OK).
+  Pendiente: heartbeat opcional y la restauración de prueba desde la copia de la Mac (aceptación del nivel 2).
+- **Restauración desde la copia de la Mac (aceptación nivel 2):** `scripts/postgres/restaurar-desde-mac.sh`
+  restaura lo que la Mac sube a `/opt/fusionbikes/qa/restore-mac/entrada` (usuario `fusion-restore`, uid
+  1998, pensado para `rrsync -wo`; solo puede leer el manifiesto del repo de producción) en un contenedor
+  sin red, verifica hashes, `pgbackrest verify`, la marca de `public.e0_verificacion` indicada en
+  `qa/restore-mac/marca-esperada` y firma el registro en `pg-registros/restore-mac-*.json`.
+  Lecciones del ensayo 2026-09-14: `--target-action` exige `--type` de objetivo (error 031), y el
+  `postgres` restaurado necesita la clave del repo en su entorno (archive-get), leída como root y
+  bajando con gosu. Ensayo con copia armada en el VPS: OK, RTO 7 s (etiquetado ENSAYO, no es aceptación).
+- **Heartbeat "Backup PostgreSQL (VPS)" activo (2026-09-14):** Better Stack, período 1 día; URL en `.env`
+  como `PG_BACKUP_HEARTBEAT_URL` (no se copia en docs). Ping de prueba HTTP 200; lo envía
+  `backup-diario.sh` a las 05:30 UTC.
+- **Observación de 24 h de WAL (13/09 22:36 → 14/09 22:36 UTC):** 0 fallos de archivado dentro de la
+  ventana (los 9 de `pg_stat_archiver` son del despliegue, antes del stanza), WAL 01→11 continuo y
+  `pgbackrest verify` OK, sobrevivió al reinicio del VPS de 13:45 UTC, backups full y diff firmados OK,
+  0 incidentes del vigía de PostgreSQL.
+- **Permisos de backups (2026-09-15):** `/opt/fusionbikes/backups/db` y `/opt/fusionbikes/backups/uploads`
+  en `700` root (antes 755 con archivos 644, legibles por cualquier usuario local). Sólo los usa
+  `backup.sh` (cron root 06:00 UTC). Memoria disponible medida ese día: 2,9 GB (Ollama 1,5 GB, legado 504 MB).
+
+- **pgBackRest sin límite de cola en producción (2026-09-15 10:38 UTC, PM-177):** imagen `fusion-pg:local`
+  reconstruida y contenedor `fusion-pg-pg-1` recreado; `test:e0` 8/8 antes (RTO 12 s, RPO 61 s); después
+  `pgbackrest check` OK, `init=true`, archivado sin fallos y la marca `e0_verificacion` intacta. El
+  arranque de archive-push ya no lista `--archive-push-queue-max`. `estado-archivo.sh` publica
+  `ready_bytes`, `pg_wal_bytes`, `disco_pct` (68 % ese día) y `disco_libre_bytes`.
+- **Subida de la Mac para restaurar (2026-09-15):** `fusion-restore` (uid 1998) tiene sólo la clave
+  `mac-local-fusion-restore` con `restrict,command="/usr/bin/rrsync -wo /opt/fusionbikes/qa/restore-mac/entrada"`
+  (verificado: sube; lectura, shell y rutas fuera rechazadas). La entrada debe ser `fusion-restore` 700 sin
+  ACL: `cp -a origen/. entrada/` o `rsync -a` sobre la raíz copian dueño/permisos de la carpeta y la
+  rompen (pasó con el ensayo del 14/09). La Mac sube con `rsync -rt` (sin permisos). Borrar la clave al
+  terminar la restauración.
+
+## Correr un script de `scripts/` contra PostgreSQL de producción
+
+Los scripts que escriben en PostgreSQL (`catalogo-atributos-backfill.mjs`,
+`catalogo-categorias-importar.mjs`, `catalogo-informe-taxonomia.mjs`, `revivir-senales.mjs`) **no leen
+`plataforma.env`** a propósito: esperar el entorno ya poblado es lo que evita que un script suelto
+pueda abrir el archivo de configuración del servicio. Por eso hay que pasárselo en la invocación:
+
+```
+cd /opt/fusionbikes/herramientas && PG_HOST=127.0.0.1 PG_PORT=5432 PG_DATABASE=plataforma \
+  PG_USER=plataforma_app PG_PASSWORD_FILE=/opt/fusionbikes/plataforma-prod/secretos/app-pass \
+  node scripts/<script>.mjs <argumentos>
+```
+
+`PG_PASSWORD_FILE` es una **ruta**: el secreto no pasa por la línea de comandos ni queda en el historial
+del shell. Los secretos viven en `/opt/fusionbikes/plataforma-prod/secretos/` (`app-pass` para el rol de
+la aplicación, `migrador-pass` para el migrador, que un script no debería necesitar nunca).
+
+El `cd` no es decorativo: los scripts que además hablan con un canal toman `WOO_URL`/`WOO_CK`/`WOO_CS`
+y `DB_PATH` del `.env` del legado vía `dotenv/config`, que se resuelve desde el directorio de trabajo, y
+desde `/tmp` fallan con `ERR_MODULE_NOT_FOUND` por la resolución de `node_modules`.
+
+Ids de producción que estos scripts piden como argumento (lectura de `core.channel_accounts`, 2026-09-20):
+empresa `01a0ad82-dcf5-7235-a8d6-13fe30b386a2`; cuenta de WooCommerce
+`01a0ad82-de15-7a79-b935-dc665538cd05`; cuenta de MercadoLibre `01a0b28d-18e4-733b-b53f-64d1be288253`.
+
+El informe de taxonomía (`catalogo-informe-taxonomia.mjs`) se corre DESPUÉS de importar las categorías del
+canal, no antes: traduce los `category_id` de MercadoLibre a nombres leyendo `catalog.channel_categories`, y
+con esa tabla vacía cada id de ML queda sin traducir, ningún modelo publicado en los dos canales puede
+coincidir y el desglose del puente (`cobertura.puente`) sale inflado con todos ellos. No es un hallazgo del
+catálogo: es el informe corriendo sin su diccionario.
+
+El desglose del puente es INVÁLIDO mientras no se importen las categorías de MercadoLibre. Medido el 2026-09-20, ya con las 82 categorías de Woo importadas: 942 modelos publicados en
+los dos canales, y los 942 con el `category_id` crudo de ML (126 ids distintos). El número es idéntico al de
+modelos en ambos canales, así que no mide contradicción: mide doble publicación. Importar Woo no lo arregla,
+porque los valores de Woo ya eran nombres; los que necesitan diccionario son los `MLA*`, y esa importación no
+existe todavía. No leerlo como un hallazgo del catálogo.
+
+**Al 2026-09-20 esto quedó superado y el campo `contradictoriosEntreCanales` ya no existe.** El informe mide
+por NODO del árbol propio, que es exacto, y dejó el criterio de nombres agrupado en `cobertura.puente`, que
+cubre exactamente `sinNodoEnAlgunCanal` — los modelos a los que todavía les falta nodo en algún canal — y se
+retira cuando ML esté mapeado del todo. Se le sacó el nombre viejo a propósito: había cambiado de significado
+dos veces y nada fuera del informe lo consumía, así que el único riesgo era que una persona leyera un número
+creyendo que medía lo de antes. `cadenasIncompletas` vive ahora dentro de `puente`, porque sólo se calcula
+subiendo cadenas de categorías del canal.
+
+El comando de la plataforma se corre **desde `/opt/fusionbikes/herramientas`**, siempre. El `-f` es una ruta
+relativa, así que desde otro directorio falla con
+`compose file "/opt/plataforma/deploy/compose.yml" is invalid: no such file or directory`, que parece un
+archivo faltante y es sólo el directorio de trabajo. Escribirlo con el `cd` adelante evita la confusión:
+
+```
+cd /opt/fusionbikes/herramientas && docker compose -f plataforma/deploy/compose.yml \
+  -p fusion-plataforma --env-file /opt/fusionbikes/plataforma-prod/plataforma.env <subcomando>
+```
+
+**Un `migrate` sin `build` previo parece exitoso y no aplica nada.** El Dockerfile hace
+`COPY migrations ./migrations`: las migraciones van HORNEADAS en la imagen, no montadas. Si la imagen no tiene
+el archivo nuevo, el migrador no ve nada pendiente, informa éxito y sale 0. Pasó el 2026-09-20 con la 0016: se
+corrió el `migrate`, dio bien, y `core.schema_migrations` seguía en 15 — y encima la carga posterior escribió
+58 de 78 mapeos porque el índice viejo seguía puesto.
+
+El `build` NO es opcional ni una optimización: es parte del despliegue, y va primero de los tres.
+Verificar SIEMPRE contra la base y no contra la salida del comando:
+
+```
+docker exec fusion-pg-pg-1 psql -U postgres -d plataforma -c \
+  'select count(*), max(nombre) from core.schema_migrations'
+```
+
+
+- El VPS no tiene el binario `sqlite3`: el backup previo a un deploy se hace con `better-sqlite3` (`db.backup()`) desde Node, y el deploy no sigue si el backup no existe.
+- Las credenciales de testing `auditor`/`Auditor2026!` no autentican en la base de producción (verificado 2026-10-05); valen para QA.
+
+## Preparación de integración WordPress (2026-10-04)
+
+- Puente WordPress independiente `fusion-herramientas-bridge` instalado y activo (actualizado a 0.2.0 abajo)
+  desde la sesión de administración autorizada. No se modificaron los cinco plugins
+  originales ni el runtime de Herramientas, ni se reiniciaron sus servicios.
+- Fuente y prueba conservadas en `integrations/wordpress/`; especificación y plan
+  `docs/superpowers/{specs,plans}/2026-10-04-puente-wordpress-lectura.md`.
+- Prueba PHP aislada sin red: 44 comprobaciones con servicios originales de Master
+  Control. Lectura real desde VPS: anónimo 401, autenticado 200, cotización 200,
+  IDs duplicados 400. Estado habilitado de pasarelas y versiones de plugins originales
+  conservados. No se realizaron transacciones ni se enviaron mensajes.
+- Retirada: desactivar solamente `Fusion Herramientas — Puente de lectura` en WP.
+  No borra datos ni requiere restaurar la base. Los módulos principales siguen en WP.
+- Master Control debe permanecer íntegro por instrucción explícita del usuario.
+
+## Chat nativo: ensayo aislado del 2026-10-04
+
+- Proyecto independiente `/opt/fusion-chat-migration-qa`, Compose `fusion-chat-migration-qa`: API/worker con bot simulado, PostgreSQL y Redis propios. Sólo datos ficticios; no es producción ni una migración terminada.
+- Red Docker interna sin puertos publicados ni salida a Internet; vista `/qa/` por túnel SSH ligado a loopback local. `qa.env` privado, nunca copiarlo al repositorio. Límites de memoria/CPU definidos por servicio.
+- Fuente mantenida en `integrations/chat-migration-qa/`; allí están contratos, límites, reproducción de pruebas y comandos de inicio/parada. Plan: `docs/superpowers/plans/2026-10-04-chat-migracion-qa.md`.
+- Respaldo previo del bot (código/configuración y dump PostgreSQL): `/opt/fusionbikes/backups/chat-migration/20261004T220310Z`; archivo e índice verificados, restauración completa pendiente.
+- Los procesos, código y tráfico del bot original/Herramientas no se trasladaron. Master Control, checkout y plugins originales permanecen en su ubicación. No atribuir ahorro de carga de WordPress a este ensayo.
+- Pendiente antes del corte: integración con sesión/permisos Herramientas, widget completo, datos/historial, leads y carrito abandonado, configuración/aprendizaje, WhatsApp/IA reales, notificaciones/retención y reversión. Diferencia previa entre test y lógica de derivación a Taller documentada en el README; no habilitar tráfico real asumiendo suite original verde.
+
+## POS, Facturador y Taller: consulta en VPS (2026-10-04)
+
+- Runtime independiente `/opt/fusion-management-migration`, WordPress 7.1.2/WooCommerce 11.1.2/PHP 8.2 con SOAP y los tres ZIP actuales. Master Control no se instaló ni modificó. Fuente propia en `integrations/management-migration/`; plan `docs/superpowers/plans/2026-10-04-pos-arca-taller-vps.md`.
+- Entrada `/herramientas/gestion-vps/`, sesión vigente de Herramientas y administrador en cada solicitud. Gateway systemd `fusion-management-validation.service`, 127.0.0.1:8212, firma HMAC interna. PHP/DB en red interna Docker, sin puertos publicados; escrituras HTTP, cron, correo y salida externa bloqueados. Requiere actualizar IP de PHP con `ops/start-gateway.py` si se recrea su red/contenedor.
+- Historial copiado y conciliado por página/hash y por columna: 153 comprobantes, 14 series, 221 estados ML y 6 estados WhatsApp; 27 presupuestos; 1 trabajo y 1 modelo de Taller, 2 constancias, 0 recordatorios. Cinco borradores conservados para mapear operadores, todavía no asignados. No se copiaron contraseñas, sales ni certificados fiscales.
+- Origen privado: `data/2026-10-04T23-06-05-446Z`; respaldo destino previo a importación `backups/20261005T004328Z/before-import.sql`; respaldo Nginx previo al nuevo location `backups/20261005T004439Z/herramientas.nginx.conf`, todos dentro del runtime. No se ensayó restauración completa ni se obtuvo snapshot de corte con origen bloqueado.
+- Puente WordPress actualizado a 0.2.0. Los dos GET de exportación/inventario exigen `manage_options` además del permiso Woo y HTTPS; recursos fijados, 50 filas/página, sin credenciales. 61 comprobaciones PHP. Gateway: tres pruebas HTTP integradas y comprobación real de sesión, firma vencida, bloqueo de métodos y acceso anónimo. Tienda y Herramientas respondieron 200. No se reinició la app principal.
+- Las pantallas originales permiten consultar Taller, comprobantes y presupuestos con la sesión de Herramientas. Se adaptaron navegación y tabla móvil de Taller sólo en el envoltorio del VPS. La copia permite buscar el catálogo sincronizado local con cantidad y fecha; faltan campos comerciales/clientes/pedidos para operar y sus controles de negocio están bloqueados. No atribuirle un corte productivo ni ahorro medido de carga.
+- Pendientes: completar campos comerciales del catálogo, clientes/pedidos e identidades; precios de Master Control/dólares; checkout POS original e idempotencia; configuración/certificados ARCA y conexiones ML/WhatsApp; documentos y recordatorios; corte con un solo escritor/emisor y rollback ensayado. Se consultó por SSH/SFTP del hosting para transferir certificados por canal privado. Los módulos originales continúan como autoridad y Chat sigue en QA.
+
+<!-- end management validation memory -->
+
+- Acceso a Gestión VPS añadido a `public/home/index.html` el 2026-10-04 (Argentina), sólo como navegación de administradores. Publicación estática sin reinicio ni migraciones; conservar permisos pero actualizar mtime al publicar HTML para que If-Modified-Since reciba la versión nueva. Respaldo y candidato en `/opt/fusion-management-migration/home-navigation/{before,candidate}.html`; suite completa ejecutada en copia aislada sin red ni datos/credenciales de producción. Revertir sólo si el hash vigente sigue coincidiendo con `home-navigation/result.json`.
+
+- Catálogo local y estética de Gestión VPS publicados el 2026-10-04 (Argentina). Respaldo final: `/opt/fusion-management-migration/backups/catalog-20261005T025118Z`. Sólo se reinició `fusion-management-validation.service`; app principal, sincronizadores, tienda y Master Control sin cambios. Fuente en `integrations/management-migration`; once pruebas HTTP/unitarias y lint PHP/JS. Cantidad local, contado de Consulta de Precios y miniaturas verificados en navegador. Archivo ML: 221 registros visibles, paginación/filtro y bloqueo de escrituras probados. Falta OAuth/sincronización ML activa, validación comercial y corte operativo.
+
+- Directorio compartido publicado 2026-10-05. Respaldo `/opt/fusion-management-migration/backups/directory-20261005T143651Z`; sólo se reinició gateway de validación. `fusion-management-directory-sync.service` hace GET con credenciales Woo preexistentes; timer cada 15 min para pedidos modificados con solapamiento 10 min, clientes cada 24 h y conciliación completa semanal. Descarga histórica con checkpoints privados y reanudación; primero publica clientes y marca pedidos incompletos, luego publica historial completo atómicamente. Gateway DynamicUser lee mediante grupo limitado `fusion-management-read`; credenciales siguen fuera. Última copia válida ante fallo. Pruebas 17 Node y 5 Python (incluye interrupción/reanudación), sintaxis JS y control de lectura bajo cuenta del gateway. Ver `directory-cache/status.json` para cobertura actual; no inferir fin de carga de la publicación de UI.
+
+- Directorio: carga histórica y actualización incremental verificadas el 2026-10-05. La carga inicial concilió 1.593 cuentas customer y 13.888 pedidos desde 2023-03-09; el primer delta incorporó dos pedidos (13.890), con dos GET. 434 pedidos tienen marca de copia ML. UI probada: clientes POS, búsquedas por SKU y pedido exacto (#6115), detalle histórico y compras por ID de cliente. No hay mapeo de escritura ni selector fiscal ARCA; directorio compartido de consulta. No interpretar las fichas por pedido sin cuenta sincronizada como clientes únicos. El importador legado que acumula contactos repetidos no se modificó ni alimenta este índice.
+
+- Flujo git del equipo (2026-10-06): `docs/operations/flujo-git-equipo.md`. Checkout de prod no se edita; worktree+rama por persona; `master` principal por PR sin aprobación humana con gates; deploy con OK de José. Codex Astra (migración POS/Gestión VPS) entra por SSH como root desde fuera del VPS.

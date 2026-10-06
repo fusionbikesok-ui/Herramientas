@@ -1,0 +1,12 @@
+#!/bin/bash
+# pgbr — pgBackRest de la stanza fusion con la clave del repositorio, para `docker compose exec pg pgbr ...`.
+# Si corre como root toma la clave del archivo montado y baja a postgres; nunca la imprime.
+set -euo pipefail
+if [ -z "${PGBACKREST_REPO1_CIPHER_PASS:-}" ] && [ -r /run/fusion-pg/cipher-pass ]; then
+  PGBACKREST_REPO1_CIPHER_PASS="$(tr -d '\n' < /run/fusion-pg/cipher-pass)"
+  export PGBACKREST_REPO1_CIPHER_PASS
+fi
+if [ "$(id -u)" = "0" ]; then
+  exec gosu postgres pgbackrest --stanza=fusion "$@"
+fi
+exec pgbackrest --stanza=fusion "$@"

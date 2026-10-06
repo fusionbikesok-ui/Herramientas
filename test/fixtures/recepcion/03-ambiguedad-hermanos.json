@@ -1,0 +1,15 @@
+{
+  "caso": "Ambigüedad entre hermanos - descripción coincide con familia variable pero sin especificar talle/color",
+  "items": [
+    {
+      "linea_id": "3",
+      "nombre_doc": "Zapatilla Base Negro",
+      "codigo_proveedor": "",
+      "variacion": "",
+      "cantidad": 2,
+      "marca": "Marca B",
+      "talle": null,
+      "color": null
+    }
+  ]
+}

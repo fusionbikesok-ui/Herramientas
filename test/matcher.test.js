@@ -3,9 +3,10 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
-import { matcherRouter, refrescarPublicacionesMlAcotado, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
+import { clavesNecesitanAtencion, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
+import { matcherRouter, refrescarPublicacionesMl, refrescarPublicacionesMlAcotado, mlFetchConReintento, computarCandidatosApi, remarcarStockResueltos } from '../routes/matcher.js';
 import { _resetEstadoPushParaTests } from '../lib/matcherPush.js';
+import { _resetCooldownParaTests } from '../lib/mlClient.js';
 
 // Mock axios para evitar llamadas reales a ML
 vi.mock('axios', async () => {
@@ -81,6 +82,143 @@ describe('clavesNecesitanAtencion', () => {
   });
 });
 
+describe('autoVincularPorSellerSku (incidente 2026-08-27, FB-68055)', () => {
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('vincula una publicación con seller_sku exacto y único en catalogo_cache', () => {
+    seedCatalogo(db, { sku: 'FB-68055', stock: 2 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-68055' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(1);
+    const decision = db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA1|'").get();
+    expect(decision).toMatchObject({ sku: 'FB-68055', accion: 'asignar', origen: 'auto_seller_sku' });
+  });
+
+  it('NO vincula si ya hay una decisión activa para esa clave (nunca pisa una decisión humana)', () => {
+    seedCatalogo(db, { sku: 'FB-1', stock: 5 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-1' });
+    seedDecision(db, { clave: 'MLA1|', sku: 'FB-DISTINTO', accion: 'confirmar' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    const decision = db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA1|'").get();
+    expect(decision.sku).toBe('FB-DISTINTO'); // la decisión humana previa queda intacta
+  });
+
+  it('NO vincula si el SKU está duplicado en catalogo_cache (ambigüedad, requiere revisión humana)', () => {
+    seedCatalogo(db, { sku: 'FB-DUP', stock: 3 });
+    seedCatalogo(db, { sku: 'FB-DUP', stock: 7 }); // fila fantasma / duplicado real
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-DUP' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA1|'").get()).toBeUndefined();
+  });
+
+  it('SÍ vincula si ese SKU ya está vinculado a OTRA publicación cuando el producto Woo es único (Fase A, 2026-10-03)', () => {
+    seedCatalogo(db, { sku: 'FB-COMPARTIDO', stock: 4 });
+    seedDecision(db, { clave: 'MLA-VIEJA|', sku: 'FB-COMPARTIDO', accion: 'asignar' });
+    seedCache(db, { clave: 'MLA-NUEVA|', itemId: 'MLA-NUEVA', sellerSku: 'FB-COMPARTIDO' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(1);
+    expect(db.prepare("SELECT sku, accion, origen FROM sku_matcher_decisiones WHERE clave='MLA-NUEVA|'").get())
+      .toEqual({ sku: 'FB-COMPARTIDO', accion: 'asignar', origen: 'auto_seller_sku' });
+    // La publicación anterior no se toca.
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA-VIEJA|'").get().sku).toBe('FB-COMPARTIDO');
+  });
+
+  it('NO vincula un SKU ya vinculado a otra publicación si el producto Woo NO es único (SKU duplicado en catalogo_cache)', () => {
+    seedCatalogo(db, { sku: 'FB-COMPARTIDO', stock: 4 });
+    seedCatalogo(db, { sku: 'FB-COMPARTIDO', stock: 9 });
+    seedDecision(db, { clave: 'MLA-VIEJA|', sku: 'FB-COMPARTIDO', accion: 'asignar' });
+    seedCache(db, { clave: 'MLA-NUEVA|', itemId: 'MLA-NUEVA', sellerSku: 'FB-COMPARTIDO' });
+
+    expect(autoVincularPorSellerSku(db)).toBe(0);
+    expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA-NUEVA|'").get()).toBeUndefined();
+  });
+
+  it('NO vincula si la clave ya tiene decisión "omitir" (hallazgo del revisor: es una decisión humana explícita, no un hueco)', () => {
+    seedCatalogo(db, { sku: 'FB-OMITIDO', stock: 5 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-OMITIDO' });
+    seedDecision(db, { clave: 'MLA1|', sku: null, accion: 'omitir' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    const decision = db.prepare("SELECT accion FROM sku_matcher_decisiones WHERE clave='MLA1|'").get();
+    expect(decision.accion).toBe('omitir'); // no se pisa ni se reintenta
+  });
+
+  it('NO revincula una clave descartada a propósito (errores_descartados)', () => {
+    seedCatalogo(db, { sku: 'FB-MUERTO', stock: 5 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-MUERTO' });
+    db.prepare('INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES (?,?,?)')
+      .run('MLA1|', 'variación muerta', now());
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave='MLA1|'").get()).toBeUndefined();
+  });
+
+  it('NO vincula ninguna si dos publicaciones de la MISMA corrida comparten seller_sku (hallazgo del revisor: nunca "una al azar")', () => {
+    seedCatalogo(db, { sku: 'FB-MULTI', stock: 5 });
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-MULTI' });
+    seedCache(db, { clave: 'MLA2|', itemId: 'MLA2', sellerSku: 'FB-MULTI' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+    expect(db.prepare("SELECT * FROM sku_matcher_decisiones WHERE clave IN ('MLA1|','MLA2|')").all()).toHaveLength(0);
+  });
+
+  it('una candidata no elegible (omitir) no frena a las demás elegibles de la misma corrida', () => {
+    seedCatalogo(db, { sku: 'FB-OK', stock: 5 });
+    seedCatalogo(db, { sku: 'FB-BLOQ', stock: 5 });
+    seedCache(db, { clave: 'MLA-OK|', itemId: 'MLA-OK', sellerSku: 'FB-OK' });
+    seedCache(db, { clave: 'MLA-BLOQ|', itemId: 'MLA-BLOQ', sellerSku: 'FB-BLOQ' });
+    seedDecision(db, { clave: 'MLA-BLOQ|', sku: null, accion: 'omitir' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(1);
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA-OK|'").get().sku).toBe('FB-OK');
+  });
+
+  it('NO vincula si el seller_sku no existe en catalogo_cache', () => {
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: 'FB-INEXISTENTE' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+  });
+
+  it('ignora publicaciones sin seller_sku', () => {
+    seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', sellerSku: '' });
+
+    const n = autoVincularPorSellerSku(db);
+
+    expect(n).toBe(0);
+  });
+
+  it('vincula varias publicaciones elegibles en una sola corrida (caso real: 84 pendientes)', () => {
+    for (let i = 1; i <= 5; i++) {
+      seedCatalogo(db, { sku: `FB-${i}`, stock: i });
+      seedCache(db, { clave: `MLA${i}|`, itemId: `MLA${i}`, sellerSku: `FB-${i}` });
+    }
+    const n = autoVincularPorSellerSku(db);
+    expect(n).toBe(5);
+  });
+});
+
 describe('GET /publicaciones?scope=atencion', () => {
   let db, app;
   beforeEach(() => {
@@ -95,6 +233,7 @@ describe('GET /publicaciones?scope=atencion', () => {
     seedCache(db, { clave: 'MLA1|', itemId: 'MLA1' });
     seedCache(db, { clave: 'MLA3|55', itemId: 'MLA3', variationId: '55' });
     seedCache(db, { clave: 'MLA9|', itemId: 'MLA9' }); // no necesita atención
+    seedDecision(db, { clave: 'MLA9|', sku: null, accion: 'omitir' });
     seedSyncLog(db, { clave: 'MLA1|', estado: 'sin_mapeo' });
     seedSyncLog(db, { clave: 'MLA3|55', estado: 'remapeo_requerido' });
 
@@ -113,6 +252,7 @@ describe('GET /publicaciones?scope=atencion', () => {
 
   it('scope=atencion sin pendientes devuelve lista vacía sin error', async () => {
     seedCache(db, { clave: 'MLA9|', itemId: 'MLA9' });
+    seedDecision(db, { clave: 'MLA9|', sku: null, accion: 'omitir' });
     const r = await request(app).get('/api/matcher/publicaciones?scope=atencion');
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
@@ -269,6 +409,179 @@ describe('refrescarPublicacionesMlAcotado', () => {
     const vieja = db.prepare('SELECT titulo FROM ml_publicaciones_cache WHERE clave = ?').get('MLA999|');
     expect(vieja).toMatchObject({ titulo: 'Vieja' });
   });
+
+  it('sobrevive a un 500 transitorio en un chunk del multiget y persiste igual (incidente 2026-08-27)', async () => {
+    let llamada = 0;
+    axios.request.mockImplementation(async () => {
+      llamada += 1;
+      if (llamada === 1) return { status: 500, headers: {}, data: null };
+      return {
+        status: 200,
+        headers: {},
+        data: [{
+          code: 200,
+          body: {
+            id: 'MLA101', title: 'Recuperado', status: 'active', sub_status: [],
+            attributes: [{ id: 'SELLER_SKU', value_name: 'FB-101' }], variations: [],
+          },
+        }],
+      };
+    });
+
+    const r = await refrescarPublicacionesMlAcotado(db, ML_CFG, ['MLA101']);
+
+    expect(r.total).toBe(1);
+    const fila = db.prepare('SELECT titulo FROM ml_publicaciones_cache WHERE clave = ?').get('MLA101|');
+    expect(fila?.titulo).toBe('Recuperado'); // antes del fix, el 500 abortaba el refresco entero
+  }, 10000);
+});
+
+describe('refrescarPublicacionesMl — test de CABLEADO (hallazgo del revisor, 2026-08-27)', () => {
+  // Las funciones del incidente real (6840 filas stancadas 8 días) son listarItemIds y
+  // refrescarPublicacionesMl, no refrescarPublicacionesMlAcotado (esa es la del refresco
+  // puntual por SKU). Si alguien revierte routes/matcher.js y el scroll de listarItemIds
+  // vuelve a llamar `mlFetch` a secas en vez de `mlFetchConReintento`, este test lo detecta:
+  // sin reintento, el 500 del primer chunk tira y refrescarPublicacionesMl rechaza en vez
+  // de terminar con total:0 (fail-closed correcto, pero solo tras agotar los reintentos).
+  let db;
+  beforeEach(() => { db = openDb(TEST_DB); seedToken(db); vi.clearAllMocks(); _resetCooldownParaTests(); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); _resetCooldownParaTests(); });
+
+  it('el scroll de items/search sobrevive a un 500 transitorio en el primer status y termina bien', async () => {
+    let llamadasSearch = 0;
+    axios.request.mockImplementation(async (opts) => {
+      if (String(opts?.url).includes('/items/search')) {
+        llamadasSearch += 1;
+        if (llamadasSearch === 1) return { status: 500, headers: {}, data: null };
+        return { status: 200, headers: {}, data: { results: [], scroll_id: null } };
+      }
+      return { status: 200, headers: {}, data: [] };
+    });
+
+    const r = await refrescarPublicacionesMl(db, ML_CFG);
+
+    expect(r.total).toBe(0); // sin ids devueltos por el scroll (mockeado vacío), pero SIN abortar
+    // STATUSES_A_TRAER = ['active','paused']: 1 falla + 1 éxito para 'active', 1 éxito para 'paused'.
+    expect(llamadasSearch).toBe(3);
+  }, 10000);
+
+  // Cubre la OTRA línea cambiada en refrescarPublicacionesMl (el multiget, no el scroll):
+  // si alguien revierte solo esa línea a `mlFetch` a secas, el test de arriba sigue en
+  // verde igual (no ejercita el multiget con ids reales) — este lo detecta.
+  it('el multiget sobrevive a un 500 transitorio en el primer chunk y persiste la publicación', async () => {
+    let llamadaMultiget = 0;
+    axios.request.mockImplementation(async (opts) => {
+      const url = String(opts?.url);
+      if (url.includes('/items/search')) {
+        return { status: 200, headers: {}, data: { results: ['MLA200'], scroll_id: null } };
+      }
+      if (url.includes('/items/bulk?ids=')) {
+        llamadaMultiget += 1;
+        if (llamadaMultiget === 1) return { status: 500, headers: {}, data: null };
+        return {
+          status: 200, headers: {},
+          data: [{
+            id: 'MLA200',
+            status_code: 200,
+            body: {
+              id: 'MLA200', title: 'Recuperado por multiget', status: 'active', sub_status: [],
+              attributes: [{ id: 'SELLER_SKU', value_name: 'FB-200' }], variations: [],
+            },
+          }],
+        };
+      }
+      return { status: 200, headers: {}, data: [] };
+    });
+
+    const r = await refrescarPublicacionesMl(db, ML_CFG);
+
+    expect(r.total).toBe(1);
+    const fila = db.prepare('SELECT titulo FROM ml_publicaciones_cache WHERE clave = ?').get('MLA200|');
+    expect(fila?.titulo).toBe('Recuperado por multiget'); // antes del fix, el 500 abortaba todo
+    const bulkCall = axios.request.mock.calls.map(c => c[0]).find(cfg => String(cfg?.url).includes('/items/bulk?ids='));
+    expect(bulkCall?.url).toMatch(/attributes=status_code,id,body\.id,body\.title,body\.status,body\.sub_status,/);
+  }, 10000);
+});
+
+describe('mlFetchConReintento — resiliencia ante 5xx/429 transitorios (incidente 2026-08-27)', () => {
+  let db;
+  // El test de 429 activa el cooldown global de mlFetch (estado de módulo en
+  // lib/mlClient.js) — sin resetearlo, contamina los tests siguientes de este archivo
+  // con un cooldown que nunca pidieron (ver doc de _resetCooldownParaTests).
+  beforeEach(() => { db = openDb(TEST_DB); seedToken(db); vi.clearAllMocks(); _resetCooldownParaTests(); });
+  afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); _resetCooldownParaTests(); });
+
+  it('reintenta ante 500 y devuelve OK si un intento posterior tiene éxito', async () => {
+    vi.useFakeTimers();
+    try {
+      let llamada = 0;
+      axios.request.mockImplementation(async () => {
+        llamada += 1;
+        if (llamada < 3) return { status: 500, headers: {}, data: null };
+        return { status: 200, headers: {}, data: { ok: true } };
+      });
+      const p = mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1');
+      await vi.runAllTimersAsync();
+      const resp = await p;
+      expect(resp.status).toBe(200);
+      expect(llamada).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('NO reintenta un 429 — mlFetch ya tiene su propio cooldown global, un backoff corto no lo esquiva', async () => {
+    axios.request.mockResolvedValue({ status: 429, headers: {}, data: null });
+    const resp = await mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1');
+    expect(resp.status).toBe(429);
+    expect(axios.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('agota los reintentos y devuelve el último status (no cuelga para siempre)', async () => {
+    vi.useFakeTimers();
+    try {
+      axios.request.mockResolvedValue({ status: 503, headers: {}, data: null });
+      const p = mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1');
+      await vi.runAllTimersAsync();
+      const resp = await p;
+      expect(resp.status).toBe(503);
+      expect(axios.request).toHaveBeenCalledTimes(4); // 1 intento + 3 reintentos
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('NO reintenta un 404 — devuelve en el primer intento (no es un error transitorio)', async () => {
+    axios.request.mockResolvedValue({ status: 404, headers: {}, data: null });
+    const resp = await mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA-inexistente');
+    expect(resp.status).toBe(404);
+    expect(axios.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('NO reintenta un error fatal de credenciales (getAccessToken 401 al refrescar el token) — hallazgo del revisor: reintentar esto solo multiplica llamadas a /oauth/token con un refresh_token ya quemado', async () => {
+    // Token vencido: fuerza el refresh en la primera llamada.
+    db.prepare("UPDATE ml_oauth_token SET expires_at=? WHERE id=1").run(new Date(Date.now() - 60_000).toISOString());
+    axios.post.mockResolvedValue({ status: 401, headers: {}, data: null });
+    await expect(mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/Autenticación ML rechazada/);
+    expect(axios.post).toHaveBeenCalledTimes(1); // sin el filtro, hubiera sido 4 (1 + 3 reintentos)
+    expect(axios.request).not.toHaveBeenCalled(); // nunca llegó a pegarle a la API real
+  });
+
+  it('NO reintenta mientras el cooldown de OAuth está activo — un backoff de segundos no esquiva un cooldown de decenas de segundos', async () => {
+    db.prepare("UPDATE ml_oauth_token SET expires_at=? WHERE id=1").run(new Date(Date.now() - 60_000).toISOString());
+    // Primer 429 real del OAuth arma el cooldown global (lib/mlClient.js).
+    axios.post.mockResolvedValueOnce({ status: 429, headers: {}, data: null });
+    await expect(mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA1')).rejects.toThrow(/rate limit/i);
+    expect(axios.post).toHaveBeenCalledTimes(1); // el 429 en sí tampoco se reintenta (ya cubierto arriba)
+
+    // Con el cooldown ya activo, una SEGUNDA llamada de mlFetchConReintento (token todavía
+    // vencido) recibe el 429 sintético de mlFetch (guard ANTES de llegar a getAccessToken)
+    // sin reintentar ni volver a pegarle a /oauth/token.
+    axios.post.mockClear();
+    const resp2 = await mlFetchConReintento(db, ML_CFG, 'get', '/items/MLA2');
+    expect(resp2.status).toBe(429);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /matcher/push-skus-pendientes/list', () => {
@@ -328,7 +641,7 @@ describe('GET /matcher/push-skus-pendientes/list', () => {
   });
 });
 
-describe('POST /matcher/push-skus-pendientes y estado (background)', () => {
+describe('Legacy push y estado', () => {
   let db, app;
   beforeEach(() => {
     db = openDb(TEST_DB);
@@ -340,17 +653,12 @@ describe('POST /matcher/push-skus-pendientes y estado (background)', () => {
   });
   afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
 
-  it('devuelve 202 y arranca en background; 409 si ya hay una corrida en curso', async () => {
+  it('rechaza el push legacy y deriva a Guardia ML', async () => {
     seedCache(db, { clave: 'MLA1|', itemId: 'MLA1', status: 'active', sellerSku: '' });
     seedDecision(db, { clave: 'MLA1|', sku: 'FB-100', accion: 'asignar' });
-    axios.request.mockImplementation(() => new Promise(() => {})); // nunca resuelve
-
     const r1 = await request(app).post('/matcher/push-skus-pendientes');
-    expect(r1.status).toBe(202);
-    expect(r1.body).toMatchObject({ ok: true, running: true });
-
-    const r2 = await request(app).post('/matcher/push-skus-pendientes');
-    expect(r2.status).toBe(409);
+    expect(r1.status).toBe(410);
+    expect(r1.body.migracion).toContain('/api/guardia-ml');
   });
 
   it('GET /estado refleja el estado sondeable', async () => {
@@ -370,13 +678,14 @@ describe('GET /matcher/push-skus-pendientes/count', () => {
   });
   afterEach(() => { db.close(); try { fs.unlinkSync(TEST_DB); } catch {} });
 
-  it('incluye pausadas y las separa de activas', async () => {
+  it('informa que el contador legacy fue retirado', async () => {
     seedCache(db, { clave: 'A1|', itemId: 'A1', status: 'active', sellerSku: '' });
     seedDecision(db, { clave: 'A1|', sku: 'FB-1', accion: 'asignar' });
     seedCache(db, { clave: 'P1|', itemId: 'P1', status: 'paused', sellerSku: '' });
     seedDecision(db, { clave: 'P1|', sku: 'FB-2', accion: 'asignar' });
 
     const r = await request(app).get('/matcher/push-skus-pendientes/count');
-    expect(r.body).toMatchObject({ ok: true, pendientes: 2, activas: 1, pausadas: 1, en_espera: 0 });
+    expect(r.status).toBe(410);
+    expect(r.body).toMatchObject({ ok: false, migracion: 'GET /api/guardia-ml/casos' });
   });
 });

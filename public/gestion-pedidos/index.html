@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gestión de pedidos · Fusion Bikes</title>
+<script>
+/* La app se sirve detrás del prefijo /herramientas/ (nginx), así que los assets se piden
+   con ruta relativa y no absoluta: /lib/ no está proxyeado, /herramientas/lib/ sí. Pero el
+   detalle vive un nivel más abajo (/gestion-pedidos/pedidos/123), donde "../lib/" apunta a
+   /gestion-pedidos/lib/ y da 404.
+
+   Un <base> insertado por script NO sirve acá: se probó el 2026-09-09 y los <link> del
+   markup igual resolvieron contra la URL del documento. Por eso se calcula la raíz de la
+   herramienta y se escriben las rutas ya resueltas. document.write y no appendChild porque
+   necesitamos que el CSS y, más abajo, los scripts de lib/ mantengan el orden de parseo:
+   api.js debe existir antes del script principal. */
+(function () {
+  var marca = '/gestion-pedidos/';
+  var i = location.pathname.indexOf(marca);
+  var raiz = i >= 0 ? location.pathname.slice(0, i + marca.length) : '/gestion-pedidos/';
+  window.RAIZ = raiz;
+  window.LIB = raiz.slice(0, raiz.length - 'gestion-pedidos/'.length) + 'lib/';
+  document.write('<link rel="stylesheet" href="' + window.LIB + 'theme.css">' +
+                 '<link rel="stylesheet" href="' + window.LIB + 'components.css">');
+})();
+</script>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--oscuro);color:var(--text);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
+  .wrap{max-width:1220px;margin:0 auto;padding:18px 22px 72px}
+  a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);
+         text-decoration:none;margin-bottom:10px}
+  a.back:hover{color:var(--azul)}
+  h1{font-size:clamp(1.5rem,4vw,2.1rem);font-weight:800;letter-spacing:-.03em;margin:4px 0}
+  h1 em{font-style:normal;color:var(--azul)}
+  .sub{color:var(--muted);font-size:12.5px;margin:0 0 16px;max-width:80ch}
+
+  /* Frescura del dato: si la herramienta muestra pedidos viejos hay que verlo sin buscarlo. */
+  .frescura{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 16px;
+            font-size:12px;color:var(--muted)}
+  .frescura.vieja{color:var(--amber)}
+
+  .pills{margin-bottom:14px}
+  .pills .ui-btn b{margin-left:.35rem;font-weight:800}
+
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .toolbar .ui-input{flex:1;min-width:220px}
+  select.ui-input{min-width:150px;flex:0 0 auto}
+
+  .layout{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(330px,.75fr);gap:16px;
+          align-items:start}
+  .lista{padding:14px}
+
+  .fila{width:100%;text-align:left;display:block;background:var(--surface2);
+        border:1px solid var(--border);border-radius:var(--radius);padding:11px 12px;
+        margin:7px 0;cursor:pointer;color:inherit;font:inherit}
+  .fila:hover{border-color:var(--border2)}
+  .fila[aria-current="true"]{border-color:var(--accent);background:var(--accent-dim)}
+  .fila:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .fila-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+  .fila-top strong{font-size:14px}
+  .fila-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:5px}
+  .fila-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;align-items:center}
+  .ui-chip--info{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-bd)}
+  .sel{width:16px;height:16px;accent-color:var(--accent);margin-right:8px;vertical-align:-3px}
+
+  .bulk{display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:var(--blue-bg);
+        border:1px solid var(--blue-bd);border-radius:var(--radius);padding:9px 11px;margin:6px 0}
+
+  .detalle{padding:14px;position:sticky;top:14px}
+  .detalle h2{font-size:1.05rem;margin:0 0 2px}
+  .kv{display:grid;gap:5px;font-size:13px;color:var(--muted);margin:10px 0}
+  .kv b{color:var(--text);font-weight:600}
+  .items{border-top:1px solid var(--border);margin-top:12px;padding-top:8px}
+  .item{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)}
+  .item:last-child{border-bottom:0}
+  .item .nom{flex:1;min-width:0}
+  .miniatura{width:44px;height:44px;flex:0 0 44px;object-fit:cover;border-radius:8px;
+             background:var(--surface2);border:1px solid var(--border)}
+  .miniatura.vacia{display:grid;place-items:center;color:var(--muted)}
+  .full .miniatura{width:72px;height:72px;flex-basis:72px}
+  .item .nom small{display:block;color:var(--muted)}
+  .qty{font-weight:800;color:var(--azul);white-space:nowrap}
+  .timeline{border-left:2px solid var(--act-rail,var(--border));margin:12px 0;padding-left:14px}
+  .ev{margin-bottom:11px;font-size:12.5px}
+  .ev b{display:block}
+  .ev small{color:var(--muted)}
+
+  .estado{padding:26px 6px;text-align:center;color:var(--muted);font-size:13px}
+  .estado.error{color:var(--amber)}
+  .oculto{display:none!important}
+  .acciones{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+
+  /* Detalle a pantalla completa, en su URL propia. */
+  .full{padding:18px}
+  .full-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+
+  @media (max-width:860px){
+    .wrap{padding:14px 12px 56px}
+    .layout{display:block}
+    .detalle{position:static;margin-top:14px}
+    .full-grid{display:block}
+    .toolbar .ui-input{min-width:0;width:100%;flex:1 1 100%}
+    select.ui-input{width:100%;flex:1 1 100%}
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <a class="back" id="ir-home" href="../home/">← Volver al inicio</a>
+
+  <!-- ── Listado ────────────────────────────────────────────────────────────── -->
+  <section id="vista-lista">
+    <h1>Gestión de <em>pedidos</em></h1>
+    <p class="sub">Pedidos de WooCommerce y MercadoLibre del último mes, incluidas las ventas
+      físicas del local. La preparación y el despacho se ejecutan en Gestión de envíos.</p>
+
+    <div class="frescura" id="frescura" aria-live="polite">
+      <span id="frescura-txt">Consultando la última importación…</span>
+      <button class="ui-btn" id="btn-reconciliar" type="button">Reconciliar 30 días</button>
+    </div>
+
+    <nav class="ui-tabs pills" id="pills" aria-label="Vistas de pedidos">
+      <button class="ui-btn" type="button" role="tab" data-vista="atencion" aria-selected="true">Requieren atención <b id="n-atencion">–</b></button>
+      <button class="ui-btn" type="button" role="tab" data-vista="recuperar" aria-selected="false">Recuperar ventas <b id="n-recuperar">–</b></button>
+      <button class="ui-btn" type="button" role="tab" data-vista="todos" aria-selected="false">Todos los pedidos <b id="n-todos">–</b></button>
+    </nav>
+
+    <div class="toolbar">
+      <input class="ui-input" id="q" type="search" autocomplete="off"
+             placeholder="Buscar por pedido, id externo, cliente, email, teléfono, SKU, EAN o producto…"
+             aria-label="Buscar pedidos">
+      <select class="ui-input" id="f-fuente" aria-label="Filtrar por canal">
+        <option value="">Todos los canales</option>
+        <option value="woocommerce">WooCommerce</option>
+        <option value="mercadolibre">MercadoLibre</option>
+      </select>
+      <select class="ui-input" id="f-comercial" aria-label="Filtrar por estado comercial">
+        <option value="">Todos los estados</option>
+        <option value="confirmado">Confirmado</option>
+        <option value="cancelado">Cancelado</option>
+        <option value="fallido">Fallido</option>
+        <option value="reembolsado">Reembolsado</option>
+      </select>
+    </div>
+
+    <div class="layout">
+      <div class="ui-card lista">
+        <div class="bulk oculto" id="bulk">
+          <strong><span id="n-sel">0</span> seleccionados</strong>
+          <button class="ui-btn ui-btn--primario" type="button" id="btn-lote">Enviar a preparación</button>
+          <button class="ui-btn" type="button" id="btn-limpiar">Limpiar</button>
+        </div>
+        <div id="resultado" aria-live="polite"></div>
+        <div class="estado" id="estado-lista">Cargando pedidos…</div>
+        <div class="acciones oculto" id="paginacion">
+          <button class="ui-btn" type="button" id="btn-mas">Ver más</button>
+        </div>
+      </div>
+
+      <aside class="ui-card detalle" id="rapida" aria-label="Vista rápida del pedido">
+        <div class="estado">Elegí un pedido para ver su ficha.</div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ── Detalle en URL propia ──────────────────────────────────────────────── -->
+  <section id="vista-detalle" class="oculto">
+    <a class="back" href="#" id="volver-lista">← Volver al listado</a>
+    <div class="ui-card full" id="full"></div>
+  </section>
+</main>
+
+<script>document.write('<script src="' + window.LIB + 'format.js"><\/script>' +
+                 '<script src="' + window.LIB + 'api.js"><\/script>');</script>
+<script>
+(function () {
+  'use strict';
+  Api.installAuth();
+
+  var API = '/api/gestion-pedidos';
+  var PAGINA = 50;
+
+  var estado = {
+    vista: 'atencion',
+    q: '',
+    fuente: '',
+    comercial: '',
+    offset: 0,
+    total: 0,
+    pedidos: [],
+    seleccion: new Set(),
+    abierto: null
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = window.esc;
+
+  // ── Formato ───────────────────────────────────────────────────────────────
+  function plata(centavos, moneda) {
+    if (centavos == null) return '—';
+    var v = (Number(centavos) / 100).toLocaleString('es-AR', { minimumFractionDigits: 2 });
+    return (moneda === 'USD' ? 'US$ ' : '$ ') + v;
+  }
+  function cuando(iso) {
+    if (!iso) return '—';
+    var d = new Date(iso);
+    if (isNaN(d)) return String(iso);
+    return d.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit',
+                                       hour: '2-digit', minute: '2-digit' });
+  }
+  function canal(fuente) {
+    return fuente === 'mercadolibre' ? 'ML' : fuente === 'woocommerce' ? 'WEB' : String(fuente || '—');
+  }
+  // El estado que el operario reconoce es el del canal ('enviadoandreani', 'lpaandreani',
+  // 'completed'), no la clasificación propia: 625 de 723 pedidos comparten la misma
+  // combinación comercial/operativa, así que ese chip no distinguía nada. Se muestra el del
+  // canal con su origen a la vista, y el operativo sólo cuando aporta algo distinto.
+  var ESTADOS_LEGIBLES = {
+    mercadolibre: 'Venta de ML', lpaandreani: 'Listo para enviar', enviadoandreani: 'Enviado',
+    completed: 'Completado', processing: 'En proceso', cancelled: 'Cancelado',
+    'on-hold': 'En espera', pending: 'Pago pendiente', refunded: 'Reembolsado',
+    failed: 'Fallido', paid: 'Pagado', checkout: 'Checkout',
+    retiradoenfusion: 'Retirado en el local', serviceterminado: 'Service terminado',
+    serviceenproces: 'Service en proceso', fusion: 'Entregado sin aviso'
+  };
+
+  // El listado devuelve el estado del envío como texto y el detalle como objeto (con
+  // logistic_type y frescura). Se normaliza acá para que chipEstado sirva en los dos.
+  function statusEnvio(valor) {
+    if (!valor) return null;
+    return typeof valor === 'string' ? valor : (valor.status || null);
+  }
+
+  // Estados del envío de ML. Son los que mandan en una venta de ML: su estado de orden se
+  // queda en 'Pagado' aunque el paquete ya haya salido.
+  var ENVIOS_ML = {
+    ready_to_ship: 'Listo para enviar', shipped: 'Despachado',
+    delivered: 'Entregado', not_delivered: 'No entregado', cancelled: 'Envío cancelado'
+  };
+
+  function estadoLegible(estado) {
+    if (!estado) return null;
+    return ESTADOS_LEGIBLES[estado] || estado;
+  }
+
+  function nombreOperacion(p) {
+    var esService = ['serviceenproces', 'serviceterminado'].indexOf(p.estado_canal) >= 0;
+    return (esService ? 'Service · ' : '') + (p.cliente_nombre || 'Sin cliente');
+  }
+
+  function chipEstado(p) {
+    var cerrado = ['cerrado', 'despachado', 'retirado'].indexOf(p.estado_operativo) >= 0;
+    var clase = p.estado_comercial === 'cancelado' || p.estado_comercial === 'fallido' ? 'ui-chip--critico'
+      : cerrado ? 'ui-chip--ok' : 'ui-chip--urgente';
+    if (['serviceenproces', 'processing', 'lpaandreani'].indexOf(p.estado_canal) >= 0) clase = 'ui-chip--info';
+    if (['fusion', 'retiradoenfusion', 'serviceterminado', 'completed', 'enviadoandreani'].indexOf(p.estado_canal) >= 0) clase = 'ui-chip--ok';
+    if (['cancelled', 'failed', 'refunded'].indexOf(p.estado_canal) >= 0) clase = 'ui-chip--critico';
+    var origen = p.fuente === 'mercadolibre' ? 'ML' : 'Woo';
+    // En una venta de ML manda el envío: 'paid' sólo dice que ML cobró.
+    var status = p.fuente === 'mercadolibre' ? statusEnvio(p.estado_envio_ml) : null;
+    var envio = status ? (ENVIOS_ML[status] || status) : null;
+    var canal = envio || estadoLegible(p.estado_canal);
+    if (status === 'ready_to_ship') clase = 'ui-chip--info';
+    if (status && ['shipped', 'delivered'].indexOf(status) >= 0) clase = 'ui-chip--ok';
+    if (status === 'cancelled' || status === 'not_delivered') clase = 'ui-chip--critico';
+    // Sin estado del canal no se cae a la clasificación propia: eso afirmaría algo que no
+    // se verificó. Son pedidos viejos, fuera de la ventana que la reconciliación alcanza.
+    var html = '<span class="ui-chip ' + (canal ? clase : '') + '">' +
+      (canal ? esc(canal) + ' <small>(' + origen + ')</small>' : 'Sin estado conocido') + '</span>';
+    // El estado operativo sólo se agrega cuando dice algo que el del canal no dice.
+    if (p.estado_operativo && p.estado_operativo !== 'importado' && !cerrado) {
+      html += ' <span class="ui-chip">' + esc(p.estado_operativo.replace(/_/g, ' ')) + '</span>';
+    }
+    return html;
+  }
+
+  // ── Estados explícitos de carga/vacío/error ──────────────────────────────
+  function mostrarEstado(texto, esError) {
+    var el = $('estado-lista');
+    el.textContent = texto || '';
+    el.classList.toggle('oculto', !texto);
+    el.classList.toggle('error', Boolean(esError));
+  }
+
+  // ── Resumen: contadores de pills y frescura ──────────────────────────────
+  function cargarResumen() {
+    return fetch(API + '/resumen', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.ok) { $('frescura-txt').textContent = 'No se pudo leer el estado de la importación.'; return; }
+        $('n-atencion').textContent = d.atencion;
+        $('n-recuperar').textContent = d.recuperar;
+        $('n-todos').textContent = d.total;
+        pintarFrescura(d.ultima_importacion);
+      })
+      .catch(function () { $('frescura-txt').textContent = 'No se pudo leer el estado de la importación.'; });
+  }
+
+  function pintarFrescura(ultima) {
+    var caja = $('frescura');
+    if (!ultima) {
+      caja.classList.add('vieja');
+      $('frescura-txt').textContent = 'Todavía no se importó ningún pedido.';
+      return;
+    }
+    if (ultima.estado === 'fallida') {
+      caja.classList.add('vieja');
+      $('frescura-txt').textContent = 'La última importación falló (' + esc(ultima.error || 'sin detalle') +
+        '). Se muestran los datos de la corrida anterior.';
+      return;
+    }
+    var horas = (Date.now() - new Date(ultima.finalizado_en).getTime()) / 36e5;
+    caja.classList.toggle('vieja', !(horas < 1));
+    $('frescura-txt').textContent = 'Última importación: ' + cuando(ultima.finalizado_en) +
+      ' · ' + ultima.importados + ' pedidos' + (horas >= 1 ? ' (hace más de una hora)' : '');
+  }
+
+  // ── Listado ───────────────────────────────────────────────────────────────
+  function url() {
+    var p = new URLSearchParams();
+    if (estado.vista === 'atencion') p.set('vista', 'atencion');
+    if (estado.q) p.set('q', estado.q);
+    if (estado.fuente) p.set('fuente', estado.fuente);
+    if (estado.comercial) p.set('comercial', estado.comercial);
+    p.set('limit', PAGINA);
+    p.set('offset', estado.offset);
+    return API + '?' + p.toString();
+  }
+
+  function cargarLista(acumular) {
+    if (!acumular) {
+      estado.offset = 0;
+      estado.pedidos = [];
+      $('resultado').innerHTML = '';
+      // La selección se limpia al cambiar de vista, buscar o filtrar. Si no, un pedido
+      // elegido en otra vista sigue seleccionado sin estar en pantalla y "Enviar a
+      // preparación" lo mandaría sin que nadie lo vea. Paginar (acumular) sí la conserva.
+      estado.seleccion.clear();
+      refrescarSeleccion();
+    }
+    mostrarEstado('Cargando pedidos…');
+    $('paginacion').classList.add('oculto');
+    return fetch(url(), { credentials: 'same-origin' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        estado.total = d.total;
+        estado.pedidos = estado.pedidos.concat(d.pedidos);
+        pintarLista();
+        if (!estado.pedidos.length) {
+          mostrarEstado(estado.q ? 'Ningún pedido coincide con la búsqueda.' : 'No hay pedidos en esta vista.');
+        } else {
+          mostrarEstado('');
+          $('paginacion').classList.toggle('oculto', estado.pedidos.length >= estado.total);
+        }
+      })
+      .catch(function (e) {
+        mostrarEstado('No se pudieron cargar los pedidos: ' + e.message + '. Reintentá en unos segundos.', true);
+      });
+  }
+
+  function pintarLista() {
+    $('resultado').innerHTML = estado.pedidos.map(function (p) {
+      return '<article class="fila" tabindex="0" role="button" data-id="' + p.id + '"' +
+        (estado.abierto === p.id ? ' aria-current="true"' : '') + '>' +
+        '<div class="fila-top"><strong>' +
+          '<input class="sel" type="checkbox" data-sel="' + p.id + '" aria-label="Seleccionar pedido ' + esc(p.numero_visible) + '"' +
+          (estado.seleccion.has(p.id) ? ' checked' : '') + '>' +
+          esc(p.numero_visible) + ' · ' + esc(nombreOperacion(p)) +
+        '</strong><span class="ui-chip">' + canal(p.fuente) + '</span></div>' +
+        '<div class="fila-meta"><span>' + cuando(p.creado_fuente_en) + '</span>' +
+          (p.numero_espejo_woo ? '<span>Woo ' + esc(p.numero_espejo_woo) + '</span>' : '') +
+          '<span>' + p.productos + ' productos · ' + p.unidades + ' u.</span>' +
+          '<span>' + plata(p.total_centavos, p.moneda) + '</span></div>' +
+        '<div class="fila-chips">' + chipEstado(p) + '</div>' +
+      '</article>';
+    }).join('');
+  }
+
+  // ── Vista rápida ──────────────────────────────────────────────────────────
+  function abrirRapida(id) {
+    estado.abierto = id;
+    pintarLista();
+    var caja = $('rapida');
+    caja.innerHTML = '<div class="estado">Cargando ficha…</div>';
+    fetch(API + '/' + id, { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) { caja.innerHTML = fichaRapida(d.pedido); })
+      .catch(function (e) {
+        caja.innerHTML = '<div class="estado error">No se pudo cargar la ficha: ' + esc(e.message) + '</div>';
+      });
+  }
+
+  function fichaRapida(p) {
+    var e = p.entrega || {};
+    return '<h2>' + esc(p.numero_visible) + '</h2>' +
+      '<div class="ui-chip">' + canal(p.fuente) + ' · ' + esc(p.external_id) + '</div> ' + chipEstado(p) +
+      '<div class="kv">' +
+        fila('Estado en ' + (p.fuente === 'mercadolibre' ? 'MercadoLibre' : 'WooCommerce'), estadoLegible(p.estado_canal)) +
+        (statusEnvio(p.estado_envio_ml) ? fila('Envío ML', ENVIOS_ML[statusEnvio(p.estado_envio_ml)] || statusEnvio(p.estado_envio_ml)) : '') +
+        (p.espejo_woo ? fila('Pedido en Woo', p.espejo_woo.numero_visible + ' · ' + (estadoLegible(p.espejo_woo.estado_canal) || 'sin estado')) : '') +
+        fila('Cliente', p.cliente_nombre) +
+        fila('Email', p.cliente_email) +
+        fila('Teléfono', p.cliente_telefono) +
+        fila('Fecha', cuando(p.creado_fuente_en)) +
+        fila('Entrega', e.tipo) +
+        fila('Dirección', e.direccion) +
+        fila('Pago', [p.pago_metodo, p.pago_estado].filter(Boolean).join(' · ')) +
+        fila('Cuotas', p.cuotas) +
+        fila('Total', plata(p.total_centavos, p.moneda)) +
+        fila('Notas', p.notas) +
+      '</div>' +
+      itemsHtml(p.items) +
+      '<div class="acciones">' +
+        '<a class="ui-btn ui-btn--primario" data-pedido="' + p.id + '" href="' + RAIZ + 'pedidos/' + p.id + '">Abrir pedido completo</a>' +
+        (p.enlace_woocommerce ? '<a class="ui-btn" target="_blank" rel="noopener" href="' + esc(p.enlace_woocommerce) + '">Abrir en WooCommerce ↗</a>' : '') +
+      '</div>';
+  }
+
+  function fila(label, valor) {
+    if (valor == null || valor === '') return '';
+    return '<div>' + esc(label) + ': <b>' + esc(valor) + '</b></div>';
+  }
+
+  function itemsHtml(items) {
+    if (!items || !items.length) return '<div class="items"><div class="estado">Sin productos registrados.</div></div>';
+    return '<div class="items">' + items.map(function (i) {
+      var unit = i.precio_unitario_centavos;
+      return '<div class="item">' +
+        (i.imagen ? '<img class="miniatura" src="' + esc(i.imagen) + '" alt="" loading="lazy">' : '<span class="miniatura vacia" aria-hidden="true">–</span>') +
+        '<div class="nom"><b>' + esc(i.nombre) + '</b>' +
+        '<small>' + esc(i.sku || 'sin SKU') + (i.ean ? ' · EAN ' + esc(i.ean) : '') +
+        (i.stock_actual != null ? ' · stock ' + esc(i.stock_actual) : '') + '</small></div>' +
+        '<span class="qty">× ' + esc(i.cantidad) + '</span>' +
+        '<span>' + (unit != null ? plata(unit * i.cantidad) : '—') + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  // ── Detalle completo, en su propia URL ───────────────────────────────────
+  function idDeLaUrl() {
+    var m = location.pathname.match(/\/gestion-pedidos\/pedidos\/(\d+)/);
+    return m ? Number(m[1]) : null;
+  }
+
+  function mostrarDetalle(id, empujar) {
+    if (empujar) history.pushState({ id: id }, '', RAIZ + 'pedidos/' + id);
+    $('vista-lista').classList.add('oculto');
+    $('vista-detalle').classList.remove('oculto');
+    $('full').innerHTML = '<div class="estado">Cargando pedido…</div>';
+    fetch(API + '/' + id, { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) { $('full').innerHTML = detalleHtml(d.pedido); })
+      .catch(function (e) {
+        $('full').innerHTML = '<div class="estado error">No se pudo cargar el pedido: ' + esc(e.message) + '</div>';
+      });
+  }
+
+  function detalleHtml(p) {
+    var e = p.entrega || {};
+    return '<h1>' + esc(p.numero_visible) + ' <em>' + canal(p.fuente) + '</em></h1>' +
+      '<p class="sub">' + esc(p.external_id) + ' · ' + cuando(p.creado_fuente_en) + '</p>' +
+      chipEstado(p) +
+      '<div class="acciones">' +
+        (p.enlace_woocommerce ? '<a class="ui-btn ui-btn--primario" target="_blank" rel="noopener" href="' + esc(p.enlace_woocommerce) + '">Abrir en WooCommerce ↗</a>' : '') +
+      '</div>' +
+      '<div class="full-grid">' +
+        '<div class="ui-panel"><h3>Estado</h3><div class="kv">' +
+          fila('En ' + (p.fuente === 'mercadolibre' ? 'MercadoLibre' : 'WooCommerce'), estadoLegible(p.estado_canal)) +
+          (statusEnvio(p.estado_envio_ml) ? fila('Envío ML', (ENVIOS_ML[statusEnvio(p.estado_envio_ml)] || statusEnvio(p.estado_envio_ml)) + (p.estado_envio_ml.logistic_type ? ' · ' + p.estado_envio_ml.logistic_type : '')) : '') +
+          (p.espejo_woo ? fila('Pedido espejo en Woo', p.espejo_woo.numero_visible + ' · ' + (estadoLegible(p.espejo_woo.estado_canal) || 'sin estado')) : '') +
+          fila('Operativo', p.estado_operativo) +
+          (p.fuente === 'mercadolibre' ? '<div class="ui-aviso ui-aviso--info" style="margin-top:8px">Los pedidos de MercadoLibre no se modifican desde acá: los cambios se hacen en ML y se traen por la API.</div>' : '') +
+        '</div></div>' +
+        '<div class="ui-panel"><h3>Cliente</h3><div class="kv">' +
+          fila('Nombre', p.cliente_nombre) + fila('Email', p.cliente_email) +
+          fila('Teléfono', p.cliente_telefono) + '</div></div>' +
+        '<div class="ui-panel"><h3>Entrega</h3><div class="kv">' +
+          fila('Tipo', e.tipo) + fila('Transportista', e.transportista) + fila('Receptor', e.nombre_receptor) + fila('Dirección', e.direccion) +
+          fila('Ciudad', e.ciudad) + fila('Provincia', e.provincia) +
+          fila('Código postal', e.codigo_postal) + fila('Tracking', e.tracking) + '</div></div>' +
+        '<div class="ui-panel"><h3>Pago</h3><div class="kv">' +
+          fila('Método', p.pago_metodo) + fila('Estado', p.pago_estado) +
+          fila('Cuotas', p.cuotas) + fila('Subtotal', plata(p.subtotal_centavos, p.moneda)) +
+          fila('Envío', plata(p.envio_centavos, p.moneda)) +
+          fila('Total', plata(p.total_centavos, p.moneda)) + '</div></div>' +
+        '<div class="ui-panel"><h3>Productos</h3>' + itemsHtml(p.items) + '</div>' +
+      '</div>' +
+      '<div class="ui-panel" style="margin-top:14px"><h3>Línea de tiempo</h3>' + eventosHtml(p.eventos) + '</div>';
+  }
+
+  function eventosHtml(eventos) {
+    if (!eventos || !eventos.length) return '<div class="estado">Sin eventos registrados.</div>';
+    return '<div class="timeline">' + eventos.map(function (ev) {
+      return '<div class="ev"><b>' + esc(ev.evento) + '</b>' +
+        '<small>' + cuando(ev.creado_en) + ' · ' + esc(ev.actor_tipo || 'sistema') +
+        (ev.estado_anterior || ev.estado_nuevo ? ' · ' + esc(ev.estado_anterior || '—') + ' → ' + esc(ev.estado_nuevo || '—') : '') +
+        '</small></div>';
+    }).join('') + '</div>';
+  }
+
+  function volverAlListado() {
+    $('vista-detalle').classList.add('oculto');
+    $('vista-lista').classList.remove('oculto');
+  }
+
+  // ── Selección múltiple y envío a preparación ─────────────────────────────
+  function refrescarSeleccion() {
+    $('n-sel').textContent = estado.seleccion.size;
+    $('bulk').classList.toggle('oculto', estado.seleccion.size === 0);
+  }
+
+  function enviarALote() {
+    var ids = Array.from(estado.seleccion);
+    if (!ids.length) return;
+    var boton = $('btn-lote');
+    boton.disabled = true;
+    fetch(API + '/preparacion/validar-lote', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pedido_ids: ids })
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d.error || 'No se pudo validar el lote');
+        var d = res.d;
+        var detalle = d.validos.length + ' de ' + d.solicitados + ' pedidos entran a preparación.';
+        if (d.rechazados.length) {
+          detalle += '\n\nQuedan afuera:\n' + d.rechazados.map(function (r) {
+            return '· ' + (r.numero_visible || ('#' + r.id)) + ': ' + r.motivo;
+          }).join('\n');
+        }
+        if (!d.validos.length) { alert(detalle); return; }
+        if (!confirm(detalle + '\n\n¿Confirmás el envío a preparación?')) return;
+        return crearLote(d.validos.map(function (p) { return p.id; }));
+      })
+      .catch(function (e) { alert('No se pudo enviar a preparación: ' + e.message); })
+      .then(function () { boton.disabled = false; });
+  }
+
+  function crearLote(ids) {
+    return fetch('/api/preparacion/lote-desde-gestion', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gestion_pedido_ids: ids })
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d.error || 'No se pudo crear el lote');
+        alert('Lote creado: ' + ((res.d.lote && res.d.lote.pedidos) || ids.length) + ' pedidos enviados a preparación.');
+        estado.seleccion.clear();
+        refrescarSeleccion();
+        cargarResumen();
+        cargarLista(false);
+      });
+  }
+
+  // ── Reconciliación manual ────────────────────────────────────────────────
+  function reconciliar() {
+    var boton = $('btn-reconciliar');
+    if (!confirm('Se vuelven a leer los pedidos de los últimos 30 días de WooCommerce y MercadoLibre. No cambia estados ni crea preparaciones. ¿Seguimos?')) return;
+    boton.disabled = true;
+    var textoPrevio = boton.textContent;
+    boton.textContent = 'Importando…';
+    fetch(API + '/importar', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: '{}'
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.d.detalle || res.d.error || 'falló la importación');
+        alert('Importación completa: ' + res.d.creados + ' nuevos y ' + res.d.actualizados + ' actualizados.');
+        cargarResumen();
+        cargarLista(false);
+      })
+      .catch(function (e) { alert('No se pudo importar: ' + e.message); })
+      .then(function () { boton.disabled = false; boton.textContent = textoPrevio; });
+  }
+
+  // ── Eventos ───────────────────────────────────────────────────────────────
+  $('pills').addEventListener('click', function (ev) {
+    var b = ev.target.closest('[data-vista]');
+    if (!b) return;
+    Array.prototype.forEach.call(this.querySelectorAll('[data-vista]'), function (x) {
+      x.setAttribute('aria-selected', String(x === b));
+    });
+    estado.vista = b.dataset.vista;
+    if (estado.vista === 'recuperar') {
+      // Recuperar ventas tiene su propio endpoint y su propia forma; hasta que se porte
+      // a esta pantalla se dice qué pasa, en vez de mostrar una lista vacía sin explicar.
+      $('resultado').innerHTML = '';
+      $('paginacion').classList.add('oculto');
+      mostrarEstado('Recuperar ventas todavía se opera en su pantalla anterior. No hay oportunidades vigentes cargadas.');
+      return;
+    }
+    cargarLista(false);
+  });
+
+  var timer = null;
+  $('q').addEventListener('input', function () {
+    var v = this.value.trim();
+    clearTimeout(timer);
+    timer = setTimeout(function () { estado.q = v; cargarLista(false); }, 300);
+  });
+  $('f-fuente').addEventListener('change', function () { estado.fuente = this.value; cargarLista(false); });
+  $('f-comercial').addEventListener('change', function () { estado.comercial = this.value; cargarLista(false); });
+
+  $('resultado').addEventListener('click', function (ev) {
+    var caja = ev.target.closest('[data-sel]');
+    if (caja) {
+      var id = Number(caja.dataset.sel);
+      if (caja.checked) estado.seleccion.add(id); else estado.seleccion.delete(id);
+      refrescarSeleccion();
+      return;
+    }
+    var fila = ev.target.closest('.fila');
+    if (fila) abrirRapida(Number(fila.dataset.id));
+  });
+  $('resultado').addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    var fila = ev.target.closest('.fila');
+    if (!fila) return;
+    ev.preventDefault();
+    abrirRapida(Number(fila.dataset.id));
+  });
+
+  // "Abrir pedido completo" es un <a> real: navega con clic del medio y se puede copiar,
+  // pero en el clic común se resuelve sin recargar.
+  $('rapida').addEventListener('click', function (ev) {
+    var a = ev.target.closest('a[data-pedido]');
+    if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+    ev.preventDefault();
+    mostrarDetalle(Number(a.dataset.pedido), true);
+  });
+
+  $('volver-lista').addEventListener('click', function (ev) {
+    ev.preventDefault();
+    history.pushState({}, '', RAIZ);
+    volverAlListado();
+  });
+  window.addEventListener('popstate', function () {
+    var id = idDeLaUrl();
+    if (id) mostrarDetalle(id, false); else volverAlListado();
+  });
+
+  $('btn-limpiar').addEventListener('click', function () {
+    estado.seleccion.clear();
+    refrescarSeleccion();
+    pintarLista();
+  });
+  $('btn-lote').addEventListener('click', enviarALote);
+  $('btn-reconciliar').addEventListener('click', reconciliar);
+  $('btn-mas').addEventListener('click', function () {
+    estado.offset += PAGINA;
+    cargarLista(true);
+  });
+
+  // ── Arranque ──────────────────────────────────────────────────────────────
+  // El "volver al inicio" del markup es relativo y apuntaría mal desde la URL del
+  // detalle; se reescribe con la raíz ya calculada.
+  $('ir-home').setAttribute('href', RAIZ.slice(0, RAIZ.length - 'gestion-pedidos/'.length) + 'home/');
+  cargarResumen();
+  var inicial = idDeLaUrl();
+  if (inicial) { mostrarDetalle(inicial, false); cargarLista(false); }
+  else cargarLista(false);
+})();
+</script>
+</body>
+</html>

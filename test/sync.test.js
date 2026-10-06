@@ -344,7 +344,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-      if (method === 'get' && /\/items\?ids=/.test(url)) {
+      if (method === 'get' && /\/items\/bulk\?ids=/.test(url)) {
         getItemCount++;
         return { status: 200, data: [{ code: 200, body: { id: 'MLA9', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
@@ -369,6 +369,23 @@ describe('reactivación de pausadas por falta de stock', () => {
     expect(log.n).toBe(1);
   });
 
+  it('reactivarItems: no empuja ni activa una variación con contradicción de título', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-CONTRA', 7, { idWoo: 901 });
+    db.prepare("UPDATE catalogo_cache SET nombre='Bici Rodado 27 Talle M',precio=1350,regular_price=1350 WHERE sku='FB-CONTRA'").run();
+    seedDecision(db, 'MLA-CONTRA|v1', 'FB-CONTRA');
+    seedPublicacion(db, { clave: 'MLA-CONTRA|v1', itemId: 'MLA-CONTRA', varId: 'v1', status: 'paused', subStatus: 'out_of_stock', titulo: 'Bici Rodado 29 Talle M' });
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
+      if (/\/items\/bulk\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA-CONTRA', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
+      return { status: 200, data: {}, headers: {} };
+    });
+    const r = await reactivarItems(db, ML_CFG, ['MLA-CONTRA']);
+    expect(r.resultados[0]).toMatchObject({ bloqueado: true, motivo: 'contradiccion_titulo' });
+    expect(axios.request.mock.calls.some(([cfg]) => String(cfg.method).toLowerCase() === 'put')).toBe(false);
+  });
+
   it('reactivarItems: si ML rechaza la activación, registra error y no marca activo', async () => {
     seedToken(db);
     seedCatalogo(db, 'FB-10', 4);
@@ -381,7 +398,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-      if (method === 'get' && /\/items\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA10', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
+      if (method === 'get' && /\/items\/bulk\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA10', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       if (method === 'put' && /\/items\/MLA10\/variations\/v10$/.test(url)) return { status: 200, data: {}, headers: {} };
       if (method === 'put' && /\/items\/MLA10$/.test(url)) return { status: 400, data: { message: 'no se puede activar' }, headers: {} };
       return { status: 404, data: {}, headers: {} };
@@ -405,7 +422,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const url = cfg.url || '';
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
       if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
-      if (/\/items\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA11', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, variations: [] } }], headers: {} };
+      if (/\/items\/bulk\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA11', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, variations: [] } }], headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -425,7 +442,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     seedPublicacion(db, { clave: 'MLA12|v12', itemId: 'MLA12', varId: 'v12', status: 'paused', subStatus: 'out_of_stock' });
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (/\/items\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA12', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
+      if (/\/items\/bulk\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA12', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -447,7 +464,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       if (url.includes('/listing_prices')) return { status: 404, data: {}, headers: {} };
-      if (/\/items\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA14', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
+      if (/\/items\/bulk\?ids=/.test(url)) return { status: 200, data: [{ code: 200, body: { id: 'MLA14', status: 'paused', sub_status: ['out_of_stock'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -469,7 +486,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     seedPublicacion(db, { clave: 'MLA13|v13', itemId: 'MLA13', varId: 'v13', status: 'paused', subStatus: 'out_of_stock' });
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (/\/items\?ids=/.test(url)) return { status: 500, data: null, headers: {} };
+      if (/\/items\/bulk\?ids=/.test(url)) return { status: 500, data: null, headers: {} };
       return { status: 200, data: {}, headers: {} };
     });
 
@@ -493,7 +510,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
-      if (method === 'get' && /\/items\?ids=/.test(url)) {
+      if (method === 'get' && /\/items\/bulk\?ids=/.test(url)) {
         getItemCount++;
         return { status: 200, data: [{ code: 200, body: { id: 'MLA15', status: 'active', sub_status: [], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
@@ -528,7 +545,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
-      if (method === 'get' && /\/items\?ids=/.test(url)) {
+      if (method === 'get' && /\/items\/bulk\?ids=/.test(url)) {
         return { status: 200, data: [{ code: 200, body: { id: 'MLA16', status: 'paused', sub_status: ['out_of_stock', 'paused_by_seller'], price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
       if (method === 'put') { putCount++; }
@@ -559,7 +576,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
-      if (method === 'get' && /\/items\?ids=/.test(url)) {
+      if (method === 'get' && /\/items\/bulk\?ids=/.test(url)) {
         return { status: 200, data: [{ code: 200, body: { id: 'MLA17', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
       if (method === 'put') { putCount++; }
@@ -588,7 +605,7 @@ describe('reactivación de pausadas por falta de stock', () => {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
       const method = (cfg.method || '').toLowerCase();
-      if (method === 'get' && /\/items\?ids=/.test(url)) {
+      if (method === 'get' && /\/items\/bulk\?ids=/.test(url)) {
         return { status: 200, data: [{ code: 200, body: { id: 'MLA18', status: 'paused', sub_status: 'paused_by_seller', price: 1000, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: false }, variations: [] } }], headers: {} };
       }
       if (method === 'put') { putCount++; }
@@ -629,7 +646,7 @@ describe('reactivación de pausadas por falta de stock', () => {
         await new Promise(r => setTimeout(r, 5));
         const url = cfg.url || '';
         if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-        if (/\/items\?ids=/.test(url)) {
+        if (/\/items\/bulk\?ids=/.test(url)) {
           const idsParam = url.match(/ids=([^&]*)/)[1];
           const ids = idsParam.split(',');
           return {
@@ -674,7 +691,7 @@ describe('reactivación de pausadas por falta de stock', () => {
       const method = (cfg.method || '').toLowerCase();
       await new Promise(r => setTimeout(r, 2));
       if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 50 }, headers: {} };
-      if (/\/items\?ids=/.test(url)) {
+      if (/\/items\/bulk\?ids=/.test(url)) {
         const idsParam = url.match(/ids=([^&]*)/)[1];
         const ids = idsParam.split(',');
         return {
@@ -776,7 +793,7 @@ describe('vista de detalle', () => {
     seedLog(db, { clave: 'MLA_V|666', estado: 'sin_mapeo' });  // variación viva
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (/\/items\?ids=/.test(url)) {
+      if (/\/items\/bulk\?ids=/.test(url)) {
         return { status: 200, data: [
           { code: 200, body: { id: 'MLA_M', status: 'active', variations: [] } },
           { code: 200, body: { id: 'MLA_V', status: 'active', variations: [{ id: 666 }] } },
@@ -851,6 +868,26 @@ describe('vista de detalle', () => {
     expect(res.body.data.map(r => r.clave)).toEqual(['MLA3|v3']);
   });
 
+  it('atencion/errores: muestra un error posterior a un estado ML antiguo', async () => {
+    const viejo = '2026-08-30T10:00:00.000Z';
+    const nuevo = '2026-08-30T11:00:00.000Z';
+    db.prepare("INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES ('MLA-VIEJO|','FB-V',1,?)").run(viejo);
+    db.prepare("INSERT INTO sync_log (direccion,clave,sku,estado,error,intentos,creado_en,actualizado_en) VALUES ('wc_ml','MLA-VIEJO|','FB-V','error','HTTP 500',1,?,?)").run(nuevo,nuevo);
+    const res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.body.data.map(r => r.clave)).toContain('MLA-VIEJO|');
+  });
+
+  it('atencion/errores: limpia error→ok con clave NULL y desempata por id', async () => {
+    const ts = '2026-08-30T12:00:00.000Z';
+    db.prepare("INSERT INTO sync_log (direccion,clave,estado,error,intentos,creado_en,actualizado_en) VALUES ('pedidos_cache',NULL,'error','timeout',1,?,?)").run(ts,ts);
+    db.prepare("INSERT INTO sync_log (direccion,clave,estado,error,intentos,creado_en,actualizado_en) VALUES ('pedidos_cache',NULL,'ok',NULL,0,?,?)").run(ts,ts);
+    let res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.body.data.some(r => r.clave === null)).toBe(false);
+    db.prepare("INSERT INTO sync_log (direccion,clave,estado,error,intentos,creado_en,actualizado_en) VALUES ('pedidos_cache',NULL,'error','nuevo',1,?,?)").run(ts,ts);
+    res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.body.data.some(r => r.clave === null && r.error === 'nuevo')).toBe(true);
+  });
+
   it('atencion: categoría inválida → 400', async () => {
     const res = await request(app).get('/api/sync/atencion/cualquiera');
     expect(res.status).toBe(400);
@@ -861,7 +898,7 @@ describe('vista de detalle', () => {
     seedDecision(db, 'MLA_D|111', 'FB-D'); // item ahora simple → variación muerta
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (/\/items\?ids=/.test(url)) {
+      if (/\/items\/bulk\?ids=/.test(url)) {
         return { status: 200, data: [{ code: 200, body: { id: 'MLA_D', status: 'active', variations: [] } }], headers: {} };
       }
       return { status: 200, data: {}, headers: {} };
@@ -885,6 +922,19 @@ describe('vista de detalle', () => {
     expect(res.body.cantidad).toBe(6);
     const est = db.prepare('SELECT cantidad_ml FROM ml_stock_estado WHERE clave=?').get('MLA20|v20');
     expect(est.cantidad_ml).toBe(6);
+  });
+
+  it('reintentar-item: devuelve bloqueo explícito sin PUT ante contradicción', async () => {
+    seedToken(db);
+    seedCatalogo(db, 'FB-CONTRA-ITEM', 6, { idWoo: 902 });
+    db.prepare("UPDATE catalogo_cache SET nombre='Bici Rodado 27 Talle M' WHERE sku='FB-CONTRA-ITEM'").run();
+    seedDecision(db, 'MLA-CONTRA-ITEM|v', 'FB-CONTRA-ITEM');
+    seedPublicacion(db, { clave: 'MLA-CONTRA-ITEM|v', itemId: 'MLA-CONTRA-ITEM', varId: 'v', status: 'active', titulo: 'Bici Rodado 29 Talle M' });
+    axios.request.mockResolvedValue({ status: 200, data: {}, headers: {} });
+    const res = await request(app).post('/api/sync/reintentar-item').send({ clave: 'MLA-CONTRA-ITEM|v' });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ ok: false, bloqueado: true, error: 'contradiccion_titulo' });
+    expect(axios.request.mock.calls.some(([cfg]) => String(cfg.method).toLowerCase() === 'put')).toBe(false);
   });
 
   it('reintentar-item: publicación pausada → no reintenta, sugiere reactivar', async () => {
@@ -944,7 +994,14 @@ describe('vista de detalle', () => {
   function mockItem(body) {
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (url.includes('/items?ids=')) return { status: 200, data: [{ code: 200, body }], headers: {} };
+      if (url.includes('/items/bulk?ids=')) {
+        // El elemento SOLO trae id/status_code en la raíz si la URL los pidió explícitamente
+        // en attributes= (comportamiento real de ML, verificado 2026-09-25 con lectura directa:
+        // atributos filtran el elemento entero, no solo el body).
+        const pideRaiz = /attributes=[^&]*\bstatus_code\b/.test(url) || /attributes=[^&]*(^|,)id(,|$)/.test(url);
+        const entry = pideRaiz ? { id: body.id, status_code: 200, body } : { body };
+        return { status: 200, data: [entry], headers: {} };
+      }
       return { status: 200, data: {}, headers: {} };
     });
   }
@@ -959,6 +1016,8 @@ describe('vista de detalle', () => {
     const row = res.body.data.find(r => r.clave === 'MLD1|v1');
     expect(row.diagnostico).toBe('reactivable');
     expect(row.accion).toBe('reactivar');
+    const bulkCall = axios.request.mock.calls.map(c => c[0]).find(cfg => String(cfg?.url).includes('/items/bulk?ids='));
+    expect(bulkCall?.url).toMatch(/attributes=status_code,id,body\.id,body\.title,body\.status,body\.sub_status,body\.variations,body\.secure_thumbnail,body\.thumbnail/);
   });
 
   it('atencion/errores: diagnostica estructura_cambiada (activa, la variación no existe)', async () => {
@@ -1012,7 +1071,7 @@ describe('vista de detalle', () => {
 
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';
-      if (url.includes('/items?ids=')) {
+      if (url.includes('/items/bulk?ids=')) {
         return {
           status: 200,
           data: [

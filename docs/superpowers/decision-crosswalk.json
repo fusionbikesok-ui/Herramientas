@@ -1,0 +1,1749 @@
+{
+  "schema_version": 1,
+  "rule": "Un dueño vigente por decisión; consumidores adicionales se declaran aquí y en las fichas.",
+  "decisions": [
+    {
+      "id": "PM-001",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-002",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-003",
+      "owner": "E10",
+      "consumers": [
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-004",
+      "owner": "E10",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E8",
+        "E9",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-005",
+      "owner": "E10",
+      "consumers": [
+        "E8",
+        "E9",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-006",
+      "owner": "E10",
+      "consumers": [
+        "E8",
+        "E9",
+        "E11",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-007",
+      "owner": "E10",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-008",
+      "owner": "E10",
+      "consumers": [
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-009",
+      "owner": "E24",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-010",
+      "owner": "E5",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-011",
+      "owner": "E5",
+      "consumers": [
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-012",
+      "owner": "E5",
+      "consumers": [
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-013",
+      "owner": "E6",
+      "consumers": [
+        "E5",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-014",
+      "owner": "E6",
+      "consumers": [
+        "E5",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-015",
+      "owner": "E19",
+      "consumers": [
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-016",
+      "owner": "E21",
+      "consumers": [
+        "E19",
+        "E20",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-017",
+      "owner": "E20",
+      "consumers": [
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-018",
+      "owner": "E16",
+      "consumers": [
+        "E5",
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-019",
+      "owner": "E25",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-020",
+      "owner": "E19",
+      "consumers": [
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-021",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-022",
+      "owner": "E19",
+      "consumers": [
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-023",
+      "owner": "E10",
+      "consumers": [
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-024",
+      "owner": "E10",
+      "consumers": [
+        "E8",
+        "E9",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-025",
+      "owner": "E10",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-026",
+      "owner": "E10",
+      "consumers": [
+        "E8",
+        "E9",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-027",
+      "owner": "E10",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-028",
+      "owner": "E10",
+      "consumers": [
+        "E8",
+        "E9",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-029",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-030",
+      "owner": "E5",
+      "consumers": [
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-031",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-032",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-033",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-034",
+      "owner": "E26",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-035",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-036",
+      "owner": "E4",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-037",
+      "owner": "E3",
+      "consumers": [
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-038",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-039",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-040",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-041",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-042",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-043",
+      "owner": "E5",
+      "consumers": [
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-044",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-045",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-046",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-047",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-048",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-049",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-050",
+      "owner": "E4",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-051",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-052",
+      "owner": "E1",
+      "consumers": [
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-053",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-054",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-055",
+      "owner": "E3",
+      "consumers": [
+        "E2",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-056",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-057",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-058",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-059",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-060",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-061",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-062",
+      "owner": "E2",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-063",
+      "owner": "E2",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-064",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-065",
+      "owner": "E2",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-066",
+      "owner": "E2",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-067",
+      "owner": "E2",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-068",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7",
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-069",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-070",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-071",
+      "owner": "E2",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-072",
+      "owner": "E2",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-073",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-074",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-075",
+      "owner": "E3",
+      "consumers": [
+        "E2",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-076",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-077",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-078",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-079",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-080",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-081",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-082",
+      "owner": "E2",
+      "consumers": [
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-083",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-084",
+      "owner": "E26",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-085",
+      "owner": "E3",
+      "consumers": [
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-086",
+      "owner": "E4",
+      "consumers": [
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-087",
+      "owner": "E3",
+      "consumers": [
+        "E2",
+        "E4",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-088",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-089",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-090",
+      "owner": "E26",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-091",
+      "owner": "E4",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-092",
+      "owner": "E3",
+      "consumers": [
+        "E2",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-093",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-094",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E5",
+        "E6",
+        "E7",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-095",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-096",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-097",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-098",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-099",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-100",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-101",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-102",
+      "owner": "E26",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-103",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-104",
+      "owner": "E4",
+      "consumers": [
+        "E5",
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-105",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-106",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-107",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-108",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-109",
+      "owner": "E26",
+      "consumers": [
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-110",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-111",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-112",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-113",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-114",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-115",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-116",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-117",
+      "owner": "E3",
+      "consumers": [
+        "E2",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-118",
+      "owner": "E3",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-119",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-120",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-121",
+      "owner": "E26",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-122",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-123",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-124",
+      "owner": "E3",
+      "consumers": [
+        "E2",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-125",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E5",
+        "E6",
+        "E7",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-126",
+      "owner": "E3",
+      "consumers": [
+        "E2",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-127",
+      "owner": "E9",
+      "consumers": [
+        "E8",
+        "E10",
+        "E11",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-128",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-129",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-130",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-131",
+      "owner": "E3",
+      "consumers": [
+        "E2",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-132",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-133",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-134",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-135",
+      "owner": "E5",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-136",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-137",
+      "owner": "E1",
+      "consumers": [
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-138",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-139",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-140",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-141",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-142",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-143",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-144",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-145",
+      "owner": "E2",
+      "consumers": [
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-146",
+      "owner": "E1",
+      "consumers": [
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-147",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-148",
+      "owner": "E26",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-149",
+      "owner": "E26",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-150",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-151",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-152",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-153",
+      "owner": "E4",
+      "consumers": [
+        "E2",
+        "E3",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-154",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-155",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-156",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-157",
+      "owner": "E1",
+      "consumers": [
+        "E8",
+        "E9",
+        "E10",
+        "E11",
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-158",
+      "owner": "E1",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7",
+        "E19",
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-159",
+      "owner": "E26",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+        "E11"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-160",
+      "owner": "E14",
+      "consumers": [
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7",
+        "E1"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-161",
+      "owner": "E6",
+      "consumers": [
+        "E5",
+        "E7"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-162",
+      "owner": "E19",
+      "consumers": [
+        "E20",
+        "E21",
+        "E22",
+        "E23"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-163",
+      "owner": "E16",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-164",
+      "owner": "E2",
+      "consumers": [
+        "E3",
+        "E4"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-165",
+      "owner": "E0",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-166",
+      "owner": "E0",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-167",
+      "owner": "E0",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-168",
+      "owner": "E0",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-169",
+      "owner": "E0",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-170",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-171",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-172",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-173",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-174",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-175",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-176",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-177",
+      "owner": "E0",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-178",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-179",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-180",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-181",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-182",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-183",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-184",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-185",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-186",
+      "owner": "E1",
+      "consumers": [],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-187",
+      "owner": "E3",
+      "consumers": [
+        "E2"
+      ],
+      "basis": "contenido y dominio de la decisión"
+    },
+    {
+      "id": "PM-188",
+      "owner": "E1",
+      "consumers": ["E2", "E3"],
+      "basis": "E2 y E3 dependen del cierre de la campaña de 7 días verdes de PM-186, que T5 desbloquea; E3 además comparte directamente el bucket de cupo `items` con la relectura automática de SKU (spec T5 §2.8)."
+    },
+    {
+      "id": "PM-189",
+      "owner": "E3",
+      "consumers": ["E1", "E4", "E14"],
+      "basis": "Fases A y B de la consolidación como correcciones del legado (pausas del Vigía y bloqueo de vínculo); C y D se reparten entre E3 y E4, E entre E1 y E14."
+    }
+  ]
+}

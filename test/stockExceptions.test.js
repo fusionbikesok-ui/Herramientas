@@ -1,0 +1,165 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import fs from 'fs';
+import { openDb } from '../db/index.js';
+import {
+  crearIncidente, listarIncidentes, resolverIncidente,
+  crearTarea, listarTareas, tomarTarea, completarTarea,
+  recibirDevolucion, clasificarDevolucion, marcarDanoDevolucion,
+  procesarWooOutbox,
+  crearDevolucionProveedor, listarDevolucionesProveedor, descartarIncidente,
+  cambiarEstadoDevolucionProveedor, listarEventosDevolucionProveedor,
+} from '../lib/stockExceptions.js';
+import { stockExceptionsRouter } from '../routes/stockExceptions.js';
+
+const FILE = './test/tmp-stock-exceptions.sqlite';
+const clean = () => { if (fs.existsSync(FILE)) fs.unlinkSync(FILE); if (fs.existsSync(`${FILE}-shm`)) fs.unlinkSync(`${FILE}-shm`); if (fs.existsSync(`${FILE}-wal`)) fs.unlinkSync(`${FILE}-wal`); };
+
+function appFor(db, user = 'operario', permisos = [{ herramienta: 'stock-exceptions', nivel: 'write' }]) {
+  const app = express(); app.use(express.json());
+  app.use((req, _res, next) => { req.user = { username: user, permisos }; next(); });
+  app.use('/api/stock-exceptions', stockExceptionsRouter(db)); return app;
+}
+
+describe('E18 — excepciones físicas', () => {
+  let db;
+  beforeEach(() => { clean(); db = openDb(FILE); });
+  afterEach(() => { db.close(); clean(); });
+
+  it('crea las tablas 066/067 y las migraciones son idempotentes', () => {
+    const nombres = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'stock_%'").all().map(x => x.name);
+    expect(nombres).toEqual(expect.arrayContaining(['stock_incidents', 'stock_tasks', 'stock_exception_events']));
+    expect(db.prepare("SELECT COUNT(*) n FROM _schema_migrations WHERE key='stock_exceptions_066'").get().n).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM _schema_migrations WHERE key='stock_exception_returns_067'").get().n).toBe(1);
+    const columns = db.prepare('PRAGMA table_info(stock_incidents)').all().map(x => x.name);
+    expect(columns).toEqual(expect.arrayContaining(['clasificacion', 'recibido_por', 'recibido_en', 'producto_estado', 'inspeccion_task_id', 'dañado_en']));
+    db.close(); db = openDb(FILE);
+    expect(db.prepare("SELECT COUNT(*) n FROM _schema_migrations WHERE key='stock_exceptions_066'").get().n).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM _schema_migrations WHERE key='stock_exception_returns_067'").get().n).toBe(1);
+  });
+
+  it('crea y reintenta un incidente sin duplicarlo y audita', () => {
+    const input = { tipo: 'faltante', severidad: 'urgente', sku: 'FB-X', motivo: 'No encontrado', creado_por: 'ana', operation_id: 'inc-1' };
+    const one = crearIncidente(db, input), two = crearIncidente(db, input);
+    expect(one.ok).toBe(true); expect(two.repetido).toBe(true);
+    expect(listarIncidentes(db)).toHaveLength(1);
+    expect(db.prepare("SELECT evento FROM stock_exception_events WHERE entidad='incidente'").all().map(x => x.evento)).toEqual(['creado']);
+  });
+
+  it('rechaza resolver con versión obsoleta y permite resolver con la vigente', () => {
+    const created = crearIncidente(db, { tipo: 'daño', motivo: 'Golpe', creado_por: 'ana', operation_id: 'inc-2' });
+    expect(resolverIncidente(db, created.incidente.id, { expected_version: 99, resolucion: 'Separado', resuelto_por: 'ana', operation_id: 'res-2' }).code).toBe('VERSION_CONFLICT');
+    const done = resolverIncidente(db, created.incidente.id, { expected_version: 1, resolucion: 'Separado', resuelto_por: 'ana', operation_id: 'res-2' });
+    expect(done.ok).toBe(true); expect(done.incidente.estado).toBe('resuelto');
+    expect(resolverIncidente(db, created.incidente.id, { expected_version: 2, resolucion: 'otra', resuelto_por: 'ana', operation_id: 'res-2' }).repetido).toBe(true);
+  });
+
+  it('crea, toma y completa una tarea con claim y auditoría', () => {
+    const incident = crearIncidente(db, { tipo: 'faltante', motivo: 'faltante', creado_por: 'ana', operation_id: 'inc-3' });
+    const created = crearTarea(db, { incident_id: incident.incidente.id, tipo: 'contar', sku: 'FB-X', creado_por: 'ana', operation_id: 'task-1' });
+    const taken = tomarTarea(db, created.tarea.id, { expected_version: 1, asignado_a: 'luis', operation_id: 'take-1' });
+    expect(taken.ok).toBe(true); expect(taken.tarea.estado).toBe('tomada');
+    expect(completarTarea(db, created.tarea.id, { expected_version: 2, completada_por: 'ana', resultado: 'Contado', operation_id: 'complete-bad' }).code).toBe('TASK_NOT_OWNED');
+    const done = completarTarea(db, created.tarea.id, { expected_version: 2, completada_por: 'luis', resultado: 'Contado', operation_id: 'complete-1' });
+    expect(done.ok).toBe(true); expect(done.tarea.estado).toBe('completada');
+    expect(listarTareas(db, { incident_id: incident.incidente.id })).toHaveLength(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM stock_exception_events WHERE entidad='tarea'").get().n).toBe(3);
+  });
+
+  it('protege las transiciones REST e informa conflictos de versión', async () => {
+    const app = appFor(db);
+    const created = await request(app).post('/api/stock-exceptions/incidentes').send({ tipo: 'diferencia', motivo: 'Conteo', operation_id: 'http-1' });
+    expect(created.status).toBe(201);
+    const listed = await request(app).get('/api/stock-exceptions/incidentes?estado=abierto');
+    expect(listed.status).toBe(200); expect(listed.body.data).toHaveLength(1);
+    const conflict = await request(app).post(`/api/stock-exceptions/incidentes/${created.body.incidente.id}/resolver`).send({ expected_version: 4, resolucion: 'Ajustar', operation_id: 'http-res-1' });
+    expect(conflict.status).toBe(409);
+    const resolved = await request(app).post(`/api/stock-exceptions/incidentes/${created.body.incidente.id}/resolver`).send({ expected_version: 1, resolucion: 'Ajustar', operation_id: 'http-res-2' });
+    expect(resolved.status).toBe(201); expect(resolved.body.incidente.estado).toBe('resuelto');
+  });
+
+  it('no completa una tarea tomada por otro operador', () => {
+    const task = crearTarea(db, { tipo: 'verificar', creado_por: 'ana', operation_id: 'task-2' });
+    tomarTarea(db, task.tarea.id, { expected_version: 1, asignado_a: 'luis', operation_id: 'take-2' });
+    expect(completarTarea(db, task.tarea.id, { expected_version: 2, completada_por: 'ana', resultado: 'ok', operation_id: 'complete-2' }).code).toBe('TASK_NOT_OWNED');
+  });
+
+  it('recibe una devolución una sola vez y crea inspección sin stock comercial', () => {
+    const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', cantidad: 1, motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-1' });
+    const input = { expected_version: 1, producto_estado: 'recibido', recibido_por: 'ana', operation_id: 'receive-1' };
+    const one = recibirDevolucion(db, incident.incidente.id, input);
+    const two = recibirDevolucion(db, incident.incidente.id, input);
+    expect(one.ok).toBe(true); expect(two.repetido).toBe(true);
+    expect(one.tarea.tipo).toBe('inspeccionar');
+    expect(db.prepare('SELECT COUNT(*) n FROM stock_tasks').get().n).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) n FROM stock_movements').get().n).toBe(0);
+  });
+
+  it('clasifica con conflicto de versión y permite disponible/no disponible/condicionado', () => {
+    const incident = crearIncidente(db, { tipo: 'otro', motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-2' });
+    const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-2' });
+    expect(clasificarDevolucion(db, incident.incidente.id, { expected_version: 1, clasificacion: 'disponible', clasificado_por: 'ana', operation_id: 'class-bad' }).code).toBe('VERSION_CONFLICT');
+    const done = clasificarDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, clasificacion: 'condicionado', clasificado_por: 'ana', operation_id: 'class-2' });
+    expect(done.ok).toBe(true); expect(done.incidente.clasificacion).toBe('condicionado');
+  });
+
+  it('encola el efecto comercial de una devolución disponible con idempotencia', () => {
+    const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', cantidad: 2, motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-woo' });
+    const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-woo' });
+    const one = clasificarDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, clasificacion: 'disponible', clasificado_por: 'ana', operation_id: 'class-woo' });
+    const two = clasificarDevolucion(db, incident.incidente.id, { expected_version: one.incidente.expected_version, clasificacion: 'disponible', clasificado_por: 'ana', operation_id: 'class-woo' });
+    expect(one.woo.delta).toBe(2); expect(two.repetido).toBe(true);
+    expect(db.prepare('SELECT COUNT(*) n FROM stock_exception_woo_outbox').get().n).toBe(1);
+  });
+
+  it('marca devolución dañada, crea incidente urgente y tarea de revisión', () => {
+    const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-3' });
+    const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-3' });
+    const damaged = marcarDanoDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, motivo: 'Marco roto', marcado_por: 'ana', operation_id: 'damage-3' });
+    expect(damaged.ok).toBe(true); expect(damaged.incidente.severidad).toBe('urgente'); expect(damaged.incidente.clasificacion).toBe('no_disponible');
+    expect(damaged.tarea.tipo).toBe('verificar');
+  });
+
+  it('reintenta efectos Woo fallidos y confirma el éxito una sola vez', async () => {
+    const incident = crearIncidente(db, { tipo: 'otro', sku: 'FB-X', cantidad: 1, motivo: 'Devolución', creado_por: 'ana', operation_id: 'return-worker' });
+    const received = recibirDevolucion(db, incident.incidente.id, { expected_version: 1, recibido_por: 'ana', operation_id: 'receive-worker' });
+    clasificarDevolucion(db, incident.incidente.id, { expected_version: received.incidente.expected_version, clasificacion: 'disponible', clasificado_por: 'ana', operation_id: 'class-worker' });
+    const failed = await procesarWooOutbox(db, async () => { throw new Error('Woo caído'); });
+    expect(failed.ok).toBe(false); expect(failed.fila.estado).toBe('fallido'); expect(failed.fila.intentos).toBe(1);
+    const done = await procesarWooOutbox(db, async (row) => ({ sku: row.sku, delta: row.delta }));
+    expect(done.ok).toBe(true); expect(done.fila.estado).toBe('enviado'); expect(done.fila.intentos).toBe(2);
+    expect((await procesarWooOutbox(db, async () => null)).procesado).toBe(false);
+  });
+
+  it('registra devolución a proveedor y descarte con auditoría e idempotencia', () => {
+    const incident = crearIncidente(db, { tipo: 'daño', sku: 'FB-X', cantidad: 1, motivo: 'Rotura', creado_por: 'ana', operation_id: 'supplier-incident' });
+    const supplier = crearDevolucionProveedor(db, { incident_id: incident.incidente.id, sku: 'FB-X', cantidad: 1, proveedor: 'Proveedor X', motivo: 'Garantía', creado_por: 'ana', operation_id: 'supplier-1' });
+    expect(supplier.ok).toBe(true); expect(crearDevolucionProveedor(db, { sku: 'FB-X', cantidad: 1, proveedor: 'Proveedor X', motivo: 'Garantía', creado_por: 'ana', operation_id: 'supplier-1' }).repetido).toBe(true);
+    expect(listarDevolucionesProveedor(db)).toHaveLength(1);
+    const discarded = descartarIncidente(db, incident.incidente.id, { expected_version: 1, motivo: 'Sin reparación', descartado_por: 'ana', operation_id: 'discard-1' });
+    expect(discarded.ok).toBe(true); expect(discarded.incidente.estado).toBe('resuelto');
+    expect(descartarIncidente(db, incident.incidente.id, { expected_version: 2, motivo: 'otra', descartado_por: 'ana', operation_id: 'discard-1' }).repetido).toBe(true);
+  });
+
+  it('avanza la devolución a proveedor con estados válidos, versión y auditoría propia', () => {
+    const created = crearDevolucionProveedor(db, { sku: 'FB-X', cantidad: 1, proveedor: 'Proveedor X', motivo: 'Garantía', creado_por: 'ana', operation_id: 'supplier-life' });
+    const prepared = cambiarEstadoDevolucionProveedor(db, created.devolucion.id, { expected_version: 1, estado: 'preparada', motivo: 'Paquete listo', cambiado_por: 'ana', operation_id: 'supplier-life-1' });
+    expect(prepared.ok).toBe(true); expect(prepared.devolucion.expected_version).toBe(2);
+    expect(cambiarEstadoDevolucionProveedor(db, created.devolucion.id, { expected_version: 1, estado: 'enviada', motivo: 'salida', cambiado_por: 'ana', operation_id: 'supplier-life-bad' }).code).toBe('VERSION_CONFLICT');
+    const sent = cambiarEstadoDevolucionProveedor(db, created.devolucion.id, { expected_version: 2, estado: 'enviada', motivo: 'Retiro proveedor', cambiado_por: 'ana', operation_id: 'supplier-life-2' });
+    expect(sent.devolucion.estado).toBe('enviada'); expect(listarEventosDevolucionProveedor(db, created.devolucion.id)).toHaveLength(2);
+  });
+
+  it('REST rechaza mutaciones sin permiso de stock', async () => {
+    const app = appFor(db, 'sin-permiso', []);
+    const response = await request(app).post('/api/stock-exceptions/devoluciones/1/recibir').send({ expected_version: 1, operation_id: 'forbidden-1' });
+    expect(response.status).toBe(403); expect(response.body.code).toBe('FORBIDDEN');
+  });
+
+  it('REST reserva el descarte irreversible a supervisor/Admin', async () => {
+    const incident = crearIncidente(db, { tipo: 'daño', motivo: 'Rotura', creado_por: 'ana', operation_id: 'discard-auth' });
+    const response = await request(appFor(db, 'operario')).post(`/api/stock-exceptions/incidentes/${incident.incidente.id}/descarte`).send({ expected_version: 1, motivo: 'Baja', operation_id: 'discard-auth-op' });
+    expect(response.status).toBe(403);
+  });
+});

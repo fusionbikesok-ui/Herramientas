@@ -1,0 +1,21 @@
+{
+  "caso": "Alias huérfano - el alias existe pero su producto (id_woo) ya no está en catálogo",
+  "items": [
+    {
+      "linea_id": "11",
+      "nombre_doc": "Producto Eliminado",
+      "codigo_proveedor": "ALIAS-BORRADO-001",
+      "variacion": "",
+      "cantidad": 1,
+      "marca": "Marca X",
+      "talle": null,
+      "color": null
+    }
+  ],
+  "alias_huerfano": {
+    "proveedor": "Proveedor Prueba",
+    "codigo_proveedor": "ALIAS-BORRADO-001",
+    "id_woo_anterior": 9999,
+    "nota": "El producto con id_woo 9999 fue eliminado del catálogo"
+  }
+}

@@ -2,7 +2,7 @@
 --
 -- Caché persistente de comisión (sale_fee) y costo de envío gratis de ML, para no repetir
 -- llamadas a listing_prices / shipping_options/free que devuelven siempre lo mismo dentro
--- de la ventana de vigencia (plan docs/superpowers/plans/2026-08-05-ahorro-llamadas-ml.md).
+-- de la ventana de vigencia.
 --
 -- clave:
 --   fee:{price}:{category_id}:{listing_type_id}   → sale_fee_amount

@@ -2,493 +2,611 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sincronización ML — Fusion Bikes</title>
+<link rel="stylesheet" href="../lib/theme.css">
+<link rel="stylesheet" href="../lib/components.css">
 <style>
-  :root{
-    --azul:#2DB8E8;--azul-dk:#1C93BD;--oscuro:#0C0F16;
-    --surface:#141A25;--surface2:#1B2235;--border:#24304A;--border2:#2E3B57;
-    --text:#E4EAF4;--muted:#8493B0;--muted2:#5B6B8C;
-    --green:#34D399;--amber:#F5B942;--red:#F87171;
-  }
-  *{box-sizing:border-box;}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;margin:0;background:var(--oscuro);color:var(--text);}
-  .wrap{max-width:1000px;margin:0 auto;padding:20px 22px 60px;}
-  a.back{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);text-decoration:none;margin-bottom:12px;}
-  a.back:hover{color:var(--azul);}
-  .brand-badge{display:inline-flex;flex-direction:column;transform:skewX(-8deg);border-radius:5px 3px 3px 5px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.4);vertical-align:middle;}
-  .brand-badge b{display:block;font-style:italic;font-weight:800;text-transform:uppercase;font-size:9px;line-height:1.25;letter-spacing:-.02em;padding:1px 7px;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;}
-  .brand-badge .bb-t{background:#08090B;color:#fff;}
-  .brand-badge .bb-b{background:var(--azul);color:#08090B;}
-  .head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:20px;}
-  h1{font-size:1.6rem;font-weight:800;letter-spacing:-.03em;margin:6px 0 4px;}
-  h1 em{font-style:normal;color:var(--azul);}
-  .sub{font-size:12.5px;color:var(--muted);margin:0;}
-  .btn{background:var(--azul);color:#06131C;border:0;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s;}
-  .btn:hover{background:var(--azul-dk);}
-  .btn.sec{background:var(--surface2);color:var(--text);font-weight:600;}
-  .btn.sec:hover{background:var(--border2);}
-  .btn:disabled{opacity:.5;cursor:default;}
+:root{--gutter:clamp(12px,3vw,32px);--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--shadow-pop:0 12px 32px rgba(0,0,0,.5)}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+button{font:inherit;color:inherit}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+[hidden]{display:none!important}
 
-  .pills{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:22px;}
-  .pill{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:13px 15px;display:flex;align-items:center;gap:11px;}
-  .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
-  .dot.ok{background:var(--green);box-shadow:0 0 0 3px rgba(52,211,153,.15);}
-  .dot.bad{background:var(--red);box-shadow:0 0 0 3px rgba(248,113,113,.15);}
-  .pill .pl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px;}
-  .pill .pv{font-size:13.5px;font-weight:700;}
+.wrap{max-width:1080px;margin:0 auto;padding:0 var(--gutter) 96px}
+.crumb{font-size:var(--fs-meta);color:var(--muted)}.crumb a{display:inline-flex;align-items:center;min-height:var(--tap-min);color:var(--muted)}.crumb a:hover{color:var(--accent)}
+.head{display:flex;align-items:center;gap:.75rem;justify-content:space-between;padding:0 0 .75rem}
+.head h1{font-size:var(--fs-titulo);margin:0;min-width:0}
+.tools{display:flex;gap:.5rem;flex:0 0 auto}
+.menuwrap{position:relative}
+.iconbtn{height:var(--tap-min);min-width:var(--tap-min);padding:0 .8rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;cursor:pointer;color:var(--txt);display:inline-flex;align-items:center;justify-content:center;gap:.4rem;white-space:nowrap}
+.iconbtn:hover{border-color:var(--border2)}
+.iconbtn:disabled{opacity:.55;cursor:default}
+.menu{position:absolute;right:0;top:calc(100% + 6px);z-index:20;width:300px;max-width:calc(100vw - 2*var(--gutter));background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius);padding:.35rem;box-shadow:var(--shadow-pop)}
+.menu button{display:flex;flex-direction:column;align-items:flex-start;width:100%;min-height:var(--tap-min);padding:.5rem .7rem;background:none;border:0;border-radius:6px;text-align:left;cursor:pointer}
+.menu button:hover,.menu button:focus-visible{background:var(--surface2)}
+.menu small{color:var(--muted);font-size:var(--fs-meta)}
+.menu hr{border:0;border-top:1px solid var(--border);margin:.3rem 0}
 
-  .sec-title{font-size:11px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--azul);margin:26px 0 11px;}
-  .cards{display:grid;gap:12px;}
-  .cards.c2{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));}
-  .cards.c4{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 17px;}
-  .card .n{font-size:2rem;font-weight:800;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums;}
-  .card .lbl{font-size:12.5px;color:var(--muted);margin-top:5px;}
-  .card .hint{font-size:11.5px;color:var(--muted2);margin-top:7px;line-height:1.45;}
-  .card.good .n{color:var(--green);}
-  .card.warn .n{color:var(--amber);}
-  .card.crit .n{color:var(--red);}
-  .card.link{cursor:pointer;transition:border-color .15s;text-decoration:none;display:block;color:inherit;}
-  .card.link:hover{border-color:var(--azul);}
-  .card .go{font-size:11.5px;color:var(--azul);margin-top:8px;font-weight:600;}
+.status{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1.25rem;padding:.85rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1.5rem}
+.status .big{display:flex;align-items:flex-start;gap:.6rem;font-weight:600;flex:1 1 280px;min-width:0}
+.dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto;margin-top:.4rem;background:var(--muted2)}
+.dot.ok{background:var(--green)}.dot.warn{background:var(--amber)}.dot.bad{background:var(--red)}
+.status .big small{display:block;font-weight:400;color:var(--muted);font-size:var(--fs-meta)}
+.status .big a{display:inline-flex;align-items:center;min-height:var(--tap-min)}
+.flows{display:flex;flex-wrap:wrap;gap:.3rem 1.25rem;font-size:var(--fs-meta);color:var(--muted)}
+.flows span{white-space:nowrap}
+.flows b{color:var(--txt);font-weight:600}
+.flows .bad b{color:var(--red)}
 
-  table{width:100%;border-collapse:collapse;font-size:13px;}
-  .tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);}
-  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted2);font-weight:600;padding:10px 13px;border-bottom:1px solid var(--border);white-space:nowrap;}
-  td{padding:10px 13px;border-bottom:1px solid var(--border);vertical-align:middle;}
-  tr:last-child td{border-bottom:0;}
-  td.mono{font-family:'Courier New',monospace;color:var(--azul);}
-  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
-  .pub-cell{display:flex;gap:10px;align-items:center;}
-  .pub-thumb{width:40px;height:40px;border-radius:6px;object-fit:cover;background:var(--surface2);border:1px solid var(--border);flex-shrink:0;}
-  .pub-txt{min-width:0;}
-  .pub-tit{font-weight:600;line-height:1.25;}
-  .pub-meta{font-size:11px;color:var(--muted2);font-family:'Courier New',monospace;margin-top:2px;}
-  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;}
-  .tag.ok{background:rgba(52,211,153,.13);color:var(--green);}
-  .tag.canc{background:rgba(248,113,113,.13);color:var(--red);}
-  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;}
-  .b-bajo{background:rgba(248,113,113,.14);color:var(--red);}
-  .b-alto{background:rgba(245,185,66,.14);color:var(--amber);}
-  .b-sin_precio{background:rgba(132,147,176,.14);color:var(--muted);}
-  .b-ok{background:rgba(52,211,153,.14);color:var(--green);}
+h2.sec{font-size:var(--fs-label);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 .5rem;font-weight:600}
+.inc{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:clip;margin-bottom:1.75rem}
+.it{border-top:1px solid var(--border)}.it:first-child{border-top:0}
+.ih{display:grid;grid-template-columns:4px 56px minmax(0,1fr) auto;align-items:center;column-gap:.85rem;width:100%;min-height:64px;padding:.6rem 1rem .6rem 0;background:none;border:0;text-align:left;cursor:pointer;color:inherit;text-decoration:none!important}
+.ih:hover{background:var(--surface2)}
+.ih .bar{align-self:stretch;border-radius:0 3px 3px 0}
+.sev-crit .bar{background:var(--red)}.sev-warn .bar{background:var(--amber)}.sev-info .bar{background:var(--accent)}
+.ih .n{font-size:1.5rem;font-weight:700;text-align:right;font-variant-numeric:tabular-nums;line-height:1}
+.sev-crit .n{color:var(--red)}.sev-warn .n{color:var(--amber)}.sev-info .n{color:var(--accent)}
+.ih .tx{min-width:0}
+.ih .t{display:block;font-weight:600;font-size:var(--fs-dato)}
+.ih .d{display:block;color:var(--muted);font-size:var(--fs-meta)}
+.ih .go{color:var(--accent);font-size:.88rem;white-space:nowrap;display:flex;align-items:center;gap:.35rem}
+.ih .chev{transition:transform .15s}
+.ih[aria-expanded="true"] .chev{transform:rotate(180deg)}
+.ib{padding:0 1rem 1rem calc(4px + 56px + 1.7rem)}
+.ok-line{display:flex;flex-wrap:wrap;gap:.3rem 1rem;padding:.75rem 1rem;color:var(--muted);font-size:var(--fs-meta);border-top:1px solid var(--border)}
+.ok-line:first-child{border-top:0}
+.ok-line span{white-space:nowrap}
+.ok-line span::before{content:"✓ ";color:var(--green)}
+.allok{display:flex;align-items:center;gap:.6rem;padding:1rem;font-weight:600}
+.allok .dot{margin:0}
 
-  .acciones{display:flex;gap:10px;flex-wrap:wrap;margin-top:11px;}
-  .msg{font-size:12.5px;color:var(--muted);margin-top:12px;min-height:16px;}
-  .loading{color:var(--muted2);font-size:13px;padding:30px 0;text-align:center;}
+.mr{display:grid;grid-template-columns:44px 56px minmax(0,1fr) auto;align-items:center;column-gap:.75rem;padding:.5rem 0;border-top:1px solid var(--border)}
+.mr:first-child{border-top:0}
+.mr.noc,.mr--f{grid-template-columns:56px minmax(0,1fr) auto}
+.mr input{width:18px;height:18px;accent-color:var(--accent);margin:0;cursor:pointer}
+.cbx{display:flex;align-items:center;justify-content:center;width:44px;height:44px;cursor:pointer}
+.ph{width:56px;height:56px;border-radius:6px;background:var(--surface2);display:grid;place-items:center;color:var(--muted2);overflow:hidden}
+.ph svg{width:28px;height:28px;opacity:.6}
+.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.mr .tt{min-width:0}
+.mr .tt b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.9rem}
+.mr .tt span{color:var(--muted);font-size:var(--fs-meta);display:block;overflow-wrap:anywhere}
+.mr .tt .warn{color:var(--amber)}.mr .tt .bad{color:var(--red)}
+.cambio{font-family:var(--mono)}
+.cambio s{color:var(--muted)}.cambio em{font-style:normal;color:var(--amber);font-weight:700}
+.mr .v{text-align:right;font-size:var(--fs-meta);display:flex;flex-wrap:wrap;gap:.4rem;justify-content:flex-end}
+.neg{color:var(--red)}
+.acts{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.75rem;align-items:center}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 .95rem;border-radius:8px;background:var(--surface2);border:1px solid var(--border2);cursor:pointer;white-space:nowrap;font-weight:600;font-size:.88rem;color:var(--txt);text-decoration:none!important}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:default}
+.btn--pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent,#04121A)}.btn--pri:hover{color:var(--on-accent,#04121A);filter:brightness(.9)}
+.note{color:var(--muted);font-size:var(--fs-meta);margin:0 0 .5rem}
+.note--pie{margin:.6rem 0 0}
+.ok-line--warn{color:var(--amber)}
+.plan{margin-top:.75rem;padding:.75rem;border:1px solid var(--border2);border-radius:8px;background:var(--surface2);font-size:var(--fs-meta)}
+.plan table{width:100%;border-collapse:collapse;table-layout:fixed}
+.plan th{color:var(--muted);font-weight:500;text-align:left;padding:.25rem .4rem .25rem 0}
+.plan td{padding:.35rem .4rem .35rem 0;border-top:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plan .r{text-align:right;width:6.5rem}
+.plan .sub{display:block;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+.plan .nocalc{margin:.6rem 0 0;color:var(--muted);overflow-wrap:anywhere}
+.res{margin:.6rem 0 0;font-size:var(--fs-meta)}
+.res.ok{color:var(--green)}.res.warn{color:var(--amber)}.res.bad{color:var(--red)}
+.comp{grid-column:1 / -1;min-width:0;max-width:100%;overflow-wrap:anywhere;font-size:var(--fs-meta);line-height:1.5;padding:.3rem 0 .5rem}
+.comp .tw{overflow-x:auto;max-width:100%}
+.comp table{border-collapse:collapse;width:100%;min-width:420px;margin-top:6px}
+.comp th,.comp td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+.cf-ok{color:var(--green);font-weight:700}.cf-mal{color:var(--red);font-weight:700}
+
+.sales{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:.75rem;margin-bottom:.75rem}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:.8rem 1rem}
+.kpi .n{font-size:1.5rem;font-weight:700}
+.kpi .l{color:var(--muted);font-size:var(--fs-meta)}
+details.orders{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
+details.orders summary{cursor:pointer;min-height:var(--tap-min);display:flex;align-items:center;padding:0 1rem;color:var(--accent);list-style:none}
+details.orders summary::-webkit-details-marker{display:none}
+.or{display:grid;grid-template-columns:88px minmax(0,1fr) auto auto;gap:.75rem;align-items:center;padding:.55rem 1rem;border-top:1px solid var(--border);font-size:.88rem}
+.or .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.or .when{color:var(--muted);font-size:var(--fs-meta);white-space:nowrap}
+.tag{font-size:var(--fs-label);padding:.15rem .5rem;border-radius:var(--radius-pill);border:1px solid;white-space:nowrap}
+.tag.ok{color:var(--green);border-color:var(--green-bd);background:var(--green-bg)}
+.tag.canc{color:var(--amber);border-color:var(--amber-bd);background:var(--amber-bg)}
+
+.band{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface2);border-top:1px solid var(--border2);box-shadow:0 -8px 24px rgba(0,0,0,.45)}
+.band.ok{border-top-color:var(--green-bd)}.band.warn{border-top-color:var(--amber-bd)}.band.bad{border-top-color:var(--red-bd)}
+.band>div{max-width:1080px;margin:0 auto;display:flex;align-items:center;gap:.75rem;padding:.4rem var(--gutter);padding-bottom:calc(.4rem + env(safe-area-inset-bottom))}
+.band .msg{flex:1 1 0;min-width:0;overflow-wrap:anywhere}
+.band.ok .msg::before{content:"✓ ";color:var(--green)}
+.band.warn .msg::before{content:"⚠ ";color:var(--amber)}
+.band.bad .msg::before{content:"✗ ";color:var(--red)}
+.band .bacts{display:flex;flex-wrap:wrap;gap:.5rem}
+.band .bacts .btn{min-height:var(--tap-min)}
+.band .bx{background:none;border:0;color:var(--accent);min-width:var(--tap-min);min-height:var(--tap-min);cursor:pointer;font-size:1.1rem}
+.sk{height:64px;border-top:1px solid var(--border);background:linear-gradient(90deg,var(--surface),var(--surface2),var(--surface));background-size:200% 100%;animation:sh 1.2s infinite}
+.sk:first-child{border-top:0}
+.sk--st{height:62px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1.5rem}
+.sk--st.sk--lleno{width:100%;margin:0;border:0}
+.sk.sk--kpi{height:70px}
+@keyframes sh{to{background-position:-200% 0}}
+.errbox{padding:1rem;display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;justify-content:space-between;color:var(--red)}
+
+@media (max-width:640px){
+  .iconbtn .lbl,.iconbtn .car{display:none}
+  .ih{grid-template-columns:4px 40px minmax(0,1fr) auto;column-gap:.6rem;padding-right:.75rem}
+  .ih .n{font-size:1.2rem}
+  .ih .go .txt{display:none}
+  .ih .go{min-width:24px;justify-content:flex-end}
+  .ib{padding:0 .75rem .9rem}
+  .mr{grid-template-columns:44px 48px minmax(0,1fr);row-gap:.1rem}
+  .mr.noc,.mr--f{grid-template-columns:48px minmax(0,1fr)}
+  .mr.mr--f .v{grid-column:2}
+  .mr .ph{width:48px;height:48px;grid-row:1 / span 2}
+  .mr .tt b{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .mr .v{grid-column:3;text-align:left;justify-content:flex-start}
+  .mr.noc .v{grid-column:2}
+  .mr.noc .v .btn{flex:1 1 100%;min-height:var(--tap-min);margin-top:.35rem}
+  .mr .cbx{grid-row:1 / span 2}
+  .btn{min-height:var(--tap-min);white-space:normal;text-align:center;padding-block:.35rem}
+  .acts .btn{flex:1 1 100%}
+  .mr .v .btn{flex:1 1 auto}
+  .or{grid-template-columns:minmax(0,1fr) auto;row-gap:.1rem}
+  .or .num,.or .who,.or .when{grid-column:1}
+  .or .tag{grid-row:1 / span 3;grid-column:2}
+  .flows{flex-direction:column}
+  .flows span{white-space:normal}
+  .plan thead{display:none}
+  .plan table,.plan tbody{display:block}
+  .plan tr{display:grid;grid-template-columns:1fr 1fr;padding:.4rem 0;border-top:1px solid var(--border)}
+  .plan td{border:0;padding:.1rem 0;width:auto}
+  .plan td:first-child{grid-column:1 / -1;white-space:normal}
+  .plan td.r{text-align:left;overflow:visible}
+  .plan td.r.hoy::before{content:"Hoy "}
+  .plan td.r.nuevo::before{content:"Nuevo ";font-weight:400}
+  .band .bacts .btn{flex:1 1 auto}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <a class="back" href="/herramientas/home/">&larr; Inicio</a>
+<main class="wrap">
+  <div class="crumb"><a href="/herramientas/home/">&larr; Inicio</a></div>
   <div class="head">
-    <div>
-      <div style="font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--azul);margin-bottom:5px">
-        <span class="brand-badge"><b class="bb-t">Fusion</b><b class="bb-b">Bikes</b></span>
-        &ensp;Integración MercadoLibre
+    <h1>Sincronización ML</h1>
+    <div class="tools">
+      <button class="iconbtn" id="refresh" type="button" aria-label="Actualizar"><span aria-hidden="true">↻</span><span class="lbl">Actualizar</span></button>
+      <div class="menuwrap">
+        <button class="iconbtn" id="mbtn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu" aria-label="Correr ahora"><span aria-hidden="true">⟳</span><span class="lbl">Correr ahora</span><span class="car" aria-hidden="true">▾</span></button>
+        <div class="menu" id="menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-run="ml-wc">Traer ventas de ML<small>Llegan solas al instante; esto es por si faltó una</small></button>
+          <button type="button" role="menuitem" data-run="wc-ml">Sincronizar stock<small>Corre solo cada 10 min</small></button>
+          <button type="button" role="menuitem" data-run="cancel">Procesar cancelaciones<small>Devuelve el stock de las ventas canceladas</small></button>
+          <hr>
+          <button type="button" role="menuitem" data-run="muertas">Limpiar variaciones muertas<small>Descarta las que ML confirma que ya no existen; no borra nada que ML no confirme</small></button>
+        </div>
       </div>
-      <h1>Sincronización <em>ML ↔ WooCommerce</em></h1>
-      <p class="sub">Estado en vivo del stock, los pedidos y lo que necesita tu atención.</p>
     </div>
-    <button class="btn sec" id="btn-refresh" onclick="cargar()">↻ Actualizar</button>
   </div>
-
-  <div id="cuerpo"><div class="loading">Cargando estado…</div></div>
-</div>
+  <section class="status" id="status" aria-live="polite"><div class="big"><span class="dot"></span><span>Revisando…<small>Consultando ML y la web</small></span></div></section>
+  <h2 class="sec" id="inch">Para resolver</h2>
+  <section class="inc" id="inc" aria-labelledby="inch"></section>
+  <h2 class="sec" id="ventash">Ventas de ML en la web</h2>
+  <div class="sales" id="sales"></div>
+  <details class="orders" id="ordersbox" hidden><summary>Ver los últimos 5 pedidos</summary><div id="orders"></div></details>
+</main>
+<div class="band" id="band" role="status" hidden><div><span class="msg" id="bandmsg"></span><span class="bacts" id="bandacts"></span><button class="bx" id="bandx" type="button" aria-label="Cerrar aviso">✕</button></div></div>
 
 <script src="../lib/format.js"></script>
 <script src="../lib/api.js"></script>
 <script>
 Api.installAuth();
+var $=function(s){return document.querySelector(s)};
+var SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="16" r="4"/><circle cx="18" cy="16" r="4"/><path d="M6 16l4-8h5l3 8M10 8l-1-2H7"/></svg>';
+var CHEV='<svg class="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" fill="none"/></svg>';
+var SEV={crit:0,warn:1,info:2};
+var D=null, frenadas=[], formato=[], estado='cargando', sinPermiso=false, cargaOk={fren:false,form:false};
+var open=new Set(), selFr=new Set(), planPrecios=null, corriendo=false, confirmaForzar=false;
 
+/* ---------- helpers ---------- */
+function urlSegura(u,https){
+  if(typeof u!=='string'||!/^https?:\/\//i.test(u))return null;
+  return https?u.replace(/^http:\/\//i,'https://'):u;
+}
+function ph(url){
+  var u=urlSegura(url,true);
+  return '<div class="ph" aria-hidden="true">'+(u?'<img src="'+esc(u)+'" alt="" loading="lazy">':SVG)+'</div>';
+}
+document.addEventListener('error',function(e){var t=e.target;if(t&&t.tagName==='IMG'&&t.parentNode&&t.parentNode.classList.contains('ph'))t.parentNode.innerHTML=SVG},true);
+function hace(iso){
+  if(!iso)return 'nunca';
+  var t=Date.parse(String(iso).indexOf('T')<0&&String(iso).indexOf('Z')<0?String(iso).replace(' ','T')+'Z':iso); if(!isFinite(t))return '—';
+  var m=Math.max(0,Math.round((Date.now()-t)/60000));
+  if(m<1)return 'hace instantes'; if(m<60)return 'hace '+m+' min';
+  var h=Math.round(m/60); if(h<24)return 'hace '+h+' h';
+  var d=Math.round(h/24); if(d<14)return 'hace '+d+(d===1?' día':' días');
+  return 'hace '+Math.round(d/7)+' sem';
+}
+function venceEl(iso){
+  var t=Date.parse(iso); if(!isFinite(t))return '—';
+  return new Date(t).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit'});
+}
+function sumResumen(r){return Object.keys(r||{}).reduce(function(a,k){return a+(r[k]||0)},0)}
+async function leerJson(r){
+  if(r.status===403){var pe=new Error('No tenés permiso para ver esto.');pe.permiso=true;throw pe}
+  var t=await r.text(),d;
+  try{d=JSON.parse(t)}catch(_e){throw new Error('el servidor respondió '+r.status+' sin datos')}
+  if(!d||!d.ok)throw new Error((d&&d.error)||('HTTP '+r.status));
+  return d;
+}
+
+/* ---------- franja inferior persistente ---------- */
+function band(tipo,html,acciones){
+  var b=$('#band');
+  b.className='band '+tipo;
+  $('#bandmsg').innerHTML=html;
+  $('#bandacts').innerHTML=acciones||'';
+  b.hidden=false;
+}
+
+/* ---------- carga ---------- */
 async function cargar(){
-  var cont=document.getElementById('cuerpo');
-  var btn=document.getElementById('btn-refresh');btn.disabled=true;
+  if(!D){estado='cargando';render();}
+  $('#refresh').disabled=true;
   try{
-    var r=await fetch('/api/sync/dashboard');
-    var d=await r.json();
-    if(!d.ok)throw new Error(d.error||'error');
-    cont.innerHTML=render(d);
-    cargarReactivables();
-    cargarFrenadas();
-  }catch(err){
-    cont.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
-  }finally{btn.disabled=false;}
+    var d=await leerJson(await fetch('/api/sync/dashboard'));
+    D=d; estado='lista';
+  }catch(e){ sinPermiso=!!e.permiso; if(!D)estado='error'; }
+  var res=await Promise.all([
+    fetch('/api/sync/frenadas').then(leerJson).then(function(d){frenadas=d.data||[];return true},function(){return false}),
+    fetch('/api/sync/cambios-formato').then(leerJson).then(function(d){formato=d.data||[];return true},function(){return false})
+  ]);
+  cargaOk.fren=res[0]; cargaOk.form=res[1];
+  var ids=new Set(frenadas.map(function(p){return p.item_id}));
+  selFr.forEach(function(x){if(!ids.has(x))selFr.delete(x)});
+  $('#refresh').disabled=false;
+  render();
+  irAHash();
 }
 
-var yaScrolleReactivar=false;
-async function cargarReactivables(){
-  var box=document.getElementById('reactivar-box');
-  if(!box)return;
+/* ---------- incidencias ---------- */
+function incidencias(){
+  var at=(D&&D.atencion)||{};
+  var nPaus=sumResumen(D&&D.pausadas_con_stock);
+  var iq=(D&&D.identidad_encoladas)||{}, nEnc=iq.n||0, nTrab=iq.procesando_vencidas||0, nIdq=nEnc+nTrab;
+  var nIdqD=[nEnc?nEnc+' encoladas sin ejecutar (más de 2 horas esperando'+(iq.mas_vieja_horas?'; la más vieja, '+iq.mas_vieja_horas+' h':'')+(iq.fuera_de_canario?'; '+iq.fuera_de_canario+' fuera del canario, que el sistema no va a tomar solo':'')+')':'',
+    nTrab?nTrab+' trabadas en proceso (el paso quedó a medias y venció)':''].filter(Boolean).join(' · ')+'.';
+  var nFren=cargaOk.fren?frenadas.length:((D&&D.frenadas)||0);
+  var nForm=cargaOk.form?formato.length:0;
+  return [
+    {k:'err',sev:'crit',n:at.errores_reales||0,t:'Errores que no se resolvieron solos',d:'ML rechazó la actualización de stock y no se arregló con el reintento automático.',go:'Ver y reintentar',href:'/herramientas/sync-detalle/?cat=errores'},
+    {k:'foto',sev:'crit',n:at.requiere_atencion_ml||0,t:'Exceso de fotos en ML',d:'ML no deja actualizar estas publicaciones hasta bajar la cantidad de fotos en tu cuenta de ML.',go:'Ver detalle',href:'/herramientas/sync-detalle/?cat=requiere_atencion_ml'},
+    {k:'idq',sev:'warn',n:nIdq,t:'Correcciones de SKU encoladas o trabadas',d:nIdqD,go:'Ver',href:'/herramientas/identidad-productos/'},
+    {k:'paus',sev:'warn',n:nPaus,t:'Pausadas con stock en la web',d:'Pausadas en ML con stock para vender.',go:'Revisar',href:'/herramientas/sync-ml/pausadas/'},
+    {k:'map',sev:'warn',n:at.sin_mapeo||0,t:'Ventas sin producto de la web',d:'Se vendieron en ML sin estar unidas a un producto: el stock no se descontó.',go:'Resolver',href:'/herramientas/sync-detalle/?cat=sin_mapeo'},
+    {k:'remap',sev:'warn',n:at.remapeo_requerido||0,t:'Variaciones a re-mapear',d:'Cambiaron en ML (se editó la publicación). Volvé a asignarles el producto.',go:'Resolver',href:'/herramientas/sync-detalle/?cat=remapeo_requerido'},
+    {k:'fren',sev:'warn',n:nFren,t:'Frenadas por precio',d:'Tienen stock, pero al precio de ML venderían bajo el contado.',go:'Ver',exp:true},
+    {k:'form',sev:'info',n:nForm,t:'Cambiaron de producto en ML',d:'Confirmá que siguen siendo lo mismo.',go:'Ver',exp:true}
+  ].filter(function(i){return i.n>0}).sort(function(a,b){return SEV[a.sev]-SEV[b.sev]});
+}
+function oks(I){
+  var hay={};I.forEach(function(i){hay[i.k]=1});
+  if(!cargaOk.fren)hay.fren=1;
+  if(!cargaOk.form)hay.form=1;
+  var t=[['err','Errores'],['foto','Exceso de fotos'],['idq','Correcciones encoladas'],['paus','Pausadas con stock'],['map','Ventas sin producto'],['remap','Variaciones a re-mapear'],['fren','Frenadas por precio'],['form','Cambios de producto']];
+  return t.filter(function(x){return !hay[x[0]]}).map(function(x){return x[1]});
+}
+
+/* ---------- estado arriba ---------- */
+function renderStatus(){
+  var el=$('#status');
+  if(estado==='cargando'){el.innerHTML='<div class="sk sk--st sk--lleno"></div>';return}
+  if(estado==='error'){el.innerHTML=sinPermiso
+    ?'<div class="big"><span class="dot bad"></span><span>No tenés permiso para ver esto.</span></div>'
+    :'<div class="big"><span class="dot bad"></span><span>No se pudo cargar el estado<small>Revisá la conexión y reintentá. <button class="btn" type="button" data-reload>Reintentar</button></small></span></div>';return}
+  var I=incidencias(), tok=!!(D.token&&D.token.vigente);
+  var ml=(D.ultimasSyncsOk||[]).filter(function(x){return x.direccion==='ml_wc'})[0];
+  var wc=(D.ultimasSyncsOk||[]).filter(function(x){return x.direccion==='wc_ml'})[0];
+  var st=D.stock||{}, big;
+  if(!tok)big='<span class="dot bad"></span><span>La conexión con ML venció<small>No se sincroniza nada hasta renovarla. <button class="btn" type="button" data-renovar>Renovar conexión →</button><span id="renovar-err" class="res bad" role="alert" hidden></span></small></span>';
+  else if(!I.length)big='<span class="dot ok"></span><span>Todo sincronizando<small>'+n(st.sincronizadas)+' publicaciones al día</small></span>';
+  else{
+    var crit=I.some(function(i){return i.sev==='crit'});
+    big='<span class="dot '+(crit?'bad':'warn')+'"></span><span>Sincronizando · '+(I.length===1?'1 cosa':I.length+' cosas')+' para mirar<small>'+n(st.sincronizadas)+' publicaciones al día</small></span>';
+  }
+  var f=function(l,v){return '<span'+(tok?'':' class="bad"')+'>'+l+' <b>'+(tok?v:'detenido')+'</b></span>'};
+  var pend=st.pendientes>0?' · '+n(st.pendientes)+' en cola':'';
+  el.innerHTML='<div class="big">'+big+'</div><div class="flows">'+f('Ventas ML → web',hace(ml&&ml.ultima))+f('Stock web → ML',hace(wc&&wc.ultima)+pend)
+    +'<span'+(tok?'':' class="bad"')+'>Conexión <b>'+(tok?'vence el '+venceEl(D.token.vence):'vencida')+'</b></span></div>';
+}
+
+/* ---------- lista "Para resolver" ---------- */
+function renderInc(){
+  var box=$('#inc');
+  if(estado==='cargando'){box.innerHTML=[1,2,3,4].map(function(){return '<div class="sk"></div>'}).join('');return}
+  var I=incidencias(), fallo=(!cargaOk.fren||!cargaOk.form)?'<div class="ok-line ok-line--warn">No se pudo consultar '+(!cargaOk.fren&&!cargaOk.form?'las frenadas ni los cambios de producto':!cargaOk.fren?'las frenadas por precio':'los cambios de producto')+'. <button class="btn" type="button" data-reload>Reintentar</button></div>':'';
+  if(!I.length){
+    box.innerHTML='<div class="allok"><span class="dot ok"></span>Nada para resolver</div>'+fallo+'<div class="ok-line">'+oks(I).map(function(x){return '<span>'+x+'</span>'}).join('')+'</div>';
+    return;
+  }
+  box.innerHTML=I.map(function(i){
+    var o=open.has(i.k);
+    var inner='<span class="bar"></span><span class="n">'+n(i.n)+'</span><span class="tx"><span class="t">'+esc(i.t)+'</span><span class="d">'+esc(i.d)+'</span></span><span class="go"><span class="txt">'+esc(i.go)+'</span> '+(i.exp?CHEV:'→')+'</span>';
+    var head=i.exp?'<button class="ih" type="button" aria-expanded="'+o+'" data-k="'+i.k+'" id="ih-'+i.k+'">'+inner+'</button>'
+      :'<a class="ih" href="'+esc(i.href)+'" aria-label="'+esc(i.t)+': '+i.n+'. '+esc(i.go)+'">'+inner+'</a>';
+    return '<div class="it sev-'+i.sev+'">'+head+(o&&i.exp?'<div class="ib" id="ib-'+i.k+'">'+(i.k==='fren'?bodyFren():bodyForm())+'</div>':'')+'</div>';
+  }).join('')+fallo+(oks(I).length?'<div class="ok-line">'+oks(I).map(function(x){return '<span>'+x+'</span>'}).join('')+'</div>':'');
+}
+
+/* ---------- frenadas por precio ---------- */
+function bodyFren(){
+  var h='<p class="note">No se reactivaron a propósito. «Ver precios nuevos» calcula el precio que deja el contado neto; nada se aplica sin tu clic.</p>';
+  h+=frenadas.map(function(p){
+    var t=esc(p.titulo||p.item_id||p.clave), dis=!p.item_id;
+    var def=p.deficit_pct;
+    return '<div class="mr"><label class="cbx"><input type="checkbox" data-fr="'+esc(p.item_id||'')+'" '+(selFr.has(p.item_id)?'checked ':'')+(dis?'disabled ':'')+'aria-label="Elegir '+t+'"></label>'+ph(p.thumbnail)
+      +'<div class="tt"><b title="'+t+'">'+t+'</b><span>Deja '+money(p.neto)+' · contado '+money(p.precio_contado)+(p.variations_texto?' · '+esc(p.variations_texto):'')+'</span></div>'
+      +'<div class="v num"><span class="neg">'+(def==null?'—':'−'+Math.abs(Math.round(def*100))+' %')+'</span></div></div>';
+  }).join('');
+  var n=selFr.size;
+  h+='<div class="acts"><button class="btn" type="button" data-fr-todas>'+(n===frenadas.filter(function(p){return p.item_id}).length?'Quitar la elección':'Elegir todas')+'</button>'
+    +'<button class="btn btn--pri" type="button" data-plan'+(n?'':' disabled')+'>Ver precios nuevos'+(n?' ('+n+')':'')+'</button>'
+    +(confirmaForzar
+      ?'<button class="btn btn--pri" type="button" data-forzar-ok>Confirmar reintento de '+n+'</button><button class="btn" type="button" data-forzar-no>Cancelar</button>'
+      :'<button class="btn" type="button" data-forzar'+(n?'':' disabled')+' title="Vuelve a chequear el precio sin cambiarlo: las que sigan mal quedan frenadas otra vez">Reintentar sin cambiar el precio'+(n?' ('+n+')':'')+'</button>')
+    +'</div><div id="planbox">'+(planHtml||'')+'</div>';
+  return h;
+}
+var planHtml='';
+function planFila(x){
+  var p=frenadas.filter(function(f){return f.clave===x.clave})[0]||{};
+  var t=esc(x.sku||p.titulo||x.item_id||x.clave);
+  return '<tr><td title="'+t+'">'+t+'<span class="sub">Deja '+money(x.neto)+' de neto'+(x.cruza_umbral_envio?' · cambia el envío':'')+'</span></td><td class="r hoy num">'+money(x.precio_actual)+'</td><td class="r nuevo num"><b>'+money(x.precio)+'</b></td></tr>';
+}
+async function verPlan(){
+  var claves=frenadas.filter(function(p){return selFr.has(p.item_id)}).map(function(p){return p.clave}).filter(Boolean);
+  var box=$('#planbox');
+  if(!claves.length){planHtml='<p class="res warn">⚠ Elegí al menos una.</p>';box.innerHTML=planHtml;return}
+  planHtml='<p class="res">Calculando el precio de '+claves.length+' publicación(es)… se le pregunta a MercadoLibre la comisión y el envío de cada precio candidato.</p>';
+  box.innerHTML=planHtml;
   try{
-    // Paso 1 (rápido, solo caché local): conteo de candidatas para mostrar progreso real.
-    // Evita el spinner ciego mientras el paso 2 evalúa precios en ML (lo que tarda).
+    var d=await leerJson(await fetch('/api/precios/objetivo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({claves:claves})}));
+    var ok=(d.resultados||[]).filter(function(x){return x.precio!=null}), no=(d.resultados||[]).filter(function(x){return x.precio==null});
+    planPrecios=ok;
+    planHtml=ok.length
+      ?'<div class="plan"><table><thead><tr><th>Publicación</th><th class="r">Precio hoy</th><th class="r">Nuevo</th></tr></thead><tbody>'+ok.map(planFila).join('')+'</tbody></table>'
+        +(no.length?'<p class="nocalc"><b>Sin precio calculado ('+no.length+'):</b><br>'+no.map(function(x){return esc(x.sku||x.clave)+' — '+esc(x.motivo||'sin motivo')}).join('<br>')+'</p>':'')
+        +'<div class="acts"><button class="btn btn--pri" type="button" data-apply>Aplicar '+ok.length+' y reactivar</button><button class="btn" type="button" data-cancelplan>Cancelar</button></div></div>'
+      :'<p class="res bad">No se pudo calcular ningún precio.'+(no.length?'<br>'+no.map(function(x){return esc(x.sku||x.clave)+' — '+esc(x.motivo||'sin motivo')}).join('<br>'):'')+'</p>';
+  }catch(e){planHtml='<p class="res bad">No se pudo calcular: '+esc(e.message)+'</p>'}
+  var b2=$('#planbox'); if(b2)b2.innerHTML=planHtml;
+}
+async function aplicarPlan(){
+  if(!planPrecios||!planPrecios.length||corriendo)return;
+  corriendo=true;
+  var lista=planPrecios, aplicados=[], fallados=[];
+  for(var i=0;i<lista.length;i++){
+    band('warn','Aplicando precios: '+(i+1)+' de '+lista.length+'…');
+    var x=lista[i];
     try{
-      var rc=await fetch('/api/sync/reactivables/conteo');
-      var dc=await rc.json();
-      if(dc.ok){
-        var loading=box.querySelector('.loading');
-        if(loading){
-          loading.textContent=dc.totalPublicaciones>0
-            ? ('Evaluando '+n(dc.totalPublicaciones)+' publicación(es) — verificando precios en ML (puede tardar unos segundos)…')
-            : 'Verificando publicaciones pausadas…';
-        }
-      }
-    }catch(e){/* el conteo es cosmético: si falla, seguimos al detalle igual */}
-    // Paso 2 (lento): detalle completo con precio/neto vivo desde ML.
-    var r=await fetch('/api/sync/reactivables');
-    var d=await r.json();
-    if(!d.ok)throw new Error(d.error||'error');
-    box.innerHTML=renderReactivables(d);
-  }catch(err){
-    box.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+'</div>';
+      await leerJson(await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:x.clave,precio:x.precio})}));
+      aplicados.push(x);
+    }catch(e){fallados.push({x:x,error:e.message})}
   }
-  // Deep-link desde el home (/sync-ml/#reactivar): scrollear a la sección una sola vez,
-  // recién cuando la lista ya cargó. El flag evita re-scrollear tras cada reactivarSel/disparar.
-  if(location.hash==='#reactivar' && !yaScrolleReactivar){
-    yaScrolleReactivar=true;
-    document.getElementById('reactivar')?.scrollIntoView({behavior:'smooth',block:'start'});
+  var reactivadas=0, errReact=null;
+  if(aplicados.length){
+    try{
+      var dd=await leerJson(await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:aplicados.map(function(x){return x.item_id})})}));
+      reactivadas=dd.reactivados!=null?dd.reactivados:aplicados.length;
+    }catch(e){errReact=e.message}
   }
+  var msg=aplicados.length+' precio(s) corregido(s)'+(reactivadas?' y '+reactivadas+' reactivada(s) en ML':'')+'.';
+  if(errReact)msg+=' La reactivación falló: '+esc(errReact)+'.';
+  if(fallados.length)msg+=' No se pudieron corregir '+fallados.length+' (y por eso no se reactivaron): '+fallados.map(function(f){return esc(f.x.sku||f.x.clave)+' — '+esc(f.error)}).join(' | ')+'.';
+  band(fallados.length||errReact?'warn':'ok',msg);
+  planPrecios=null;planHtml='';selFr.clear();corriendo=false;
+  await cargar();
 }
-
-var LABELS_PRECIO={bajo:'Neto bajo',alto:'Neto alto',sin_precio:'Sin precio',ok:'OK'};
-
-var yaScrolleFrenadas=false;
-async function cargarFrenadas(){
-  var box=document.getElementById('frenadas-box');
-  if(!box)return;
+async function forzar(){
+  var sel=Array.from(selFr);
+  confirmaForzar=false;
+  if(!sel.length||corriendo){renderInc();return}
+  corriendo=true;
+  band('warn','Reintentando la reactivación de '+sel.length+'… vuelve a chequear el precio, no lo saltea.');
   try{
-    var r=await fetch('/api/sync/frenadas');
-    var d=await r.json();
-    if(!d.ok)throw new Error(d.error||'error');
-    box.innerHTML=renderFrenadas(d);
-  }catch(err){
-    box.innerHTML='<div class="loading" style="color:var(--red)">No se pudo cargar: '+esc(err.message)+' <button class="btn sec" onclick="cargarFrenadas()">Reintentar</button></div>';
-  }
-  // Deep-link desde el home (/sync-ml/#frenadas): igual patrón que #reactivar — scrollear
-  // recién cuando la sección ya cargó, una sola vez por carga de página.
-  if(location.hash==='#frenadas' && !yaScrolleFrenadas){
-    yaScrolleFrenadas=true;
-    scrollAFrenadas();
-  }
+    var d=await leerJson(await fetch('/api/sync/frenadas/forzar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:sel})}));
+    var ok=(d.resultados||[]).filter(function(x){return x.ok}), no=(d.resultados||[]).filter(function(x){return !x.ok});
+    var m=[];
+    if(ok.length)m.push(ok.length+' reactivada(s)');
+    if(no.length)m.push(no.length+' siguen frenadas: '+no.map(function(x){return esc(x.item_id)+' ('+esc(x.error||x.motivo||'motivo desconocido')+')'}).join(' | '));
+    if(d.truncado)m.push('se pidieron '+n(d.pedidos)+' pero solo se procesaron '+n(d.procesados)+'; el resto entra en el próximo ciclo');
+    band(no.length?'warn':'ok',m.join(' · ')||'Sin cambios.');
+  }catch(e){band('bad','No se pudo reintentar: '+esc(e.message))}
+  corriendo=false; selFr.clear(); await cargar();
 }
 
-function scrollAFrenadas(){
-  document.getElementById('frenadas')?.scrollIntoView({behavior:'smooth',block:'start'});
+/* ---------- cambios de producto (vigía) ---------- */
+function esMotivoSinPausa(c){return !c.pausada&&(!!c.nota||/^(migración de ML|catálogo nuevo)/.test(c.pausa_error||''))}
+function bodyForm(){
+  var h=formato.map(function(c){
+    var t=esc(c.titulo||c.item_id), antes=c.valor_anterior==null?'(vacío)':c.valor_anterior, desp=c.valor_nuevo==null?'(vacío)':c.valor_nuevo;
+    var link=urlSegura(c.permalink);
+    var extra=esMotivoSinPausa(c)?'<span class="warn">'+esc(c.nota||c.pausa_error)+'. Revisalo igual.</span>'
+      :(c.pausada?'':'<span class="warn">No se pausó (freno de mano o error).</span>')+(c.pausa_error?'<span class="bad">No se pudo pausar: '+esc(c.pausa_error)+'</span>':'');
+    return '<div class="mr mr--f">'+ph(c.thumbnail)
+      +'<div class="tt"><b title="'+t+'">'+t+'</b><span>'+(c.sku?esc(c.sku)+' · ':'')+(c.variaciones>1?c.variaciones+' variaciones · ':'')+'<span class="cambio">'+esc(c.campo)+': <s>'+esc(antes)+'</s> → <em>'+esc(desp)+'</em></span></span>'+extra+'</div>'
+      +'<div class="v"><button class="btn" type="button" data-ok="'+c.id+'">Es lo mismo</button>'
+      +'<button class="btn" type="button" data-pausada="'+c.id+'">Dejar pausada</button>'
+      +(link?'<a class="btn" href="'+esc(link)+'" target="_blank" rel="noopener">Ver en ML ↗</a>':'')
+      +(c.campo==='catalog_product_id'?'<button class="btn" type="button" data-comp="'+c.id+'">Comparar productos</button>':'')+'</div>'
+      +'<div class="comp" id="comp-'+c.id+'" hidden></div></div>';
+  }).join('');
+  return h+'<p class="note note--pie">Si no es lo mismo, corregila en ML. Mientras tanto no se le toca el stock.</p>';
 }
-
-// El hash puede cambiar sin recarga completa (link a #frenadas estando ya en la pantalla,
-// botón de atrás/adelante del navegador): la carga inicial de arriba no corre de nuevo, así
-// que sin esto el scroll queda roto en ese caso. La sección ya está renderizada (no hay tabs
-// que cambiar acá, a diferencia de /vinculos/), así que alcanza con reintentar el scroll.
-window.addEventListener('hashchange', function(){
-  if(location.hash==='#frenadas') scrollAFrenadas();
-});
-
-function renderFrenadas(d){
-  var pubs=d.data||[];
-  if(!pubs.length){
-    return '<div class="card good"><div class="lbl">Ninguna publicación frenada por precio ahora mismo.</div><div class="hint">La reactivación automática no dejó nada pendiente de corregir.</div></div>';
-  }
-  var h='';
-  h+='<p class="sub" style="margin-bottom:10px">Estas publicaciones recuperaron stock, pero el sistema '
-   +'<b>no las reactivó a propósito</b>: al precio actual en ML, venderían por debajo del precio de contado. '
-   +'Corregí el precio en ML y reintentá desde acá — el reintento vuelve a chequear el precio, no lo saltea.</p>';
-  h+='<div class="tbl-wrap"><table><thead><tr>';
-  h+='<th aria-label="Seleccionar todas las publicaciones frenadas"><input type="checkbox" id="chk-all-fr" onclick="toggleAllFrenadas(this)" aria-label="Seleccionar todas las publicaciones frenadas"></th>';
-  h+='<th>Publicación</th><th class="num">Neto ML</th><th class="num">Precio contado</th>'
-   +'<th class="num">Déficit</th><th>Motivo</th><th>Frenada desde</th></tr></thead><tbody>';
-  pubs.forEach(function(p){
-    var thumb=p.thumbnail?'<img class="pub-thumb" src="'+esc(p.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
-    var titulo=p.titulo||p.item_id||p.clave;
-    var link=p.permalink?('<a href="'+esc(p.permalink)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">'+esc(titulo)+'</a>'):esc(titulo);
-    h+='<tr>';
-    h+='<td><input type="checkbox" class="chk-fr" value="'+esc(p.item_id||'')+'" data-clave="'+esc(p.clave)+'" aria-label="Seleccionar '+esc(titulo)+'" '+(p.item_id?'onclick="actualizarBtnFrenadas()"':'disabled')+'></td>';
-    h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+link+'</div>'
-      +'<div class="pub-meta">'+esc(p.item_id||p.clave)+(p.variations_texto?(' · '+esc(p.variations_texto)):'')+'</div></div></div></td>';
-    h+='<td class="num">'+money(p.neto)+'</td>';
-    h+='<td class="num">'+money(p.precio_contado)+'</td>';
-    // b-bajo fijo a propósito, sin resolverlo dinámicamente como en renderReactivables:
-    // TODA fila de /api/sync/frenadas es por definición un caso de neto bajo (es la única
-    // razón por la que una publicación entra en ml_reactivacion_frenada), así que no hay
-    // otro estado posible que mostrar acá.
-    h+='<td class="num"><span class="badge b-bajo">'+pct(p.deficit_pct)+'</span></td>';
-    h+='<td style="max-width:220px">'+esc(p.motivo||'—')+'</td>';
-    h+='<td>'+fecha(p.detectado_en)+'</td>';
-    h+='</tr>';
-  });
-  h+='</tbody></table></div>';
-  h+='<div class="acciones"><button class="btn" id="btn-fr" onclick="reintentarFrenadasSel()" disabled>Reintentar reactivación (0)</button></div>';
-  return h;
+function cfProducto(etq,p){
+  p=p||{};
+  var txt=esc(etq)+': <b>'+esc(p.nombre||'(sin nombre)')+'</b> <span class="num">'+esc(p.id||'')+'</span>', l=urlSegura(p.link);
+  if(p.borrado)txt+=' · <span class="cf-mal">borrado por ML</span>';
+  else if(l)txt+=' · <a href="'+esc(l)+'" target="_blank" rel="noopener">Ficha pública ↗</a>';
+  return '<div>'+txt+'</div>';
 }
-
-// Mismo criterio que actualizarBtnReactivar(): default DESTILDADO, botón deshabilitado
-// con 0 seleccionados y label con el conteo real (evita el reintento masivo accidental
-// contra ML real que reportó el probador e2e).
-function actualizarBtnFrenadas(){
-  var btn=document.getElementById('btn-fr');
-  if(!btn) return;
-  var n=document.querySelectorAll('.chk-fr:checked').length;
-  btn.disabled=(n===0);
-  btn.textContent='Reintentar reactivación ('+n+')';
-  var chkAll=document.getElementById('chk-all-fr');
-  var total=document.querySelectorAll('.chk-fr:not(:disabled)').length;
-  if(chkAll) chkAll.checked=(total>0 && n===total);
-}
-
-function toggleAllFrenadas(cb){document.querySelectorAll('.chk-fr').forEach(function(x){if(!x.disabled)x.checked=cb.checked;});actualizarBtnFrenadas();}
-
-async function reintentarFrenadasSel(){
-  // fr-resultado vive FUERA de frenadas-box a propósito: cargarFrenadas() reemplaza todo
-  // el contenido de frenadas-box (incluida cualquier tabla nueva), así que si el resultado
-  // viviera adentro se borraría apenas se refresca la lista, y el usuario nunca llegaría a
-  // ver qué se reactivó y qué siguió frenada.
-  var sel=[...document.querySelectorAll('.chk-fr:checked')].map(function(x){return x.value;}).filter(Boolean);
-  var resultado=document.getElementById('fr-resultado');
-  if(!sel.length){resultado.style.color='var(--amber)';resultado.textContent='No seleccionaste ninguna publicación.';return;}
-  if(!confirm('Vas a reintentar la reactivación de '+sel.length+' publicación(es) en MercadoLibre.\n\nVuelve a chequear el precio, NO lo saltea: las que sigan con el precio mal van a quedar frenadas otra vez. ¿Confirmás?'))return;
-  var btn=document.getElementById('btn-fr');btn.disabled=true;
-  resultado.style.color='var(--muted)';resultado.textContent='Reintentando reactivación — vuelve a chequear el precio, no lo saltea…';
+async function comparar(id,btn){
+  var caja=document.getElementById('comp-'+id);
+  if(!caja)return;
+  if(!caja.hidden){caja.hidden=true;return}
+  caja.hidden=false;caja.textContent='Consultando a MercadoLibre…';btn.disabled=true;
   try{
-    var r=await fetch('/api/sync/frenadas/forzar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:sel})});
-    var d=await r.json();
-    if(!d.ok)throw new Error(d.error||'error');
-    var reactivadas=(d.resultados||[]).filter(function(x){return x.ok;});
-    var siguenFrenadas=(d.resultados||[]).filter(function(x){return !x.ok;});
-    var partes=[];
-    if(reactivadas.length)partes.push(reactivadas.length+' reactivada(s): '+reactivadas.map(function(x){return x.item_id;}).join(', '));
-    // El motivo puede venir en `error` (bloqueo por precio, fallo de ML) o en `motivo`
-    // (rama `omitido` de chequearNetoReactivar: "ya no está pausada", "pausada manualmente
-    // por el vendedor…") — son campos distintos según el caso, y omitir cualquiera de los
-    // dos deja al usuario viendo "motivo desconocido" justo cuando el sistema sí sabe por qué.
-    if(siguenFrenadas.length)partes.push(siguenFrenadas.length+' siguen frenadas: '+siguenFrenadas.map(function(x){return x.item_id+' ('+(x.error||x.motivo||'motivo desconocido')+')';}).join(' | '));
-    var truncadoTxt=d.truncado?(' · Se pidieron '+n(d.pedidos)+' pero solo se procesaron '+n(d.procesados)+' en esta llamada (el resto entra en el próximo ciclo o reintento).'):'';
-    resultado.style.color=siguenFrenadas.length?'var(--amber)':'var(--green)';
-    resultado.textContent=(partes.join(' · ')||'Sin cambios.')+truncadoTxt;
-    await cargarFrenadas();
-  }catch(err){
-    resultado.style.color='var(--red)';resultado.textContent='✗ '+err.message;
-  }finally{btn.disabled=false;}
+    var d=await leerJson(await fetch('/api/sync/cambios-formato/'+id+'/comparacion'));
+    var v=d.veredicto==='coincide'?'<span class="cf-ok">Coincide con la publicación</span>':d.veredicto==='no_coincide'?'<span class="cf-mal">No coincide con la publicación</span>':'<span>Sin datos suficientes para comparar</span>';
+    var filas=(d.diferencias||[]).map(function(x){
+      var m=x.coincide_nuevo===true?'<span class="cf-ok">coincide</span>':x.coincide_nuevo===false?'<span class="cf-mal">no coincide</span>':'—';
+      return '<tr><td>'+esc(x.nombre)+'</td><td>'+esc(x.viejo==null?'—':x.viejo)+'</td><td>'+esc(x.nuevo==null?'—':x.nuevo)+'</td><td>'+esc(x.publicacion==null?'—':x.publicacion)+'</td><td>'+m+'</td></tr>';
+    }).join('');
+    caja.innerHTML=cfProducto('Anterior',d.viejo)+cfProducto('Nuevo',d.nuevo)+'<div>'+v+' <span class="num">('+(d.comparados||0)+' atributos comparados)</span></div>'
+      +(filas?'<div class="tw"><table><thead><tr><th>Atributo</th><th>Anterior</th><th>Nuevo</th><th>Tu publicación</th><th>Nuevo vs. publicación</th></tr></thead><tbody>'+filas+'</tbody></table></div>':'<div>Los productos no difieren en atributos.</div>');
+  }catch(e){caja.textContent='No se pudo comparar: '+e.message}
+  btn.disabled=false;
 }
-
-function renderReactivables(d){
-  var pubs=d.data||[];
-  if(!pubs.length){
-    return '<div class="card"><div class="lbl">Nada para reactivar por ahora.</div><div class="hint">No hay publicaciones pausadas por falta de stock con stock disponible en la web. Si esperabas ver algunas, refrescá las publicaciones de ML desde el Matcher para actualizar su estado.</div></div>';
-  }
-  var h='';
-  h+='<p class="sub" style="margin-bottom:10px">'+n(d.totalPublicaciones)+' publicaciones ('+n(d.totalVariaciones)+' variaciones) que ML pausó por quedarse sin stock y ya tienen stock en la web. Reactivarlas les empuja el stock actual y las vuelve a poner activas en ML.</p>';
-  h+='<div class="tbl-wrap"><table><thead><tr>';
-  h+='<th><input type="checkbox" id="chk-all" onclick="toggleAll(this)" aria-label="Seleccionar todas"></th>';
-  h+='<th>Publicación</th><th>SKU(s)</th><th class="num">Stock web</th>'
-   +'<th class="num">Precio ML</th><th class="num">Neto</th><th class="num">Precio contado</th><th>Estado</th></tr></thead><tbody>';
-  pubs.forEach(function(p){
-    var skus=[...new Set(p.variaciones.map(function(v){return v.sku;}).filter(Boolean))];
-    var stockTotal=p.variaciones.reduce(function(a,v){return a+(v.stock_disponible_ml||0);},0);
-    var thumb=p.thumbnail?'<img class="pub-thumb" src="'+esc(p.thumbnail)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">':'<div class="pub-thumb"></div>';
-    var estado=p.estado||'sin_precio';
-    h+='<tr>';
-    h+='<td><input type="checkbox" class="chk-item" value="'+esc(p.item_id)+'" onclick="actualizarBtnReactivar()"></td>';
-    h+='<td><div class="pub-cell">'+thumb+'<div class="pub-txt"><div class="pub-tit">'+esc(p.titulo||p.item_id)+'</div>'
-      +'<div class="pub-meta">'+esc(p.item_id)+' · '+p.variaciones.length+' var.</div></div></div></td>';
-    h+='<td class="mono">'+esc(skus.slice(0,3).join(', '))+(skus.length>3?(' +'+(skus.length-3)):'')+'</td>';
-    h+='<td class="num">'+n(stockTotal)+'</td>';
-    h+='<td class="num">'+money(p.precio_ml)+'</td>';
-    h+='<td class="num"><b>'+money(p.neto)+'</b></td>';
-    h+='<td class="num">'+money(p.precio_web)+'</td>';
-    h+='<td><span class="badge b-'+esc(estado)+'">'+esc(LABELS_PRECIO[estado]||estado)+'</span></td>';
-    h+='</tr>';
-  });
-  h+='</tbody></table></div>';
-  h+='<div class="acciones"><button class="btn" id="btn-react" onclick="reactivarSel()" disabled>Reactivar seleccionadas (0)</button>'
-   +'<button class="btn sec" id="btn-react-cancel" onclick="cancelarReactivar()" style="display:none">Cancelar</button></div>';
-  h+='<div class="msg" id="react-msg"></div>';
-  return h;
-}
-
-// Default DESTILDADO siempre (decisión de UX tras el incidente de reactivación masiva
-// accidental): el botón arranca deshabilitado y solo se habilita cuando el usuario tilda
-// algo a propósito. El label muestra siempre cuántas quedaron seleccionadas.
-function actualizarBtnReactivar(){
-  var btn=document.getElementById('btn-react');
-  if(!btn) return;
-  var n=document.querySelectorAll('.chk-item:checked').length;
-  btn.disabled=(n===0);
-  btn.textContent='Reactivar seleccionadas ('+n+')';
-  var chkAll=document.getElementById('chk-all');
-  var total=document.querySelectorAll('.chk-item').length;
-  if(chkAll) chkAll.checked=(total>0 && n===total);
-}
-
-function toggleAll(cb){document.querySelectorAll('.chk-item').forEach(function(x){x.checked=cb.checked;});actualizarBtnReactivar();}
-
-// Controller del lote en curso: permite cancelar los chunks que aún no se dispararon.
-var reactivarCtrl=null;
-
-function cancelarReactivar(){
-  if(reactivarCtrl)reactivarCtrl.abort();
-}
-
-async function reactivarSel(){
-  var sel=[...document.querySelectorAll('.chk-item:checked')].map(function(x){return x.value;});
-  var msg=document.getElementById('react-msg');
-  if(!sel.length){msg.style.color='var(--amber)';msg.textContent='No seleccionaste ninguna publicación.';return;}
-  if(!confirm('Vas a reactivar '+sel.length+' publicación(es) en MercadoLibre.\n\nSe les empuja el stock actual de la web y pasan a estado activo. ¿Confirmás?'))return;
-  var btn=document.getElementById('btn-react');btn.disabled=true;
-  var btnCancel=document.getElementById('btn-react-cancel');
-  if(btnCancel){btnCancel.style.display='';btnCancel.disabled=false;}
-  reactivarCtrl=new AbortController();
-  var CHUNK=10,okTotal=0,errTotal=0,omitTotal=0,noProcTotal=0,fallos=[],omitidos=[];
-  var cancelado=false;
-  msg.style.color='var(--muted)';
+async function revisar(id,reactivar,btn){
+  if(corriendo)return; corriendo=true; if(btn)btn.disabled=true;
   try{
-    for(var i=0;i<sel.length;i+=CHUNK){
-      // Si el usuario canceló antes de disparar este chunk, contamos lo que queda como
-      // "no procesado por cancelación" (estado distinto de omitido/error) y cortamos.
-      if(reactivarCtrl.signal.aborted){cancelado=true;noProcTotal=sel.length-i;break;}
-      msg.textContent='Reactivando… '+Math.min(i+CHUNK,sel.length)+'/'+sel.length+' (podés cancelar; los que ya se están procesando terminan)';
-      try{
-        var r=await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:sel.slice(i,i+CHUNK)}),signal:reactivarCtrl.signal});
-        var d=await r.json();
-        if(!d.ok)throw new Error(d.error||'error');
-        (d.resultados||[]).forEach(function(x){
-          if(x.ok){okTotal++;}
-          else if(x.omitido){omitTotal++;if(omitidos.length<8)omitidos.push(x.item_id+': '+(x.motivo||'omitida'));}
-          else{errTotal++;if(fallos.length<8)fallos.push(x.item_id+': '+(x.error||'error'));}
-        });
-      }catch(e){
-        // AbortError: el chunk en curso se canceló del lado del cliente. El backend puede
-        // terminar de procesarlo igual (no se interrumpe un PUT a ML a mitad), pero como no
-        // sabemos su resultado lo contamos, junto con los chunks restantes, como no procesados.
-        if(e.name==='AbortError'){cancelado=true;noProcTotal=sel.length-i;break;}
-        throw e;
-      }
+    var d=await leerJson(await fetch('/api/sync/cambios-formato/'+id+'/revisar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reactivar:!!reactivar})}));
+    var f=d.oferta_reactivar;
+    if(d.pendiente_stock){
+      var MP={sin_stock_woo:'No hay stock en la web (Woo): sigue pausada y se reactiva cuando vuelva a haber stock.',
+        ml_sin_stock:'La publicación no tiene stock en MercadoLibre: se reactiva sola cuando vuelva a haber stock.',
+        otro_aviso:'Sigue pausada: hay otro aviso abierto de esta publicación que hay que revisar antes.',
+        solo_local:'Sigue pausada: su SKU está en «solo local» en Config ML, que fuerza el stock a 0.',
+        sin_vinculo:'Sigue pausada: no está vinculada a un producto de Woo.'};
+      band('ok','Aviso cerrado. '+(MP[d.motivo_pendiente]||'La publicación sigue pausada hasta que se pueda reactivar.'));
     }
-    var hayPend=(errTotal||omitTotal||noProcTotal);
-    msg.style.color=hayPend?'var(--amber)':'var(--green)';
-    msg.textContent=(cancelado?'⚠ Cancelado. ':'✓ ')+'Reactivadas '+okTotal
-      +(omitTotal?(' · '+omitTotal+' omitida(s): '+omitidos.join(' | ')):'')
-      +(errTotal?(' · '+errTotal+' con error: '+fallos.join(' | ')):'')
-      +(noProcTotal?(' · '+noProcTotal+' sin procesar por cancelación'):'')
-      +'. Actualizando estado…';
-    await cargar();
-  }catch(err){
-    msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
-  }finally{
-    reactivarCtrl=null;
-    btn.disabled=false;
-    if(btnCancel){btnCancel.style.display='none';btnCancel.disabled=false;}
-  }
+    else if(f)band('ok','Aviso cerrado. <b>Hay '+f.stock_woo+' en stock</b> y la publicación sigue pausada.',
+      '<button class="btn btn--pri" type="button" data-cf-reactivar data-id="'+esc(f.item_id)+'">Reactivar ahora</button><a class="btn" href="/herramientas/sync-ml/pausadas/">Ver en Pausadas</a>');
+    else band('ok',reactivar?'Aviso cerrado y publicación reactivada.':'Aviso cerrado. La publicación queda pausada.');
+  }catch(e){band('bad','No se pudo: '+esc(e.message)); if(btn)btn.disabled=false}
+  corriendo=false; await cargar();
 }
-
-function render(d){
-  var tokOk=d.token&&d.token.vigente;
-  var ml=(d.ultimasSyncsOk||[]).find(function(x){return x.direccion==='ml_wc';});
-  var wc=(d.ultimasSyncsOk||[]).find(function(x){return x.direccion==='wc_ml';});
-  var st=d.stock||{}, pe=d.pedidos||{}, at=d.atencion||{};
-
-  var h='';
-  // Pills de estado
-  h+='<div class="pills">';
-  h+=pill(tokOk?'ok':'bad','Token MercadoLibre',tokOk?('Vigente · vence '+fecha(d.token.vence)):'No configurado / vencido');
-  h+=pill(ml?'ok':'bad','Última venta ML → WC',ml?fecha(ml.ultima):'nunca');
-  h+=pill(wc?'ok':'bad','Último stock WC → ML',wc?fecha(wc.ultima):'nunca');
-  h+='</div>';
-
-  // Stock
-  h+='<div class="sec-title">Stock WC → ML</div><div class="cards c2">';
-  h+='<div class="card good"><div class="n">'+n(st.sincronizadas)+'</div><div class="lbl">Publicaciones activas sincronizadas</div></div>';
-  var notaPend=st.pendientesPausadas>0?('De estas, <b>'+n(st.pendientesPausadas)+'</b> son publicaciones pausadas en ML — reactivalas desde la sección de abajo.'):'Se sincronizan en el próximo ciclo del cron.';
-  h+='<div class="card"><div class="n" style="color:var(--muted)">'+n(st.pendientes)+'</div><div class="lbl">Pendientes de sincronizar</div><div class="hint">'+notaPend+'</div></div>';
-  h+='</div>';
-
-  // Reactivar pausadas por falta de stock (se llena aparte, async)
-  h+='<div class="sec-title" id="reactivar">Reactivar publicaciones pausadas por falta de stock</div>';
-  h+='<div id="reactivar-box"><div class="loading">Buscando publicaciones y verificando precios en ML (puede tardar unos segundos)…</div></div>';
-
-  // Frenadas por precio (se llena aparte, async)
-  h+='<div class="sec-title" id="frenadas">Publicaciones frenadas por precio</div>';
-  h+='<div class="msg" id="fr-resultado"></div>';
-  h+='<div id="frenadas-box"><div class="loading">Buscando publicaciones frenadas…</div></div>';
-
-  // Pedidos
-  h+='<div class="sec-title">Pedidos de MercadoLibre en WooCommerce</div><div class="cards c2">';
-  h+='<div class="card good"><div class="n">'+n(pe.total)+'</div><div class="lbl">Pedidos creados desde ventas de ML</div></div>';
-  h+='<div class="card"><div class="n" style="color:var(--amber)">'+n(pe.cancelados)+'</div><div class="lbl">Cancelados (stock devuelto)</div></div>';
-  h+='</div>';
-  if(pe.ultimos&&pe.ultimos.length){
-    h+='<div class="tbl-wrap" style="margin-top:12px"><table><thead><tr><th>Pedido WC</th><th>Comprador ML</th><th>Fecha</th><th>Estado</th></tr></thead><tbody>';
-    pe.ultimos.forEach(function(o){
-      var canc=!!o.cancelado_en;
-      h+='<tr><td class="mono">#'+esc(o.wc_order_id)+'</td><td>'+esc(nick(o.comprador_json))+'</td><td>'+fecha(o.creado_en)+'</td><td>'+(canc?'<span class="tag canc">Cancelado</span>':'<span class="tag ok">Activo</span>')+'</td></tr>';
-    });
-    h+='</tbody></table></div>';
-  }
-
-  // Necesita atención
-  h+='<div class="sec-title">Necesita tu atención</div><div class="cards c4">';
-  h+=cardAtencion(at.sin_mapeo,'Ventas sin SKU mapeado','Publicaciones que se vendieron pero no están vinculadas a un SKU. Asignalas acá.','warn','/herramientas/sync-detalle/?cat=sin_mapeo','Ver y resolver →');
-  h+=cardAtencion(at.remapeo_requerido,'Variaciones a re-mapear','Cambiaron en ML (se editó la publicación). Volvé a asignarles el SKU.','warn','/herramientas/sync-detalle/?cat=remapeo_requerido','Ver y resolver →');
-  h+=cardAtencion(at.requiere_atencion_ml,'Exceso de fotos en ML','ML no deja actualizar estas publicaciones hasta bajar la cantidad de fotos en tu cuenta de ML.','crit','/herramientas/sync-detalle/?cat=requiere_atencion_ml','Ver detalle →');
-  h+=cardAtencion(at.errores_reales,'Errores de sincronización','Fallos que no se resolvieron solos. Revisá y reintentá.','crit','/herramientas/sync-detalle/?cat=errores','Ver y reintentar →');
-  h+='</div>';
-
-  // Acciones
-  h+='<div class="sec-title">Acciones manuales</div>';
-  h+='<div class="acciones">';
-  h+='<button class="btn" onclick="disparar(this,\'/api/sync/ml-wc\',\'Trayendo ventas de ML…\')">Traer ventas de ML ahora</button>';
-  h+='<button class="btn sec" onclick="disparar(this,\'/api/sync/wc-ml\',\'Empujando stock a ML…\')">Sincronizar stock ahora</button>';
-  h+='<button class="btn sec" onclick="disparar(this,\'/api/sync/ml-cancelaciones\',\'Procesando cancelaciones…\')">Procesar cancelaciones</button>';
-  h+='<button class="btn sec" onclick="limpiarMuertas(this)">Limpiar variaciones muertas</button>';
-  h+='</div><div class="msg" id="accion-msg"></div>';
-
-  return h;
-}
-
-function pill(estado,label,valor){
-  return '<div class="pill"><span class="dot '+estado+'"></span><div><div class="pl">'+esc(label)+'</div><div class="pv">'+esc(valor)+'</div></div></div>';
-}
-function cardAtencion(num,titulo,hint,clase,href,go){
-  num=num||0;
-  var cls=num>0?clase:'';
-  var inner='<div class="n"'+(num===0?' style="color:var(--green)"':'')+'>'+n(num)+'</div><div class="lbl">'+esc(titulo)+'</div><div class="hint">'+esc(hint)+'</div>'+(href&&num>0?'<div class="go">'+esc(go)+'</div>':'');
-  if(href&&num>0)return '<a class="card link '+cls+'" href="'+href+'">'+inner+'</a>';
-  return '<div class="card '+cls+'">'+inner+'</div>';
-}
-
-async function disparar(btn,url,txt){
-  var msg=document.getElementById('accion-msg');
-  btn.disabled=true;msg.style.color='var(--muted)';msg.textContent=txt+' (puede tardar unos minutos, no cierres la pestaña)';
+async function reactivarAhora(btn,id){
+  btn.disabled=true;
   try{
-    var r=await fetch(url,{method:'POST'});
-    var d=await r.json();
-    if(!d.ok)throw new Error(d.error||'error');
-    msg.style.color='var(--green)';msg.textContent='✓ Listo. Actualizando estado…';
-    await cargar();
-  }catch(err){
-    msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
-  }finally{btn.disabled=false;}
+    var d=await leerJson(await fetch('/api/sync/pausadas-con-stock/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:[id]})}));
+    if((d.no_reactivables||[]).indexOf(id)>=0)throw new Error('ya no se puede reactivar desde acá');
+    var x=(d.resultados||[]).filter(function(y){return y.item_id===id})[0];
+    if(!x||!x.ok)throw new Error((x&&x.error)||'ML no la dejó');
+    band('ok','Reactivada. Ya está a la venta en ML.');
+    cargar();
+  }catch(e){band('bad','No se pudo reactivar: '+esc(e.message),'<a class="btn" href="/herramientas/sync-ml/pausadas/">Ver en Pausadas</a>')}
 }
 
-// Limpieza masiva de variaciones muertas: verifica contra ML y descarta las que ya no
-// existen. Reporta cuántas descartó y cuántas salteó (ML no confirmó — fail-closed).
-async function limpiarMuertas(btn){
-  var msg=document.getElementById('accion-msg');
-  if(!confirm('Se van a revisar contra MercadoLibre las variaciones mapeadas y las pendientes de re-mapeo, y se descartarán las que ya no existen. No borra nada que ML no confirme. ¿Seguimos?'))return;
-  btn.disabled=true;msg.style.color='var(--muted)';msg.textContent='Verificando publicaciones en ML (puede tardar)…';
+/* ---------- Correr ahora ---------- */
+var RUNS={
+  'ml-wc':{url:'/api/sync/ml-wc',txt:'Trayendo ventas de ML…',ok:'Ventas de ML traídas.'},
+  'wc-ml':{url:'/api/sync/wc-ml',txt:'Empujando stock a ML…',ok:'Stock enviado a ML.'},
+  'cancel':{url:'/api/sync/ml-cancelaciones',txt:'Procesando cancelaciones…',ok:'Cancelaciones procesadas.'},
+  'muertas':{url:'/api/sync/limpiar-variaciones-muertas',txt:'Verificando publicaciones en ML…',ok:null}
+};
+async function renovarConexion(btn){
+  var err=$('#renovar-err'); err.hidden=true; btn.disabled=true;
   try{
-    var r=await fetch('/api/sync/limpiar-variaciones-muertas',{method:'POST'});
-    var d=await r.json();
-    if(!d.ok)throw new Error(d.error||'error');
-    msg.style.color='var(--green)';
-    msg.textContent='✓ '+n(d.muertas)+' variación(es) muerta(s) descartada(s) de '+n(d.revisados)+' revisada(s)'+(d.saltados?(' · '+n(d.saltados)+' salteada(s) porque ML no respondió'):'')+'. Actualizando…';
-    await cargar();
-  }catch(err){
-    msg.style.color='var(--red)';msg.textContent='✗ '+err.message;
-  }finally{btn.disabled=false;}
+    var d=await leerJson(await fetch('/api/sync/ml-auth-url'));
+    if(typeof d.url!=='string'||!/^https:\/\//i.test(d.url))throw new Error('el servidor no devolvió la dirección de autorización');
+    location.href=d.url; return;
+  }catch(e){
+    err.textContent='No se pudo iniciar la renovación: '+e.message+'. Probá de nuevo en un momento.'; err.hidden=false;
+  }
+  btn.disabled=false;
+}
+async function correr(k){
+  var r=RUNS[k]; if(!r||corriendo)return;
+  corriendo=true; $('#mbtn').disabled=true;
+  band('warn',r.txt+' Puede tardar unos minutos: no cierres la pestaña.');
+  try{
+    var d=await leerJson(await fetch(r.url,{method:'POST'}));
+    var m=r.ok;
+    if(k==='muertas')m=n(d.muertas)+' variación(es) muerta(s) descartada(s) de '+n(d.revisados)+' revisada(s)'+(d.saltados?' · '+n(d.saltados)+' salteada(s) porque ML no respondió':'')+'.';
+    band('ok',m);
+  }catch(e){band('bad','No se pudo: '+esc(e.message))}
+  corriendo=false; $('#mbtn').disabled=false; await cargar();
 }
 
+/* ---------- ventas ---------- */
+function renderVentas(){
+  var pe=(D&&D.pedidos)||{};
+  if(estado!=='lista'){$('#sales').innerHTML='<div class="kpi sk sk--kpi"></div><div class="kpi sk sk--kpi"></div>';$('#ordersbox').hidden=true;return}
+  $('#sales').innerHTML='<div class="kpi"><div class="n num">'+n(pe.total)+'</div><div class="l">pedidos creados desde ventas de ML</div></div><div class="kpi"><div class="n num">'+n(pe.cancelados)+'</div><div class="l">cancelados, con el stock devuelto</div></div>';
+  var u=(pe.ultimos||[]).slice(0,5);
+  $('#ordersbox').hidden=!u.length;
+  $('#orders').innerHTML=u.map(function(o){
+    var c=!!o.cancelado_en;
+    return '<div class="or"><span class="num">#'+esc(o.wc_order_id)+'</span><span class="who">'+esc(nick(o.comprador_json))+'</span><span class="when">'+hace(o.creado_en)+'</span><span class="tag '+(c?'canc':'ok')+'">'+(c?'Cancelado':'Activo')+'</span></div>';
+  }).join('');
+}
+function render(){
+  var err=estado==='error';
+  ['#inch','#inc','#ventash','#sales'].forEach(function(q){$(q).hidden=err});
+  if(err)$('#ordersbox').hidden=true;
+  renderStatus();
+  if(!err){renderInc();renderVentas()}
+}
+
+/* ---------- enlaces antiguos (#frenadas, #reactivar, #cambios-formato) ---------- */
+var hashHecho=false;
+function irAHash(){
+  var h=location.hash;
+  if(h==='#reactivar'){location.replace('/herramientas/sync-ml/pausadas/');return}
+  var k=h==='#frenadas'?'fren':h==='#cambios-formato'?'form':null;
+  if(!k||hashHecho||estado!=='lista')return;
+  hashHecho=true;
+  if(incidencias().some(function(i){return i.k===k})){open.add(k);renderInc();var e=document.getElementById('ih-'+k);if(e)e.scrollIntoView({block:'start'})}
+}
+window.addEventListener('hashchange',function(){hashHecho=false;irAHash()});
+
+/* ---------- eventos ---------- */
+function cerrarMenu(){$('#menu').hidden=true;$('#mbtn').setAttribute('aria-expanded','false')}
+document.addEventListener('click',function(e){
+  var t=e.target.closest&&e.target.closest('button,a,summary');
+  if(!t||!t.closest('.menuwrap'))cerrarMenu();
+  if(!t)return;
+  var d=t.dataset;
+  if(t.id==='mbtn'){var m=$('#menu');m.hidden=!m.hidden;t.setAttribute('aria-expanded',String(!m.hidden));if(!m.hidden)m.querySelector('button').focus();return}
+  if(d.renovar!==undefined){renovarConexion(t);return}
+  if(d.run){cerrarMenu();correr(d.run);return}
+  if(t.id==='refresh'||d.reload!==undefined){cargar();return}
+  if(t.id==='bandx'){$('#band').hidden=true;return}
+  if(d.k){open.has(d.k)?open.delete(d.k):open.add(d.k);renderInc();return}
+  if(d.frTodas!==undefined){
+    var ids=frenadas.map(function(p){return p.item_id}).filter(Boolean);
+    if(selFr.size===ids.length)selFr.clear();else ids.forEach(function(x){selFr.add(x)});
+    planHtml='';planPrecios=null;confirmaForzar=false;renderInc();return;
+  }
+  if(d.plan!==undefined){verPlan();return}
+  if(d.cancelplan!==undefined){planHtml='';planPrecios=null;renderInc();return}
+  if(d.apply!==undefined){aplicarPlan();return}
+  if(d.forzar!==undefined){confirmaForzar=true;renderInc();return}
+  if(d.forzarNo!==undefined){confirmaForzar=false;renderInc();return}
+  if(d.forzarOk!==undefined){forzar();return}
+  if(d.ok){revisar(d.ok,true,t);return}
+  if(d.pausada){revisar(d.pausada,false,t);return}
+  if(d.comp){comparar(d.comp,t);return}
+  if(d.cfReactivar!==undefined){reactivarAhora(t,d.id);return}
+});
+document.addEventListener('change',function(e){
+  var c=e.target;
+  if(c.dataset&&c.dataset.fr!==undefined){
+    if(c.checked)selFr.add(c.dataset.fr);else selFr.delete(c.dataset.fr);
+    planHtml='';planPrecios=null;confirmaForzar=false;renderInc();
+    var again=document.querySelector('[data-fr="'+(window.CSS&&CSS.escape?CSS.escape(c.dataset.fr):c.dataset.fr)+'"]');if(again)again.focus();
+  }
+});
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'&&!$('#menu').hidden){cerrarMenu();$('#mbtn').focus()}
+});
 cargar();
 </script>
 

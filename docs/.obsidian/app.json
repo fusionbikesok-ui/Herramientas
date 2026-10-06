@@ -1,0 +1,10 @@
+{
+  "attachmentFolderPath": "adjuntos",
+  "newFileLocation": "folder",
+  "newFileFolderPath": "memory",
+  "alwaysUpdateLinks": true,
+  "useMarkdownLinks": true,
+  "showUnsupportedFiles": true,
+  "readableLineLength": true,
+  "strictLineBreaks": false
+}

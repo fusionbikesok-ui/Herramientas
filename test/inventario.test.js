@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
@@ -7,9 +7,20 @@ import { inventarioRouter, looksLikeEan, productoEnAlcance, productoEnAlcanceOr,
 
 vi.mock('../lib/wooStock.js', async () => {
   const actual = await vi.importActual('../lib/wooStock.js');
-  return { ...actual, setStockWc: vi.fn() };
+  // `getStockLiveWc` se mockea porque /diferencias/:id/aprobar lo consulta ANTES de ajustar,
+  // para detectar el caso ya conciliado (el stock de Woo ya coincide con lo contado, porque
+  // algo externo lo movió durante la sesión) y cerrarlo sin un segundo PUT que duplicaría
+  // stock. Sin el mock, esa lectura sale por wooFetch —que acá devuelve undefined— y el
+  // endpoint contesta 502 por una razón que no tiene que ver con lo que el test mide.
+  return { ...actual, setStockWc: vi.fn(), setStockWcDelta: vi.fn(), getStockLiveWc: vi.fn() };
 });
-import { setStockWc } from '../lib/wooStock.js';
+import { setStockWc, setStockWcDelta, getStockLiveWc } from '../lib/wooStock.js';
+
+// Para tests que usen setStockWcDelta de verdad (no mockeado)
+vi.mock('../routes/woo.js', () => ({
+  wooFetch: vi.fn()
+}));
+import { wooFetch } from '../routes/woo.js';
 
 // Ninguna llamada real a Woo en los tests: mockeamos axios, igual que codigos.test.js.
 // Los tests de /asociar que NO configuran un mock explícito reciben el automock
@@ -19,13 +30,15 @@ vi.mock('axios');
 import axios from 'axios';
 
 const TEST_DB = './test/tmp-inventario.sqlite';
+const E6_DB = './test/tmp-inventario-e6.sqlite';
+const E6_DB_2 = './test/tmp-inventario-e6-2.sqlite';
 const CFG = { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' };
 const now = () => new Date().toISOString();
 
-function buildApp(db, usuario = 'operario1') {
+function buildApp(db, usuario = 'operario1', isAdmin = false) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.user = { username: usuario, is_admin: 0 }; next(); });
+  app.use((req, _res, next) => { req.user = { username: usuario, is_admin: isAdmin ? 1 : 0 }; next(); });
   app.use('/api/inventario', inventarioRouter(db, CFG));
   return app;
 }
@@ -34,17 +47,79 @@ function insertProducto(db, extra) {
   const base = {
     id_woo: 1, nombre: 'Producto', sku: 'FB-1', tipo: 'simple', id_padre: null,
     stock: 5, categorias_json: null, img: null, precio: null, atributos_json: null,
-    marca: null, gtin: null, actualizado_en: now(),
+    marca: null, gtin: null, no_contable: 0, actualizado_en: now(),
   };
   const row = { ...base, ...extra };
   db.prepare(`
     INSERT INTO catalogo_cache
-      (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, atributos_json, marca, gtin, actualizado_en)
+      (id_woo, nombre, sku, tipo, id_padre, stock, categorias_json, img, precio, atributos_json, marca, gtin, no_contable, actualizado_en)
     VALUES
-      (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @atributos_json, @marca, @gtin, @actualizado_en)
+      (@id_woo, @nombre, @sku, @tipo, @id_padre, @stock, @categorias_json, @img, @precio, @atributos_json, @marca, @gtin, @no_contable, @actualizado_en)
   `).run(row);
   return row;
 }
+
+describe('consulta rápida de stock E5', () => {
+  it('busca por SKU/EAN/nombre y no inventa saldos físicos ni entrantes', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 9999, sku: 'FB-RAPIDA', nombre: 'Casco rápido', stock: 7, gtin: '7791234567890' });
+    db.prepare('INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES (?,?,?,?)')
+      .run('ml:rapida', 'FB-RAPIDA', 6, now());
+    const r = await request(buildApp(db)).get('/api/inventario/consulta-rapida?q=7791234567890');
+    expect(r.status).toBe(200);
+    expect(r.body.data[0]).toMatchObject({ sku: 'FB-RAPIDA', disponible_comercial: 7, stock_ml: 6, fisico_conocido: null, entrante: null });
+    db.close();
+  });
+});
+
+describe('libro de movimientos E6', () => {
+  // Estos dos tests usan bases dedicadas porque crean el mismo bootstrap en cada
+  // ejecución. No deben depender de archivos que haya dejado una corrida anterior.
+  beforeEach(() => {
+    for (const file of [E6_DB, E6_DB_2]) {
+      try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
+    }
+  });
+  afterEach(() => {
+    for (const file of [E6_DB, E6_DB_2]) {
+      try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (_) {}
+    }
+  });
+
+  it('transfiere con saldo suficiente y hace idempotente el reintento', async () => {
+    const db = openDb(E6_DB);
+    const app = buildApp(db, 'supervisor', true);
+    const a = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'A', estante: '1' });
+    const b = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'B', estante: '1' });
+    const origen = a.body.ubicacion.id, destino = b.body.ubicacion.id;
+    await request(app).post('/api/inventario/movimientos-stock/habilitar').send({ sku: 'FB-MOV' });
+    db.prepare(`INSERT INTO stock_movements (sku,cantidad,tipo,destino_id,motivo,idempotencia,usuario,creado_en)
+      VALUES (?,?,'entrada',?,?,?, ?,?)`).run('FB-MOV', 5, origen, 'saldo inicial', 'seed-e6', 'test', now());
+    const body = { sku: 'FB-MOV', cantidad: 2, origen_id: origen, destino_id: destino, motivo: 'reubicación' };
+    const first = await request(app).post('/api/inventario/movimientos-stock/transferir').set('Idempotency-Key', 'move-1').send(body);
+    const repeat = await request(app).post('/api/inventario/movimientos-stock/transferir').set('Idempotency-Key', 'move-1').send(body);
+    expect(first.status).toBe(201); expect(repeat.status).toBe(200); expect(repeat.body.repetido).toBe(true);
+    const view = await request(app).get('/api/inventario/movimientos-stock?sku=FB-MOV');
+    expect(view.body.balances.find(x => x.id === origen).cantidad).toBe(3);
+    expect(view.body.balances.find(x => x.id === destino).cantidad).toBe(2);
+    db.close();
+  });
+
+  it('rechaza transferir más unidades que las disponibles', async () => {
+    const db = openDb(E6_DB_2);
+    const app = buildApp(db, 'supervisor', true);
+    const a = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'C', estante: '1' });
+    const b = await request(app).post('/api/inventario/ubicaciones').send({ zona: 'D', estante: '1' });
+    await request(app).post('/api/inventario/movimientos-stock/habilitar').send({ sku: 'FB-MOV-2' });
+    db.prepare(`INSERT INTO stock_movements (sku,cantidad,tipo,destino_id,motivo,idempotencia,usuario,creado_en) VALUES (?,?,'entrada',?,?,?, ?,?)`)
+      .run('FB-MOV-2', 1, a.body.ubicacion.id, 'saldo inicial', 'seed-e6-2', 'test', now());
+    const r = await request(app).post('/api/inventario/movimientos-stock/transferir').set('Idempotency-Key', 'move-2')
+      .send({ sku: 'FB-MOV-2', cantidad: 2, origen_id: a.body.ubicacion.id, destino_id: b.body.ubicacion.id, motivo: 'exceso' });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatch(/insuficiente/i);
+    db.close();
+  });
+});
 
 describe('looksLikeEan', () => {
   it('reconoce un EAN-13 válido (checksum GS1 correcto)', () => {
@@ -87,6 +162,7 @@ describe('looksLikeEan', () => {
 });
 
 describe('GET /api/inventario/alcance-opciones', () => {
+  beforeEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
   afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
   it('devuelve categorías y marcas distintas de catalogo_cache, sin duplicados', async () => {
@@ -96,6 +172,7 @@ describe('GET /api/inventario/alcance-opciones', () => {
     insertProducto(db, { id_woo: 3, sku: 'FB-3', marca: 'Continental', categorias_json: '["Cubiertas"]' });
 
     const res = await request(buildApp(db)).get('/api/inventario/alcance-opciones');
+    db.close();
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -543,6 +620,250 @@ describe('POST /api/inventario/sesiones/:id/asociar — subida del código a Woo
   });
 });
 
+describe('POST /api/inventario/sesiones/:id/asociar — alcance ad hoc para SKU fuera de alcance (commit 1443c79)', () => {
+  afterEach(() => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    vi.resetAllMocks();
+  });
+
+  it('(a) Asociar un código desconocido a un SKU fuera del alcance original → alcance ad hoc con stock_inicial congelado', async () => {
+    const db = openDb(TEST_DB);
+    // Crear sesión con alcance = marca 'Bell' (stock > 0)
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    // SKU fuera de alcance: marca 'Maxxis' NO está en la sesión
+    insertProducto(db, { id_woo: 2, sku: 'FB-MAXXIS', marca: 'Maxxis', stock: 5 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    // Escanear un código desconocido
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1234567890128' });
+    expect(esc.body.item.sin_asociar).toBe(true);
+
+    // Asociar a un SKU fuera del alcance original
+    const asc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-MAXXIS' });
+
+    expect(asc.status).toBe(200);
+    expect(asc.body.item.sku).toBe('FB-MAXXIS');
+    expect(asc.body.item.fuera_de_alcance).toBe(true);
+
+    // Verificar que se creó una fila en inventario_sesion_alcance con stock_inicial congelado
+    const alcance = db.prepare('SELECT stock_inicial, bloque FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcance).toBeTruthy();
+    expect(alcance.stock_inicial).toBe(5);
+    expect(alcance.bloque).toBe('con_stock');
+
+    db.close();
+  });
+
+  it('(b) Asociar fuera de alcance y luego borrar el ítem → NO queda un pendiente huérfano bloqueando /confirmar', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-MAXXIS', marca: 'Maxxis', stock: 5 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    // Escanear, asociar a SKU fuera de alcance
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1234567890128' });
+    const itemId = esc.body.item.id;
+    const asc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-MAXXIS' });
+
+    // Borrar el ítem
+    const del = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId}`);
+    expect(del.status).toBe(200);
+
+    // Verificar que se borró también la fila de alcance ad hoc (esto era el bug: quedaba huérfana)
+    const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcance.n).toBe(0);
+
+    // Verificar que NO hay un pendiente huérfano específico para FB-MAXXIS
+    // (FB-BELL sigue siendo pendiente porque está en el alcance original y nunca se contó)
+    const pendientesMaxxis = db.prepare(`
+      SELECT COUNT(*) n FROM inventario_sesion_alcance a
+      WHERE a.sesion_id=? AND a.sku='FB-MAXXIS'
+        AND NOT EXISTS (SELECT 1 FROM inventario_conteos t WHERE t.sesion_id=a.sesion_id AND t.sku=a.sku)
+    `).get(sesionId);
+    expect(pendientesMaxxis.n).toBe(0);
+
+    db.close();
+  });
+
+  it('(c) Asociar a un SKU variable fuera del alcance → 400, sin efectos colaterales', async () => {
+    const db = openDb(TEST_DB);
+    // Sesión con alcance = marca 'Bell'
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    // Producto variable FUERA del alcance (marca Maxxis)
+    insertProducto(db, { id_woo: 2, sku: 'FB-VAR', marca: 'Maxxis', stock: 5, tipo: 'variable' });
+    // Producto no contable FUERA del alcance
+    insertProducto(db, { id_woo: 3, sku: 'FB-NOCOUNT', marca: 'Maxxis', stock: 5, no_contable: 1 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    // Escanear un código desconocido
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1234567890128' });
+    const itemId = esc.body.item.id;
+
+    // Intentar asociar a SKU variable fuera del alcance → debe fallar (no puede crear alcance ad hoc)
+    const asc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-VAR' });
+    expect(asc1.status).toBe(400);
+    expect(asc1.body.error).toMatch(/variable/i);
+
+    // Verificar que no se modificó el ítem
+    const item1 = db.prepare('SELECT sku, fuera_de_alcance FROM inventario_conteos WHERE id=?').get(itemId);
+    expect(item1.sku).toBeNull();
+    expect(item1.fuera_de_alcance).toBe(0);
+
+    // Verificar que no se creó alcance ad hoc
+    const alcance1 = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-VAR');
+    expect(alcance1.n).toBe(0);
+
+    // Intentar asociar a SKU no contable fuera del alcance → también debe fallar
+    const asc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-NOCOUNT' });
+    expect(asc2.status).toBe(400);
+    expect(asc2.body.error).toMatch(/variable|no contable/i);
+
+    // Verificar que no se modificó el ítem
+    const item2 = db.prepare('SELECT sku, fuera_de_alcance FROM inventario_conteos WHERE id=?').get(itemId);
+    expect(item2.sku).toBeNull();
+    expect(item2.fuera_de_alcance).toBe(0);
+
+    // Verificar que no se creó alcance ad hoc
+    const alcance2 = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-NOCOUNT');
+    expect(alcance2.n).toBe(0);
+
+    db.close();
+  });
+
+  // REESCRITO el 2026-09-11. Estos dos tests construían el escenario de "dos filas para el
+  // mismo SKU", que era justamente el bug del casco Giro: desde que /asociar funde en la fila
+  // existente, esa situación ya no puede producirse por ningún camino (/escanear deduplica por
+  // SKU desde el 2026-08-25 y /asociar funde desde hoy). Lo que se verifica ahora es la
+  // garantía más fuerte que reemplaza a la vieja: un SKU, una fila, y el ciclo de vida del
+  // alcance ad hoc colgado de ella.
+  it('(d) Dos EANs del mismo SKU fuera de alcance quedan en UNA fila, y su alcance ad hoc vive con ella', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-MAXXIS', marca: 'Maxxis', stock: 5 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    // Escanear dos EANs desconocidos
+    const esc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1111111111116' });
+    const esc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '2222222222223' });
+    const itemId1 = esc1.body.item.id;
+
+    // Asociar ambos al mismo SKU fuera del alcance → crea alcance ad hoc y funde las filas
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1111111111116', sku: 'FB-MAXXIS' });
+    const asc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '2222222222223', sku: 'FB-MAXXIS' });
+    expect(asc2.body.fusionado).toBe(true);
+
+    const filas = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').all(sesionId, 'FB-MAXXIS');
+    expect(filas).toHaveLength(1);
+    expect(filas[0].cantidad).toBe(2); // una unidad por cada escaneo, en la misma fila
+    expect(filas[0].id).toBe(itemId1);
+
+    // Borrar esa única fila se lleva el alcance ad hoc: ya no queda ningún conteo del SKU.
+    const del = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId1}`);
+    expect(del.status).toBe(200);
+
+    const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcance.n).toBe(0);
+
+    db.close();
+  });
+
+  it('(e) La fusión conserva el alcance ad hoc y la cantidad, sin importar el orden de asociación', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-MAXXIS', marca: 'Maxxis', stock: 5 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    const esc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1111111111116' });
+    const esc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '2222222222223' });
+    const itemId1 = esc1.body.item.id;
+    const itemId2 = esc2.body.item.id;
+
+    const asc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1111111111116', sku: 'FB-MAXXIS' });
+    const asc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '2222222222223', sku: 'FB-MAXXIS' });
+
+    // El primer /asociar crea la fila de alcance ad hoc; el segundo funde su cantidad en la
+    // fila que ya existía y devuelve esa misma fila.
+    expect(asc1.body.item.fuera_de_alcance).toBe(true);
+    expect(asc2.body.fusionado).toBe(true);
+    expect(asc2.body.item.id).toBe(itemId1);
+    expect(asc2.body.item.cantidad).toBe(2);
+    const alcanceAdHoc = db.prepare('SELECT ad_hoc FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcanceAdHoc.ad_hoc).toBe(1);
+
+    // La fila del segundo EAN ya no existe. El DELETE es idempotente (responde 200 aunque no
+    // haya nada que borrar) y, lo que importa, NO se lleva el alcance ad hoc: la fila fundida
+    // sigue viva y sigue necesitándolo para que /confirmar tenga su stock_inicial congelado.
+    const del2 = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId2}`);
+    expect(del2.status).toBe(200);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS').n).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS').n).toBe(1);
+
+    // Borrar la fila viva sí se lleva el alcance ad hoc.
+    const del1 = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId1}`);
+    expect(del1.status).toBe(200);
+
+    const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-MAXXIS');
+    expect(alcance.n).toBe(0);
+
+    db.close();
+  });
+
+  it('(f) Fila de alcance CONGELADA al abrir la sesión (ad_hoc=0) nunca se borra al asociar/borrar un ítem del mismo SKU', async () => {
+    const db = openDb(TEST_DB);
+    // FB-BELL está en el alcance original (marca Bell) → congelarAlcance la inserta con ad_hoc=0.
+    insertProducto(db, { id_woo: 1, sku: 'FB-BELL', marca: 'Bell', stock: 10 });
+    db.prepare('CREATE TABLE IF NOT EXISTS ean_sku (ean TEXT PRIMARY KEY, sku TEXT NOT NULL, actualizado_en TEXT NOT NULL)').run();
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const sesionId = crear.body.sesion.id;
+
+    const alcanceInicial = db.prepare('SELECT ad_hoc FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-BELL');
+    expect(alcanceInicial.ad_hoc).toBe(0);
+
+    // Escanear un código desconocido y asociarlo a FB-BELL (SKU que SÍ está en el alcance).
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/escanear`).send({ codigo: '1234567890128' });
+    const itemId = esc.body.item.id;
+    const asc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${sesionId}/asociar`).send({ ean: '1234567890128', sku: 'FB-BELL' });
+    expect(asc.status).toBe(200);
+
+    // Borrar el ítem: la fila de alcance CONGELADA (ad_hoc=0) no debe borrarse nunca,
+    // aunque no quede ningún conteo vivo con ese SKU — sigue siendo un pendiente real.
+    const del = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${sesionId}/items/${itemId}`);
+    expect(del.status).toBe(200);
+
+    const alcanceFinal = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(sesionId, 'FB-BELL');
+    expect(alcanceFinal.n).toBe(1);
+
+    db.close();
+  });
+});
+
 describe('DELETE /api/inventario/sesiones/:id/items/:itemId', () => {
   afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
@@ -585,7 +906,7 @@ describe('POST /api/inventario/sesiones/:id/descartar', () => {
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/descartar`);
 
     expect(r.status).toBe(200);
-    expect(setStockWc).not.toHaveBeenCalled();
+    expect(setStockWcDelta).not.toHaveBeenCalled();
     const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesion.estado).toBe('descartada');
   });
@@ -603,14 +924,14 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
 
     expect(r.status).toBe(409);
-    expect(setStockWc).not.toHaveBeenCalled();
+    expect(setStockWcDelta).not.toHaveBeenCalled();
   });
 
   it('ajusta stock por cada ítem contado y marca la sesión confirmada', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -620,7 +941,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
 
     expect(r.status).toBe(200);
     expect(r.body.ajustados).toBe(2);
-    expect(setStockWc).toHaveBeenCalledTimes(2);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(2);
     const sesion = db.prepare('SELECT estado, confirmado_en FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesion.estado).toBe('confirmada');
     expect(sesion.confirmado_en).toBeTruthy();
@@ -630,7 +951,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -641,13 +962,18 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     expect(r.status).toBe(200);
     expect(r.body.ajustados).toBe(1);
     expect(r.body.fallidos).toBe(1);
-    expect(setStockWc).toHaveBeenCalledTimes(2);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(2);
   });
 
-  it('rechaza confirmar una sesión ya confirmada (evita doble ajuste)', async () => {
+  // Contrato cambiado el 2026-09-10: una sesión ya confirmada responde 200 idempotente en vez
+  // de 400. Lo que este test protege —que un segundo confirm NO vuelva a ajustar stock— sigue
+  // igual de firme; lo que cambió es que dejó de presentarse como error del operario, porque
+  // ahora la sesión puede cerrarse sola (el admin resuelve las diferencias desde su pantalla)
+  // mientras quien contaba todavía tiene el botón "Confirmar" a la vista.
+  it('confirmar una sesión ya confirmada es idempotente y no vuelve a ajustar stock', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -656,15 +982,16 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
 
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
 
-    expect(r.status).toBe(400);
-    expect(setStockWc).not.toHaveBeenCalled();
+    expect(r.status).toBe(200);
+    expect(r.body.ya_confirmada).toBe(true);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
   });
 
   it('evita doble ajuste ante dos /confirmar simultáneos sobre la misma sesión (carrera real)', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockImplementation(() => new Promise(r => setTimeout(r, 50)));
+    setStockWcDelta.mockImplementation(() => new Promise(r => setTimeout(r, 50)).then(() => ({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 })));
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -676,7 +1003,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
       request(app).post(`/api/inventario/sesiones/${id}/confirmar`),
     ]);
 
-    expect(setStockWc).toHaveBeenCalledTimes(2); // N ítems, no 2N
+    expect(setStockWcDelta).toHaveBeenCalledTimes(2); // N ítems, no 2N
     // El request que pierde la carrera puede recibir 409 (perdió el claim atómico)
     // o 400 (llegó después y encontró la sesión ya en 'confirmando', no 'abierta',
     // en el chequeo temprano) — ambos indican que fue bloqueado correctamente.
@@ -705,11 +1032,11 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     // Se la deja como quedó una sesión vieja: cerrada con errores y con FB-2 nunca contado.
     db.prepare("UPDATE inventario_sesiones SET estado='confirmada_con_errores' WHERE id=?").run(id);
 
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
 
     expect(r.status).toBe(200);
-    expect(setStockWc).toHaveBeenCalledTimes(1);   // reintenta el que quedó sin ajustar
+    expect(setStockWcDelta).toHaveBeenCalledTimes(1);   // reintenta el que quedó sin ajustar
   });
 
   it('no confirma si quedan productos CON STOCK sin contar, y no toca Woo', async () => {
@@ -725,13 +1052,13 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
     expect(r.status).toBe(409);
     expect(r.body.pendientes_con_stock).toBe(1);
     expect(r.body.pendientes[0].sku).toBe('FB-2');
-    expect(setStockWc).not.toHaveBeenCalled();          // NI UNA llamada a Woo
+    expect(setStockWcDelta).not.toHaveBeenCalled();          // NI UNA llamada a Woo
     // el reclamo atómico no se ejecutó: la sesión sigue reintentable
     expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('abierta');
   });
 
   it('confirma normalmente cuando el pendiente con stock se cerró en 0', async () => {
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 2 });
@@ -746,7 +1073,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar', () => {
   });
 
   it('un pendiente SIN stock no bloquea: ajustarlo a 0 seria un no-op', async () => {
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 3 });
     insertProducto(db, { id_woo: 9, sku: 'FB-9', marca: 'Bell', stock: 0 });   // bloque sin_stock
@@ -764,7 +1091,7 @@ describe('GET /api/inventario/sesiones (historial)', () => {
 
   it('devuelve solo sesiones cerradas del usuario, no las abiertas ni las de otro', async () => {
     const db = openDb(TEST_DB);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const c1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${c1.body.sesion.id}/descartar`);
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Continental' }); // queda abierta
@@ -817,7 +1144,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar — reintento real tras fa
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -830,13 +1157,13 @@ describe('POST /api/inventario/sesiones/:id/confirmar — reintento real tras fa
     const sesionTrasR1 = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesionTrasR1.estado).toBe('confirmada_con_errores');
 
-    setStockWc.mockResolvedValueOnce(); // el reintento ahora sí resuelve
+    setStockWcDelta.mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 }); // el reintento ahora sí resuelve
     const r2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
 
     expect(r2.status).toBe(200);
     expect(r2.body.ajustados).toBe(1); // solo el que faltaba
     expect(r2.body.fallidos).toBe(0);
-    expect(setStockWc).toHaveBeenCalledTimes(3); // 2 del primer intento + 1 del reintento, nunca re-ajusta el que ya salió bien
+    expect(setStockWcDelta).toHaveBeenCalledTimes(3); // 2 del primer intento + 1 del reintento, nunca re-ajusta el que ya salió bien
     const sesionFinal = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesionFinal.estado).toBe('confirmada');
   });
@@ -844,7 +1171,7 @@ describe('POST /api/inventario/sesiones/:id/confirmar — reintento real tras fa
   it('marca confirmada (sin _con_errores) cuando no hay fallos', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -863,7 +1190,7 @@ describe('GET /api/inventario/sesiones (historial) — incluye confirmada_con_er
   it('lista sesiones en confirmada_con_errores junto con confirmada/descartada', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
-    setStockWc.mockRejectedValue(new Error('Woo caído'));
+    setStockWcDelta.mockRejectedValue(new Error('Woo caído'));
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1065,7 +1392,13 @@ describe('POST /api/inventario/alcance-preview', () => {
 describe('Orden y bloque congelado de pendientes', () => {
   afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
-  it('ordena con-stock primero y después por categoría, marca y nombre', async () => {
+  // CONTRATO CAMBIADO el 2026-09-11 (conteo a ciegas). Con la sesión abierta, la API ya no
+  // manda el bloque ni ordena con_stock primero: ese orden delataba qué productos el sistema
+  // cree que tienen stock, que es exactamente el anclaje que el conteo a ciegas evita. El
+  // bloque sigue existiendo y sigue mandando del lado del servidor — lo prueban el gate de
+  // /confirmar y los tests de cierre en cero. Acá se verifica lo que ahora SÍ es el contrato:
+  // orden alfabético por categoría → marca → nombre, sin bloque.
+  it('con la sesión abierta ordena por categoría, marca y nombre, sin delatar el bloque', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'SIN-1', nombre: 'Zeta', marca: 'Bell', categorias_json: '["Cascos"]', stock: 0 });
     insertProducto(db, { id_woo: 2, sku: 'CON-2', nombre: 'Beta', marca: 'Bell', categorias_json: '["Cascos"]', stock: 2 });
@@ -1074,9 +1407,18 @@ describe('Orden y bloque congelado de pendientes', () => {
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
     const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + crear.body.sesion.id);
 
-    expect(r.body.pendientes.map(p => p.sku)).toEqual(['CON-1', 'CON-2', 'SIN-1']);
-    expect(r.body.pendientes.map(p => p.bloque)).toEqual(['con_stock', 'con_stock', 'sin_stock']);
-    expect(r.body.resumen).toMatchObject({ pendientes_con_stock: 2, pendientes_sin_stock: 1 });
+    expect(r.body.pendientes.map(p => p.sku)).toEqual(['CON-1', 'CON-2', 'SIN-1']); // Alfa, Beta, Zeta
+    expect(r.body.pendientes.map(p => p.bloque)).toEqual([undefined, undefined, undefined]);
+    expect(r.body.resumen.pendientes).toBe(3);
+    expect(r.body.resumen.pendientes_con_stock).toBeUndefined();
+    // El bloque congelado sigue en la base, intacto: lo que cambió es qué se publica.
+    const bloques = db.prepare('SELECT sku, bloque FROM inventario_sesion_alcance WHERE sesion_id=? ORDER BY sku')
+      .all(crear.body.sesion.id);
+    expect(bloques).toEqual([
+      { sku: 'CON-1', bloque: 'con_stock' },
+      { sku: 'CON-2', bloque: 'con_stock' },
+      { sku: 'SIN-1', bloque: 'sin_stock' },
+    ]);
   });
 
   it('el bloque queda CONGELADO al abrir: si el stock cambia después, el ítem no salta de bloque', async () => {
@@ -1086,10 +1428,17 @@ describe('Orden y bloque congelado de pendientes', () => {
 
     db.prepare("UPDATE catalogo_cache SET stock=99 WHERE sku='FB-1'").run(); // cambio por otra vía
 
+    // El congelado se verifica contra la base: con la sesión abierta la API ya no publica ni
+    // el bloque ni los stocks (conteo a ciegas), pero el snapshot tiene que seguir congelado.
+    const alcance = db.prepare('SELECT bloque, stock_inicial FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?')
+      .get(crear.body.sesion.id, 'FB-1');
+    expect(alcance.bloque).toBe('sin_stock');
+    expect(alcance.stock_inicial).toBe(0);
+
     const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + crear.body.sesion.id);
-    expect(r.body.pendientes[0].bloque).toBe('sin_stock');
-    expect(r.body.pendientes[0].stock_inicial).toBe(0);
-    expect(r.body.pendientes[0].stock_woo).toBe(99); // el stock actual sí se muestra al día
+    expect(r.body.pendientes[0].sku).toBe('FB-1');
+    expect(r.body.pendientes[0].bloque).toBeUndefined();
+    expect(r.body.pendientes[0].stock_woo).toBeUndefined();
   });
 
   it('el ítem escaneado guarda su bloque congelado', async () => {
@@ -1345,7 +1694,7 @@ describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
   it('los ítems cerrados por omisión se ajustan en Woo como 0 al confirmar', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionConSinStock(db);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
 
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
     // CON-1 tiene stock y nunca se contó/cerró: antes de este cambio confirmar lo dejaba
@@ -1355,7 +1704,7 @@ describe('POST /api/inventario/sesiones/:id/cerrar-sin-stock', () => {
     const r = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
 
     expect(r.body.ajustados).toBe(3);
-    expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'SIN-1', 0);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'SIN-1', 0, 0);
   });
 
   it('rechaza cerrar sobre una sesión que no está abierta', async () => {
@@ -1628,7 +1977,7 @@ describe('Casos borde adicionales — cobertura de tester', () => {
       const id = crear.body.sesion.id;
       if (estadoFinal === 'confirmada') {
         await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'CON-1' });
-        setStockWc.mockResolvedValue();
+        setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
         await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/cerrar-sin-stock').send({ todos: true });
         const confirmar = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
         expect(confirmar.body.ok).toBe(true);
@@ -1733,8 +2082,8 @@ describe('Casos borde adicionales — cobertura de tester', () => {
       // el ítem sigue apareciendo en pendientes con su bloque original.
       const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
       expect(r.body.pendientes.map(p => p.sku)).toEqual(['FB-1']);
-      expect(r.body.pendientes[0].bloque).toBe('con_stock');
-
+      // El bloque ya no viaja con la sesión abierta (conteo a ciegas): el invariante se
+      // verifica donde vive, en el snapshot congelado.
       const snapshot = db.prepare('SELECT * FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
       expect(snapshot.categoria_principal).toBe('Cascos'); // congelado, no actualizado
       expect(snapshot.bloque).toBe('con_stock');
@@ -1749,9 +2098,12 @@ describe('Casos borde adicionales — cobertura de tester', () => {
       db.prepare("UPDATE catalogo_cache SET stock=0 WHERE sku='FB-1'").run();
 
       const r = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
-      // El bloque sigue siendo con_stock (congelado), aunque stock_woo refleje el valor actual.
-      expect(r.body.pendientes[0].bloque).toBe('con_stock');
-      expect(r.body.pendientes[0].stock_woo).toBe(0);
+      expect(r.body.pendientes[0].sku).toBe('FB-1');
+      // Con la sesión abierta ni el bloque ni el stock viajan (conteo a ciegas). El congelado
+      // se verifica en el snapshot, que es donde el gate de /confirmar lo lee.
+      const snapshot = db.prepare('SELECT bloque, stock_inicial FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+      expect(snapshot.bloque).toBe('con_stock');
+      expect(snapshot.stock_inicial).toBe(3);
     });
   });
 
@@ -1819,7 +2171,7 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1837,7 +2189,7 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1857,7 +2209,7 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
   it('POST /confirmar deja confirmado_por con el username que hizo la request', async () => {
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1872,7 +2224,7 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
     const db = openDb(TEST_DB);
     insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell' });
     insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell' });
-    setStockWc.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce();
+    setStockWcDelta.mockRejectedValueOnce(new Error('Woo caído')).mockResolvedValueOnce({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
     const id = crear.body.sesion.id;
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
@@ -1880,11 +2232,90 @@ describe('Reintentar desde el historial: conteo de fallidos y reintento selectiv
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`); // FB-1 falla, FB-2 ajusta ok
     vi.clearAllMocks();
 
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`); // reintento
 
-    expect(setStockWc).toHaveBeenCalledTimes(1);
-    expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'FB-1', 1);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(1);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 1, 5);
+  });
+});
+
+describe('POST /api/inventario/sesiones/:id/confirmar — ajuste por delta (setStockWcDelta)', () => {
+  // En estos tests, setStockWcDelta es REAL (no mockeado), y mockeamos wooFetch
+  // para simular el comportamiento de WC sin hacer llamadas reales.
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('confirma con setStockWcDelta sin error cuando hay datos básicos', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 3, huboVentaDurante: false, stockLive: 5 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.ajustados).toBe(1);
+    expect(r.body.fallidos).toBe(0);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(1);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 1, 5);
+  });
+
+  it('registra ventasDuranteConteo cuando huboVentaDurante es true', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 4, huboVentaDurante: true, stockLive: 4 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.ventasDuranteConteo).toBeDefined();
+    expect(r.body.ventasDuranteConteo).toHaveLength(1);
+    expect(r.body.ventasDuranteConteo[0].sku).toBe('FB-1');
+    expect(r.body.ventasDuranteConteo[0].stock_al_abrir_sesion).toBe(5);
+    expect(r.body.ventasDuranteConteo[0].stock_al_confirmar).toBe(4);
+    expect(r.body.ventasDuranteConteo[0].stock_final).toBe(4);
+  });
+
+  it('no incluye ventasDuranteConteo si no hubo ventas', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 5 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.ventasDuranteConteo).toBeUndefined();
+  });
+
+  it('fail-closed: si setStockWcDelta falla, el ítem va a errores y la sesión en confirmada_con_errores', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    setStockWcDelta.mockRejectedValue(new Error('stockInicial requerido'));
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(r.status).toBe(200);
+    expect(r.body.fallidos).toBe(1);
+    expect(r.body.errores).toHaveLength(1);
+    expect(r.body.errores[0].sku).toBe('FB-1');
+    expect(r.body.errores[0].error).toMatch(/requerido/i);
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('confirmada_con_errores');
   });
 });
 
@@ -1924,6 +2355,30 @@ describe('Código escaneado que no existe en el catálogo', () => {
     expect(r.body.item.sku).toBe('FB-9'); // sí se ajusta en Woo, es un producto real
   });
 
+  it('escanear el mismo producto por su GTIN y despues por su SKU (dos codigos distintos) NO crea dos filas', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', gtin: '1234567890128', stock: 5 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+
+    // Primer escaneo por el GTIN de fábrica.
+    const r1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: '1234567890128' });
+    expect(r1.body.item.sku).toBe('FB-1');
+    expect(r1.body.item.cantidad).toBe(1);
+
+    // Segundo escaneo del MISMO producto, esta vez por su etiqueta de SKU (código distinto).
+    const r2 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-1' });
+    expect(r2.body.item.sku).toBe('FB-1');
+    // Bug corregido: debe ser la MISMA fila (cantidad acumulada 2), no una fila nueva con cantidad 1.
+    expect(r2.body.item.id).toBe(r1.body.item.id);
+    expect(r2.body.item.cantidad).toBe(2);
+
+    const sesionVista = await request(buildApp(db, 'juan')).get('/api/inventario/sesiones/' + id);
+    const filasFB1 = sesionVista.body.items.filter(i => i.sku === 'FB-1');
+    expect(filasFB1).toHaveLength(1); // una sola fila para el producto, no dos
+    expect(filasFB1[0].cantidad).toBe(2);
+  });
+
   it('el código desconocido aparece en P3 sin nombre ni diferencia inventada', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionBell(db);
@@ -1940,7 +2395,7 @@ describe('Código escaneado que no existe en el catálogo', () => {
   it('fail-closed: no se confirma nada en Woo mientras haya un código desconocido', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionBell(db);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-1' });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'XX-NO-EXISTE-999' });
 
@@ -1949,7 +2404,7 @@ describe('Código escaneado que no existe en el catálogo', () => {
     expect(r.status).toBe(409);
     expect(r.body.codigos_desconocidos).toBe(1);
     expect(r.body.codigos).toEqual(['XX-NO-EXISTE-999']);
-    expect(setStockWc).not.toHaveBeenCalled(); // ni siquiera el ítem sano se ajusta
+    expect(setStockWcDelta).not.toHaveBeenCalled(); // ni siquiera el ítem sano se ajusta
     const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
     expect(sesion.estado).toBe('abierta');
   });
@@ -1957,7 +2412,7 @@ describe('Código escaneado que no existe en el catálogo', () => {
   it('se resuelve asociándolo a un SKU real: deja de ser desconocido y ya se puede confirmar', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionBell(db);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'XX-NO-EXISTE-999' });
 
     const asoc = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/asociar')
@@ -1968,13 +2423,13 @@ describe('Código escaneado que no existe en el catálogo', () => {
 
     const conf = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/confirmar');
     expect(conf.status).toBe(200);
-    expect(setStockWc).toHaveBeenCalledWith(CFG, db, 'FB-1', 1);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 1, 5);
   });
 
   it('también se resuelve borrando el ítem: la sesión vuelve a poder confirmarse', async () => {
     const db = openDb(TEST_DB);
     const id = await sesionBell(db);
-    setStockWc.mockResolvedValue();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
     await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'FB-1' });
     const malo = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones/' + id + '/escanear').send({ codigo: 'XX-NO-EXISTE-999' });
 
@@ -1994,5 +2449,1470 @@ describe('Código escaneado que no existe en el catálogo', () => {
     expect(r.body.item.estado_codigo).toBe('sin_asociar');
     expect(r.body.item.codigo_desconocido).toBe(false);
     expect(r.body.item.sin_asociar).toBe(true);
+  });
+});
+
+describe('Hallazgo #1 — ítem fuera de alcance real no falla al confirmar', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('sesión con alcance de marca X: escanear SKU en alcance + SKU real fuera de alcance → ambos se ajustan sin error', async () => {
+    const db = openDb(TEST_DB);
+    // Productos: FB-1 marca Bell (en alcance), FB-9 marca Giro (fuera de alcance)
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-9', marca: 'Giro', stock: 3 });
+
+    // Crear sesión con alcance de marca Bell
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const idSesion = crear.body.sesion.id;
+
+    // Escanear FB-1 (en alcance)
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-1' });
+
+    // Escanear FB-9 (producto real pero fuera de alcance)
+    const escan = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-9' });
+    expect(escan.status).toBe(200);
+    expect(escan.body.item.fuera_de_alcance).toBe(true);
+    expect(escan.body.item.sku).toBe('FB-9');
+
+    // Al confirmar, ambos ítems deben ajustarse sin error.
+    // El FB-9 ya debe tener una fila en inventario_sesion_alcance (insertada en el escaneo)
+    // con stock_inicial=3, así que setStockWcDelta no falla.
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/confirmar`);
+
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(2);
+    expect(conf.body.fallidos).toBe(0);
+    // Verificar que setStockWcDelta fue llamado con stock_inicial para FB-9 (que es 3)
+    const llamadaFB9 = Array.from({ length: setStockWcDelta.mock.calls.length })
+      .map((_, i) => setStockWcDelta.mock.calls[i])
+      .find(call => call[2] === 'FB-9');
+    expect(llamadaFB9).toBeDefined();
+    expect(llamadaFB9[4]).toBe(3); // stock_inicial debe ser 3
+  });
+});
+
+describe('Hallazgo #3 — solapamiento bloquea sesiones en confirmada_con_errores', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('no se puede crear sesión si hay otra en confirmada_con_errores que solapa el alcance', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+
+    // Juan crea una sesión con marca Bell y la deja en confirmada_con_errores
+    const crear1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id1 = crear1.body.sesion.id;
+
+    // Escanear un ítem
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id1}/escanear`).send({ codigo: 'FB-1' });
+
+    // Confirmar con error (mockeamos para que falle)
+    setStockWcDelta.mockRejectedValue(new Error('Woo error'));
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id1}/confirmar`);
+    expect(conf.status).toBe(200);
+    expect(conf.body.fallidos).toBe(1);
+
+    // Verificar que la sesión quedó en confirmada_con_errores
+    const sesion1 = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id1);
+    expect(sesion1.estado).toBe('confirmada_con_errores');
+
+    // Otro usuario (o el mismo) intenta crear una sesión que solapa con marca Bell → debe devolver 409
+    const crear2 = await request(buildApp(db, 'maria')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    expect(crear2.status).toBe(409);
+    expect(crear2.body.error).toMatch(/se cruza/i);
+    expect(crear2.body.ocupada_por).toBe('juan');
+  });
+});
+
+describe('Hallazgo A — Corrección: sesión en confirmada_con_errores puede descartarse y permitir crear nueva', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('usuario con sesión en confirmada_con_errores puede crear una nueva sesión en distinto alcance', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Continental', stock: 3 });
+
+    // Juan crea una sesión con marca Bell
+    const crear1 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id1 = crear1.body.sesion.id;
+
+    // Escanea un ítem y confirma con error (mockeamos para que falle)
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id1}/escanear`).send({ codigo: 'FB-1' });
+    setStockWcDelta.mockRejectedValue(new Error('Woo error'));
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id1}/confirmar`);
+    expect(conf.body.fallidos).toBe(1);
+    const sesion1 = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id1);
+    expect(sesion1.estado).toBe('confirmada_con_errores');
+
+    // Juan intenta crear una sesión nueva con otra marca (Continental, que NO solapa) → DEBE FUNCIONAR
+    // (la restricción "sesión propia" solo aplica a 'abierta', no a 'confirmada_con_errores')
+    const crear2 = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Continental'] });
+    expect(crear2.status).toBe(200);
+    expect(crear2.body.sesion.id).not.toBe(id1);
+    expect(crear2.body.sesion.marcas).toEqual(['Continental']);
+  });
+
+  it('usuario puede descartar una sesión en confirmada_con_errores', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+
+    // Juan crea una sesión y la deja en confirmada_con_errores
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    setStockWcDelta.mockRejectedValue(new Error('Woo error'));
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('confirmada_con_errores');
+
+    // Descartar DEBE funcionar (status 200, no 400)
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/descartar`);
+    expect(r.status).toBe(200);
+    const sesionDescartada = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesionDescartada.estado).toBe('descartada');
+  });
+});
+
+describe('Hallazgo C — Ítem fuera de alcance borrado no bloquea confirm', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('borrar un ítem fuera de alcance también borra su fila en inventario_sesion_alcance', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Continental', stock: 3 });
+
+    // Juan crea una sesión con alcance Bell (FB-1 entra, FB-2 no)
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const idSesion = crear.body.sesion.id;
+
+    // Escanea FB-1 (en alcance, para tener un ítem contado real)
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-1' });
+
+    // Escanea FB-2 (fuera de alcance) → debe crear fila en inventario_sesion_alcance
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-2' });
+    expect(escanear.body.item.fuera_de_alcance).toBe(true);
+    const itemId = escanear.body.item.id;
+
+    // Verificar que SÍ se creó la fila en inventario_sesion_alcance para FB-2
+    let alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(idSesion, 'FB-2');
+    expect(alcance.n).toBe(1);
+
+    // Borrar el ítem fuera de alcance (FB-2)
+    const del = await request(buildApp(db, 'juan')).delete(`/api/inventario/sesiones/${idSesion}/items/${itemId}`);
+    expect(del.status).toBe(200);
+
+    // Verificar que la fila de inventario_sesion_alcance se borró también
+    alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(idSesion, 'FB-2');
+    expect(alcance.n).toBe(0);
+
+    // Confirmar NO debe dar 409 por pendientes (FB-2 no bloquea porque su fila se borró)
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 1 });
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/confirmar`);
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(1); // Solo FB-1 se ajusta
+    expect(conf.body.fallidos).toBe(0);
+  });
+});
+
+describe('Hallazgo D — Producto variable padre no crea fila de alcance', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  // REESCRITO el 2026-09-11. El escaneo ya no deja que un producto `variable` entre como fila
+  // contada —lo trata como código sin asociar y lo avisa en el momento—, así que el escenario
+  // original no se puede construir por la API. Lo que este test protege sigue siendo necesario:
+  // que `setStockWcDelta` falle cerrado si le llega un ítem sin `stock_inicial`. Esa fila puede
+  // existir igual en bases viejas (producción tenía una así en la sesión 34), y ese guard es lo
+  // único que impide escribir stock sin punto de referencia. Se construye directo en la base.
+  it('una fila sin stock_inicial falla cerrada al confirmar, sin escribir stock', async () => {
+    const db = openDb(TEST_DB);
+    // FB-1: producto simple en alcance
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', tipo: 'simple', marca: 'Bell', stock: 5 });
+    // FB-VAR: producto variable (padre) fuera de alcance, stock=NULL como es típico en padres variables
+    insertProducto(db, { id_woo: 2, sku: 'FB-VAR', tipo: 'variable', id_padre: null, marca: 'Continental', stock: null });
+
+    // Juan crea sesión con alcance Bell (FB-1 entra, FB-VAR no porque es Continental)
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    const idSesion = crear.body.sesion.id;
+
+    // Escanea FB-1 (en alcance, para que el gate de "pendientes con stock" no bloquee
+    // el confirm antes de llegar al ítem variable — si no, el 409 vendría de ahí y el
+    // test pasaría sin ejercer nunca el fail-closed de setStockWcDelta que dice probar).
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-1' });
+
+    // Escanear el padre ya NO lo cuenta contra el padre: queda como código sin asociar, con el
+    // motivo explicado en el momento en vez de un error recién al cerrar la sesión.
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/escanear`).send({ codigo: 'FB-VAR' });
+    expect(escanear.body.item.sku).toBeFalsy();
+    expect(escanear.body.item.estado_codigo).toBe('sin_asociar');
+    expect(escanear.body.item.aviso).toMatch(/producto padre/i);
+    db.prepare('DELETE FROM inventario_conteos WHERE sesion_id=? AND sku IS NULL').run(idSesion);
+
+    // La fila problemática se construye a mano: es la forma que tienen las filas viejas de
+    // producción, y el guard de abajo es lo que las contiene.
+    db.prepare(`INSERT INTO inventario_conteos (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, codigo_desconocido, actualizado_en)
+      VALUES (?, 'FB-VAR', 'FB-VAR', 1, NULL, 1, 0, ?)`).run(idSesion, new Date().toISOString());
+
+    // Sin fila de alcance no hay stock_inicial: es exactamente el caso que se quiere cubrir.
+    const alcance = db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(idSesion, 'FB-VAR');
+    expect(alcance.n).toBe(0);
+
+    // setStockWcDelta está mockeada a nivel de módulo: el mock por sí solo NO reproduce
+    // el fail-closed real de la función (que vive adentro de setStockWcDelta, no en el
+    // route). Si el mock resolviera siempre, este test "pasaría" para FB-VAR aunque el
+    // route le pasara stockInicial=undefined — exactamente el falso positivo que
+    // encontró el revisor. Por eso el mock imita acá el contrato real: rechaza cuando
+    // stockInicial es null/undefined, igual que lib/wooStock.js.
+    setStockWcDelta.mockImplementation(async (_cfg, _db, sku, _cantidad, stockInicial) => {
+      if (stockInicial === null || stockInicial === undefined) {
+        throw new Error(`stockInicial requerido para SKU "${sku}": no se puede calcular delta sin punto de referencia`);
+      }
+      return { stockFinal: 5, huboVentaDurante: false, stockLive: 5 };
+    });
+
+    // Al confirmar: FB-1 se ajusta bien, FB-VAR cae en fallidos por "stockInicial
+    // requerido" (fail-closed real, no el gate de pendientes) — respuesta 200, no 409.
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${idSesion}/confirmar`);
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(1);
+    expect(conf.body.fallidos).toBe(1);
+    expect(conf.body.errores[0].sku).toBe('FB-VAR');
+    expect(conf.body.errores[0].error).toMatch(/stockInicial/i);
+    // setStockWcDelta se llama para AMBOS ítems (el route no pre-filtra por
+    // stockInicial, delega el fail-closed a la función): una vez con stockInicial de
+    // FB-1 (resuelve bien) y otra con stockInicial=undefined para FB-VAR (rechaza).
+    expect(setStockWcDelta).toHaveBeenCalledTimes(2);
+    expect(setStockWcDelta).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'FB-VAR', expect.anything(), undefined);
+  });
+});
+
+// ─── Fase 0 (higiene) — Tarea 1: catalogo_cache.no_contable ────────────────────
+describe('Fase 0 — no_contable: sugerencias, confirmación y filtrado del alcance', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('sugerencias detecta stock>500 o sin marca, y excluye los ya marcados no_contable=1', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Service Completo', stock: 999933, marca: 'Fusion Bikes' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Cargo sin marca', stock: 5, marca: '' });
+    insertProducto(db, { id_woo: 3, sku: 'FB-3', nombre: 'Casco normal', stock: 10, marca: 'Bell' });
+    insertProducto(db, { id_woo: 4, sku: 'FB-4', nombre: 'Ya marcado antes', stock: 600, marca: 'Bell' });
+    db.prepare('UPDATE catalogo_cache SET no_contable=1 WHERE id_woo=4').run();
+
+    const res = await request(buildApp(db)).get('/api/inventario/no-contables/sugerencias');
+
+    expect(res.status).toBe(200);
+    const skus = res.body.sugerencias.map(s => s.sku).sort();
+    expect(skus).toEqual(['FB-1', 'FB-2']);
+  });
+
+  it('POST /no-contables marca no_contable=1; el SKU sale de alcance-opciones/alcance-preview; revertir lo trae de vuelta', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Service', stock: 999, marca: 'Fusion Bikes', categorias_json: '["Servicios"]' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', nombre: 'Casco', stock: 5, marca: 'Fusion Bikes', categorias_json: '["Cascos"]' });
+
+    let opciones = await request(buildApp(db)).get('/api/inventario/alcance-opciones');
+    expect(opciones.body.marcas.find(m => m.nombre === 'Fusion Bikes').productos).toBe(2);
+
+    const marcar = await request(buildApp(db, 'admin', true)).post('/api/inventario/no-contables').send({ ids_woo: [1] });
+    expect(marcar.status).toBe(200);
+    expect(marcar.body.marcados).toBe(1);
+    expect(db.prepare('SELECT no_contable FROM catalogo_cache WHERE id_woo=1').get().no_contable).toBe(1);
+
+    opciones = await request(buildApp(db)).get('/api/inventario/alcance-opciones');
+    expect(opciones.body.marcas.find(m => m.nombre === 'Fusion Bikes').productos).toBe(1);
+
+    const preview = await request(buildApp(db)).post('/api/inventario/alcance-preview').send({ marcas: ['Fusion Bikes'] });
+    expect(preview.body.productos).toBe(1);
+
+    const revertir = await request(buildApp(db, 'admin', true)).post('/api/inventario/no-contables/revertir').send({ ids_woo: [1] });
+    expect(revertir.status).toBe(200);
+    expect(revertir.body.revertidos).toBe(1);
+    expect(db.prepare('SELECT no_contable FROM catalogo_cache WHERE id_woo=1').get().no_contable).toBe(0);
+
+    opciones = await request(buildApp(db)).get('/api/inventario/alcance-opciones');
+    expect(opciones.body.marcas.find(m => m.nombre === 'Fusion Bikes').productos).toBe(2);
+  });
+
+  it('DELETE /no-contables también desmarca (misma semántica que /revertir)', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', stock: 600, marca: 'Fusion Bikes' });
+    db.prepare('UPDATE catalogo_cache SET no_contable=1 WHERE id_woo=1').run();
+
+    const res = await request(buildApp(db, 'admin', true)).delete('/api/inventario/no-contables').send({ ids_woo: [1] });
+    expect(res.status).toBe(200);
+    expect(db.prepare('SELECT no_contable FROM catalogo_cache WHERE id_woo=1').get().no_contable).toBe(0);
+  });
+});
+
+// ─── Fase 0 (higiene) — Tarea 2: inventario_diferencias + freno por sobrante ───
+describe('Fase 0 — diferencias al confirmar: faltante nunca frena, sobrante grande sí', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('faltante grande se ajusta igual (no frena) y queda registrado con requiere_revision=1', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 1000, precio: 200 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 0, huboVentaDurante: false, stockLive: 1000 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 0 });
+
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(1);
+    expect(conf.body.fallidos).toBe(0);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 0, 1000);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(fila).toMatchObject({
+      cantidad_esperada: 1000, cantidad_contada: 0, diferencia: -1000,
+      valor_diferencia: 200000, tipo: 'faltante', requiere_revision: 1,
+    });
+  });
+
+  it('sobrante grande NO se ajusta, queda pendiente de revisión, y /aprobar lo aplica a Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 21 });
+
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(0);
+    expect(conf.body.fallidos).toBe(1);
+    expect(conf.body.errores[0].error).toMatch(/Sobrante grande/);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+
+    const sesion = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesion.estado).toBe('confirmada_con_errores');
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(fila).toMatchObject({
+      cantidad_esperada: 10, cantidad_contada: 21, diferencia: 11,
+      tipo: 'sobrante', requiere_revision: 1, stock_inicial_usado: 10,
+    });
+    expect(fila.revisado_en).toBeNull();
+
+    const pendientes = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/pendientes');
+    expect(pendientes.body.pendientes).toHaveLength(1);
+    expect(pendientes.body.pendientes[0].id).toBe(fila.id);
+
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+    // Woo sigue en 10 contra 21 contadas: no está conciliado, hay que ajustar de verdad.
+    getStockLiveWc.mockResolvedValue(10);
+    const aprobar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    expect(aprobar.status).toBe(200);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 21, 10);
+
+    const filaRevisada = db.prepare('SELECT * FROM inventario_diferencias WHERE id=?').get(fila.id);
+    expect(filaRevisada.revisado_en).not.toBeNull();
+    expect(filaRevisada.revisado_por).toBe('jose');
+  });
+
+  it('/rechazar marca revisado_en sin tocar Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    vi.clearAllMocks();
+
+    const rechazar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+    expect(rechazar.status).toBe(200);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+
+    const filaRevisada = db.prepare('SELECT * FROM inventario_diferencias WHERE id=?').get(fila.id);
+    expect(filaRevisada.revisado_en).not.toBeNull();
+    expect(filaRevisada.revisado_por).toBe('jose');
+  });
+
+  it('sobrante chico se ajusta normal y se registra con requiere_revision=0', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 100 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 12, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 12 });
+
+    const conf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    expect(conf.status).toBe(200);
+    expect(conf.body.ajustados).toBe(1);
+    expect(conf.body.fallidos).toBe(0);
+    expect(setStockWcDelta).toHaveBeenCalledWith(CFG, db, 'FB-1', 12, 10);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(fila).toMatchObject({ tipo: 'sobrante', requiere_revision: 0 });
+  });
+});
+
+// ─── Fase 0 (higiene) — Tarea 4: medición de ritmo ─────────────────────────────
+describe('Fase 0 — GET /api/inventario/ritmo', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  function insertSesionConfirmada(db, { usuario, itemsContados, segundosActivos, confirmadoEn }) {
+    db.prepare(`INSERT INTO inventario_sesiones
+      (usuario, categorias, marcas, estado, creado_en, confirmado_en, items_contados, segundos_activos)
+      VALUES (?, '[]', '[]', 'confirmada', ?, ?, ?, ?)`)
+      .run(usuario, confirmadoEn, confirmadoEn, itemsContados, segundosActivos);
+  }
+
+  it('con menos de 3 sesiones válidas devuelve el valor fijo 20 con estimado:true', async () => {
+    const db = openDb(TEST_DB);
+    buildApp(db); // dispara ensureTables() — inventario_sesiones no existe hasta que el router corre
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 40, segundosActivos: 3600, confirmadoEn: '2026-08-20T10:00:00Z' });
+
+    const res = await request(buildApp(db)).get('/api/inventario/ritmo?usuario=jose');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ritmo).toBe(20);
+    expect(res.body.estimado).toBe(true);
+  });
+
+  it('con sesiones válidas calcula el percentil 25 de ítems/hora', async () => {
+    const db = openDb(TEST_DB);
+    buildApp(db);
+    // Ritmos (items/hora): 40, 60, 80, 100 → ordenados: [40,60,80,100]
+    // percentil25 (interpolación lineal): rango = 0.25*(4-1) = 0.75 → 40 + (60-40)*0.75 = 55
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 40, segundosActivos: 3600, confirmadoEn: '2026-08-20T10:00:00Z' });
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 60, segundosActivos: 3600, confirmadoEn: '2026-08-21T10:00:00Z' });
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 80, segundosActivos: 3600, confirmadoEn: '2026-08-22T10:00:00Z' });
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 100, segundosActivos: 3600, confirmadoEn: '2026-08-23T10:00:00Z' });
+
+    const res = await request(buildApp(db)).get('/api/inventario/ritmo?usuario=jose');
+
+    expect(res.status).toBe(200);
+    expect(res.body.estimado).toBe(false);
+    expect(res.body.ritmo).toBeCloseTo(55, 5);
+  });
+
+  it('excluye del cálculo una sesión de más de 3 horas de duración', async () => {
+    const db = openDb(TEST_DB);
+    buildApp(db);
+    // Tres sesiones "buenas" a 40 items/hora + una de más de 3h que debe ignorarse
+    // (si no se excluyera, arruinaría el promedio/percentil con un ritmo altísimo o bajísimo).
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 40, segundosActivos: 3600, confirmadoEn: '2026-08-20T10:00:00Z' });
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 40, segundosActivos: 3600, confirmadoEn: '2026-08-21T10:00:00Z' });
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 40, segundosActivos: 3600, confirmadoEn: '2026-08-22T10:00:00Z' });
+    insertSesionConfirmada(db, { usuario: 'jose', itemsContados: 1000, segundosActivos: 10801, confirmadoEn: '2026-08-23T10:00:00Z' });
+
+    const res = await request(buildApp(db)).get('/api/inventario/ritmo?usuario=jose');
+
+    expect(res.status).toBe(200);
+    expect(res.body.muestras).toBe(3);
+    expect(res.body.estimado).toBe(false);
+    expect(res.body.ritmo).toBeCloseTo(40, 5);
+  });
+});
+
+// ─── Fase 0 (higiene) — Correcciones del revisor ───────────────────────────────
+describe('ALTO 1: /diferencias/pendientes solo devuelve sobrantes, no faltantes', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('GET /diferencias/pendientes filtra solo tipo=sobrante; un faltante con requiere_revision=1 no aparece', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 1000, precio: 200 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 0, huboVentaDurante: false, stockLive: 1000 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    // Escanear FB-1 con cantidad 0 → faltante grande
+    const esc1 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc1.body.item.id}`).send({ cantidad: 0 });
+
+    // Escanear FB-2 con cantidad 21 → sobrante grande
+    const esc2 = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-2' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc2.body.item.id}`).send({ cantidad: 21 });
+
+    setStockWcDelta.mockResolvedValue({ stockFinal: 0, huboVentaDurante: false, stockLive: 1000 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const pendientes = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/pendientes');
+    expect(pendientes.status).toBe(200);
+    expect(pendientes.body.pendientes).toHaveLength(1);
+    expect(pendientes.body.pendientes[0].tipo).toBe('sobrante');
+    expect(pendientes.body.pendientes[0].sku).toBe('FB-2');
+  });
+});
+
+describe('ALTO 1: /diferencias/:id/aprobar rechaza faltantes con 400', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('intentar aprobar un faltante responde 400 sin tocar Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 1000, precio: 200 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 0, huboVentaDurante: false, stockLive: 1000 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 0 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    vi.clearAllMocks();
+
+    const aprobar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    expect(aprobar.status).toBe(400);
+    expect(aprobar.body.error).toMatch(/Solo los sobrantes/);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+  });
+});
+
+describe('ALTO 2: /diferencias/:id/rechazar borra el conteo de inventario_conteos', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('rechazar un sobrante borra su fila de inventario_conteos; reintentar /confirmar no re-inserta diferencia', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    const conteoBefore = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(conteoBefore).toBeTruthy();
+
+    const rechazar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+    expect(rechazar.status).toBe(200);
+
+    // Verifica que la fila de conteo fue borrada
+    const conteoAfter = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(conteoAfter).toBeUndefined();
+
+    // Desde 2026-09-10 rechazar ya cierra la sesión (recomputarEstadoSesion), así que el
+    // reintento de /confirmar es idempotente: responde OK sin volver a ajustar ni a crear
+    // una diferencia. Antes la sesión quedaba en confirmada_con_errores esperando este
+    // segundo confirm — y si el admin resolvía desde su pantalla, nadie lo hacía nunca.
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('confirmada');
+    vi.clearAllMocks();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 10, huboVentaDurante: false, stockLive: 10 });
+    const reconf = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(reconf.status).toBe(200);
+    expect(reconf.body.ya_confirmada).toBe(true);
+    expect(reconf.body.ajustados).toBe(0);
+    expect(reconf.body.fallidos).toBe(0);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+
+    // Verifica que no hay una segunda fila de diferencia
+    const difAfterReconf = db.prepare('SELECT COUNT(*) as cnt FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    expect(difAfterReconf.cnt).toBe(1); // Solo la original, revisada
+
+    // Verifica que la sesión llegó a confirmada
+    const sesionFinal = db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id);
+    expect(sesionFinal.estado).toBe('confirmada');
+  });
+
+  it('dos EANs distintos para el mismo SKU: rechazar el sobrante NO borra la fila que ya se ajustó a Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+
+    // Dos filas para el MISMO sku, insertadas DIRECTO en la base. Ya no hay forma de crearlas
+    // por la API: /escanear deduplica por sku desde el 2026-08-25 y /asociar funde en la fila
+    // existente desde el 2026-09-11 (fue el bug del casco Giro FB-67121). Pero el guard que
+    // este test protege —`ajustado_en IS NULL` al rechazar, para no borrar una fila que ya se
+    // escribió a Woo— sigue siendo necesario: producción tiene 4 filas partidas históricas de
+    // antes de la fusión, y ese guard es lo único que impide que resolverlas pise un ajuste.
+    const insertarFila = db.prepare(`INSERT INTO inventario_conteos
+      (sesion_id, ean, sku, cantidad, bloque, fuera_de_alcance, codigo_desconocido, actualizado_en)
+      VALUES (?,?,?,?, 'con_stock', 0, 0, ?) RETURNING id`);
+    const ts = new Date().toISOString();
+    const idFila1 = insertarFila.get(id, 'XX-VIEJO-1', 'FB-1', 3, ts).id;
+    const idFila2 = insertarFila.get(id, 'XX-VIEJO-2', 'FB-1', 21, ts).id;
+    const e1 = { body: { item: { id: idFila1 } } };
+    const e2 = { body: { item: { id: idFila2 } } };
+
+    const filasAntes = db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-1').n;
+    expect(filasAntes).toBe(2);
+
+    // Confirm: una fila queda como faltante (se ajusta siempre) y la otra como sobrante
+    // grande (se frena). Cuál es cuál depende del orden de lectura, no importa para este
+    // test — lo que importa es que UNA se ajustó a Woo y la otra no.
+    setStockWcDelta.mockResolvedValue({ stockFinal: 3, huboVentaDurante: false, stockLive: 10 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const conteosPostConfirm = db.prepare('SELECT ean, ajustado_en FROM inventario_conteos WHERE sesion_id=? AND sku=?').all(id, 'FB-1');
+    expect(conteosPostConfirm).toHaveLength(2);
+    const yaAjustada = conteosPostConfirm.find(c => c.ajustado_en !== null);
+    const sinAjustar = conteosPostConfirm.find(c => c.ajustado_en === null);
+    expect(yaAjustada).toBeTruthy(); // el faltante ya se escribió a Woo
+    expect(sinAjustar).toBeTruthy(); // el sobrante quedó frenado
+
+    const filaSobrante = db.prepare(
+      "SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=? AND tipo='sobrante'"
+    ).get(id, 'FB-1');
+    expect(filaSobrante).toBeTruthy();
+
+    // Rechazar el sobrante: debe borrar SOLO la fila sin ajustar, nunca la que ya se
+    // escribió en Woo — sin eso, se pierde el único registro de que esa escritura ocurrió.
+    const rechazar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${filaSobrante.id}/rechazar`);
+    expect(rechazar.status).toBe(200);
+
+    const conteosPostRechazo = db.prepare('SELECT ean, ajustado_en FROM inventario_conteos WHERE sesion_id=? AND sku=?').all(id, 'FB-1');
+    expect(conteosPostRechazo).toHaveLength(1);
+    expect(conteosPostRechazo[0].ean).toBe(yaAjustada.ean);
+    expect(conteosPostRechazo[0].ajustado_en).not.toBeNull();
+  });
+});
+
+describe('MEDIO 3: /diferencias/:id/aprobar, /rechazar, /no-contables requieren admin', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('POST /diferencias/:id/aprobar sin admin responde 403', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    vi.clearAllMocks();
+
+    // Sin ser admin
+    const aprobar = await request(buildApp(db, 'operario2', false)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    expect(aprobar.status).toBe(403);
+    expect(aprobar.body.error).toMatch(/Requiere administrador/);
+  });
+
+  it('POST /diferencias/:id/rechazar sin admin responde 403', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${escanear.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=? AND sku=?').get(id, 'FB-1');
+    vi.clearAllMocks();
+
+    // Sin ser admin
+    const rechazar = await request(buildApp(db, 'operario2', false)).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+    expect(rechazar.status).toBe(403);
+    expect(rechazar.body.error).toMatch(/Requiere administrador/);
+  });
+
+  it('POST /no-contables sin admin responde 403', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Producto', stock: 600 });
+
+    const res = await request(buildApp(db, 'operario1', false)).post('/api/inventario/no-contables').send({ ids_woo: [1] });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Requiere administrador/);
+  });
+
+  it('POST /no-contables/revertir sin admin responde 403', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Producto', stock: 600, no_contable: 1 });
+
+    const res = await request(buildApp(db, 'operario1', false)).post('/api/inventario/no-contables/revertir').send({ ids_woo: [1] });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/Requiere administrador/);
+  });
+});
+
+describe('Ubicación combinada con categoría/marca', () => {
+  beforeEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  // Hasta el 2026-09-10 elegir ubicación y marca a la vez daba 400, y por eso el mapeo nunca
+  // se llenó: en la tienda se cuenta por marca, así que nadie elegía ubicación. Ahora la
+  // marca dice QUÉ se cuenta y la ubicación DÓNDE se está parado.
+  function sembrar(db) {
+    insertProducto(db, { id_woo: 1, sku: 'FB-G1', marca: 'Giro', categorias_json: '["Cascos"]', stock: 3 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-G2', marca: 'Giro', categorias_json: '["Cascos"]', stock: 2 });
+    insertProducto(db, { id_woo: 3, sku: 'FB-B1', marca: 'Bell', categorias_json: '["Cascos"]', stock: 1 });
+    return db;
+  }
+
+  it('acepta ubicación y marca juntas, y el alcance lo define la marca', async () => {
+    const db = sembrar(openDb(TEST_DB));
+    const app = buildApp(db);
+    const admin = buildApp(db, 'supervisor', true);
+    const u = await request(admin).post('/api/inventario/ubicaciones').send({ zona: 'Salón', estante: 'C1' });
+
+    const r = await request(app).post('/api/inventario/sesiones')
+      .send({ marcas: ['Giro'], ubicacion_id: u.body.ubicacion.id });
+
+    expect(r.status).toBe(200);
+    // El alcance son los Giro, no "todo lo que hay en C1": la ubicación no lo define.
+    const alcance = db.prepare('SELECT sku FROM inventario_sesion_alcance WHERE sesion_id=? ORDER BY sku')
+      .all(r.body.sesion.id).map((x) => x.sku);
+    expect(alcance).toEqual(['FB-G1', 'FB-G2']);
+    expect(db.prepare('SELECT ubicacion_id FROM inventario_sesiones WHERE id=?').get(r.body.sesion.id).ubicacion_id)
+      .toBe(u.body.ubicacion.id);
+    db.close();
+  });
+
+  it('la ubicación sola sigue siendo barrido completo de la zona', async () => {
+    const db = sembrar(openDb(TEST_DB));
+    const app = buildApp(db);
+    const admin = buildApp(db, 'supervisor', true);
+    const u = await request(admin).post('/api/inventario/ubicaciones').send({ zona: 'Salón', estante: 'C2' });
+    db.prepare(`INSERT INTO producto_ubicacion (sku, ubicacion_id, principal, confirmado_en)
+      VALUES ('FB-B1', ?, 0, '2026-09-01T10:00:00Z')`).run(u.body.ubicacion.id);
+
+    const r = await request(app).post('/api/inventario/sesiones').send({ ubicacion_id: u.body.ubicacion.id });
+
+    expect(r.status).toBe(200);
+    expect(db.prepare('SELECT sku FROM inventario_sesion_alcance WHERE sesion_id=?').all(r.body.sesion.id).map((x) => x.sku))
+      .toEqual(['FB-B1']);
+    db.close();
+  });
+
+  it('sigue exigiendo algún alcance', async () => {
+    const db = sembrar(openDb(TEST_DB));
+    const r = await request(buildApp(db)).post('/api/inventario/sesiones').send({});
+    expect(r.status).toBe(400);
+    db.close();
+  });
+
+  it('dos personas contando marcas distintas en el mismo estante no se pisan', async () => {
+    // Antes cualquier coincidencia de ubicación marcaba solape. Contar Giro y contar Bell
+    // parados en el mismo estante son trabajos distintos.
+    const db = sembrar(openDb(TEST_DB));
+    const app = buildApp(db);
+    const admin = buildApp(db, 'supervisor', true);
+    const u = await request(admin).post('/api/inventario/ubicaciones').send({ zona: 'Salón', estante: 'C3' });
+    // Dos personas distintas: hay una sesión abierta por usuario.
+    const uno = await request(buildApp(db, 'joaco')).post('/api/inventario/sesiones')
+      .send({ marcas: ['Giro'], ubicacion_id: u.body.ubicacion.id });
+    expect(uno.status).toBe(200);
+
+    const dos = await request(buildApp(db, 'santi')).post('/api/inventario/sesiones')
+      .send({ marcas: ['Bell'], ubicacion_id: u.body.ubicacion.id });
+
+    expect(dos.status).toBe(200);
+    db.close();
+  });
+});
+
+describe('GET /api/inventario/ronda-sugerida', () => {
+  beforeEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  function contado(db, sku, cuando) {
+    db.prepare(`INSERT INTO sku_ultimo_conteo (sku, contado_en, sesion_id, por_omision, diferencia_ultima)
+      VALUES (?,?,1,0,0)`).run(sku, cuando);
+  }
+
+  it('sugiere el grupo con mayor proporción sin contar, medida sobre lo que tiene stock', async () => {
+    const db = openDb(TEST_DB);
+    // Bell: 2 con stock, ninguno contado → rinde 100%.
+    insertProducto(db, { id_woo: 1, sku: 'FB-B1', marca: 'Bell', categorias_json: '["Cascos"]', stock: 2 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-B2', marca: 'Bell', categorias_json: '["Cascos"]', stock: 1 });
+    // Giro: 3 con stock pero 2 ya contados → rinde 33%, y recontarlos no avanza cobertura.
+    insertProducto(db, { id_woo: 3, sku: 'FB-G1', marca: 'Giro', categorias_json: '["Cascos"]', stock: 4 });
+    insertProducto(db, { id_woo: 4, sku: 'FB-G2', marca: 'Giro', categorias_json: '["Cascos"]', stock: 4 });
+    insertProducto(db, { id_woo: 5, sku: 'FB-G3', marca: 'Giro', categorias_json: '["Cascos"]', stock: 4 });
+    const app = buildApp(db); // ensureTables corre acá y crea sku_ultimo_conteo
+    contado(db, 'FB-G1', '2026-09-01T10:00:00Z');
+    contado(db, 'FB-G2', '2026-09-01T10:00:00Z');
+
+    const r = await request(app).get('/api/inventario/ronda-sugerida');
+
+    expect(r.status).toBe(200);
+    expect(r.body.sugerencia.marca).toBe('Bell');
+    expect(r.body.sugerencia.con_stock).toBe(2);
+    expect(r.body.siguientes[0].marca).toBe('Giro');
+    db.close();
+  });
+
+  it('no sugiere grupos que sólo tienen productos en cero', async () => {
+    // Contarlos no aporta cobertura: no hay nada en el local.
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-Z1', marca: 'Fantasma', categorias_json: '["Cascos"]', stock: 0 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-R1', marca: 'Real', categorias_json: '["Cascos"]', stock: 3 });
+
+    const r = await request(buildApp(db)).get('/api/inventario/ronda-sugerida');
+
+    expect(r.body.sugerencia.marca).toBe('Real');
+    expect(r.body.siguientes.map((g) => g.marca)).not.toContain('Fantasma');
+    db.close();
+  });
+
+  it('cuenta el alcance igual que la sesión: sin productos variable', async () => {
+    // Si contara distinto, la sugerencia prometería un número y la sesión traería otro.
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-P1', marca: 'Marca', categorias_json: '["Cascos"]', stock: 5, tipo: 'variable' });
+    insertProducto(db, { id_woo: 2, sku: 'FB-V1', marca: 'Marca', categorias_json: '["Cascos"]', stock: 5, tipo: 'simple' });
+
+    const r = await request(buildApp(db)).get('/api/inventario/ronda-sugerida');
+
+    expect(r.body.sugerencia.con_stock).toBe(1);
+    expect(r.body.universo).toBe(1);
+    db.close();
+  });
+
+  it('corta las marcas grandes por categoría para que entren en una ronda', async () => {
+    const db = openDb(TEST_DB);
+    for (let i = 0; i < 8; i++) {
+      insertProducto(db, { id_woo: 10 + i, sku: 'FB-T' + i, marca: 'Grande', categorias_json: '["Transmisión"]', stock: 1 });
+    }
+    for (let i = 0; i < 5; i++) {
+      insertProducto(db, { id_woo: 20 + i, sku: 'FB-F' + i, marca: 'Grande', categorias_json: '["Frenos"]', stock: 1 });
+    }
+
+    // objetivo=10 (el mínimo): la marca son 13 con stock, no entra entera y se corta.
+    const r = await request(buildApp(db)).get('/api/inventario/ronda-sugerida?objetivo=10');
+
+    expect(r.body.sugerencia.marca).toBe('Grande');
+    expect(r.body.sugerencia.categoria).toBe('Transmisión');
+    expect(r.body.sugerencia.con_stock).toBe(8);
+    db.close();
+  });
+});
+
+describe('consulta rápida: dónde está el producto', () => {
+  beforeEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('devuelve las ubicaciones con las unidades vistas y cuándo se vieron', async () => {
+    const db = openDb(TEST_DB);
+    const app = buildApp(db);
+    const admin = buildApp(db, 'supervisor', true);
+    insertProducto(db, { id_woo: 1, sku: 'FB-DOS', nombre: 'Casco en dos lados', marca: 'Giro', stock: 5 });
+    const salon = (await request(admin).post('/api/inventario/ubicaciones').send({ zona: 'Salón', estante: 'C1' })).body.ubicacion.id;
+    const most = (await request(admin).post('/api/inventario/ubicaciones').send({ zona: 'Mostrador', estante: 'M1' })).body.ubicacion.id;
+
+    // Dos conteos del mismo SKU en lugares distintos: 3 en el salón, 2 en el mostrador.
+    const sesion = (u) => db.prepare(`INSERT INTO inventario_sesiones (usuario, categorias, marcas, estado, creado_en, ubicacion_id)
+      VALUES ('joaco','[]','["Giro"]','confirmada','2026-09-01T10:00:00Z',?)`).run(u).lastInsertRowid;
+    const contar = (sesionId, cant, cuando) => db.prepare(`INSERT INTO inventario_conteos (sesion_id, ean, sku, cantidad, actualizado_en)
+      VALUES (?,?,?,?,?)`).run(sesionId, '779' + cant, 'FB-DOS', cant, cuando);
+    contar(sesion(salon), 3, '2026-09-01T10:05:00Z');
+    contar(sesion(most), 2, '2026-09-02T10:05:00Z');
+    for (const u of [salon, most]) {
+      db.prepare(`INSERT INTO producto_ubicacion (sku, ubicacion_id, principal, confirmado_en)
+        VALUES ('FB-DOS', ?, 0, '2026-09-02T10:05:00Z')`).run(u);
+    }
+
+    const r = await request(app).get('/api/inventario/consulta-rapida?q=FB-DOS');
+
+    expect(r.status).toBe(200);
+    const prod = r.body.data.find((x) => x.sku === 'FB-DOS');
+    expect(prod.ubicaciones).toHaveLength(2);
+    const porZona = Object.fromEntries(prod.ubicaciones.map((u) => [u.zona, u]));
+    expect(porZona['Salón'].unidades_vistas).toBe(3);
+    expect(porZona['Mostrador'].unidades_vistas).toBe(2);
+    // Siempre viaja cuándo se vio: es una foto fechada, no stock en vivo.
+    expect(porZona['Salón'].visto_en).toBeTruthy();
+    db.close();
+  });
+
+  it('un producto sin ubicación relevada devuelve la lista vacía, no un dato inventado', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 2, sku: 'FB-SIN', nombre: 'Sin ubicación', stock: 1 });
+    const r = await request(buildApp(db)).get('/api/inventario/consulta-rapida?q=FB-SIN');
+    expect(r.body.data[0].ubicaciones).toEqual([]);
+    db.close();
+  });
+});
+
+// ─── Auditoría de faltantes aplicados solos ───────────────────────────────────
+// Los faltantes se ajustan sin autorización (decisión del usuario, 2026-09-10: "dejarlo como
+// está pero dejando información para auditar"). Este endpoint es esa información: sin él,
+// $138M en ajustes automáticos —48 de ellos marcados requiere_revision— no tenían pantalla.
+describe('Auditoría — GET /diferencias/aplicadas', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  async function sesionConFaltanteYSobrante(db) {
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 1000, precio: 200 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 10, precio: 50000 });
+    insertProducto(db, { id_woo: 3, sku: 'FB-3', marca: 'Bell', stock: 10, precio: 100 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 0, huboVentaDurante: false, stockLive: 1000 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const escanear = async (codigo, cantidad) => {
+      const e = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo });
+      await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${e.body.item.id}`).send({ cantidad });
+    };
+    await escanear('FB-1', 0);   // faltante total: 1000 → 0
+    await escanear('FB-2', 21);  // sobrante grande: espera autorización
+    await escanear('FB-3', 4);   // faltante parcial: 10 → 4
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    return id;
+  }
+
+  it('lista los faltantes ya aplicados, excluye los sobrantes y separa los que fueron a cero', async () => {
+    const db = openDb(TEST_DB);
+    await sesionConFaltanteYSobrante(db);
+
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/aplicadas');
+    expect(r.status).toBe(200);
+    const skus = r.body.aplicadas.map(d => d.sku).sort();
+    expect(skus).toEqual(['FB-1', 'FB-3']);          // el sobrante FB-2 no está
+    expect(r.body.cantidad).toBe(2);
+    expect(r.body.en_cero).toBe(1);                   // sólo FB-1 quedó en cero
+    expect(r.body.total_valor).toBeGreaterThan(0);
+    // Ordenado por valor: primero el que más duele.
+    expect(r.body.aplicadas[0].sku).toBe('FB-1');
+    // Trae los datos que la pantalla necesita para poder juzgar el ajuste.
+    expect(r.body.aplicadas[0]).toMatchObject({ usuario: 'juan', cantidad_esperada: 1000, cantidad_contada: 0 });
+    expect(r.body.aplicadas[0].nombre).toBeTruthy();
+  });
+
+  it('la ventana `dias` acota y se clampea a un rango sano', async () => {
+    const db = openDb(TEST_DB);
+    await sesionConFaltanteYSobrante(db);
+
+    // Antigüedad artificial: los ajustes pasan a tener 90 días.
+    const viejo = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+    db.prepare("UPDATE inventario_diferencias SET creado_en=? WHERE tipo='faltante'").run(viejo);
+
+    const corta = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/aplicadas?dias=30');
+    expect(corta.body.aplicadas).toHaveLength(0);
+    expect(corta.body.total_valor).toBe(0);
+
+    const larga = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/aplicadas?dias=180');
+    expect(larga.body.aplicadas).toHaveLength(2);
+
+    // Basura y desbordes no rompen la consulta.
+    const basura = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/aplicadas?dias=abc');
+    expect(basura.status).toBe(200);
+    expect(basura.body.dias).toBe(30);
+    const enorme = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/aplicadas?dias=99999');
+    expect(enorme.body.dias).toBe(365);
+  });
+});
+
+// La pantalla de autorización descarta una diferencia y espera que la sesión deje de trabar
+// el anti-solape. La sesión 33 llevaba trabada desde el 8 de septiembre por no tener UI.
+describe('Autorización — descartar el último sobrante destraba la sesión', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('tras rechazar y reconfirmar, la sesión sale de confirmada_con_errores y no bloquea un alcance que se cruza', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('confirmada_con_errores');
+
+    const fila = db.prepare('SELECT id FROM inventario_diferencias WHERE sesion_id=?').get(id);
+    const rechazar = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+    expect(rechazar.status).toBe(200);
+
+    setStockWcDelta.mockResolvedValue({ stockFinal: 10, huboVentaDurante: false, stockLive: 10 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('confirmada');
+
+    // Con la sesión cerrada, otro usuario puede abrir la misma marca.
+    const nueva = await request(buildApp(db, 'pedro')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    expect(nueva.status).toBe(200);
+  });
+
+  it('un usuario sin admin no puede autorizar ni descartar', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const fila = db.prepare('SELECT id FROM inventario_diferencias WHERE sesion_id=?').get(id);
+    vi.clearAllMocks();
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+    expect(r.status).toBe(403);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT revisado_en FROM inventario_diferencias WHERE id=?').get(fila.id).revisado_en).toBeNull();
+  });
+});
+
+// ─── Destrabe y diagnóstico del anti-solape ───────────────────────────────────
+// El 2026-09-10 una ronda Shimano·TRANSMISIÓN quedó frenada por una sesión CASCOS·Giro:
+// tres repuestos Shimano estaban categorizados en CASCOS y alcanzaba con uno para chocar.
+// El 409 decía "se cruza" sin decir con qué, y hubo que ir a buscarlo a la base.
+describe('Anti-solape — el 409 dice qué productos cruzan', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('devuelve el producto mal categorizado que provoca el choque', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-CASCO', marca: 'Giro', categorias_json: JSON.stringify(['CASCOS']), stock: 5, precio: 100 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-CADENA', marca: 'Shimano', categorias_json: JSON.stringify(['TRANSMISIÓN']), stock: 5, precio: 100 });
+    // El intruso: repuesto Shimano cargado en CASCOS. Entra en los dos alcances.
+    insertProducto(db, { id_woo: 3, sku: 'FB-INTRUSO', marca: 'Shimano', categorias_json: JSON.stringify(['CASCOS']), stock: 0, precio: 100, nombre: 'Adaptador Shimano purgado' });
+
+    await request(buildApp(db, 'joaco')).post('/api/inventario/sesiones').send({ categoria: 'CASCOS' });
+
+    const choque = await request(buildApp(db, 'matias')).post('/api/inventario/sesiones').send({ marca: 'Shimano' });
+    expect(choque.status).toBe(409);
+    expect(choque.body.ocupada_por).toBe('joaco');
+    expect(choque.body.productos_en_comun).toBe(1);
+    expect(choque.body.ejemplos).toHaveLength(1);
+    expect(choque.body.ejemplos[0]).toMatchObject({ sku: 'FB-INTRUSO', marca: 'Shimano', categoria: 'CASCOS' });
+  });
+
+  it('sin producto en común no hay choque', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-CASCO', marca: 'Giro', categorias_json: JSON.stringify(['CASCOS']), stock: 5, precio: 100 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-CADENA', marca: 'Shimano', categorias_json: JSON.stringify(['TRANSMISIÓN']), stock: 5, precio: 100 });
+
+    await request(buildApp(db, 'joaco')).post('/api/inventario/sesiones').send({ categoria: 'CASCOS' });
+    const ok = await request(buildApp(db, 'matias')).post('/api/inventario/sesiones').send({ marca: 'Shimano' });
+    expect(ok.status).toBe(200);
+  });
+});
+
+// La pantalla de autorización la usa un admin desde otra vista: nunca pasa por /confirmar.
+// Si rechazar no recalcula el estado, la sesión queda con 0 pendientes pero sigue en
+// 'confirmada_con_errores' y sigue bloqueando — justo lo que la pantalla venía a resolver.
+describe('Autorización — descartar el último sobrante cierra la sesión sin pasar por /confirmar', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  it('tras rechazar, la sesión pasa a confirmada y deja de bloquear un alcance que se cruza', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('confirmada_con_errores');
+
+    const fila = db.prepare('SELECT id FROM inventario_diferencias WHERE sesion_id=?').get(id);
+    await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/rechazar`);
+
+    // Sin volver a llamar a /confirmar: la sesión ya no tiene nada sin ajustar.
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('confirmada');
+    const otra = await request(buildApp(db, 'pedro')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    expect(otra.status).toBe(200);
+  });
+
+  it('si queda otro sobrante sin resolver, la sesión NO se promueve', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-2', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    for (const codigo of ['FB-1', 'FB-2']) {
+      const e = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo });
+      await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${e.body.item.id}`).send({ cantidad: 21 });
+    }
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const filas = db.prepare('SELECT id FROM inventario_diferencias WHERE sesion_id=? ORDER BY id').all(id);
+    expect(filas.length).toBe(2);
+    await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${filas[0].id}/rechazar`);
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('confirmada_con_errores');
+  });
+});
+
+// El caso real que motivó el cambio del 2026-09-10. La sesión de Joaco era CASCOS **y** Giro;
+// la ronda sugerida era Shimano **y** TRANSMISIÓN. Ningún producto pertenece a las dos, pero
+// el anti-solape comparaba con O y frenaba por 3 repuestos Shimano mal categorizados en
+// CASCOS — que ninguna de las dos sesiones iba a contar.
+describe('Anti-solape — se compara el alcance real (Y), no la unión (O)', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  function catalogoDeLaTienda(db) {
+    insertProducto(db, { id_woo: 1, sku: 'FB-CASCO-GIRO', marca: 'Giro', categorias_json: JSON.stringify(['CASCOS']), stock: 5 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-CADENA', marca: 'Shimano', categorias_json: JSON.stringify(['TRANSMISIÓN']), stock: 5 });
+    // Los intrusos: repuestos Shimano cargados en CASCOS. No son Giro ni TRANSMISIÓN, así que
+    // no entran en el alcance real de ninguna de las dos sesiones.
+    insertProducto(db, { id_woo: 3, sku: 'FB-2419', marca: 'Shimano', categorias_json: JSON.stringify(['CASCOS']), stock: 0 });
+  }
+
+  it('CASCOS+Giro no bloquea Shimano+TRANSMISIÓN', async () => {
+    const db = openDb(TEST_DB);
+    catalogoDeLaTienda(db);
+    const joaco = await request(buildApp(db, 'joaco')).post('/api/inventario/sesiones')
+      .send({ categorias: ['CASCOS'], marcas: ['Giro'] });
+    expect(joaco.status).toBe(200);
+
+    const ronda = await request(buildApp(db, 'matias')).post('/api/inventario/sesiones')
+      .send({ categorias: ['TRANSMISIÓN'], marcas: ['Shimano'] });
+    expect(ronda.status).toBe(200);
+  });
+
+  it('pero si las dos sesiones SÍ van a contar el mismo producto, sigue bloqueando', async () => {
+    const db = openDb(TEST_DB);
+    catalogoDeLaTienda(db);
+    // Ahora Joaco cuenta CASCOS entero (una sola dimensión): FB-2419 sí entra en su alcance.
+    const joaco = await request(buildApp(db, 'joaco')).post('/api/inventario/sesiones')
+      .send({ categorias: ['CASCOS'] });
+    expect(joaco.status).toBe(200);
+
+    const otra = await request(buildApp(db, 'matias')).post('/api/inventario/sesiones')
+      .send({ marcas: ['Shimano'] });
+    expect(otra.status).toBe(409);
+    expect(otra.body.ejemplos.map(p => p.sku)).toContain('FB-2419');
+  });
+
+  it('el caso clásico sigue protegido: "Cascos" contra "Bell" chocan por el casco Bell', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Casco Bell', marca: 'Bell', categorias_json: JSON.stringify(['Cascos']), stock: 3 });
+    await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ categorias: ['Cascos'] });
+    const ana = await request(buildApp(db, 'ana')).post('/api/inventario/sesiones').send({ marcas: ['Bell'] });
+    expect(ana.status).toBe(409);
+    expect(ana.body.ejemplos[0].sku).toBe('FB-1');
+  });
+
+  it('un producto no contable (variable) no genera un choque fantasma', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-PADRE', marca: 'Shimano', tipo: 'variable', categorias_json: JSON.stringify(['CASCOS']), stock: 0 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-CASCO', marca: 'Giro', categorias_json: JSON.stringify(['CASCOS']), stock: 5 });
+    insertProducto(db, { id_woo: 3, sku: 'FB-CADENA', marca: 'Shimano', categorias_json: JSON.stringify(['TRANSMISIÓN']), stock: 5 });
+
+    await request(buildApp(db, 'joaco')).post('/api/inventario/sesiones').send({ categorias: ['CASCOS'] });
+    const otra = await request(buildApp(db, 'matias')).post('/api/inventario/sesiones').send({ marcas: ['Shimano'] });
+    expect(otra.status).toBe(200);
+  });
+});
+
+// Una diferencia puede quedar pendiente aunque su conteo YA se haya ajustado: pasa cuando
+// alguien aplica el ajuste por otra vía (p.ej. "Confirmar ajuste como administrador") y nadie
+// marca la diferencia como revisada. En producción, al 2026-09-10, 5 de los 8 sobrantes
+// pendientes estaban así. Autorizarlos no debe volver a tocar Woo.
+describe('Autorización — diferencia cuyo conteo ya se ajustó', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  async function sobrantePendienteYaAjustado(db) {
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    // Simula el ajuste aplicado por afuera, sin marcar la diferencia como revisada.
+    db.prepare("UPDATE inventario_conteos SET ajustado_en='2026-09-05T15:15:38.851Z' WHERE sesion_id=? AND sku='FB-1'").run(id);
+    db.prepare("UPDATE catalogo_cache SET stock=21 WHERE sku='FB-1'").run();
+    return { id, fila: db.prepare('SELECT id FROM inventario_diferencias WHERE sesion_id=?').get(id) };
+  }
+
+  it('/pendientes la marca ya_aplicado y trae el stock de hoy', async () => {
+    const db = openDb(TEST_DB);
+    await sobrantePendienteYaAjustado(db);
+    const r = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/pendientes');
+    expect(r.status).toBe(200);
+    expect(r.body.pendientes).toHaveLength(1);
+    expect(r.body.pendientes[0].ya_aplicado).toBe(true);
+    expect(r.body.pendientes[0].stock_actual).toBe(21);
+  });
+
+  it('aprobarla cierra el aviso sin volver a tocar Woo', async () => {
+    const db = openDb(TEST_DB);
+    const { id, fila } = await sobrantePendienteYaAjustado(db);
+    vi.clearAllMocks();
+
+    const r = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    expect(r.status).toBe(200);
+    expect(r.body.ya_aplicado).toBe(true);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+    expect(db.prepare('SELECT revisado_en FROM inventario_diferencias WHERE id=?').get(fila.id).revisado_en).toBeTruthy();
+    expect(db.prepare('SELECT stock FROM catalogo_cache WHERE sku=?').get('FB-1').stock).toBe(21);
+    // Y deja de aparecer en la lista.
+    const pend = await request(buildApp(db, 'juan')).get('/api/inventario/diferencias/pendientes');
+    expect(pend.body.pendientes).toHaveLength(0);
+    expect(db.prepare('SELECT estado FROM inventario_sesiones WHERE id=?').get(id).estado).toBe('confirmada');
+  });
+
+  // Caso FB-53910 (2026-09-11): durante la sesión 36 algo externo subió el stock de Woo de 1
+  // a 2 y Joaco contó 2. Las dos fuentes coinciden, así que no hay nada que escribir: aplicar
+  // el delta (2−1) sobre el stock de hoy (2) dejaría 3, stock que no existe. Aprobar tiene que
+  // cerrar el caso sin un segundo PUT.
+  it('si Woo ya coincide con lo contado, aprobar concilia sin volver a escribir', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    const fila = db.prepare('SELECT id FROM inventario_diferencias WHERE sesion_id=?').get(id);
+    vi.clearAllMocks();
+    getStockLiveWc.mockResolvedValue(21); // Woo ya está en lo contado
+
+    const r = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    expect(r.status).toBe(200);
+    expect(r.body.ya_conciliado).toBe(true);
+    expect(r.body.stock_live).toBe(21);
+    expect(setStockWcDelta).not.toHaveBeenCalled();
+    // Queda cerrado: revisada la diferencia y ajustado el conteo, para que un reintento de
+    // /confirmar no lo vuelva a tocar.
+    expect(db.prepare('SELECT revisado_en FROM inventario_diferencias WHERE id=?').get(fila.id).revisado_en).toBeTruthy();
+    expect(db.prepare("SELECT ajustado_en FROM inventario_conteos WHERE sesion_id=? AND sku='FB-1'").get(id).ajustado_en).toBeTruthy();
+  });
+
+  it('si el conteo NO se ajustó, aprobar sí llama a Woo', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Bell', stock: 10, precio: 50000 });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    const id = crear.body.sesion.id;
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).patch(`/api/inventario/sesiones/${id}/items/${esc.body.item.id}`).send({ cantidad: 21 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+    const fila = db.prepare('SELECT id FROM inventario_diferencias WHERE sesion_id=?').get(id);
+    vi.clearAllMocks();
+    setStockWcDelta.mockResolvedValue({ stockFinal: 21, huboVentaDurante: false, stockLive: 10 });
+    // Woo sigue en 10 y se contaron 21: NO es el caso ya conciliado, así que hay que ajustar.
+    getStockLiveWc.mockResolvedValue(10);
+
+    const r = await request(buildApp(db, 'jose', true)).post(`/api/inventario/diferencias/${fila.id}/aprobar`);
+    expect(r.status).toBe(200);
+    expect(r.body.ya_aplicado).toBeUndefined();
+    expect(r.body.ya_conciliado).toBeUndefined();
+    expect(setStockWcDelta).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Filas partidas del mismo producto ────────────────────────────────────────
+// Reproducción del incidente del 2026-09-08 (sesión 33, casco Giro FB-67121):
+//   14:42 se contó a mano por SKU  → fila con sku, cantidad 2
+//   14:56 se escaneó su EAN, que todavía no resolvía a ningún SKU → fila nueva, sku=null
+//   luego se asoció ese EAN al SKU → /asociar le puso el sku a la segunda fila SIN mirar
+//   que ya existía otra con el mismo SKU en la sesión.
+// Resultado real: dos filas del mismo producto, dos diferencias, y el stock publicado en 0
+// cuando las 3 unidades estaban. /escanear ya deduplica por SKU desde el 2026-08-25; el
+// agujero estaba en /asociar.
+describe('Conteo — un producto, una sola fila (fusión al asociar)', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  async function sesionConDosCaminos(db) {
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', nombre: 'Casco Giro Caden II', marca: 'Giro', stock: 3, precio: 100 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Giro' });
+    const id = crear.body.sesion.id;
+    // 1) contado a mano desde la lista: el front manda el SKU al mismo endpoint del lector
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-1' });
+    // 2) escaneado su EAN, todavía sin asociar a ningún SKU
+    const esc = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '7896541237896' });
+    expect(esc.body.item.sku).toBeFalsy();
+    return { id, itemEan: esc.body.item };
+  }
+
+  it('asociar el EAN funde su cantidad en la fila que ya tenía ese SKU', async () => {
+    const db = openDb(TEST_DB);
+    const { id } = await sesionConDosCaminos(db);
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`)
+      .send({ ean: '7896541237896', sku: 'FB-1' });
+    expect(r.status).toBe(200);
+
+    const filas = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=? AND sku=?').all(id, 'FB-1');
+    expect(filas).toHaveLength(1);
+    expect(filas[0].cantidad).toBe(3); // 2 a mano + 1 escaneada
+  });
+
+  it('y al confirmar produce UNA sola diferencia, no dos', async () => {
+    const db = openDb(TEST_DB);
+    const { id } = await sesionConDosCaminos(db);
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`)
+      .send({ ean: '7896541237896', sku: 'FB-1' });
+
+    setStockWcDelta.mockResolvedValue({ stockFinal: 3, huboVentaDurante: false, stockLive: 3 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    // Contó 3 y el sistema tenía 3: no debería haber ninguna diferencia.
+    const difs = db.prepare('SELECT * FROM inventario_diferencias WHERE sesion_id=?').all(id);
+    expect(difs).toHaveLength(0);
+    expect(setStockWcDelta).toHaveBeenCalledTimes(1);
+  });
+
+  it('si el EAN no tiene gemelo, asociar sigue funcionando como siempre', async () => {
+    const db = openDb(TEST_DB);
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Giro', stock: 3, precio: 100 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Giro' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '7896541237896' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`)
+      .send({ ean: '7896541237896', sku: 'FB-1' });
+    expect(r.status).toBe(200);
+    const filas = db.prepare('SELECT * FROM inventario_conteos WHERE sesion_id=?').all(id);
+    expect(filas).toHaveLength(1);
+    expect(filas[0].cantidad).toBe(1);
+    expect(filas[0].sku).toBe('FB-1');
+  });
+});
+
+// ─── Conteo a ciegas ──────────────────────────────────────────────────────────
+// Decisión del usuario (2026-09-11): el operario no ve la cantidad esperada antes de contar.
+// Fundamento: la práctica de cycle counting detecta 20-30% más diferencias sin el anclaje del
+// número del sistema. Mientras la sesión está ABIERTA, la API no puede mandar ese número para
+// un producto sin contar — ni el stock, ni el bloque con_stock/sin_stock, que lo delata igual.
+describe('Conteo a ciegas — la API no revela lo esperado hasta que se cuenta', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  async function sesionAbierta(db) {
+    // Nombres elegidos a propósito: alfabéticamente "Alforja" va primero, pero es la que NO
+    // tiene stock. Si la API ordenara con_stock primero (como hace el gate del servidor),
+    // "Zapatilla" encabezaría y el orden delataría cuál tiene stock.
+    insertProducto(db, { id_woo: 1, sku: 'FB-CON', nombre: 'Zapatilla con stock', marca: 'Bell', stock: 7, precio: 100 });
+    insertProducto(db, { id_woo: 2, sku: 'FB-SIN', nombre: 'Alforja sin stock', marca: 'Bell', stock: 0, precio: 100 });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Bell' });
+    return crear.body.sesion.id;
+  }
+
+  it('un producto sin contar no trae stock ni bloque', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionAbierta(db);
+    const r = await request(buildApp(db, 'juan')).get(`/api/inventario/sesiones/${id}`);
+    expect(r.status).toBe(200);
+    expect(r.body.pendientes).toHaveLength(2);
+    for (const p of r.body.pendientes) {
+      expect(p.stock_inicial).toBeUndefined();
+      expect(p.stock_actual).toBeUndefined();
+      expect(p.bloque).toBeUndefined();
+    }
+    // El resumen tampoco puede separar con stock de sin stock: esa división es el anclaje.
+    expect(r.body.resumen.pendientes_con_stock).toBeUndefined();
+    expect(r.body.resumen.pendientes_sin_stock).toBeUndefined();
+    expect(r.body.resumen.pendientes).toBe(2);
+    // Ningún campo de stock, con el nombre que sea: `stock_woo` se escapó de la primera
+    // versión de este filtro y el 7 viajaba igual.
+    for (const p of r.body.pendientes) {
+      for (const k of Object.keys(p)) expect(k).not.toMatch(/stock|bloque/);
+    }
+    // Y el orden tampoco puede delatarlo: a ciegas va alfabético, no con_stock primero.
+    expect(r.body.pendientes.map(p => p.sku)).toEqual(['FB-SIN', 'FB-CON']);
+  });
+
+  it('al contarlo, sí se revela lo esperado y la diferencia', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionAbierta(db);
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-CON' });
+
+    const r = await request(buildApp(db, 'juan')).get(`/api/inventario/sesiones/${id}`);
+    const item = r.body.items.find(i => i.sku === 'FB-CON');
+    expect(item.stock_woo).toBe(7);
+    expect(item.diferencia).toBe(-6);
+  });
+
+  it('con la sesión cerrada el detalle vuelve a mostrar todo, para poder auditarla', async () => {
+    const db = openDb(TEST_DB);
+    const id = await sesionAbierta(db);
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: 'FB-CON' });
+    setStockWcDelta.mockResolvedValue({ stockFinal: 1, huboVentaDurante: false, stockLive: 7 });
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/cerrar-sin-stock`);
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/confirmar`);
+
+    const r = await request(buildApp(db, 'juan')).get(`/api/inventario/sesiones/${id}`);
+    expect(r.body.sesion.estado).not.toBe('abierta');
+    // Ya no hay nada que anclar: la sesión está cerrada y se está auditando.
+    if (r.body.pendientes.length) expect(r.body.pendientes[0].stock_inicial).toBeDefined();
+  });
+});
+
+// ─── Código cargado en el producto padre ──────────────────────────────────────
+// Caso real (sesión 34, 2026-09-11): el código 192790619255 de la Caja Pedalera Un300 está
+// cargado en el producto PADRE (`tipo='variable'`), no en sus tres variantes. El escaneo lo
+// aceptaba porque resolvía el EAN contra `catalogo_cache.gtin` sin mirar el tipo, pero un padre
+// no tiene stock propio: el alcance ad hoc excluye `variable`, así que la fila quedaba sin
+// `stock_inicial` y recién al CERRAR la sesión aparecía el error
+// «stockInicial requerido: no se puede calcular delta sin punto de referencia».
+//
+// Peor todavía: las tres variantes ya estaban contadas bien, así que esa lectura era la misma
+// unidad contada dos veces. Y el sistema se contradecía — /asociar rechaza un SKU variable con
+// un mensaje claro, /escanear lo dejaba entrar.
+//
+// Ahora el escaneo lo trata como un código sin asociar y lo dice en el momento, que es cuando
+// el operario tiene el producto en la mano y puede elegir la variante correcta.
+describe('Conteo — un código cargado en el producto padre no se cuenta contra el padre', () => {
+  afterEach(() => { if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); vi.clearAllMocks(); });
+
+  function cajaPedaleraConCodigoEnElPadre(db) {
+    // El padre lleva el código; las variantes tienen el stock.
+    insertProducto(db, { id_woo: 19167, sku: 'FB-PADRE', nombre: 'Caja Pedalera Un300', marca: 'Shimano',
+      tipo: 'variable', stock: 0, gtin: '192790619255' });
+    insertProducto(db, { id_woo: 28298, sku: 'FB-V1', nombre: 'Caja Pedalera Un300 — 117,5', marca: 'Shimano',
+      id_padre: 19167, stock: 1 });
+    insertProducto(db, { id_woo: 28299, sku: 'FB-V2', nombre: 'Caja Pedalera Un300 — 122,5', marca: 'Shimano',
+      id_padre: 19167, stock: 2 });
+  }
+
+  it('el escaneo no lo cuenta contra el padre: queda para asociar a una variante', async () => {
+    const db = openDb(TEST_DB);
+    cajaPedaleraConCodigoEnElPadre(db);
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Shimano' });
+    const id = crear.body.sesion.id;
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '192790619255' });
+    expect(r.status).toBe(200);
+    expect(r.body.item.sku).toBeFalsy();              // no se cuenta contra el padre
+    expect(r.body.item.estado_codigo).toBe('sin_asociar');
+    expect(r.body.item.aviso).toMatch(/variante/i);   // dice qué hacer, en el momento
+    expect(r.body.item.codigo_desconocido).toBe(false); // el código existe: lo que falla es dónde está
+  });
+
+  it('no deja una fila imposible de ajustar al cerrar', async () => {
+    const db = openDb(TEST_DB);
+    cajaPedaleraConCodigoEnElPadre(db);
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Shimano' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '192790619255' });
+
+    // Ninguna fila quedó apuntando al padre, que es la que no tenía stock_inicial.
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-PADRE').n).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) n FROM inventario_sesion_alcance WHERE sesion_id=? AND sku=?').get(id, 'FB-PADRE').n).toBe(0);
+  });
+
+  it('asociarlo a la variante correcta sí lo cuenta', async () => {
+    const db = openDb(TEST_DB);
+    cajaPedaleraConCodigoEnElPadre(db);
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Shimano' });
+    const id = crear.body.sesion.id;
+    await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '192790619255' });
+
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/asociar`)
+      .send({ ean: '192790619255', sku: 'FB-V2' });
+    expect(r.status).toBe(200);
+    const fila = db.prepare('SELECT sku, cantidad FROM inventario_conteos WHERE sesion_id=? AND sku=?').get(id, 'FB-V2');
+    expect(fila).toMatchObject({ sku: 'FB-V2', cantidad: 1 });
+  });
+
+  it('un producto simple con su código sigue contándose como siempre', async () => {
+    const db = openDb(TEST_DB);
+    // EAN-13 con dígito de control válido: si no lo es, `looksLikeEan` lo trata como SKU.
+    insertProducto(db, { id_woo: 1, sku: 'FB-1', marca: 'Shimano', stock: 5, gtin: '7791234567898' });
+    const crear = await request(buildApp(db, 'juan')).post('/api/inventario/sesiones').send({ marca: 'Shimano' });
+    const id = crear.body.sesion.id;
+    const r = await request(buildApp(db, 'juan')).post(`/api/inventario/sesiones/${id}/escanear`).send({ codigo: '7791234567898' });
+    expect(r.body.item.sku).toBe('FB-1');
+    expect(r.body.item.estado_codigo).toBe('ok');
   });
 });

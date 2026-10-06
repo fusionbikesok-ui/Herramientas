@@ -41,6 +41,10 @@ function extraerAtributosWC(nombre){
   return{colores:new Set(tks.filter(t=>COLORES.has(t))),talles:new Set(tks.filter(t=>!COLORES.has(t)&&!skip.has(t)))};
 }
 // Atributos estructurados de una variación WC (atributos_json = [{name,option}]).
+// Atributos que NO son dimensión de variante (marca, categoría, género, etc.) — nunca se
+// clasifican como color/talle. Ver lib/matcherEngine.js para el detalle del hallazgo (DEFECTO A).
+const ATRIBUTOS_NO_VARIANTE=new Set(['marca','tipo de producto','tipo de articulo','tipo de montaje','genero','diseno','compuesto','body','material del cuadro','installment']);
+
 // Preferido sobre parsear el nombre: color/talle vienen del atributo declarado en WC,
 // así nombres sin el sufijo "— color / talle" ya no pierden esos atributos.
 function extraerAtributosDeAttrsWC(atributosJson){
@@ -50,7 +54,7 @@ function extraerAtributosDeAttrsWC(atributosJson){
   const colores=new Set(),talles=new Set();const skip=new Set(['eu','un','cm','mm']);
   for(const a of arr){
     const nm=norm(a&&a.name||''),val=norm(a&&a.option||'');
-    if(!val)continue;
+    if(!val||ATRIBUTOS_NO_VARIANTE.has(nm))continue;
     const esColor=/\bcolor\b/.test(nm),esTalle=/\b(talle|talla|size|medida)\b/.test(nm);
     for(const t of val.split(' ').filter(Boolean)){
       if(skip.has(t))continue;

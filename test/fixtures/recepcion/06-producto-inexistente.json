@@ -1,0 +1,15 @@
+{
+  "caso": "Producto inexistente - ningún candidato en catálogo coincide",
+  "items": [
+    {
+      "linea_id": "6",
+      "nombre_doc": "Producto que no existe xyz123",
+      "codigo_proveedor": "CODE-INEXISTENTE-999",
+      "variacion": "",
+      "cantidad": 1,
+      "marca": "Marca Desconocida",
+      "talle": null,
+      "color": null
+    }
+  ]
+}

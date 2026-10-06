@@ -98,9 +98,7 @@ Estos 5 tokens deben replicarse con el mismo nombre y valor en su `:root` local.
 ## Cobertura de Catálogo (rediseño accionable)
 
 Reemplaza el informe de 5 pestañas por una herramienta de trabajo: cola de a una, matcher
-inverso WC→ML, multi-publicación y "Solo ML" accionables. Ver
-`docs/superpowers/plans/2026-08-10-cobertura-accionable.md` (decisiones) y
-`docs/superpowers/plans/2026-08-10-cobertura-flujo-ux.md` (flujo). Este bloque define el
+inverso WC→ML, multi-publicación y "Solo ML" accionables. Este bloque define el
 sistema visual; **no** hay lógica de negocio ni JS acá — eso lo escribe `hard-worker-frontend`.
 
 Atomic Design liviano: 3 componentes nuevos que se repiten entre pantallas —
@@ -306,9 +304,8 @@ sigue siendo oscuro). Verificación puntual de los pares nuevos:
 enlaza `theme.css` sin overrides locales — igual que el Matcher viejo y Vínculos, así que
 no hay conflicto de tokens que resolver al fusionar (los tres ya comparten paleta). Lo que
 sí hay que resolver es cómo ese sistema absorbe dos pantallas más sin que la tarjeta de
-trabajo (`.match-card`) pierda protagonismo. Ver
-`docs/superpowers/plans/2026-08-11-matcher-unificado.md` (plan + flujo cerrado 2026-08-14)
-para las decisiones de producto — acá solo el sistema visual.
+trabajo (`.match-card`) pierda protagonismo. Acá vive solo el sistema visual; las decisiones
+pendientes se consolidan en `docs/superpowers/plans/plan-maestro-v2.md`.
 
 **No se retiran `.chip`, `.pub-card`, `.pill-tabs` de Vínculos ni `.match-card`/`.conf-badge`
 de Cobertura como conceptos**: la sección Problemas (que absorbe Sospechosos) reusa
@@ -470,3 +467,15 @@ verificación). No hay contraste nuevo que verificar porque no hay color nuevo.
 - Ningún estado descrito en este documento depende solo de color: todos tienen icono de
   forma distinta y/o texto explícito como mínimo un canal adicional (ver tablas de §1, §2 y
   §7).
+
+## Sincronización ML y Pausadas con stock (2026-10-05)
+
+Referencia: `docs/superpowers/prototipos/2026-10-05-sincronizacion-ml.html` y `…-pausadas-con-stock.html`. Sólo tokens existentes (`--surface`, `--surface2`, `--border`, `--accent`, `--green/--amber/--red` y sus `-bg/-bd`); ningún color nuevo.
+
+- **Fila densa con foto de 56 px** (40/48 px en móvil): foto · título en una línea con elipsis (2 líneas en móvil) · dato secundario · valor/acción a la derecha. Altura mínima 64 px; si no hay foto o falla (`error`), placeholder con ícono, nunca un cuadro vacío.
+- **Barra de lote con segundo clic**: «Reactivar N»; desde 10 elementos el primer clic pide confirmar (4 s) en el mismo botón. Un fallo parcial deja las filas fallidas seleccionadas y el botón pasa a «Reintentar N». Sin `confirm()`.
+- **Franja inferior persistente** (`.band`): fija abajo, ancho de página, con ✕; es el único lugar de resultados de acciones (ok verde, atención ámbar, error rojo, prefijo ✓/⚠/✗ para no depender del color) y puede llevar botones (p. ej. «Reactivar ahora»). `role="status"`; respeta `safe-area-inset-bottom`.
+- **Hoja inferior móvil**: en ≤640 px el detalle y la acción de una fila abren una hoja (`role="dialog"`) con foco atrapado y Esc; botones de 56 px.
+- **Lista «Para resolver» por gravedad**: una sola lista ordenada crítico > atención > info; cada fila = barra de color de 4 px (rojo/ámbar/cian) + número grande + título + frase + acción. Las filas con `aria-expanded` se abren in situ; las que llevan a otra pantalla son enlaces. Lo que está en 0 no ocupa fila: una línea «✓ …» al pie; vacía, «Nada para resolver».
+- **Menú «Correr ahora»**: botón con menú (`aria-haspopup="menu"`), cada ítem con título y descripción de una línea; en móvil queda sólo el ícono (44 px). Esc lo cierra y devuelve el foco.
+- Piso común: controles ≥24 px en PC y ≥44 px en móvil, sin scroll horizontal de 320 a 1600 px, esqueleto al cargar, y ningún `confirm`/`alert`/`prompt`.

@@ -1,0 +1,15 @@
+{
+  "caso": "Contradicción de talle - el documento menciona talle 45 pero el mejor candidato es talle 41",
+  "items": [
+    {
+      "linea_id": "4",
+      "nombre_doc": "Zapatilla Base Negro",
+      "codigo_proveedor": "",
+      "variacion": "Talle 45",
+      "cantidad": 1,
+      "marca": "Marca B",
+      "talle": "45",
+      "color": null
+    }
+  ]
+}

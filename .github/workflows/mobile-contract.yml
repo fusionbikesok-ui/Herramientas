@@ -1,0 +1,25 @@
+name: Mobile contract
+
+on:
+  push:
+    paths:
+      - 'openapi/mobile-v1.yaml'
+      - 'scripts/verify-mobile-contract.mjs'
+      - 'package.json'
+  pull_request:
+    paths:
+      - 'openapi/mobile-v1.yaml'
+      - 'scripts/verify-mobile-contract.mjs'
+      - 'package.json'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:mobile-contract

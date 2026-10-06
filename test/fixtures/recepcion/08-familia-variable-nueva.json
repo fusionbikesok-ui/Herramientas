@@ -1,0 +1,31 @@
+{
+  "caso": "Familia variable nueva - crear una familia variable con variaciones",
+  "items": [
+    {
+      "linea_id": "8",
+      "nombre_doc": "Casco de Ruta Pro",
+      "codigo_proveedor": "CASCO-RUTA-PRO",
+      "variacion": "Talle M, Color Rojo",
+      "cantidad": 2,
+      "marca": "HelmetPro",
+      "talle": "M",
+      "color": "Rojo"
+    },
+    {
+      "linea_id": "8b",
+      "nombre_doc": "Casco de Ruta Pro",
+      "codigo_proveedor": "CASCO-RUTA-PRO",
+      "variacion": "Talle L, Color Azul",
+      "cantidad": 3,
+      "marca": "HelmetPro",
+      "talle": "L",
+      "color": "Azul"
+    }
+  ],
+  "esperado_accion": "crear_borrador_variable",
+  "datos_borrador": {
+    "nombre": "Casco de Ruta Pro",
+    "sku_base": "CASCO-RUTA-PRO",
+    "atributos": ["Talle", "Color"]
+  }
+}

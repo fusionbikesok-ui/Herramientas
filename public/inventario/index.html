@@ -4,14 +4,34 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Fusion Bikes · Contador de inventario</title>
-<link rel="stylesheet" href="../lib/theme.css">
+<script>
+/* La app se sirve detrás del prefijo /herramientas/ (nginx), así que los assets van con ruta
+   relativa: /lib/ no está proxyeado, /herramientas/lib/ sí. Pero una sesión vive un nivel más
+   abajo (/inventario/sesion/37), donde "../lib/" apunta a /inventario/lib/ y da 404.
+
+   Un <base> insertado por script NO sirve: se probó el 2026-09-09 en gestión de pedidos y los
+   <link> del markup igual resolvieron contra la URL del documento. Por eso se calcula la raíz
+   de la herramienta y se escriben las rutas ya resueltas. document.write y no appendChild
+   porque el orden de parseo importa: api.js tiene que existir antes del script principal. */
+(function () {
+  var marca = '/inventario/';
+  var i = location.pathname.indexOf(marca);
+  var raiz = i >= 0 ? location.pathname.slice(0, i + marca.length) : '/inventario/';
+  window.RAIZ = raiz;
+  window.LIB = raiz.slice(0, raiz.length - 'inventario/'.length) + 'lib/';
+  document.write('<link rel="stylesheet" href="' + window.LIB + 'theme.css">');
+})();
+</script>
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
   body{background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
        display:flex;flex-direction:column;min-height:100vh;}
   header{background:rgba(12,15,22,.92);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);box-shadow:0 1px 0 var(--azul);padding:10px 12px;display:flex;flex-direction:column;gap:8px;}
-  .homelink{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);text-decoration:none}
+  /* 44px de alto real: era un enlace de 13px, el control más chico de la pantalla. El área
+     de toque se agranda con padding, sin agrandar el texto (WCAG 2.5.8). */
+  .homelink{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);
+      text-decoration:none;min-height:44px;padding:0 6px;margin-left:-6px;}
   .header-top{display:flex;align-items:center;justify-content:space-between}
   .brand{display:flex;flex-direction:column;gap:3px}
   .header-eyebrow{font-size:10px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--azul);opacity:.75}
@@ -235,7 +255,7 @@
   .fila-item .cod{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;font-size:13px;color:var(--txt);
        display:flex;align-items:center;gap:6px;}
   .fila-item .cod .warn-ico{color:var(--state-unlinked);font-weight:800;}
-  .fila-item .nombre{font-size:13px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere;white-space:normal;}
+  .fila-item .nombre{font-size:13px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere;white-space:normal;line-height:1.3;}
   .fila-item .stockline{font-size:12px;color:var(--muted);margin-top:2px;}
   .fila-item .diff{font-weight:800;}
   .diff.pos{color:var(--diff-pos);}
@@ -247,6 +267,213 @@
   .fila-item .acciones button.del{color:var(--danger);}
   .fila-item .acciones button[disabled]{opacity:.35;cursor:not-allowed;}
   .cantidad-ctrl{display:flex;align-items:center;gap:6px;}
+  /* ─── Franjas fijas del conteo (2026-09-11) ───────────────────────────────
+     Arriba, compacta: el campo de escaneo/búsqueda deja de perderse al scrollear.
+     Abajo, el progreso real de la ronda, en la zona donde llega el pulgar. */
+  #vista-conteo{padding-bottom:150px;}
+  body.contando header{padding-bottom:4px;}
+  body.contando .header-eyebrow,body.contando .brand-badge{display:none;}
+  body.contando .brand-title{font-size:15px;}
+  .conteo-top .conteo-barra{margin:0 0 8px;}
+  .conteo-top{position:sticky;top:0;z-index:30;background:var(--oscuro,#0C0F16);
+      padding:8px 0 9px;border-bottom:1px solid var(--line);margin-bottom:10px;}
+  .scanwrap{display:flex;gap:8px;align-items:center;}
+  .scanwrap #scan{flex:1;min-height:56px;font-size:16px;margin:0;}
+  .btn-camara-mini{width:56px;min-height:56px;border-radius:11px;border:1px solid var(--line);
+      background:var(--panel2);color:var(--txt);font-size:20px;cursor:pointer;flex:0 0 auto;}
+  .ultima-lectura{margin-top:9px;display:flex;align-items:center;gap:10px;
+      background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.35);
+      border-radius:10px;padding:9px 11px;font-size:13px;}
+  .ultima-lectura.warn{background:rgba(245,185,66,.12);border-color:rgba(245,185,66,.40);}
+  .ultima-lectura .ul-t{flex:1;min-width:0;}
+  .ultima-lectura .ul-t b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .ultima-lectura .ul-t span{color:var(--muted);font-size:12px;display:block;line-height:1.35;}
+  .ultima-lectura .ul-n{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--green);}
+  .ultima-lectura button{min-height:44px;padding:0 10px;background:none;border:0;color:var(--azul);
+      font-size:13px;font-weight:600;cursor:pointer;}
+  .chips-filtro{display:flex;gap:8px;margin-top:9px;margin-bottom:0;overflow-x:auto;
+      scrollbar-width:none;padding-bottom:2px;flex-wrap:nowrap;}
+  .chips-filtro::-webkit-scrollbar{display:none;}
+  .chips-filtro .chip-filtro{min-height:44px;padding:0 14px;font-size:14px;white-space:nowrap;flex:0 0 auto;}
+
+  .conteo-bottom{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--panel);
+      border-top:1px solid var(--line);padding:10px 14px calc(12px + env(safe-area-inset-bottom));}
+  .prog-linea{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px;}
+  .prog-linea b{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+  .prog-linea span{font-size:12.5px;color:var(--muted);}
+  .prog-barra{height:6px;border-radius:99px;background:var(--black,#0A0D14);overflow:hidden;margin-bottom:10px;}
+  .prog-barra i{display:block;height:100%;width:0;background:var(--azul);border-radius:99px;
+      transition:width .3s cubic-bezier(.23,1,.32,1);}
+  .conteo-acciones{display:flex;gap:8px;}
+  .conteo-acciones .btn{margin:0;min-height:52px;}
+  .conteo-acciones .btn.primary{flex:1 1 auto;white-space:nowrap;}
+  .conteo-acciones .btn.secondary{flex:0 0 92px;padding:0 12px;}
+  .conteo-mas{margin-top:8px;display:flex;flex-direction:column;gap:8px;}
+  /* Un display de clase le gana al [hidden] del navegador: sin esto, los bloques ocultos
+     se veían igual (la barra verde vacía de la última lectura, el panel "Más" desplegado). */
+  .conteo-mas[hidden],.ultima-lectura[hidden],.contadores[hidden],.conteo-lista-header[hidden]{display:none!important;}
+  .conteo-mas .btn{margin:0;min-height:48px;}
+  @media (prefers-reduced-motion: reduce){ .prog-barra i{transition:none;} }
+
+  .hist-item{border-bottom:1px solid var(--line);}
+  .hist-acciones{display:flex;gap:6px;padding:0 4px 10px;flex-wrap:wrap;}
+  .hist-acc{min-height:44px;padding:0 12px;border-radius:9px;border:1px solid var(--line);
+      background:var(--panel2);color:var(--txt);font-size:13px;cursor:pointer;}
+  .hist-acc:hover,.hist-acc:focus-visible{border-color:var(--azul);}
+  .hist-panel{padding:0 0 12px;}
+  .hist-panel[hidden]{display:none;}
+
+  /* ─── Resultado del buscador para asociar un código (2026-09-11) ──────────
+     Mismo componente que usan Códigos, Consulta de precios y Recepción, cada una con su
+     propia versión hasta hoy. 48px de alto mínimo de fila, foto de 56 y el estado del
+     código a la derecha. */
+  .res{display:flex;gap:10px;align-items:center;width:100%;text-align:left;min-height:64px;
+      padding:9px 10px;border-radius:10px;border:1px solid transparent;background:none;
+      color:var(--txt);cursor:pointer;}
+  .res:hover,.res:focus-visible{background:var(--panel2);border-color:var(--line);}
+  .res.foco{background:rgba(45,184,232,.12);border-color:rgba(45,184,232,.45);}
+  .res-foto{width:56px;height:56px;border-radius:8px;object-fit:cover;background:#fff;flex:0 0 auto;
+      outline:1px solid rgba(255,255,255,.10);outline-offset:-1px;}
+  .res-foto-vacia{display:grid;place-items:center;background:var(--panel2);color:var(--muted2);font-size:18px;}
+  .res-c{flex:1;min-width:0;display:block;}
+  .res-t{display:block;font-size:15px;font-weight:600;line-height:1.25;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .res-t-sec{font-size:13px;font-weight:500;color:var(--muted);-webkit-line-clamp:1;}
+  .res-v{display:block;font-size:15px;font-weight:700;margin-top:1px;}
+  .res-m{display:block;font-size:12px;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums;}
+  .res-pill{flex:0 0 auto;font-size:11px;font-weight:700;padding:4px 8px;border-radius:99px;white-space:nowrap;}
+  .res-pill.libre{background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.38);}
+  .kbd{display:inline-block;font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+      padding:4px 6px;border-radius:5px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);}
+  .ayuda-teclado{display:none;font-size:12px;color:var(--muted);margin:10px 0 0;text-align:center;}
+  @media (min-width:1024px){ .ayuda-teclado{display:block;} }
+  .res-pill.ocupado{background:rgba(245,185,66,.12);color:var(--amber,#F5B942);border:1px solid rgba(245,185,66,.45);}
+
+  /* ─── Ficha de producto (rediseño 2026-09-11) ─────────────────────────────
+     Blancos de toque: 56px la caja de cantidad (acción principal), 44px el menú.
+     Antes había 69 controles por debajo de 44px en esta pantalla, uno de 13x13.
+     Bordes y estados a 3:1 por WCAG 1.4.11, no sólo el texto. */
+  .pf{display:flex;gap:10px;align-items:center;background:var(--panel);
+      border:1px solid var(--line);border-radius:12px;padding:9px 6px 9px 9px;margin-bottom:8px;}
+  .pf[data-estado="sin_asociar"]{border-color:rgba(245,185,66,.45);}
+
+  .pf-foto{width:64px;height:64px;border-radius:9px;object-fit:cover;background:#fff;flex:0 0 auto;
+      outline:1px solid rgba(255,255,255,.10);outline-offset:-1px;}
+  .pf-foto-vacia{display:grid;place-items:center;background:var(--panel2);color:var(--muted2);
+      font-size:22px;outline-color:rgba(255,255,255,.06);}
+  .pf-info{flex:1;min-width:0;}
+  .pf-nom{font-size:16px;font-weight:600;line-height:1.25;letter-spacing:-.01em;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .pf-nom-sec{font-size:13px;font-weight:500;color:var(--muted);-webkit-line-clamp:1;}
+  .pf-var{font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:1px;}
+  .pf-meta{font-size:12.5px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums;}
+  .pf-res{font-size:12.5px;font-weight:600;margin-top:7px;}
+  .pf-res.ok{color:var(--green);}
+  .pf-res.dif{color:var(--amber,#F5B942);}
+  .pf-res.warn{color:var(--amber,#F5B942);}
+  /* CHOQUE DE NOMBRES: la ficha usa class="pf-res dif", y `.dif` existe aparte como componente
+     de la lista de diferencias (display:flex, padding:12px 0). Esos 24px de relleno le sumaban
+     altura a TODAS las fichas, en todos los anchos — no sólo en teléfono. Se neutraliza acá con
+     dos clases, que gana por especificidad. */
+  .pf-res.dif, .pf-res.ok, .pf-res.warn{display:block;padding:0;gap:0;flex-wrap:nowrap;}
+  .pf-num{display:flex;flex-direction:row;align-items:center;gap:2px;flex:0 0 auto;}
+  .pf-menos{min-width:44px;min-height:56px;border:0;background:none;color:var(--txt);
+      font-size:25px;line-height:1;border-radius:9px;cursor:pointer;}
+  .pf-menos:hover,.pf-menos:focus-visible{background:var(--panel2);}
+  .cd-num{display:flex;flex-direction:row;align-items:center;justify-content:center;gap:4px;}
+  .pf-menos[disabled]{opacity:.35;cursor:not-allowed;}
+  .pf-caja{width:66px;height:56px;border-radius:9px;border:1.5px solid var(--border2,#2E3B57);
+      background:var(--black,#0A0D14);color:var(--txt);text-align:center;
+      font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;
+      -moz-appearance:textfield;appearance:textfield;}
+  .pf-caja::-webkit-outer-spin-button,.pf-caja::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+  .pf-caja::placeholder{color:var(--muted2);font-size:20px;font-weight:500;}
+  .pf-caja.vacia{border-style:dashed;}
+  .pf-caja.ok{border-color:rgba(52,211,153,.55);background:rgba(52,211,153,.12);color:var(--green);}
+
+  /* TELÉFONO: el título baja a ocupar el ancho, los controles pasan a una segunda fila.
+     VA DESPUÉS de las reglas base de .pf a propósito: con la misma especificidad gana el que
+     aparece último, y puesto antes la base le pisaba la foto. Ya pasó una vez en esta pantalla
+     con el bloque de escritorio.
+
+     Medido a 390px con el layout de una sola fila: la ficha son 366px, la foto 64 y los
+     controles 158 (dos botones de 44 y la caja de 56, que es el piso accesible). Al nombre le
+     quedaban 107px — unos 13 caracteres por línea. "Cubierta Grand Prix 5000 All Se 700x28 Tr
+     Kv - Continental" son 58, y el conteo se hace 100% en teléfono. */
+
+  .pf-caja.dif{border-color:rgba(245,185,66,.55);background:rgba(245,185,66,.12);color:var(--amber,#F5B942);}
+  .pf-caja:focus{outline:2px solid var(--azul);outline-offset:2px;}
+  .pf-mas{min-width:44px;min-height:56px;border:0;background:none;color:var(--muted);
+      font-size:18px;line-height:1;border-radius:9px;cursor:pointer;}
+  .pf-mas:hover,.pf-mas:focus-visible{background:var(--panel2);color:var(--txt);}
+  @media (max-width:380px){ .pf-foto{width:52px;height:52px;} .pf-caja{width:58px;} }
+  .pf{position:relative;}
+  .pf-menu{position:absolute;right:8px;top:52px;z-index:20;background:var(--panel2);
+      border:1px solid var(--border2,#2E3B57);border-radius:10px;overflow:hidden;min-width:200px;
+      box-shadow:0 12px 30px rgba(0,0,0,.5);}
+  .pf-menu button{display:block;width:100%;text-align:left;min-height:48px;padding:0 14px;
+      background:none;border:0;color:var(--txt);font-size:14.5px;cursor:pointer;}
+  .pf-menu button:hover,.pf-menu button:focus-visible{background:var(--panel);}
+  .pf-menu button.peligro{color:var(--rojo,#F87171);}
+
+  @media (max-width: 600px) {
+    .pf{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;
+        column-gap:10px;row-gap:4px;align-items:start;}
+    .pf-foto{grid-column:1;grid-row:1;width:52px;height:52px;}
+    .pf-info{grid-column:2;grid-row:1;}
+    /* Los controles a la derecha, donde ya estaba el pulgar. */
+    .pf-num{grid-column:2;grid-row:2;justify-content:flex-end;}
+    /* Una línea cada uno: cada línea extra le suma ~20px a CADA ficha, y la lista es para
+       escanear. El resultado envolvía en dos líneas y era el que más altura agregaba. */
+    .pf-nom{-webkit-line-clamp:2;}
+    .pf-meta{margin-top:1px;}
+    .pf-res{display:block;margin-top:2px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    /* 44px es el piso accesible del proyecto (WCAG 2.5.5); los 56 de escritorio no hacen falta
+       acá y cada píxel de la fila de controles se paga en CADA ficha. */
+    .pf-menos{min-height:44px;}
+    .pf-caja{height:44px;width:58px;font-size:22px;}
+    .pf-mas{min-height:44px;}
+  }
+
+  /* ─── Escritorio: dos paneles (2026-09-11) ────────────────────────────────
+     No es la pantalla del teléfono estirada. En 1440px cada ficha medía 1.076px de ancho:
+     la foto a la izquierda y el número a 800px de distancia. Además el escritorio hace dos
+     trabajos propios que el teléfono casi no hace — asociar códigos (176 contra 86 en 14
+     días) y cerrar la sesión (42) — y los dos se hacen con teclado, no con mouse. */
+  .conteo-detalle{display:none;}
+  @media (min-width:1024px){
+    .conteo-dos-panes{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:18px;align-items:start;}
+    .conteo-detalle{display:block;position:sticky;top:190px;background:var(--panel);
+        border:1px solid var(--line);border-radius:12px;padding:18px;}
+    .conteo-detalle .cd-foto{width:100%;height:210px;object-fit:contain;background:#fff;
+        border-radius:10px;outline:1px solid rgba(255,255,255,.10);outline-offset:-1px;}
+    .conteo-detalle .cd-foto-vacia{display:grid;place-items:center;color:var(--muted2);font-size:38px;background:var(--panel2);}
+    .conteo-detalle .cd-nom{font-size:19px;font-weight:600;line-height:1.25;margin:14px 0 4px;letter-spacing:-.01em;}
+    .conteo-detalle .cd-var{font-size:20px;font-weight:700;margin:2px 0 4px;}
+    .conteo-detalle .cd-meta{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;}
+    .conteo-detalle .cd-caja{width:100%;height:76px;margin-top:16px;border-radius:12px;
+        border:1.5px solid var(--azul);background:var(--black,#0A0D14);color:var(--txt);
+        text-align:center;font-size:38px;font-weight:700;font-variant-numeric:tabular-nums;
+        -moz-appearance:textfield;appearance:textfield;}
+    .conteo-detalle .cd-caja::-webkit-outer-spin-button,
+    .conteo-detalle .cd-caja::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+    .conteo-detalle .cd-ayuda{font-size:12.5px;color:var(--muted);margin-top:10px;text-align:center;}
+    .conteo-detalle .cd-res{margin-top:12px;font-size:14px;font-weight:600;text-align:center;}
+    .conteo-detalle .cd-vacio{color:var(--muted);font-size:14px;text-align:center;padding:40px 0;}
+    /* La fila se compacta: en dos paneles el detalle está a la derecha, no en la fila. */
+    .pf{padding:7px 9px;gap:10px;}
+    .pf-foto{width:44px;height:44px;}
+    .pf-nom{font-size:14.5px;-webkit-line-clamp:1;}
+    .pf-var{font-size:14.5px;}
+    .pf-res{margin-top:3px;font-size:12px;}
+    .pf-caja{width:56px;height:44px;font-size:19px;}
+    .pf-menos{min-width:44px;min-height:44px;}
+    .pf-mas{min-width:44px;min-height:44px;}
+    .pf.activa{border-color:var(--azul);background:rgba(45,184,232,.10);}
+    .conteo-bottom{padding-left:24px;padding-right:24px;}
+  }
+
+
   .cantidad-ctrl .qty-btn{min-width:38px;min-height:38px;border-radius:9px;border:1px solid var(--line);
        background:var(--panel2);color:var(--txt);font-weight:800;font-size:18px;line-height:1;cursor:pointer;}
   .cantidad-ctrl .qty-plus{background:var(--azul);border-color:var(--azul);color:var(--black);}
@@ -260,7 +487,7 @@
        margin-bottom:8px;display:flex;align-items:center;gap:10px;}
   .fila-pendiente .info{flex:1;min-width:0;}
   .fila-pendiente .sku{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;font-weight:700;color:var(--muted);}
-  .fila-pendiente .nombre{font-size:13px;color:var(--txt);overflow-wrap:anywhere;white-space:normal;}
+  .fila-pendiente .nombre{font-size:13px;color:var(--txt);overflow-wrap:anywhere;white-space:normal;line-height:1.3;}
   .fila-pendiente button{min-height:38px;padding:0 12px;border-radius:9px;border:1px solid var(--line);
        background:var(--panel2);color:var(--txt);font-weight:700;font-size:13px;cursor:pointer;}
 
@@ -304,7 +531,7 @@
   .fila-revision{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:10px;}
   .fila-revision .info{flex:1;min-width:0;}
   .fila-revision .cod{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;font-size:13px;}
-  .fila-revision .nombre{font-size:13px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere;white-space:normal;}
+  .fila-revision .nombre{font-size:13px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere;white-space:normal;line-height:1.3;}
   .fila-revision .stockline{font-size:12px;color:var(--muted);margin-top:2px;}
   .fila-revision input[type=number]{width:64px;min-height:38px;font-size:15px;font-weight:700;text-align:center;
        border-radius:9px;border:1px solid var(--line);background:var(--surface2);color:var(--txt);}
@@ -383,12 +610,52 @@
     <button type="button" class="btn primary" id="btn-reintentar-escaneo">Reintentar</button>
   </div>
 
+  <style>
+    .autoriza{border-color:var(--warning,#F5B942);margin-bottom:16px;}
+    .autoriza-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:6px;}
+    .autoriza-rotulo{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;
+                     color:var(--warning,#F5B942);}
+    .autoriza-cifra{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;}
+    .dif{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:12px 0;
+         border-top:1px solid var(--border,#24304A);}
+    .dif-info{flex:1;min-width:200px;}
+    .dif-info b{display:block;font-size:14.5px;}
+    .dif-info span{color:var(--muted);font-size:12.5px;}
+    .dif-cambio{font-variant-numeric:tabular-nums;font-weight:700;font-size:14px;white-space:nowrap;}
+    .dif-cambio em{font-style:normal;color:var(--success,#34D399);}
+    .dif-acciones{display:flex;gap:8px;}
+    .dif-acciones .btn{min-height:44px;}
+  </style>
+
   <!-- Vista 1: Inicio -->
   <div class="vista" id="vista-inicio">
     <h1>Contador de inventario</h1>
     <div id="inicio-contenido">
       <p class="empty">Cargando…</p>
     </div>
+    <!-- Diferencias que esperan autorización. Los endpoints existían desde el 2026-08-27
+         (/diferencias/pendientes, /aprobar, /rechazar) y ninguna pantalla los llamaba: los
+         sobrantes quedaban esperando sin forma de resolverse, y una sesión trabada en
+         `confirmada_con_errores` bloquea el anti-solape de cualquier alcance que se cruce.
+         La sesión 33 llevaba así desde el 8 de septiembre. -->
+    <div class="card autoriza" id="card-autoriza" style="display:none;">
+      <div class="autoriza-top">
+        <span class="autoriza-rotulo">Esperan tu autorización</span>
+        <span class="autoriza-cifra" id="autoriza-cifra"></span>
+      </div>
+      <p class="dim-ayuda" style="margin:0 0 10px;">Se contaron más unidades de las que el
+        sistema tenía. Autorizá si el conteo es correcto —se ajusta el stock— o descartá si el
+        conteo estuvo mal, y la sesión queda cerrada.</p>
+      <div id="autoriza-lista"></div>
+    </div>
+
+    <details id="inicio-auditoria">
+      <summary>Faltantes ajustados solos</summary>
+      <div id="auditoria-contenido">
+        <p class="empty">Abrí para revisarlos.</p>
+      </div>
+    </details>
+
     <details id="inicio-historial">
       <summary>Historial de sesiones</summary>
       <div id="historial-contenido">
@@ -396,6 +663,32 @@
       </div>
     </details>
   </div>
+
+  <style>
+    /* Sugerencia de ronda: es lo primero que se mira al entrar, así que lleva el acento. */
+    .sugerencia{border-color:var(--azul,#2DB8E8);margin-bottom:16px;}
+    .sug-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+             margin-bottom:8px;}
+    .sug-rotulo{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700;
+                color:var(--azul,#2DB8E8);}
+    .sug-progreso{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;}
+    .sug-cuerpo{display:flex;justify-content:space-between;align-items:center;gap:14px;
+                flex-wrap:wrap;}
+    .sug-cuerpo b{display:block;font-size:19px;line-height:1.25;}
+    .sug-cuerpo span{color:var(--muted);font-size:13px;}
+    .sug-cuerpo .btn{min-height:48px;}
+    .sug-siguientes{margin-top:10px;padding-top:10px;border-top:1px solid var(--border,#24304A);
+                    color:var(--muted);font-size:12px;line-height:1.6;}
+    .alcance-manual > summary{min-height:52px;display:flex;align-items:center;cursor:pointer;
+                    font-size:15px;font-weight:600;list-style:none;}
+    .alcance-manual > summary::-webkit-details-marker{display:none;}
+    .alcance-manual > summary::after{content:'▾';margin-left:auto;color:var(--muted);}
+    .alcance-manual[open] > summary::after{content:'▴';}
+    /* El muro de chips no puede volver a medir 8.000px: se limita y scrollea adentro. */
+    .alcance-manual .chips-multi{max-height:240px;overflow-y:auto;}
+    /* Último control chico que quedaba en esta pantalla (medía 19px de alto). */
+    #select-ubicacion{min-height:48px;font-size:15px;}
+  </style>
 
   <!-- Vista 2: Elegir alcance -->
   <div class="vista" id="vista-alcance">
@@ -409,22 +702,63 @@
     <h1>Elegir alcance</h1>
     <p style="color:var(--muted);font-size:13px;margin:0 0 14px;">Elegí una o varias categorías y/o marcas para acotar qué vas a contar.</p>
 
+    <!-- Sugerencia: qué conviene contar ahora, para no tener que decidirlo cada día. -->
+    <div class="card sugerencia" id="card-sugerencia" style="display:none;">
+      <div class="sug-top">
+        <span class="sug-rotulo">Sugerido para contar ahora</span>
+        <span class="sug-progreso" id="sug-progreso"></span>
+      </div>
+      <div class="sug-cuerpo">
+        <div>
+          <b id="sug-que"></b>
+          <span id="sug-motivo"></span>
+        </div>
+        <button type="button" class="btn primary" id="sug-empezar"></button>
+      </div>
+      <div class="sug-siguientes" id="sug-siguientes"></div>
+    </div>
+
     <div class="alcance-grid">
       <div>
-        <div class="card">
-          <label for="buscar-categorias">Categorías</label>
+        <!-- Los dos muros de chips (≈100 categorías + ≈150 marcas) arrancan PLEGADOS: medían
+             8.198 px de alto en un teléfono, diez pantallas de scroll antes de poder empezar.
+             La ronda sugerida de arriba resuelve el caso normal; esto queda para el resto. -->
+        <details class="card alcance-manual" id="alcance-manual">
+          <summary>Elegir a mano otra marca o categoría</summary>
+
+          <label for="buscar-categorias" style="margin-top:12px;">Categorías</label>
           <input type="text" id="buscar-categorias" placeholder="Buscar categoría…" autocomplete="off">
           <div class="chips-multi" id="chips-categorias" role="group" aria-label="Categorías del alcance"></div>
           <div class="dim-resumen" id="resumen-categorias"></div>
           <p class="dim-ayuda" id="ayuda-categorias">Las categorías con «×0» no tienen productos al combinarlas con el resto del alcance elegido, por eso no se pueden seleccionar.</p>
-        </div>
 
-        <div class="card">
-          <label for="buscar-marcas">Marcas</label>
+          <label for="buscar-marcas" style="margin-top:16px;">Marcas</label>
           <input type="text" id="buscar-marcas" placeholder="Buscar marca…" autocomplete="off">
           <div class="chips-multi" id="chips-marcas" role="group" aria-label="Marcas del alcance"></div>
           <div class="dim-resumen" id="resumen-marcas"></div>
           <p class="dim-ayuda" id="ayuda-marcas">Las marcas con «×0» no tienen productos al combinarlas con el resto del alcance elegido, por eso no se pueden seleccionar.</p>
+        </details>
+
+        <div class="card">
+          <label for="select-ubicacion">¿Dónde estás contando?</label>
+          <p class="dim-ayuda" style="margin:0 0 8px;">Opcional. Si elegís el estante donde
+             estás parado, cada producto que escanees queda mapeado ahí y preparación va a
+             saber dónde buscarlo. Sin categoría ni marca, cuenta todo lo de esa zona.</p>
+          <select id="select-ubicacion">
+            <option value="">— Sin ubicación —</option>
+          </select>
+          <div id="ubicacion-info" style="font-size:12px;color:var(--muted);margin-top:6px;"></div>
+          <button type="button" class="btn secondary" id="btn-mapear-ubicacion" style="margin-top:6px;display:none;">
+            Marcar ubicación como mapeada (recorrida entera)
+          </button>
+          <details style="margin-top:10px;">
+            <summary style="font-size:12px;color:var(--muted);cursor:pointer;">+ Nueva ubicación</summary>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+              <input type="text" id="nueva-ubicacion-zona" placeholder="Zona" style="flex:1;min-width:0;">
+              <input type="text" id="nueva-ubicacion-estante" placeholder="Estante" style="flex:1;min-width:0;">
+              <button type="button" class="btn secondary" id="btn-crear-ubicacion">Crear</button>
+            </div>
+          </details>
         </div>
 
         <div id="alcance-aviso"></div>
@@ -451,39 +785,63 @@
 
   <!-- Vista 3: Conteo -->
   <div class="vista" id="vista-conteo">
-    <div class="conteo-barra">
-      <span class="txt"><span class="led" id="conteo-led"></span><span id="conteo-titulo">Contando</span></span>
-      <span class="chip-guardado" id="conteo-guardado">Guardado</span>
+
+    <!-- Franja superior fija. El campo de escaneo ES el buscador: si el texto parece un
+         código, cuenta; si no, filtra. Antes eran dos campos separados y el de escaneo se
+         perdía al scrollear (position:static en un documento de 6.386px). -->
+    <div class="conteo-top" id="conteo-top">
+      <div class="conteo-barra">
+        <span class="txt"><span class="led" id="conteo-led"></span><span id="conteo-titulo">Contando</span></span>
+        <span class="chip-guardado" id="conteo-guardado">Guardado</span>
+      </div>
+      <div class="scanwrap">
+        <input id="scan" aria-label="Escanear un código o buscar en la lista" autocomplete="off" autocorrect="off"
+               autocapitalize="off" spellcheck="false" autofocus placeholder="Escaneá o escribí para buscar">
+        <button class="btn-camara-mini" id="btn-camara" aria-label="Escanear con la cámara">📷</button>
+      </div>
+      <div id="ultima-lectura" class="ultima-lectura" hidden></div>
+      <div class="chips-filtro">
+        <button type="button" class="chip-filtro on" id="filtro-todos" data-filtro="todos">Todos</button>
+        <button type="button" class="chip-filtro" id="filtro-pendientes" data-filtro="pendientes">Sin contar</button>
+        <button type="button" class="chip-filtro" id="filtro-contados" data-filtro="contados">Contados</button>
+        <button class="chip-filtro" id="btn-orden-diff">Por diferencia</button>
+      </div>
     </div>
 
-    <input id="scan" aria-label="Escanear código EAN o SKU" inputmode="none" autocomplete="off" autocorrect="off"
-           autocapitalize="off" spellcheck="false" autofocus placeholder="Escaneá un código (EAN o SKU)…">
-    <button class="btn-camara" id="btn-camara">📷 Escanear con cámara</button>
-
-    <div class="contadores">
+    <!-- Los contadores viejos quedan como fuente de datos para el JS existente, ocultos:
+         el progreso real se muestra en la barra inferior, en la zona del pulgar. -->
+    <div class="contadores" hidden>
       <div class="contador"><div class="n" id="cont-contados">0</div><div class="l">Contados</div></div>
       <div class="contador"><div class="n" id="cont-pendientes">0</div><div class="l">Pendientes</div></div>
       <div class="contador"><div class="n" id="cont-diferencia">0</div><div class="l">Con diferencia</div></div>
     </div>
-
-    <div class="chips-filtro">
-      <button type="button" class="chip-filtro on" id="filtro-pendientes" data-filtro="pendientes">Pendientes</button>
-      <button type="button" class="chip-filtro" id="filtro-contados" data-filtro="contados">Contados</button>
-      <button type="button" class="chip-filtro" id="filtro-todos" data-filtro="todos">Todos</button>
-      <button class="btn-orden" id="btn-orden-diff">Por diferencia</button>
-    </div>
-
-    <div class="conteo-lista-header" id="conteo-lista-header" style="display:flex;align-items:center;gap:8px;padding:6px 4px;">
+    <input type="text" id="conteo-buscar" hidden aria-hidden="true">
+    <div class="conteo-lista-header" id="conteo-lista-header" hidden>
       <input type="checkbox" id="chk-todo-conteo" aria-label="Seleccionar todos los contados">
-      <label for="chk-todo-conteo" style="font-size:13px;">Seleccionar todo</label>
     </div>
 
-    <div id="conteo-lista"></div>
+    <div class="conteo-dos-panes">
+      <div id="conteo-lista"></div>
+      <aside id="conteo-detalle" class="conteo-detalle" aria-live="polite"></aside>
+    </div>
 
-    <div class="bottom-bar">
-      <button class="btn primary" id="btn-revisar">Revisar y cerrar</button>
-      <button class="btn secondary" id="btn-enviar-etiquetas" style="margin-top:8px;" disabled>Enviar a Etiquetas (0 seleccionados)</button>
-      <button class="btn secondary" id="btn-descartar-sesion" style="margin-top:8px;">Descartar sesión</button>
+    <!-- Franja inferior fija: el progreso de la ronda y la salida. -->
+    <div class="conteo-bottom">
+      <div class="prog-linea">
+        <b id="prog-texto">0 de 0</b>
+        <span id="prog-resto"></span>
+      </div>
+      <div class="prog-barra"><i id="prog-barra-i"></i></div>
+      <div class="conteo-acciones">
+        <button class="btn primary" id="btn-revisar">Revisar y cerrar</button>
+        <button class="btn secondary" id="btn-mas-conteo" aria-haspopup="true">Más ▾</button>
+      </div>
+      <div class="conteo-mas" id="conteo-mas" hidden>
+        <button class="btn secondary" id="btn-sonido" aria-pressed="true">🔊 Sonido activado</button>
+        <button class="btn secondary" id="btn-etiquetas-todos">Mandar todo lo contado a etiquetas</button>
+        <button class="btn secondary" id="btn-enviar-etiquetas" disabled>Enviar a Etiquetas (0 seleccionados)</button>
+        <button class="btn secondary" id="btn-descartar-sesion">Descartar sesión</button>
+      </div>
     </div>
   </div>
 
@@ -579,6 +937,11 @@
   <label for="ean-sheet-buscar">Buscar producto por SKU o nombre</label>
   <input type="text" id="ean-sheet-buscar" placeholder="Escribí para buscar…" autocomplete="off">
   <div id="ean-sheet-resultados" style="margin-top:10px;"></div>
+  <p class="ayuda-teclado">
+    <span class="kbd">&uarr;</span><span class="kbd">&darr;</span> elegir &middot;
+    <span class="kbd">Enter</span> asociar &middot;
+    <span class="kbd">Esc</span> saltear
+  </p>
   <button class="btn secondary" id="ean-sheet-despues" style="margin-top:6px;">Después</button>
 </div>
 
@@ -593,19 +956,39 @@
   </div>
 </div>
 
-<script src="../lib/format.js"></script>
-<script src="../lib/api.js"></script>
-<script src="../lib/conteoCantidad.js"></script>
+<script>document.write('<script src="' + window.LIB + 'format.js"><\/script>'
+  + '<script src="' + window.LIB + 'api.js"><\/script>'
+  + '<script src="' + window.LIB + 'conteoCantidad.js"><\/script>'
+  + '<script src="' + window.LIB + 'conteoLista.js"><\/script>');</script>
 <script type="module" src="../lib/scanner.js"></script>
 <script>
   Api.installAuth();
 (function(){
   "use strict";
+  function usuarioEsAdmin(){ return !!window.__inventarioEsAdmin; }
+
+  // Una ruta inexistente en el proxy (o una redirección) puede devolver una página HTML.
+  // No intentar parsearla como JSON: el mensaje de SyntaxError ocultaba el status real y
+  // hacía parecer que el problema era la cantidad ingresada.
+  function leerRespuestaJson(respuesta){
+    return respuesta.text().then(function(texto){
+      var data = null;
+      try { data = texto ? JSON.parse(texto) : null; }
+      catch (_) {
+        throw new Error('El servidor respondió HTML en vez de datos (HTTP ' + respuesta.status + '). Recargá la página; si continúa, avisá a soporte.');
+      }
+      if(!respuesta.ok || !data || !data.ok){
+        throw new Error((data && data.error) || ('Error HTTP ' + respuesta.status));
+      }
+      return data;
+    });
+  }
 
   // ----- Estado global de la SPA (compartido con las próximas tareas vía window.InvApp) -----
   var state = {
     sesion: null, // sesión activa/actual en memoria
     sesionVista: null, // sesión cerrada abierta en modo lectura desde el historial (no pisa la activa)
+    usuario: null, // quién sos: decide si una sesión abierta se retoma o se abre en lectura
   };
 
   // ----- Navegación entre vistas -----
@@ -616,8 +999,10 @@
       if(!el) return;
       el.classList.toggle('on', v === nombre);
     });
-    if(nombre === 'inicio') cargarInicio();
-    if(nombre === 'alcance') cargarAlcance();
+    // La clase compacta el encabezado mientras se cuenta: ese alto tiene que ser producto.
+    document.body.classList.toggle('contando', nombre === 'conteo');
+    if(nombre === 'inicio'){ cargarInicio(); cargarAutorizaciones(); }
+    if(nombre === 'alcance'){ cargarAlcance(); cargarSugerencia(); }
     if(nombre === 'conteo') cargarConteo();
     if(nombre === 'revision') cargarRevision();
   }
@@ -664,6 +1049,93 @@
   }
 
   // ----- Vista Inicio -----
+  // ── Autorizaciones y auditoría de diferencias ─────────────────────────────
+  // Los endpoints existían desde el 2026-08-27 y ninguna pantalla los llamaba.
+  document.getElementById('inicio-auditoria').addEventListener('toggle', function(){
+    if(this.open) cargarAuditoria();
+  });
+
+  function cargarAutorizaciones(){
+    var card=document.getElementById('card-autoriza');
+    var lista=document.getElementById('autoriza-lista');
+    fetch('/api/inventario/diferencias/pendientes', { credentials:'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        var p=(j && j.ok && j.pendientes) ? j.pendientes : [];
+        if(!p.length){ card.style.display='none'; return; }
+        document.getElementById('autoriza-cifra').textContent =
+          p.length + plural(p.length, ' diferencia', ' diferencias');
+        // Dos situaciones bien distintas bajo el mismo aviso: el que todavía espera que se
+        // ajuste el stock, y el que ya se ajustó y sólo quedó el aviso colgado. Si no se
+        // separan, "Autorizar" promete algo que en el segundo caso ya pasó.
+        lista.innerHTML = p.map(function(d){
+          return '<div class="dif" data-id="'+d.id+'">'
+            + '<div class="dif-info"><b>'+esc(d.nombre||d.sku)+'</b>'
+            + '<span>'+esc(d.sku)+(d.marca?' · '+esc(d.marca):'')
+            + (d.ya_aplicado?' · <b style="color:var(--muted)">el stock ya se ajustó, sólo falta cerrar el aviso</b>':'')
+            + '</span></div>'
+            + '<div class="dif-cambio">'+n(d.cantidad_esperada)+' → <em>'+n(d.cantidad_contada)+'</em>'
+            + '<br><span style="font-weight:400;color:var(--muted);font-size:12px">'
+            + (d.valor_diferencia!=null?('$'+n(d.valor_diferencia)):'')
+            + (d.ya_aplicado&&d.stock_actual!=null?(' · stock hoy: '+n(d.stock_actual)):'')
+            + '</span></div>'
+            + '<div class="dif-acciones">'
+            + '<button class="btn primary" data-accion="aprobar">'+(d.ya_aplicado?'Cerrar aviso':'Autorizar')+'</button>'
+            + '<button class="btn secondary" data-accion="rechazar">Descartar</button>'
+            + '</div></div>';
+        }).join('');
+        card.style.display='';
+      })
+      .catch(function(){ card.style.display='none'; });
+  }
+
+  document.getElementById('autoriza-lista').addEventListener('click', function(ev){
+    var btn=ev.target.closest('button[data-accion]'); if(!btn) return;
+    var fila=btn.closest('.dif'); var id=fila.getAttribute('data-id');
+    var accion=btn.getAttribute('data-accion');
+    var nombre=fila.querySelector('.dif-info b').textContent;
+    // Descartar borra el conteo: se confirma, porque no se puede deshacer.
+    if(accion==='rechazar' && !confirm('Descartar el conteo de "'+nombre+'".\n\nEl stock queda como estaba y la diferencia se cierra. No se puede deshacer.')) return;
+    fila.querySelectorAll('button').forEach(function(b){ b.disabled=true; });
+    fetch('/api/inventario/diferencias/'+id+'/'+accion, { method:'POST', credentials:'same-origin' })
+      .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, j:j }; }); })
+      .then(function(res){
+        if(!res.ok || !res.j.ok) throw new Error(res.j.error||'No se pudo resolver');
+        cargarAutorizaciones();
+        cargarInicio();
+      })
+      .catch(function(e){
+        alert(e.message);
+        fila.querySelectorAll('button').forEach(function(b){ b.disabled=false; });
+      });
+  });
+
+  // Auditoría: los faltantes se aplican solos (decisión del usuario). Quedan a la vista para
+  // poder revisarlos después, ordenados por valor — lo que duele es la bici, no el casco.
+  function cargarAuditoria(){
+    var cont=document.getElementById('auditoria-contenido');
+    cont.innerHTML='<p class="empty">Cargando…</p>';
+    fetch('/api/inventario/diferencias/aplicadas?dias=60', { credentials:'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        if(!j || !j.ok || !j.aplicadas.length){ cont.innerHTML='<p class="empty">No hay faltantes aplicados en los últimos 60 días.</p>'; return; }
+        cont.innerHTML='<p class="dim-ayuda">'+n(j.cantidad)+plural(j.cantidad,' producto se ajustó',' productos se ajustaron')
+          +' solos al confirmar · $'+n(j.total_valor)+' en total'
+          +(j.en_cero<j.cantidad?(' · '+n(j.cantidad-j.en_cero)+plural(j.cantidad-j.en_cero,' es conteo parcial',' son conteos parciales')+', el resto no apareció en ningún lado'):'')
+          +'. Revisá si alguno estaba guardado en otro lado.</p>'
+          + j.aplicadas.map(function(d){
+            return '<div class="dif">'
+              + '<div class="dif-info"><b>'+esc(d.nombre||d.sku)+'</b>'
+              + '<span>'+esc(d.sku)+' · contó '+esc(d.usuario||'—')+' el '+esc((d.creado_en||'').slice(0,10))
+              + (d.requiere_revision?' · <b style="color:var(--warning,#F5B942)">estaba marcado para revisar</b>':'')+'</span></div>'
+              + '<div class="dif-cambio">'+n(d.cantidad_esperada)+' → '+n(d.cantidad_contada)+'<br>'
+              + '<span style="font-weight:400;color:var(--muted);font-size:12px">$'+n(d.valor_diferencia)
+              + ' · stock hoy: '+n(d.stock_actual)+'</span></div></div>';
+          }).join('');
+      })
+      .catch(function(){ cont.innerHTML='<p class="empty">No se pudo cargar.</p>'; });
+  }
+
   function cargarInicio(){
     var cont = document.getElementById('inicio-contenido');
     cont.innerHTML = '<p class="empty">Cargando…</p>';
@@ -676,11 +1148,33 @@
             '<div class="titulo">' + esc(alcanceTexto(j.sesion)) + '</div>' +
             '<div class="meta">Sesión abierta ' + esc(fechaRelativa(j.sesion.creado_en)) + '</div>' +
             '<button class="btn primary" id="btn-retomar">Retomar</button>' +
+            '<button class="btn secondary" id="btn-descartar-bloqueo" style="margin-top:8px;">Descartar sesión</button>' +
           '</div>' +
           '<button class="btn secondary" id="btn-nueva" disabled title="Ya tenés una sesión abierta — retomala o descartala">Nueva sesión</button>';
         document.getElementById('btn-retomar').addEventListener('click', function(){
           resetEstadoBloqueSinStock();
+          empujarUrlSesion(j.sesion.id);
           mostrarVista('conteo');
+        });
+        // Descartar la sesión bloqueante sin necesidad de retomarla primero
+        // (pedido explícito 2026-08-27: liberar "Nueva sesión" sin pasar por el flujo de conteo).
+        document.getElementById('btn-descartar-bloqueo').addEventListener('click', function(){
+          var btn = document.getElementById('btn-descartar-bloqueo');
+          btn.disabled = true;
+          fetch('/api/inventario/sesiones/' + j.sesion.id + '/descartar', { method: 'POST' })
+            .then(function(r){ return r.json(); })
+            .then(function(res){
+              if(res && res.ok){
+                historialCargado = false;
+                cargarInicio();
+              } else {
+                alert(res && res.error ? res.error : 'No se pudo descartar la sesión.');
+                btn.disabled = false;
+              }
+            }).catch(function(){
+              alert('No se pudo descartar la sesión (sin conexión).');
+              btn.disabled = false;
+            });
         });
       } else {
         cont.innerHTML = '<button class="btn primary" id="btn-nueva">Nueva sesión</button>';
@@ -694,6 +1188,8 @@
   }
 
   function estadoHistorialTexto(s){
+    if(s.estado === 'abierta') return 'Abierta';
+    if(s.estado === 'confirmando') return 'Confirmando';
     if(s.estado === 'confirmada') return 'Confirmada';
     if(s.estado === 'confirmada_con_errores') return 'Confirmada con errores';
     return 'Descartada';
@@ -713,17 +1209,31 @@
         var fallidosTxt = s.fallidos > 0 ? ', ' + n(s.fallidos) + ' sin ajustar' : '';
         var fechaTxt = fecha(s.confirmado_en || s.creado_en);
         var labelTxt = 'Ver detalle de la sesión ' + alcanceTexto(s) + ', ' + estadoTxt + fallidosTxt + ', ' + fechaTxt;
-        html += '<button type="button" class="hist-row" data-id="' + esc(s.id) + '" aria-label="' + esc(labelTxt) + '">' +
-          '<span class="hist-row-main">' +
-            '<span class="hist-row-top">' + esc(alcanceTexto(s)) + '</span>' +
-            '<span class="hist-row-meta">Contó: ' + esc(s.usuario || '—') + '</span>' +
-          '</span>' +
-          '<span class="hist-row-side">' +
-            '<span class="estado ' + esc(s.estado) + '">' + esc(estadoTxt) + '</span>' +
-            (s.fallidos > 0 ? '<span class="hist-fallidos">' + n(s.fallidos) + ' sin ajustar</span>' : '') +
-            '<span class="hist-fecha">' + esc(fecha(s.confirmado_en || s.creado_en)) + '</span>' +
-          '</span>' +
-        '</button>';
+        // La fila del historial deja de ser sólo lectura (pedido del usuario, 2026-09-11):
+        // hasta ahora abría un detalle con dos contadores y nada más. Las acciones viven
+        // debajo, en la misma fila, para no esconder el trabajo detrás de otra pantalla.
+        var cerrada = s.estado === 'confirmada' || s.estado === 'confirmada_con_errores';
+        html += '<div class="hist-item">' +
+          '<button type="button" class="hist-row" data-id="' + esc(s.id) + '" aria-label="' + esc(labelTxt) + '">' +
+            '<span class="hist-row-main">' +
+              '<span class="hist-row-top">' + esc(alcanceTexto(s)) + '</span>' +
+              '<span class="hist-row-meta">Contó: ' + esc(s.usuario || '—') + '</span>' +
+            '</span>' +
+            '<span class="hist-row-side">' +
+              '<span class="estado ' + esc(s.estado) + '">' + esc(estadoTxt) + '</span>' +
+              (s.fallidos > 0 ? '<span class="hist-fallidos">' + n(s.fallidos) + ' sin ajustar</span>' : '') +
+              '<span class="hist-fecha">' + esc(fecha(s.confirmado_en || s.creado_en)) + '</span>' +
+            '</span>' +
+          '</button>' +
+          (cerrada ? '<div class="hist-acciones">' +
+            '<button type="button" class="hist-acc" data-acc="difs" data-id="' + esc(s.id) + '">Ver diferencias</button>' +
+            '<button type="button" class="hist-acc" data-acc="etiquetas" data-id="' + esc(s.id) + '">Mandar a etiquetas</button>' +
+            '<button type="button" class="hist-acc" data-acc="recontar" data-id="' + esc(s.id) + '"' +
+              ' data-cats="' + esc(JSON.stringify(s.categorias || [])) + '"' +
+              ' data-marcas="' + esc(JSON.stringify(s.marcas || [])) + '">Recontar esto</button>' +
+          '</div>' : '') +
+          '<div class="hist-panel" id="hist-panel-' + esc(s.id) + '" hidden></div>' +
+        '</div>';
       });
       cont.innerHTML = html;
     }).catch(function(){
@@ -742,11 +1252,98 @@
   // Delegación: click (o Enter/Espacio, nativos de <button>) sobre una fila del historial
   // abre esa sesión cerrada en modo lectura (vista Resultado, sin acciones de conteo).
   document.getElementById('historial-contenido').addEventListener('click', function(e){
+    var acc = e.target.closest('.hist-acc');
+    if(acc){
+      var idA = acc.getAttribute('data-id');
+      var tipo = acc.getAttribute('data-acc');
+      if(tipo === 'difs') verDiferenciasSesion(idA, acc);
+      else if(tipo === 'etiquetas') etiquetasDeSesion(idA);
+      else if(tipo === 'recontar') recontarAlcance(acc);
+      return;
+    }
     var btn = e.target.closest('.hist-row');
     if(!btn) return;
     var id = btn.getAttribute('data-id');
     if(id) abrirDetalleHistorial(id);
   });
+
+  // Diferencias de UNA ronda, con su valor en pesos. Hasta ahora sólo existían agregadas en
+  // la tarjeta de auditoría del inicio: no había forma de preguntar qué pasó en una sesión.
+  function verDiferenciasSesion(id, btn){
+    var panel = document.getElementById('hist-panel-' + id);
+    if(!panel) return;
+    if(!panel.hidden){ panel.hidden = true; btn.textContent = 'Ver diferencias'; return; }
+    panel.hidden = false;
+    panel.innerHTML = '<p class="empty">Cargando…</p>';
+    btn.textContent = 'Ocultar diferencias';
+    fetch('/api/inventario/sesiones/' + id + '/diferencias', { credentials: 'same-origin' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok) throw new Error((j && j.error) || 'No se pudieron cargar');
+        if(!j.diferencias.length){ panel.innerHTML = '<p class="empty">Esta ronda no dejó diferencias.</p>'; return; }
+        panel.innerHTML = '<p class="dim-ayuda">' + n(j.diferencias.length) + ' diferencia'
+          + (j.diferencias.length === 1 ? '' : 's') + ' · $' + n(j.total_valor)
+          + ' · ' + n(j.faltantes) + ' faltante' + (j.faltantes === 1 ? '' : 's')
+          + ', ' + n(j.sobrantes) + ' sobrante' + (j.sobrantes === 1 ? '' : 's') + '</p>'
+          + j.diferencias.map(function(d){
+            var esFalt = d.tipo === 'faltante';
+            return '<div class="res" style="cursor:default">'
+              + (d.img ? '<img class="res-foto" src="' + esc(d.img) + '" alt="" loading="lazy">'
+                       : '<div class="res-foto res-foto-vacia">▤</div>')
+              + '<span class="res-c"><span class="res-t">' + esc(d.nombre || d.sku) + '</span>'
+              + '<span class="res-m">' + esc(d.sku) + ' · contó ' + n(d.cantidad_contada)
+              + ' de ' + n(d.cantidad_esperada) + ' · stock hoy ' + n(d.stock_actual) + '</span></span>'
+              + '<span class="res-pill ' + (esFalt ? 'ocupado' : 'libre') + '">'
+              + (esFalt ? '−' : '+') + n(Math.abs(d.diferencia)) + ' · $' + n(d.valor_diferencia) + '</span>'
+            + '</div>';
+          }).join('');
+      })
+      .catch(function(e){ panel.innerHTML = '<p class="empty">' + esc(e.message) + '</p>'; });
+  }
+
+  // Los SKU de una ronda a la cola de etiquetas: terminé de contar Shimano, quiero las
+  // etiquetas de todo lo que conté. Es la puerta que hacía falta para que el depósito se
+  // vuelva escaneable — hoy sólo el 17% del catálogo tiene código.
+  function etiquetasDeSesion(id){
+    fetch('/api/inventario/sesiones/' + id, { credentials: 'same-origin' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok) throw new Error('No se pudo leer la sesión');
+        var skus = (j.items || []).filter(function(i){ return i.sku; }).map(function(i){ return i.sku; });
+        if(!skus.length){ alert('Esa ronda no tiene productos con SKU.'); return; }
+        if(!confirm('Mandar ' + skus.length + ' producto' + (skus.length === 1 ? '' : 's')
+          + ' de esta ronda a la cola de etiquetas?')) return;
+        return fetch('/api/etiquetas/cola/lote', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ skus: skus, origen: 'historial', sesion_id: Number(id) })
+        }).then(function(r){ return r.json(); }).then(function(res){
+          if(!res || !res.ok) throw new Error((res && res.error) || 'No se pudo mandar');
+          alert(res.creadas === 0
+            ? 'Ya estaban todas en la cola de etiquetas.'
+            : res.creadas + ' etiqueta(s) agregada(s)' + (res.repetidas ? ' · ' + res.repetidas + ' ya estaban' : '')
+              + '.\n\nImprimilas desde la herramienta Etiquetas.');
+        });
+      })
+      .catch(function(e){ alert(e.message); });
+  }
+
+  // Recontar el mismo alcance: es lo que uno quiere hacer cuando una ronda dio diferencias
+  // raras. Abre la pantalla de alcance con la categoría y la marca ya puestas.
+  function recontarAlcance(btn){
+    var cats = [], marcas = [];
+    try { cats = JSON.parse(btn.getAttribute('data-cats') || '[]'); } catch(e){}
+    try { marcas = JSON.parse(btn.getAttribute('data-marcas') || '[]'); } catch(e){}
+    if(!cats.length && !marcas.length){ alert('Esa ronda no tiene un alcance por marca o categoría que se pueda repetir.'); return; }
+    selCategorias = cats.slice();
+    selMarcas = marcas.slice();
+    mostrarVista('alcance');
+    setTimeout(function(){
+      var manual = document.getElementById('alcance-manual');
+      if(manual) manual.open = true; // para que se vea qué quedó seleccionado
+      renderAlcance(); refrescarOpciones();
+    }, 0);
+  }
 
   // ----- Vista Elegir alcance (chips multi-select buscables + preview en vivo) -----
   var buscarCategorias = document.getElementById('buscar-categorias');
@@ -766,6 +1363,11 @@
   var opciones = { categorias: [], marcas: [] };
   var selCategorias = [];
   var selMarcas = [];
+  // Fase 2: alcance alternativo por ubicación (barrido completo), mutuamente excluyente
+  // con categoría/marca. `selUbicacion` es el objeto entero (id/zona/estante/estado/
+  // skus_registrados), no solo el id, para no tener que re-pedir la lista al mostrar info.
+  var selUbicacion = null;
+  var ubicacionesDisponibles = [];
   var previewActual = null;
   // Contadores de secuencia: con dos toggles rápidos, la respuesta del fetch viejo puede
   // llegar después de la del nuevo. Se descarta toda respuesta que no sea la última pedida.
@@ -813,12 +1415,62 @@
         // aria-disabled no bloquea el click como `disabled`: hay que ignorarlo a mano.
         if(btn.getAttribute('aria-disabled') === 'true') return;
         toggleSeleccion(seleccion, btn.getAttribute('data-valor'));
+        // Se combinan: la categoría/marca dice QUÉ se cuenta y la ubicación DÓNDE se está
+        // parado, para que el mapeo se llene solo con el conteo que ya se hace.
+        renderInfoUbicacion();
         renderAlcance();
         refrescarOpciones();
         pedirPreview();
       });
     });
   }
+
+  // ── Sugerencia de ronda ────────────────────────────────────────────────────
+  // Elegir qué contar es una decisión diaria que termina siempre en lo mismo. La sugerencia
+  // prioriza lo que nunca se contó, evitando grupos donde habría que recontar lo que ya
+  // está al día. Aplicarla llena el alcance; no arranca sola: el operario confirma.
+  var sugerenciaActual = null;
+  function cargarSugerencia(){
+    fetch('/api/inventario/ronda-sugerida', { credentials:'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        var card = document.getElementById('card-sugerencia');
+        if(!j || !j.ok || !j.sugerencia){ card.style.display='none'; return; }
+        sugerenciaActual = j.sugerencia;
+        var s = j.sugerencia;
+        var que = s.categoria ? (s.marca + ' · ' + s.categoria) : s.marca;
+        document.getElementById('sug-que').textContent = que;
+        // Se muestran los dos números: la sesión trae también los que figuran en cero, pero
+        // sólo el bloque con stock hay que resolver para cerrarla.
+        document.getElementById('sug-motivo').textContent =
+          n(s.con_stock) + plural(s.con_stock, ' producto con stock', ' productos con stock') +
+          ' · ' + s.motivo +
+          (s.skus > s.con_stock ? ' · la sesión suma ' + n(s.skus - s.con_stock) + ' que figuran en cero' : '');
+        document.getElementById('sug-progreso').textContent =
+          n(j.contados_hoy) + ' de ' + n(j.objetivo) + ' contados hoy · faltan ' +
+          n(j.nunca_contados) + ' sin contar nunca';
+        document.getElementById('sug-empezar').textContent = 'Contar ' + que;
+        document.getElementById('sug-siguientes').textContent = (j.siguientes||[]).length
+          ? 'Después: ' + j.siguientes.map(function(g){
+              return (g.categoria ? g.marca+' · '+g.categoria : g.marca) + ' (' + g.con_stock + ')';
+            }).join(' · ')
+          : '';
+        card.style.display = '';
+      })
+      .catch(function(){ document.getElementById('card-sugerencia').style.display='none'; });
+  }
+  document.getElementById('sug-empezar').addEventListener('click', function(){
+    if(!sugerenciaActual) return;
+    selMarcas = sugerenciaActual.marca === '(sin marca)' ? [] : [sugerenciaActual.marca];
+    selCategorias = sugerenciaActual.categoria && sugerenciaActual.categoria !== '(sin categoría)'
+      ? [sugerenciaActual.categoria] : [];
+    buscarCategorias.value = '';
+    buscarMarcas.value = '';
+    renderAlcance();
+    refrescarOpciones();
+    pedirPreview();
+    document.getElementById('card-sugerencia').scrollIntoView({ behavior:'smooth', block:'start' });
+  });
 
   function renderAlcance(){
     renderChips(chipsCategorias, opciones.categorias, selCategorias, buscarCategorias.value, 'ayuda-categorias');
@@ -833,6 +1485,19 @@
   }
 
   function actualizarCta(){
+    if(selUbicacion){
+      // No hay alcance-preview para ubicación (el alcance se construye solo, a medida que
+      // se escanea — ver docs/api-contrato.md). El único número que hay de antemano es
+      // cuántos SKUs ya están asociados a esa ubicación de sesiones anteriores.
+      prevProductos.textContent = n(selUbicacion.skus_registrados || 0);
+      prevUnidades.textContent = '—';
+      prevCon.textContent = '—';
+      prevSin.textContent = '—';
+      alcanceEmpezar.textContent = 'Empezar a contar ' + esc(selUbicacion.zona) + ' / ' + esc(selUbicacion.estante) + ' →';
+      alcanceEmpezar.disabled = false;
+      renderAvisoAlcanceGrande();
+      return;
+    }
     var haySeleccion = selCategorias.length > 0 || selMarcas.length > 0;
     if(previewActual){
       prevProductos.textContent = n(previewActual.productos);
@@ -948,9 +1613,96 @@
         opciones.marcas = normOpciones(j.marcas);
         renderAlcance();
       }).catch(function(){ renderAlcance(); });
+    cargarUbicaciones();
     renderAlcance();
     pedirPreview();
   }
+
+  /* ----- Fase 2: alcance por ubicación ----- */
+  var selectUbicacion = document.getElementById('select-ubicacion');
+  var ubicacionInfo = document.getElementById('ubicacion-info');
+  var btnMapearUbicacion = document.getElementById('btn-mapear-ubicacion');
+
+  function cargarUbicaciones(){
+    fetch('/api/inventario/ubicaciones')
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok) return;
+        ubicacionesDisponibles = j.ubicaciones || [];
+        var actualId = selUbicacion ? selUbicacion.id : null;
+        selectUbicacion.innerHTML = '<option value="">— Elegir alcance por categoría/marca en cambio —</option>' +
+          ubicacionesDisponibles.map(function(u){
+            return '<option value="' + u.id + '">' + esc(u.zona) + ' / ' + esc(u.estante) +
+              ' (' + n(u.skus_registrados) + (u.estado === 'mapeada' ? ', mapeada' : ', bootstrap') + ')</option>';
+          }).join('');
+        if(actualId){
+          selUbicacion = ubicacionesDisponibles.find(function(u){ return u.id === actualId; }) || null;
+          selectUbicacion.value = selUbicacion ? String(selUbicacion.id) : '';
+        }
+        renderInfoUbicacion();
+      }).catch(function(){});
+  }
+
+  function renderInfoUbicacion(){
+    if(!selUbicacion){
+      ubicacionInfo.textContent = '';
+      btnMapearUbicacion.style.display = 'none';
+      return;
+    }
+    ubicacionInfo.textContent = selUbicacion.skus_registrados +
+      plural(selUbicacion.skus_registrados, ' producto ya asociado', ' productos ya asociados') +
+      ' a esta ubicación' + (selUbicacion.estado === 'mapeada' ? ' · ya está mapeada' : ' · todavía en bootstrap (sin recorrer entera)') + '.';
+    btnMapearUbicacion.style.display = selUbicacion.estado === 'mapeada' ? 'none' : 'inline-block';
+  }
+
+  selectUbicacion.addEventListener('change', function(){
+    var id = parseInt(selectUbicacion.value, 10);
+    selUbicacion = id ? (ubicacionesDisponibles.find(function(u){ return u.id === id; }) || null) : null;
+    // Ya no se borra la categoría/marca: se combinan. Contás los cascos Giro parado frente
+    // al estante C1 y lo que escaneás queda mapeado ahí, sin cambiar cómo contás.
+    // Sin categoría ni marca, la ubicación sigue significando barrido completo de la zona.
+    // Sin esto, el aviso "alcance grande" de una selección anterior quedaba pegado mostrando
+    // un número que ya no corresponde (hallazgo del revisor).
+    previewActual = null;
+    renderInfoUbicacion();
+    renderAlcance();
+  });
+
+  btnMapearUbicacion.addEventListener('click', function(){
+    if(!selUbicacion) return;
+    btnMapearUbicacion.disabled = true;
+    fetch('/api/inventario/ubicaciones/' + selUbicacion.id + '/mapear', { method: 'POST' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        btnMapearUbicacion.disabled = false;
+        if(j && j.ok) cargarUbicaciones();
+      }).catch(function(){ btnMapearUbicacion.disabled = false; });
+  });
+
+  document.getElementById('btn-crear-ubicacion').addEventListener('click', function(){
+    var zona = document.getElementById('nueva-ubicacion-zona').value.trim();
+    var estante = document.getElementById('nueva-ubicacion-estante').value.trim();
+    if(!zona || !estante){
+      alcanceAviso.innerHTML = '<div class="aviso">Indicá zona y estante para crear la ubicación.</div>';
+      return;
+    }
+    fetch('/api/inventario/ubicaciones', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ zona: zona, estante: estante })
+    }).then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+      .then(function(res){
+        if(res.status === 200 && res.body.ok){
+          document.getElementById('nueva-ubicacion-zona').value = '';
+          document.getElementById('nueva-ubicacion-estante').value = '';
+          cargarUbicaciones();
+        } else {
+          alcanceAviso.innerHTML = '<div class="aviso">' + esc(res.body.error || 'No se pudo crear la ubicación.') + '</div>';
+        }
+      }).catch(function(){
+        alcanceAviso.innerHTML = '<div class="aviso">No se pudo crear la ubicación (sin conexión).</div>';
+      });
+  });
 
   function limpiarAlcanceForm(){
     seqOpciones++; seqPreview++;   // invalida respuestas en vuelo de la selección anterior
@@ -958,26 +1710,94 @@
     selMarcas = [];
     buscarCategorias.value = '';
     buscarMarcas.value = '';
+    selUbicacion = null;
+    selectUbicacion.value = '';
+    renderInfoUbicacion();
     previewActual = null;
     alcanceAviso.innerHTML = '';
     renderAlcance();
     refrescarOpciones();
   }
 
-  function mostrarAvisoAlcance(mensaje, ocupadoPor, categoria, marca){
+  function mostrarAvisoAlcance(mensaje, ocupadoPor, categoria, marca, sesionId, sesionEstado, cruce){
     var detalle = listaAlcance(categoria).concat(listaAlcance(marca)).join(', ');
     var texto = ocupadoPor
       ? 'El alcance se cruza con la sesión de <b>' + esc(ocupadoPor) + '</b>' + (detalle ? ' (' + esc(detalle) + ').' : '.')
       : esc(mensaje || 'No se pudo crear la sesión.');
+    // Qué producto exactamente cruza los dos alcances. Alcanza con uno para frenar la
+    // sesión, y suele ser un producto mal categorizado: sin verlo, "se cruza" es un muro.
+    if (cruce && cruce.ejemplos && cruce.ejemplos.length) {
+      texto += '<div style="margin-top:10px;font-size:13px">'
+        + '<span class="dim-ayuda">' + n(cruce.total)
+        + plural(cruce.total, ' producto está', ' productos están') + ' en los dos alcances:</span><ul style="margin:6px 0 0;padding-left:18px">'
+        + cruce.ejemplos.map(function(p){
+            return '<li>' + esc(p.nombre || p.sku) + ' <span class="dim-ayuda">('
+              + esc(p.marca || 's/marca') + ' en ' + esc(p.categoria || 'sin categoría')
+              + ', stock ' + n(p.stock) + ')</span></li>';
+          }).join('')
+        + '</ul>'
+        + (cruce.total > cruce.ejemplos.length
+            ? '<span class="dim-ayuda">y ' + n(cruce.total - cruce.ejemplos.length) + ' más.</span>' : '')
+        + '</div>';
+    }
+    // Botón de descarte directo cuando la sesión que choca quedó trabada en
+    // confirmada_con_errores (falló el ajuste de stock): sin esto no había forma
+    // de destrabarla desde la pantalla, porque /sesion-activa solo detecta 'abierta'.
+    var btnDescartar = sesionId
+      ? '<button class="btn secondary" id="aviso-descartar">Descartar sesión de ' + esc(ocupadoPor) + '</button>'
+      : '';
+    var btnConfirmarAdmin = sesionId && usuarioEsAdmin()
+      ? '<button class="btn primary" id="aviso-confirmar-admin">Confirmar ajuste como administrador</button>'
+      : '';
     alcanceAviso.innerHTML =
       '<div class="aviso">' + texto +
         '<div style="margin-top:10px;">' +
           '<button class="btn secondary" id="aviso-cambiar">Cambiar alcance</button>' +
           '<button class="btn secondary" id="aviso-cancelar">Cancelar</button>' +
+          btnConfirmarAdmin +
+          btnDescartar +
         '</div>' +
       '</div>';
     document.getElementById('aviso-cambiar').addEventListener('click', limpiarAlcanceForm);
     document.getElementById('aviso-cancelar').addEventListener('click', function(){ mostrarVista('inicio'); });
+    if (sesionId) {
+      if (usuarioEsAdmin()) {
+        document.getElementById('aviso-confirmar-admin').addEventListener('click', function(){
+          if (!confirm('¿Confirmar el ajuste de stock de la sesión de ' + (ocupadoPor || 'otro usuario') + '? Se aplicarán los conteos a WooCommerce.')) return;
+          var btn = document.getElementById('aviso-confirmar-admin');
+          btn.disabled = true;
+          fetch('/api/inventario/sesiones/' + sesionId + '/confirmar', { method: 'POST' })
+            .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+            .then(function(result){
+              if (result.status === 200 && result.body && result.body.ok) {
+                alcanceAviso.innerHTML = '<div class="aviso">Ajuste confirmado por administrador. Ya podés abrir una nueva sesión.</div>';
+                setTimeout(function(){ mostrarVista('inicio'); }, 900);
+              } else {
+                alert(result.body && result.body.error ? result.body.error : 'No se pudo confirmar el ajuste.');
+                btn.disabled = false;
+              }
+            }).catch(function(){ alert('No se pudo confirmar el ajuste (sin conexión).'); btn.disabled = false; });
+        });
+      }
+      document.getElementById('aviso-descartar').addEventListener('click', function(){
+        var btn = document.getElementById('aviso-descartar');
+        btn.disabled = true;
+        fetch('/api/inventario/sesiones/' + sesionId + '/descartar', { method: 'POST' })
+          .then(function(r){ return r.json(); })
+          .then(function(res){
+            if (res && res.ok) {
+              alcanceAviso.innerHTML = '';
+              alcanceEmpezar.click();
+            } else {
+              alert(res && res.error ? res.error : 'No se pudo descartar la sesión.');
+              btn.disabled = false;
+            }
+          }).catch(function(){
+            alert('No se pudo descartar la sesión (sin conexión).');
+            btn.disabled = false;
+          });
+      });
+    }
   }
 
   alcanceEmpezar.addEventListener('click', function(){
@@ -986,7 +1806,8 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // categoria/marca van también en singular por compatibilidad con la forma vieja.
-      body: JSON.stringify({
+      // ubicacion_id manda solo si hay una elegida — mutuamente excluyente con categoria/marca.
+      body: JSON.stringify(selUbicacion ? { ubicacion_id: selUbicacion.id } : {
         categorias: selCategorias,
         marcas: selMarcas,
         categoria: selCategorias[0] || '',
@@ -997,11 +1818,14 @@
         if(res.status === 200 && res.body.ok){
           state.sesion = res.body.sesion;
           resetEstadoBloqueSinStock();
+          empujarUrlSesion(res.body.sesion.id);
           mostrarVista('conteo');
         } else if(res.status === 409){
           mostrarAvisoAlcance(res.body.error, res.body.ocupada_por,
             res.body.categorias != null ? res.body.categorias : res.body.categoria,
-            res.body.marcas != null ? res.body.marcas : res.body.marca);
+            res.body.marcas != null ? res.body.marcas : res.body.marca,
+            res.body.ocupada_por_sesion_id, res.body.ocupada_por_estado,
+            { total: res.body.productos_en_comun, ejemplos: res.body.ejemplos });
         } else {
           mostrarAvisoAlcance(res.body && res.body.error);
         }
@@ -1025,9 +1849,20 @@
   var contPendientes = document.getElementById('cont-pendientes');
   var contDiferencia = document.getElementById('cont-diferencia');
   var btnOrdenDiff = document.getElementById('btn-orden-diff');
+  var conteoBuscar = document.getElementById('conteo-buscar');
 
   var conteoData = { items: [], pendientes: [] };
-  var filtroActivo = 'pendientes';
+  // 'todos' por defecto (2026-09-11): con el filtro en "sin contar", contar un producto lo
+  // sacaba de la vista, que es otra forma del problema que este rediseño elimina — la fila
+  // tiene que quedarse donde está, cambiando de estado.
+  var filtroActivo = 'todos';
+  // Filtro de texto en cliente sobre la lista ya cargada (pedido de José: con un alcance
+  // amplio la lista es larga y hace falta encontrar un producto puntual sin bajar a mano).
+  // No pega al servidor — filtra lo que ya está en conteoData. `filtroBusqueda` es la
+  // versión en minúscula usada para comparar; `filtroBusquedaTexto` es la tal cual la
+  // tipeó el usuario, solo para mostrarla en el mensaje de "sin resultados".
+  var filtroBusqueda = '';
+  var filtroBusquedaTexto = '';
   var sinStockAbierto = false;
   var autoAbiertoSinStock = false;
   // El despliegue automático del bloque sin-stock es por sesión: sin esto, una segunda
@@ -1035,6 +1870,12 @@
   function resetEstadoBloqueSinStock(){
     sinStockAbierto = false;
     autoAbiertoSinStock = false;
+    // Hallazgo del revisor: sin esto, el texto buscado en una sesión quedaba filtrando
+    // la lista de la SIGUIENTE sesión que se abre/retoma — con un alcance distinto,
+    // podía mostrarse vacía o parcial sin que hubiera nada realmente mal.
+    filtroBusqueda = '';
+    filtroBusquedaTexto = '';
+    if (conteoBuscar) conteoBuscar.value = '';
   }
   var ordenPorDiferencia = false;
   var ultimoItemFlash = null; // id del ítem que acaba de escanearse, para el refuerzo visual del +1
@@ -1049,16 +1890,67 @@
   function limpiarBufferEscaneo(){ scanBuffer = ''; clearTimeout(scanTimer); scanTimer = null; }
 
   var audioCtx = null;
-  function beep(){
+  // ── Sonido del escaneo (2026-09-11) ─────────────────────────────────────────
+  // Antes había un solo beep, y sonaba al ENTRAR el código, antes de que el servidor
+  // respondiera: decía "te escuché", nada sobre el resultado. Las guías de depósito
+  // recomiendan dos sonidos por lectura —uno de lectura y otro de dato aceptado— más uno
+  // distinto para el error, para no tener que mirar la pantalla con guantes.
+  //
+  // La distinción entre PRIMERA unidad y SUMA es propia de este sistema y sale de un
+  // incidente real: el 2026-09-08 un casco se contó dos veces por caminos distintos y nadie
+  // se enteró. Si escaneás lo que creés que es la primera unidad y escuchás el tono de
+  // "suma", ese producto ya estaba contado — que es justo lo que hay que poder notar sin
+  // mirar.
+  //
+  // Vibración: NO se usa. Safari en iOS nunca soportó oficialmente la Vibration API y desde
+  // iOS 18.4 exige una interacción táctil que caduca en 1 segundo; un escaneo con lector no
+  // toca la pantalla, así que nunca entra en esa ventana. Las 12 sesiones de conteo de los
+  // últimos 14 días se abrieron desde un iPhone, así que agregar navigator.vibrate acá sería
+  // código que no hace nada y parece una función.
+  var SONIDOS = {
+    leido: [{ f: 880, t: 0.05 }],                                  // te escuché
+    nuevo: [{ f: 660, t: 0.06 }, { f: 990, t: 0.09 }],             // primera unidad: ascendente
+    suma:  [{ f: 990, t: 0.05 }, { f: 990, t: 0.05, gap: 0.07 }],  // ya estaba contado: doble igual
+    error: [{ f: 240, t: 0.16 }],                                  // código sin asociar / desconocido
+    fuera: [{ f: 520, t: 0.07 }, { f: 380, t: 0.12 }],             // fuera del alcance: descendente
+  };
+  var SONIDO_CLAVE = 'inventario:sonido';
+  var sonidoActivo = (function(){
+    try { return localStorage.getItem(SONIDO_CLAVE) !== 'off'; } catch(e){ return true; }
+  })();
+
+  function sonar(tipo){
+    if(!sonidoActivo) return;
+    var notas = SONIDOS[tipo] || SONIDOS.leido;
     try{
       audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
       if(audioCtx.state === 'suspended') audioCtx.resume();
-      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.connect(g); g.connect(audioCtx.destination);
-      o.type='square'; o.frequency.value=880;
-      g.gain.setValueAtTime(0.05, audioCtx.currentTime);
-      o.start(); o.stop(audioCtx.currentTime+0.06);
+      var t0 = audioCtx.currentTime;
+      notas.forEach(function(nota){
+        var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.connect(g); g.connect(audioCtx.destination);
+        o.type = 'square'; o.frequency.value = nota.f;
+        // Rampa corta al cierre: un corte seco en una onda cuadrada suena a chasquido.
+        g.gain.setValueAtTime(0.05, t0);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + nota.t);
+        o.start(t0); o.stop(t0 + nota.t);
+        t0 += nota.t + (nota.gap || 0.02);
+      });
     }catch(e){}
+  }
+
+  // Compatibilidad: el resto del archivo llama beep() para "código leído".
+  function beep(){ sonar('leido'); }
+
+  function setSonido(on){
+    sonidoActivo = !!on;
+    try { localStorage.setItem(SONIDO_CLAVE, sonidoActivo ? 'on' : 'off'); } catch(e){}
+    var btn = document.getElementById('btn-sonido');
+    if(btn){
+      btn.textContent = sonidoActivo ? '🔊 Sonido activado' : '🔇 Sonido silenciado';
+      btn.setAttribute('aria-pressed', sonidoActivo ? 'true' : 'false');
+    }
+    if(sonidoActivo) sonar('leido'); // que se escuche qué se acaba de activar
   }
 
   function sesionId(){
@@ -1133,7 +2025,214 @@
   var renderPendiente = false;
   function hayInputCantidadEnfocado(){
     var a = document.activeElement;
-    return !!(a && conteoLista.contains(a) && a.matches && a.matches('[data-accion="cantidad"]'));
+    if(!a || !a.matches) return false;
+    // La caja del panel de escritorio (#cd-caja) vive FUERA de conteoLista. Cuando no estaba
+    // contemplada acá, un refresco de fondo mientras alguien tipeaba ahí reescribía el panel
+    // entero: el número a medio escribir desaparecía y el foco se iba al scanner. Es el mismo
+    // motivo por el que se pospone el render de la lista, así que es la misma condición.
+    if(a.id === 'cd-caja') return true;
+    return !!(conteoLista.contains(a) && a.matches('[data-accion="cantidad"]'));
+  }
+
+  // La lógica vive en public/lib/conteoLista.js y tiene sus tests (test/conteoLista.test.js):
+  // es la parte que garantiza que contar un producto no lo mueva de lugar.
+  function productosUnificados(contados, pendientes){
+    return ConteoLista.unificar(contados, pendientes);
+  }
+
+  // Progreso real de la ronda. El efecto goal-gradient sólo funciona si el número es honesto:
+  // el denominador es el alcance completo (contados + pendientes), no una porción.
+  // ── Escritorio: panel derecho y navegación por teclado ──────────────────────
+  // El lector escribe en el campo de arriba, las flechas mueven la selección y Enter cuenta:
+  // la mano no va al mouse. Es lo que pide el uso real — en escritorio se asocian 176 códigos
+  // contra 86 en teléfono y se cierran 42 sesiones.
+  var skuActivo = null;
+  function esEscritorio(){ return window.matchMedia('(min-width:1024px)').matches; }
+
+  function filasVisibles(){ return [...conteoLista.querySelectorAll('.pf')]; }
+
+  function marcarActiva(){
+    var filas = filasVisibles();
+    if(!filas.length){ skuActivo = null; renderDetalle(null); return; }
+    var activa = filas.find(function(f){ return f.getAttribute('data-sku') === skuActivo; });
+    if(!activa){ activa = filas[0]; skuActivo = activa.getAttribute('data-sku'); }
+    filas.forEach(function(f){ f.classList.toggle('activa', f === activa); });
+    if(esEscritorio()) renderDetalle(activa.getAttribute('data-sku'));
+  }
+
+  function moverActiva(delta){
+    var filas = filasVisibles();
+    if(!filas.length) return;
+    var i = filas.findIndex(function(f){ return f.getAttribute('data-sku') === skuActivo; });
+    var siguiente = filas[Math.max(0, Math.min(filas.length - 1, (i < 0 ? 0 : i + delta)))];
+    if(!siguiente) return;
+    skuActivo = siguiente.getAttribute('data-sku');
+    marcarActiva();
+    siguiente.scrollIntoView({ block: 'nearest' });
+  }
+
+  function renderDetalle(sku){
+    var cont = document.getElementById('conteo-detalle');
+    if(!cont) return;
+    var p = productosUnificados(conteoData.items, conteoData.pendientes)
+      .find(function(x){ return x.sku === sku; });
+    if(!p){
+      cont.innerHTML = '<div class="cd-vacio">Elegí un producto de la lista, o escaneá uno.</div>';
+      return;
+    }
+    var variante = varianteDeNombre(p.nombre);
+    var resultado = '';
+    if(p.contado && p.diferencia != null){
+      resultado = p.diferencia === 0
+        ? '<div class="cd-res" style="color:var(--green)">✓ coincide con el sistema</div>'
+        : '<div class="cd-res" style="color:var(--amber,#F5B942)">El sistema tenía ' + n(p.stock_woo) + ' · '
+          + (p.diferencia > 0 ? 'sobran ' + n(p.diferencia) : 'faltan ' + n(Math.abs(p.diferencia))) + '</div>';
+    }
+    cont.innerHTML =
+      (p.img ? '<img class="cd-foto" src="' + esc(p.img) + '" alt="">' : '<div class="cd-foto cd-foto-vacia">▤</div>')
+      + (variante
+        ? '<div class="cd-nom" style="font-size:14px;color:var(--muted);font-weight:500">' + esc(variante.base) + '</div>'
+          + '<div class="cd-var">' + esc(variante.detalle) + '</div>'
+        : '<div class="cd-nom">' + esc(p.nombre || p.sku) + '</div>')
+      + '<div class="cd-meta">' + esc(p.sku || '') + (p.marca ? ' · ' + esc(p.marca) : '')
+      + (p.categoria ? ' · ' + esc(p.categoria) : '') + '</div>'
+      + '<div class="cd-num">'
+      + (p.itemId != null
+        ? '<button type="button" class="pf-menos" id="cd-menos" aria-label="Restar una unidad a '
+          + esc(p.sku || '') + '"' + (p.cantidad <= 0 ? ' disabled' : '') + '>−</button>'
+        : '')
+      + '<input type="number" class="cd-caja" id="cd-caja" inputmode="numeric" min="0"'
+      + ' max="' + ConteoCantidad.TOPE_CANTIDAD_DEFECTO + '" step="1"'
+      + ' value="' + (p.contado ? esc(p.cantidad) : '') + '" placeholder="—"'
+      + ' aria-label="Cantidad contada de ' + esc(p.sku || '') + '">'
+      + '</div>'
+      + '<div class="cd-ayuda"><span class="kbd">Enter</span> guardar y seguir · '
+      + '<span class="kbd">↑</span><span class="kbd">↓</span> moverse</div>'
+      + resultado;
+    var caja = document.getElementById('cd-caja');
+    // Un solo camino de guardado para Enter y para salir del campo. Sin el `blur`, hacer clic
+    // afuera después de tipear perdía el número sin avisar; con los dos sueltos, Enter movía
+    // el foco y disparaba el blur encima, mandando la misma cantidad dos veces.
+    var valorAlRenderizar = caja.value;
+    var guardando = false;
+    function commit(){
+      if(guardando) return Promise.resolve();
+      if(caja.value === valorAlRenderizar) return Promise.resolve();
+      guardando = true;
+      valorAlRenderizar = caja.value;
+      return guardarDesdeDetalle(p, caja.value).then(function(r){ guardando = false; return r; },
+        function(e){ guardando = false; throw e; });
+    }
+    caja.addEventListener('keydown', function(e){
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        commit().then(function(){ moverActiva(1); enfocarDetalle(); });
+      }
+      if(e.key === 'Escape'){
+        e.preventDefault();
+        caja.value = valorAlRenderizar;  // Escape descarta, no guarda
+        scanInput.focus();
+      }
+    });
+    caja.addEventListener('blur', function(){ commit(); });
+    var menos = document.getElementById('cd-menos');
+    if(menos){
+      menos.addEventListener('click', function(){
+        enviarCantidad(p.itemId, function(){
+          var item = obtenerItemConteo(p.itemId);
+          return Math.max(0, valorBaseCantidad(p.itemId, item) - 1);
+        }, null);
+      });
+    }
+  }
+
+  function enfocarDetalle(){
+    var caja = document.getElementById('cd-caja');
+    if(caja){ caja.focus(); caja.select(); }
+  }
+
+  function guardarDesdeDetalle(p, valor){
+    var crudo = String(valor || '').trim();
+    if(crudo === '') return Promise.resolve();
+    var cant = parseInt(crudo, 10);
+    if(!Number.isFinite(cant) || cant < 0 || cant > ConteoCantidad.TOPE_CANTIDAD_DEFECTO){
+      mostrarBannerEscaneo('Ese valor no es una cantidad válida.');
+      return Promise.resolve();
+    }
+    if(p.itemId){
+      enviarCantidad(p.itemId, cant, null);
+      return Promise.resolve();
+    }
+    return contarProductoNuevo(p.sku, cant);
+  }
+
+  // Flechas sobre la lista, desde donde sea que esté el foco (salvo tipeando en un número).
+  document.addEventListener('keydown', function(e){
+    if(!esEscritorio()) return;
+    if(!document.getElementById('vista-conteo').classList.contains('on')) return;
+    var a = document.activeElement;
+    if(a && a.matches && a.matches('input[type="number"]')) return;
+    if(e.key === 'ArrowDown'){ e.preventDefault(); moverActiva(1); }
+    else if(e.key === 'ArrowUp'){ e.preventDefault(); moverActiva(-1); }
+    else if(e.key === 'Enter' && a === scanInput && !scanInput.value.trim()){ e.preventDefault(); enfocarDetalle(); }
+  });
+
+  function renderProgreso(){
+    var contados = conteoData.items.length;
+    var total = contados + conteoData.pendientes.length;
+    var txt = document.getElementById('prog-texto');
+    var resto = document.getElementById('prog-resto');
+    var barra = document.getElementById('prog-barra-i');
+    if(!txt) return;
+    txt.textContent = n(contados) + ' de ' + n(total);
+    barra.style.width = total ? Math.round(contados / total * 100) + '%' : '0%';
+    var faltan = total - contados;
+    // Ritmo medido de la propia sesión; sin muestra suficiente no se inventa un tiempo.
+    var seg = segundosDesdeInicio();
+    if(contados >= 5 && seg > 60 && faltan > 0){
+      var porProducto = seg / contados;
+      var min = Math.round(faltan * porProducto / 60);
+      resto.textContent = min >= 60
+        ? 'quedan ~' + Math.floor(min / 60) + ' h ' + (min % 60 ? (min % 60) + ' min' : '')
+        : 'quedan ~' + min + ' min';
+    } else {
+      resto.textContent = faltan === 0 ? '¡terminaste!' : n(faltan) + ' sin contar';
+    }
+  }
+  var inicioConteoTs = null;
+  function segundosDesdeInicio(){
+    if(!inicioConteoTs) return 0;
+    return Math.max(0, Math.round((Date.now() - inicioConteoTs) / 1000));
+  }
+
+  // Confirmación de la última lectura: qué entró y cuánto lleva ese producto, con deshacer.
+  // Es la señal que faltaba — un escaneo que caía en otra fila no daba ningún aviso, y así
+  // se partió en dos el conteo del casco Giro el 2026-09-08.
+  function mostrarUltimaLectura(item, opciones){
+    var caja = document.getElementById('ultima-lectura');
+    if(!caja) return;
+    if(!item){ caja.hidden = true; return; }
+    var sinAsociar = !item.sku;
+    caja.className = 'ultima-lectura' + (sinAsociar ? ' warn' : '');
+    caja.innerHTML =
+      '<span style="font-weight:700;color:' + (sinAsociar ? 'var(--amber,#F5B942)' : 'var(--green)') + '">'
+      + (sinAsociar ? '?' : '✓') + '</span>'
+      + '<div class="ul-t"><b>' + esc(item.nombre || item.sku || item.ean) + '</b>'
+      // Con el motivo real cuando lo hay: "sin asociar" a secas mandaba a buscar un código que
+      // a veces YA existe, sólo que cargado en el producto padre.
+      + '<span>' + esc(sinAsociar && item.aviso ? item.aviso : (item.sku || item.ean) + (sinAsociar ? ' · sin asociar' : ' · sumó 1')) + '</span></div>'
+      + (sinAsociar ? '' : '<span class="ul-n">' + n(item.cantidad) + '</span>')
+      + (item.id != null ? '<button type="button" id="ul-deshacer">Deshacer</button>' : '');
+    caja.hidden = false;
+    var undo = document.getElementById('ul-deshacer');
+    if(undo){
+      undo.addEventListener('click', function(){
+        var actual = obtenerItemConteo(item.id);
+        var base = valorBaseCantidad(item.id, actual);
+        enviarCantidad(item.id, Math.max(0, base - 1), null);
+        caja.hidden = true;
+      });
+    }
   }
 
   function renderConteo(){
@@ -1141,25 +2240,49 @@
     renderPendiente = false;
     var contados = conteoData.items;
     var pendientes = conteoData.pendientes;
+    // Los contadores de arriba (Contados/Pendientes/Con diferencia) siempre reflejan el
+    // total real de la sesión, nunca lo que queda visible después de buscar — buscar es
+    // solo para encontrar algo en la lista, no una re-acotación del alcance.
     contContados.textContent = n(contados.length);
     contPendientes.textContent = n(pendientes.length);
     contDiferencia.textContent = n(contados.filter(function(i){ return i.diferencia !== 0 && i.diferencia != null; }).length);
 
-    var html = '';
-    if(filtroActivo !== 'contados'){
-      html += bloquesPendientesHtml(pendientes);
+    var q = filtroBusqueda;
+    var coincideBusqueda = function(item){
+      return (item.sku || '').toLowerCase().indexOf(q) !== -1 ||
+             (item.nombre || '').toLowerCase().indexOf(q) !== -1;
+    };
+
+    // LISTA ÚNICA (2026-09-11). Antes había dos listas —pendientes y contados— y contar un
+    // producto lo mudaba de una a la otra: el operario tenía que scrollear al fondo de la
+    // segunda para encontrar lo que acababa de tocar y ahí recién ponerle la cantidad, de a
+    // +1. Ahora hay una sola lista ordenada por producto y contar NO mueve la fila: cambia
+    // de estado en su lugar. El orden es el mismo que manda la API a ciegas (categoría →
+    // marca → nombre), así que la posición no depende de si está contado o no.
+    var unificados = productosUnificados(contados, pendientes);
+    var visibles = unificados.filter(function(p){
+      if(filtroActivo === 'contados' && !p.contado) return false;
+      if(filtroActivo === 'pendientes' && p.contado) return false;
+      return !q || coincideBusqueda(p);
+    });
+    if(ordenPorDiferencia){
+      visibles = visibles.slice().sort(function(a, b){
+        return Math.abs(b.diferencia || 0) - Math.abs(a.diferencia || 0);
+      });
     }
-    if(filtroActivo !== 'pendientes'){
-      var lista = contados.slice();
-      if(ordenPorDiferencia){
-        lista.sort(function(a, b){ return Math.abs(b.diferencia || 0) - Math.abs(a.diferencia || 0); });
-      }
-      if(filtroActivo === 'todos') html += '<h2 class="bloque-titulo">Contados (' + n(lista.length) + ')</h2>';
-      if(!lista.length){ html += '<p class="empty">Todavía no contaste nada.</p>'; }
-      lista.forEach(function(i){ html += filaItemHtml(i); });
+    var html = '';
+    if(!visibles.length){
+      html += q
+        ? '<p class="empty">Nada que coincida con "' + esc(filtroBusquedaTexto) + '".</p>'
+        : '<p class="empty">No hay productos para mostrar.</p>';
+    } else {
+      visibles.forEach(function(p){ html += filaProductoHtml(p); });
     }
     conteoLista.innerHTML = html;
+    bindFichasProducto();
     bindFilaEventos();
+    renderProgreso();
+    marcarActiva();
 
     // Refuerzo visual del +1: además del beep, la fila que acaba de subir por
     // un escaneo se destaca un instante para que el operario vea cuál cambió.
@@ -1276,6 +2399,60 @@
     return html;
   }
 
+  // LA FILA (2026-09-11). Una sola por producto, contada o no. Decisiones que la gobiernan:
+  //   · foto de 72px — el 99% del catálogo tiene imagen y ninguna pantalla de conteo la usaba;
+  //   · el número es lo único grande y se TIPEA (74x56): llegar a 50 tocando "+" era el flujo
+  //     real que describió el usuario, y NN/g desaconseja el stepper para rangos amplios;
+  //   · nada de ✕ ni 🏷️ al lado del número: van al menú de la fila, para que no se toquen por
+  //     error con guantes;
+  //   · el stock del sistema NO aparece hasta que hay cantidad cargada (conteo a ciegas);
+  //   · con variantes, el talle/color manda sobre el nombre: hasta 21 productos comparten foto.
+  function filaProductoHtml(p){
+    var etiqueta = esc(p.sku || p.ean || '');
+    var sinAsociar = !!p.sin_asociar;
+    var variante = varianteDeNombre(p.nombre);
+    var estado = sinAsociar ? 'sin_asociar' : (p.contado ? (p.diferencia === 0 ? 'ok' : 'dif') : 'pendiente');
+
+    var resultado = '';
+    if(sinAsociar){
+      resultado = '<div class="pf-res warn">Código sin asociar · tocá para elegir el producto</div>';
+    } else if(p.contado && p.diferencia != null){
+      resultado = p.diferencia === 0
+        ? '<div class="pf-res ok">✓ coincide con el sistema</div>'
+        : '<div class="pf-res dif">El sistema tenía ' + n(p.stock_woo) + ' · '
+          + (p.diferencia > 0 ? 'sobran ' + n(p.diferencia) : 'faltan ' + n(Math.abs(p.diferencia))) + '</div>';
+    }
+
+    var foto = p.img
+      ? '<img class="pf-foto" src="' + esc(p.img) + '" alt="" loading="lazy">'
+      : '<div class="pf-foto pf-foto-vacia" aria-hidden="true">▤</div>';
+
+    return '<div class="pf" data-estado="' + estado + '" data-sku="' + esc(p.sku || '') + '"'
+      + (p.itemId != null ? ' data-item-id="' + esc(p.itemId) + '"' : '')
+      + (p.ean ? ' data-ean="' + esc(p.ean) + '"' : '') + '>'
+      + foto
+      + '<div class="pf-info">'
+        + (variante
+          ? '<div class="pf-nom pf-nom-sec">' + esc(variante.base) + '</div><div class="pf-var">' + esc(variante.detalle) + '</div>'
+          : '<div class="pf-nom">' + esc(p.nombre || (sinAsociar ? 'Sin asociar todavía' : '(sin nombre)')) + '</div>')
+        + '<div class="pf-meta">' + etiqueta + (p.marca ? ' · ' + esc(p.marca) : '') + '</div>'
+        + resultado
+      + '</div>'
+      + '<div class="pf-num">'
+        + (p.itemId != null
+          ? '<button type="button" class="pf-menos" data-accion="menos" aria-label="Restar una unidad a ' + etiqueta + '"' + (p.cantidad <= 0 ? ' disabled' : '') + '>−</button>'
+          : '')
+        + '<input type="number" class="pf-caja' + (p.contado ? (p.diferencia === 0 ? ' ok' : ' dif') : ' vacia') + '"'
+          + ' inputmode="numeric" min="0" max="' + ConteoCantidad.TOPE_CANTIDAD_DEFECTO + '" step="1"'
+          + ' value="' + (p.contado ? esc(p.cantidad) : '') + '" placeholder="—"'
+          + ' data-accion="cantidad" aria-label="Cantidad contada de ' + etiqueta + '">'
+        + '<button type="button" class="pf-mas" data-accion="menu" aria-label="Más acciones para ' + etiqueta + '" aria-haspopup="true">⋯</button>'
+      + '</div>'
+    + '</div>';
+  }
+
+  function varianteDeNombre(nombre){ return ConteoLista.varianteDeNombre(nombre); }
+
   function filaItemHtml(i){
     var sinAsociar = !i.sku;
     var stockTxt = i.stock_woo != null ? esc(String(i.stock_woo)) : '—';
@@ -1298,6 +2475,7 @@
           '<input type="number" class="qty-input" inputmode="numeric" min="0" max="' + ConteoCantidad.TOPE_CANTIDAD_DEFECTO + '" step="1" value="' + esc(i.cantidad) + '" data-accion="cantidad" aria-label="Cantidad contada de ' + etiqueta + '">' +
           '<button type="button" class="qty-btn qty-plus" data-accion="plus" title="Sumar 1" aria-label="Sumar 1">+</button>' +
         '</div>' +
+        (sinAsociar ? '' : '<button class="etq" data-accion="etiqueta" title="Necesita etiqueta" aria-label="Necesita etiqueta ' + etiqueta + '">🏷️</button>') +
         '<button class="del" data-accion="del" title="Eliminar" aria-label="Eliminar ' + etiqueta + '">✕</button>' +
       '</div>' +
     '</div>';
@@ -1314,6 +2492,194 @@
       '<button data-accion="contar">Contar</button>' +
     '</div>';
   }
+
+  // Cuenta un producto que todavía no tiene fila: lo crea (mismo endpoint que el lector) y,
+  // si la cantidad tipeada no es 1, la fija. Devuelve una promesa para poder encadenar.
+  function contarProductoNuevo(sku, cantidad){
+    var id = sesionId();
+    if(!id || !sku) return Promise.resolve();
+    return fetch('/api/inventario/sesiones/' + id + '/escanear', opcionesConCorte({
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codigo: sku })
+    })).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok){ mostrarBannerEscaneo((j && j.error) || 'No se pudo contar el producto.'); return cargarConteo(); }
+      setGuardado(true);
+      var itemId = j.item && j.item.id;
+      if(itemId != null && cantidad !== 1){
+        return fetch('/api/inventario/sesiones/' + id + '/items/' + itemId, opcionesConCorte({
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cantidad: cantidad })
+        })).then(function(){ return cargarConteo(); });
+      }
+      return cargarConteo();
+    }).catch(function(){
+      mostrarBannerEscaneo('No se pudo confirmar el conteo. Verificá la cantidad antes de seguir.');
+      return cargarConteo(true).catch(function(){});
+    });
+  }
+
+  // Eventos de la ficha nueva. La caja de cantidad es el único control grande de la fila:
+  // tocarla abre el teclado numérico y al salir (blur o Enter) se manda el valor. La fila no
+  // se mueve de lugar en ningún momento — eso lo garantiza el orden de productosUnificados().
+  function bindFichasProducto(){
+    conteoLista.querySelectorAll('.pf [data-accion="cantidad"]').forEach(function(inp){
+      inp.addEventListener('keydown', function(e){
+        if(e.key === 'Enter'){ e.preventDefault(); inp.blur(); }
+        if(e.key === 'Escape'){ e.preventDefault(); inp.value = inp.defaultValue; inp.blur(); }
+      });
+      inp.addEventListener('blur', function(){
+        var fila = inp.closest('.pf');
+        var itemId = fila.getAttribute('data-item-id');
+        var sku = fila.getAttribute('data-sku');
+        var crudo = String(inp.value || '').trim();
+        if(itemId){
+          var item = obtenerItemConteo(itemId);
+          var base = valorBaseCantidad(itemId, item);
+          var decision = ConteoCantidad.decidirCantidadAEnviar(base, inp.value, { tope: ConteoCantidad.TOPE_CANTIDAD_DEFECTO });
+          inp.value = decision.valorMostrar;
+          if(!decision.enviar){
+            if(decision.motivo === 'invalida') mostrarBannerEscaneo('Ese valor no es un número válido. Se mantuvo ' + decision.valorMostrar + '.');
+            else if(decision.motivo === 'tope') mostrarBannerEscaneo('Cantidad demasiado alta (¿se leyó un código de barras en el campo de cantidad?). Se mantuvo ' + decision.valorMostrar + '.');
+            scanInput.focus();
+            consumirRenderPendiente();
+            return;
+          }
+          // `valorEnviar`, NO `cantidad`: el objeto de decisión nunca tuvo esa propiedad. Con
+          // el nombre mal, el PATCH viajaba con el cuerpo vacío y el servidor lo rechazaba
+          // con 400, así que tipear una cantidad a mano no guardaba nada y el número volvía
+          // solo al valor anterior.
+          if(decision.negativa) mostrarBannerEscaneo('No se puede contar en negativo. Se guardó 0.');
+          enviarCantidad(itemId, decision.valorEnviar, inp, decision.truncada);
+          return;
+        }
+        // Producto todavía sin contar: un campo vacío no cuenta nada (dejarlo en blanco es
+        // justamente "no lo conté", no "conté cero"). Cero sí es una respuesta válida.
+        if(crudo === ''){ consumirRenderPendiente(); return; }
+        var cant = parseInt(crudo, 10);
+        if(!Number.isFinite(cant) || cant < 0){
+          inp.value = '';
+          mostrarBannerEscaneo('Ese valor no es un número válido.');
+          return;
+        }
+        if(cant > ConteoCantidad.TOPE_CANTIDAD_DEFECTO){
+          inp.value = '';
+          mostrarBannerEscaneo('Cantidad demasiado alta (¿se leyó un código de barras en el campo de cantidad?).');
+          return;
+        }
+        if(!sku){ abrirSheetEan(fila.getAttribute('data-ean')); return; }
+        contarProductoNuevo(sku, cant);
+      });
+    });
+    conteoLista.querySelectorAll('.pf [data-accion="menu"]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var fila = btn.closest('.pf');
+        abrirMenuFila(fila);
+      });
+    });
+    conteoLista.querySelectorAll('.pf [data-accion="menos"]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var fila = btn.closest('.pf');
+        var itemId = fila.getAttribute('data-item-id');
+        var inp = fila.querySelector('[data-accion="cantidad"]');
+        enviarCantidad(itemId, function(){
+          var item = obtenerItemConteo(itemId);
+          return Math.max(0, valorBaseCantidad(itemId, item) - 1);
+        }, inp);
+      });
+    });
+    // Tocar la ficha (no el número ni el menú) enfoca la cantidad: el objetivo de toque real
+    // es la fila entera, no sólo los 74px de la caja.
+    conteoLista.querySelectorAll('.pf').forEach(function(fila){
+      fila.addEventListener('click', function(e){
+        if(e.target.closest('[data-accion]')) return;
+        skuActivo = fila.getAttribute('data-sku');
+        if(esEscritorio()){ marcarActiva(); enfocarDetalle(); return; }
+        var inp = fila.querySelector('[data-accion="cantidad"]');
+        if(inp){ inp.focus(); inp.select(); }
+      });
+    });
+  }
+
+  // Menú de la fila: acá viven las acciones que antes competían con el número (🏷️ y ✕) y
+  // que con guantes se tocaban por error. Se cierra al elegir, al tocar afuera o con Escape.
+  function abrirMenuFila(fila){
+    cerrarMenuFila();
+    var sku = fila.getAttribute('data-sku');
+    var ean = fila.getAttribute('data-ean');
+    var itemId = fila.getAttribute('data-item-id');
+    var menu = document.createElement('div');
+    menu.className = 'pf-menu';
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML =
+      (sku ? '<button type="button" role="menuitem" data-m="etiqueta">Mandar a etiquetas</button>' : '')
+      + (!sku && ean ? '<button type="button" role="menuitem" data-m="asociar">Asociar a un producto</button>' : '')
+      + (itemId ? '<button type="button" role="menuitem" data-m="borrar" class="peligro">Borrar el conteo</button>' : '');
+    if(!menu.innerHTML) return;
+    fila.appendChild(menu);
+    menu.querySelectorAll('button').forEach(function(b){
+      b.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        var m = b.getAttribute('data-m');
+        cerrarMenuFila();
+        if(m === 'etiqueta') mandarAEtiquetas([sku]);
+        else if(m === 'asociar') abrirSheetEan(ean);
+        else if(m === 'borrar') eliminarItem(itemId);
+      });
+    });
+    menu.querySelector('button').focus();
+    setTimeout(function(){ document.addEventListener('click', cerrarMenuFila, { once: true }); }, 0);
+  }
+  function cerrarMenuFila(){
+    var abierto = conteoLista.querySelector('.pf-menu');
+    if(abierto) abierto.remove();
+  }
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') cerrarMenuFila(); });
+
+  // Manda SKU a la cola de etiquetas. Una etiqueta por producto (se pega en el estante, no en
+  // cada unidad) y el endpoint es idempotente por (sku, sesión): tocar dos veces no duplica.
+  function mandarAEtiquetas(skus, origen){
+    var lista = (skus || []).filter(Boolean);
+    if(!lista.length){ mostrarBannerEscaneo('No hay productos con SKU para mandar a etiquetas.'); return Promise.resolve(); }
+    return fetch('/api/etiquetas/cola/lote', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skus: lista, origen: origen || 'conteo', sesion_id: sesionId() || undefined })
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if(!j || !j.ok) throw new Error((j && j.error) || 'No se pudo mandar a etiquetas');
+      var msg = j.creadas === 0
+        ? 'Ya estaban en la cola de etiquetas.'
+        : j.creadas + (j.creadas === 1 ? ' etiqueta agregada' : ' etiquetas agregadas')
+          + (j.repetidas ? ' · ' + j.repetidas + ' ya estaban' : '') + '. Imprimilas desde Etiquetas.';
+      mostrarBannerEscaneo(msg);
+      return j;
+    }).catch(function(e){ mostrarBannerEscaneo(e.message); });
+  }
+
+  // Botones de la barra inferior nueva.
+  (function(){
+    var mas = document.getElementById('btn-mas-conteo');
+    var panel = document.getElementById('conteo-mas');
+    if(mas && panel){
+      mas.addEventListener('click', function(){
+        panel.hidden = !panel.hidden;
+        mas.textContent = panel.hidden ? 'Más ▾' : 'Más ▴';
+      });
+    }
+    var son = document.getElementById('btn-sonido');
+    if(son){
+      setSonido(sonidoActivo); // deja el botón con el texto correcto al cargar
+      son.addEventListener('click', function(){ setSonido(!sonidoActivo); });
+    }
+    var todos = document.getElementById('btn-etiquetas-todos');
+    if(todos){
+      todos.addEventListener('click', function(){
+        var skus = conteoData.items.filter(function(i){ return i.sku; }).map(function(i){ return i.sku; });
+        if(!skus.length){ mostrarBannerEscaneo('Todavía no contaste nada con SKU.'); return; }
+        if(!confirm('Mandar ' + skus.length + ' producto' + (skus.length === 1 ? '' : 's') + ' a la cola de etiquetas?')) return;
+        mandarAEtiquetas(skus);
+      });
+    }
+  })();
 
   function bindFilaEventos(){
     conteoLista.querySelectorAll('.fila-item [data-accion="select"]').forEach(function(chk){
@@ -1346,6 +2712,10 @@
           }, fila.querySelector('[data-accion="cantidad"]'));
         } else if(accion === 'del'){
           eliminarItem(itemId);
+        } else if(accion === 'etiqueta'){
+          var inpCant = fila.querySelector('[data-accion="cantidad"]');
+          var cantidadActual = inpCant ? (parseInt(inpCant.value, 10) || 0) : 0;
+          pedirEtiqueta(sku || ean, cantidadActual);
         }
       });
     });
@@ -1404,6 +2774,28 @@
         escanear(sku);
       });
     });
+  }
+
+  // Fase 1 (etiquetas persistentes): manda el ítem a la cola de impresión del backend
+  // (routes/etiquetas.js) en vez de perderlo si se cierra la pestaña. No bloquea el conteo:
+  // un fallo de red solo avisa por el banner existente, nunca corta el flujo.
+  function pedirEtiqueta(sku, cantidad){
+    if(!sku || !(cantidad > 0)){
+      mostrarBannerEscaneo('Necesita una cantidad contada mayor a 0 para pedir etiqueta.');
+      return;
+    }
+    var id = sesionId();
+    fetch('/api/etiquetas/cola', opcionesConCorte({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku: sku, cantidad: cantidad, origen: 'conteo', sesion_id: id || undefined }),
+    }))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j && j.ok) mostrarBannerEscaneo('Etiqueta pedida: ' + sku + ' × ' + cantidad + '.');
+        else mostrarBannerEscaneo('No se pudo pedir la etiqueta: ' + ((j && j.error) || 'error desconocido') + '.');
+      })
+      .catch(function(){ mostrarBannerEscaneo('No se pudo pedir la etiqueta (sin conexión).'); });
   }
 
   function eliminarItem(itemId){
@@ -1502,17 +2894,12 @@
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cantidad: cantidadFinal })
-    })).then(function(r){ return r.json(); }).then(function(j){
-      if(j && j.ok){
-        setGuardado(true);
-        delete cantidadOptimista[itemId]; // el servidor vuelve a ser la fuente de verdad
-        return cargarConteo();
-      } else {
-        mostrarBannerEscaneo((j && j.error) || 'No se pudo guardar la cantidad.');
-        return revertirCantidad(itemId, inp);
-      }
-    }).catch(function(){
-      mostrarBannerEscaneo('No se pudo guardar la cantidad (sin conexión).');
+    })).then(leerRespuestaJson).then(function(){
+      setGuardado(true);
+      delete cantidadOptimista[itemId]; // el servidor vuelve a ser la fuente de verdad
+      return cargarConteo();
+    }).catch(function(error){
+      mostrarBannerEscaneo((error && error.message) || 'No se pudo guardar la cantidad (sin conexión).');
       return revertirCantidad(itemId, inp);
     });
     });
@@ -1536,7 +2923,17 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ todos: true })
       })).then(function(r){ return r.json(); }).then(function(j){
-        if(j && j.ok){ setGuardado(true); return cargarConteo(); }
+        if(j && j.ok){
+          setGuardado(true);
+          // Fase 2: en una sesión por ubicación, algunos SKUs pueden quedar afuera del
+          // cierre automático (overflow en otra ubicación) — avisar, no es un error.
+          if(j.excluidos_por_ubicacion && j.excluidos_por_ubicacion.length){
+            mostrarBannerEscaneo(j.excluidos_por_ubicacion.length +
+              ' producto(s) NO se cerraron en 0 porque tienen stock registrado en otra ubicación también: ' +
+              j.excluidos_por_ubicacion.join(', '));
+          }
+          return cargarConteo();
+        }
         mostrarBannerEscaneo((j && j.error) || 'No se pudieron cerrar los productos sin stock.');
       }).catch(function(){ mostrarBannerEscaneo('No se pudieron cerrar los productos sin stock (sin conexión).'); });
     });
@@ -1583,6 +2980,7 @@
       body: JSON.stringify({ codigo: codigo })
     })).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok){
+        sonar('error');
         mostrarBannerEscaneo((j && j.error) || 'No se pudo registrar el escaneo.');
         return cargarConteo();
       }
@@ -1592,7 +2990,14 @@
         mostrarBannerEscaneo('«' + ((j.item && (j.item.sku || j.item.ean)) || codigo) +
           '» está fuera del alcance de esta sesión. Se registró como hallazgo, no se descartó.');
       }
+      // El segundo sonido: el primero dijo "te escuché", éste dice QUÉ pasó. `cantidad === 1`
+      // significa que la fila se acaba de crear; más de 1, que ese producto YA estaba contado
+      // y se le sumó una unidad. Escuchar el tono de suma cuando esperabas el de primera
+      // unidad es la señal de que estás contando dos veces la misma cosa.
+      sonar(ConteoLista.tipoDeSonido(j.item, fuera));
       if(j.item && j.item.id != null) ultimoItemFlash = j.item.id;
+      if(j.item) mostrarUltimaLectura(j.item);
+      if(!inicioConteoTs) inicioConteoTs = Date.now();
       if(j.item && j.item.sin_asociar){
         abrirSheetEan(j.item.ean);
       }
@@ -1619,15 +3024,32 @@
     });
   }
 
+  // UN SOLO CAMPO (2026-09-11). El lector termina con Enter → cuenta. Mientras se tipea,
+  // el mismo texto filtra la lista: antes había dos campos y el de escaneo se perdía al
+  // scrollear, así que buscar algo implicaba volver arriba.
   scanInput.addEventListener('keydown', function(e){
     if(e.key === 'Enter'){
       e.preventDefault();
       var codigo = scanInput.value.trim();
       scanInput.value = '';
+      filtroBusquedaTexto = '';
+      filtroBusqueda = '';
       limpiarBufferEscaneo();
       if(codigo){ beep(); escanear(codigo); }
+      renderConteo();
     }
+    if(e.key === 'Escape'){ scanInput.value = ''; filtroBusquedaTexto = ''; filtroBusqueda = ''; renderConteo(); }
   });
+  scanInput.addEventListener('input', debounce(function(){
+    var txt = scanInput.value.trim();
+    // Un código no filtra: el lector escribe y manda Enter solo, y mostrar "0 resultados"
+    // por un instante mientras escribe sería ruido.
+    if(looksLikeCodigo(txt)) return;
+    filtroBusquedaTexto = txt;
+    filtroBusqueda = txt.toLowerCase();
+    renderConteo();
+  }, 200));
+  function looksLikeCodigo(txt){ return /^[0-9]{8,14}$/.test(txt) || /^FB-\d+$/i.test(txt); }
 
   document.getElementById('btn-reintentar-escaneo').addEventListener('click', function(){
     if(!estadoReintentoPendiente) return;
@@ -1658,6 +3080,12 @@
   btnOrdenDiff.addEventListener('click', function(){
     ordenPorDiferencia = !ordenPorDiferencia;
     btnOrdenDiff.classList.toggle('on', ordenPorDiferencia);
+    renderConteo();
+  });
+
+  conteoBuscar.addEventListener('input', function(){
+    filtroBusquedaTexto = conteoBuscar.value.trim();
+    filtroBusqueda = filtroBusquedaTexto.toLowerCase();
     renderConteo();
   });
 
@@ -1745,20 +3173,71 @@
     cerrarSheetEan(true);  // Mantener foco en scanInput
   });
 
+  // Teclado en el buscador de asociación: ↑↓ eligen, Enter asocia, Esc saltea. Es el flujo de
+  // escritorio, donde se asocia el doble que en teléfono (176 contra 86 en 14 días) y la mano
+  // no debería salir del teclado entre el lector y la confirmación.
+  function resultadosAsociacion(){ return [...eanSheetResultados.querySelectorAll('.resultado-buscar')]; }
+  function moverResultado(delta){
+    var res = resultadosAsociacion();
+    if(!res.length) return;
+    var i = res.findIndex(function(r){ return r.classList.contains('foco'); });
+    var j = Math.max(0, Math.min(res.length - 1, i < 0 ? 0 : i + delta));
+    res.forEach(function(r, k){ r.classList.toggle('foco', k === j); });
+    res[j].scrollIntoView({ block: 'nearest' });
+  }
+  eanSheetBuscar.addEventListener('keydown', function(e){
+    if(e.key === 'ArrowDown'){ e.preventDefault(); moverResultado(1); }
+    else if(e.key === 'ArrowUp'){ e.preventDefault(); moverResultado(-1); }
+    else if(e.key === 'Enter'){
+      e.preventDefault();
+      var elegido = eanSheetResultados.querySelector('.resultado-buscar.foco')
+        || resultadosAsociacion()[0];
+      if(elegido) elegido.click();
+    } else if(e.key === 'Escape'){ e.preventDefault(); cerrarSheetEan(true); }
+  });
+
   eanSheetBuscar.addEventListener('input', debounce(function(){
     var q = eanSheetBuscar.value.trim();
     if(!q){ eanSheetResultados.innerHTML = ''; return; }
     fetch('/api/codigos/buscar?q=' + encodeURIComponent(q)).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok || !Array.isArray(j.data)){ eanSheetResultados.innerHTML = ''; return; }
       if(!j.data.length){ eanSheetResultados.innerHTML = '<p class="empty">Sin resultados.</p>'; return; }
+      // Resultado con foto, estado del código y variante. La API ya mandaba `img`, `gtin`,
+      // `stock`, `marca` y atributos (SELECT * en routes/codigos.js) y la pantalla los tiraba:
+      // se elegía un casco contra dos líneas de texto. La píldora ámbar es nueva y es lo más
+      // importante — asociar hace un PATCH del global_unique_id a Woo, así que elegir un
+      // producto que YA tiene código lo reemplaza, y eso hasta hoy pasaba sin ninguna señal.
       eanSheetResultados.innerHTML = j.data.map(function(p){
-        return '<button type="button" class="resultado-buscar" data-sku="' + esc(p.sku) + '">' +
-          '<span class="sku">' + esc(p.sku) + '</span>' +
-          '<span class="nombre">' + esc(p.nombre || '') + '</span>' +
-        '</button>';
+        var variante = varianteDeNombre(p.nombre);
+        var ocupado = p.gtin && String(p.gtin).trim();
+        var foto = p.img
+          ? '<img class="res-foto" src="' + esc(p.img) + '" alt="" loading="lazy">'
+          : '<div class="res-foto res-foto-vacia" aria-hidden="true">▤</div>';
+        return '<button type="button" class="resultado-buscar res" data-sku="' + esc(p.sku) + '"'
+          + (ocupado ? ' data-ocupado="1"' : '') + '>'
+          + foto
+          + '<span class="res-c">'
+            + (variante
+              ? '<span class="res-t res-t-sec">' + esc(variante.base) + '</span><span class="res-v">' + esc(variante.detalle) + '</span>'
+              : '<span class="res-t">' + esc(p.nombre || p.sku) + '</span>')
+            + '<span class="res-m">' + esc(p.sku) + (p.marca ? ' · ' + esc(p.marca) : '')
+            + ' · ' + (p.stock != null ? n(p.stock) + ' en sistema' : 'sin stock conocido') + '</span>'
+          + '</span>'
+          + '<span class="res-pill ' + (ocupado ? 'ocupado' : 'libre') + '">'
+            + (ocupado ? 'ya tiene ' + esc(String(p.gtin).slice(0, 4)) + '…' : 'sin código') + '</span>'
+        + '</button>';
       }).join('');
+      var primero = eanSheetResultados.querySelector('.resultado-buscar');
+      if(primero) primero.classList.add('foco');
       eanSheetResultados.querySelectorAll('.resultado-buscar').forEach(function(btn){
         btn.addEventListener('click', function(){
+          // Pisar el código de un producto es irreversible del lado de Woo y es la forma
+          // exacta de los casos `gtin_contradictorio` que quedan abiertos en identidad.
+          if(btn.getAttribute('data-ocupado') === '1'){
+            var nom = btn.querySelector('.res-t, .res-v');
+            if(!confirm('Ese producto ya tiene un código cargado.\n\nAsociar este va a REEMPLAZARLO en WooCommerce'
+              + (nom ? ' para «' + nom.textContent.trim() + '»' : '') + '. ¿Seguir?')) return;
+          }
           asociarEan(eanActual, btn.getAttribute('data-sku'));
         });
       });
@@ -1958,8 +3437,7 @@
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cantidad: nuevo })
-    }).then(function(r){ return r.json(); }).then(function(d){
-      if(!d.ok) throw new Error(d.error || 'error');
+    }).then(leerRespuestaJson).then(function(){
       return cargarRevision();
     }).catch(function(e){
       alert('No se pudo actualizar: ' + e.message);
@@ -2359,6 +3837,7 @@
     fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }).then(function(j){
       if(!j || !j.ok || !j.sesion){ alert('No se pudo abrir la sesión.'); return; }
       state.sesionVista = j.sesion;
+      empujarUrlSesion(id);
       mostrarDetalleSesion(j.sesion, j.items || []);
       mostrarVista('resultado');
     }).catch(function(){ alert('No se pudo abrir la sesión (sin conexión).'); });
@@ -2389,8 +3868,10 @@
     }
     pintarItemsResultado(items, esDescartada);
     var totalFallidos = esDescartada ? 0 : items.filter(function(i){ return i.ajustado === false; }).length;
-    document.getElementById('btn-reintentar-fallidos').style.display =
-      (totalFallidos > 0 && !esDescartada) ? 'block' : 'none';
+    var puedeConfirmarAdmin = usuarioEsAdmin() && (sesion.estado === 'abierta' || sesion.estado === 'confirmada_con_errores');
+    var btnReintentar = document.getElementById('btn-reintentar-fallidos');
+    btnReintentar.textContent = puedeConfirmarAdmin ? 'Confirmar ajuste como administrador' : 'Reintentar fallidos';
+    btnReintentar.style.display = ((!esDescartada && totalFallidos > 0) || puedeConfirmarAdmin) ? 'block' : 'none';
     document.getElementById('btn-volver-inicio').textContent = 'Volver al historial';
   }
 
@@ -2429,13 +3910,87 @@
     resetEstadoBloqueSinStock();
     var det = document.getElementById('inicio-historial');
     if(det.open){ cargarHistorial(); } else { historialCargado = false; }
+    empujarUrlSesion(null);
     mostrarVista('inicio');
+  });
+
+  /* ── URL POR SESIÓN (2026-09-12) ──────────────────────────────────────────
+     Antes el id de la sesión vivía sólo en memoria: no se podía compartir un link, ni
+     recargar sin perder el lugar, ni volver con el botón de atrás. Mismo patrón que gestión
+     de pedidos y preparación, que ya usan pushState por entidad.
+
+     UNA sola URL que hace lo correcto según el caso (decisión del usuario): si la sesión es
+     tuya y está abierta, la retoma para seguir contando; si es de otro o ya se cerró, la abre
+     en lectura. Así el link sirve para las dos cosas sin que haya que saber cuál mandar. */
+  var RAIZ_INV = window.RAIZ || '/inventario/';
+
+  function urlDeSesion(id){ return RAIZ_INV + 'sesion/' + id; }
+
+  function empujarUrlSesion(id){
+    var destino = id ? urlDeSesion(id) : RAIZ_INV;
+    if(location.pathname !== destino) history.pushState({ sesion: id || null }, '', destino);
+  }
+
+  function idDeLaUrl(){
+    var m = location.pathname.match(/\/sesion\/(\d+)\/?$/);
+    return m ? Number(m[1]) : null;
+  }
+
+  /* Abre lo que diga la URL. Pide la sesión y el usuario EN PARALELO: sin saber quién sos no se
+     puede decidir entre retomar y leer, y encadenar los dos fetch duplicaría la espera en el
+     único momento en que la pantalla está en blanco. */
+  function abrirDesdeUrl(id){
+    Promise.all([
+      fetch('/api/inventario/sesiones/' + id).then(function(r){ return r.json(); }),
+      fetch('/api/auth/me').then(function(r){ return r.json(); }).catch(function(){ return null; }),
+    ]).then(function(res){
+      var j = res[0];
+      var yo = res[1] && res[1].ok ? res[1] : null;
+      if(yo) state.usuario = yo.user;
+      if(!j || !j.ok || !j.sesion){
+        mostrarBannerEscaneo('Esa sesión no existe o no se pudo abrir.');
+        mostrarVista('inicio');
+        history.replaceState({}, '', RAIZ_INV);
+        return;
+      }
+      var esMia = String(j.sesion.usuario || '') === String(state.usuario || '');
+      if(j.sesion.estado === 'abierta' && esMia){
+        state.sesion = j.sesion;
+        modoHistorial = false;
+        resetEstadoBloqueSinStock();
+        mostrarVista('conteo');
+        return;
+      }
+      // De otro, o ya cerrada: lectura. Es para lo que sirve compartir el link.
+      if(j.sesion.estado === 'abierta' && !esMia){
+        mostrarBannerEscaneo('Esa sesión la está contando ' + (j.sesion.usuario || 'otra persona') + '. Se abre para mirar.');
+      }
+      state.sesionVista = j.sesion;
+      mostrarDetalleSesion(j.sesion, j.items || []);
+      mostrarVista('resultado');
+    }).catch(function(){
+      mostrarBannerEscaneo('No se pudo abrir la sesión (sin conexión).');
+      mostrarVista('inicio');
+    });
+  }
+
+  // El botón de atrás del navegador tiene que funcionar como en cualquier página.
+  window.addEventListener('popstate', function(){
+    var id = idDeLaUrl();
+    if(id) abrirDesdeUrl(id);
+    else {
+      state.sesionVista = null;
+      modoHistorial = false;
+      mostrarVista('inicio');
+    }
   });
 
   // Expuesto para que las próximas tareas (Conteo, Revisión, etc.) lo reusen.
   window.InvApp = { mostrarVista: mostrarVista, state: state, fechaRelativa: fechaRelativa, alcanceTexto: alcanceTexto };
 
-  mostrarVista('inicio');
+  var idInicial = idDeLaUrl();
+  if(idInicial) abrirDesdeUrl(idInicial);
+  else mostrarVista('inicio');
 })();
 </script>
 
@@ -2448,6 +4003,7 @@
   }).then(function(d){
     if (!d || !d.ok) return;
     var isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+    window.__inventarioEsAdmin = isAdmin;
     if (isAdmin || !tool) return;
     var ok = (d.permisos||[]).some(function(p){ return p.herramienta === tool; });
     if (!ok) location.href = '/herramientas/home/';

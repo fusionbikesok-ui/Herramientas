@@ -75,6 +75,65 @@ describe('normalizarProductoWc', () => {
   });
 });
 
+describe('normalizarProductoWc: atributos (producto simple/variable)', () => {
+  it('producto variable con options de varios valores: se unen con ", " en un solo atributo', () => {
+    const raw = {
+      id: 40, name: 'Suspensión X', type: 'variable',
+      attributes: [{ name: 'Largo del eje', options: ['110mm', '122.5mm', '123mm'] }],
+    };
+    const p = normalizarProductoWc(raw);
+    expect(p.atributos).toEqual([{ name: 'Largo del eje', option: '110mm, 122.5mm, 123mm' }]);
+  });
+
+  it('producto simple con un atributo de un solo valor', () => {
+    const raw = {
+      id: 41, name: 'Casco Único', type: 'simple',
+      attributes: [{ name: 'Color', options: ['Rojo'] }],
+    };
+    const p = normalizarProductoWc(raw);
+    expect(p.atributos).toEqual([{ name: 'Color', option: 'Rojo' }]);
+  });
+
+  it('sin attributes → atributos queda en [] (no rompe ni devuelve undefined)', () => {
+    const p = normalizarProductoWc({ id: 42, name: 'Sin attrs', type: 'simple' });
+    expect(p.atributos).toEqual([]);
+  });
+
+  it('attributes con options: [] se descarta → atributos queda []', () => {
+    const raw = { id: 43, name: 'Attr vacío', type: 'variable', attributes: [{ name: 'Color', options: [] }] };
+    const p = normalizarProductoWc(raw);
+    expect(p.atributos).toEqual([]);
+  });
+
+  it('attributes con name vacío se descarta', () => {
+    const raw = { id: 44, name: 'Sin nombre', type: 'variable', attributes: [{ name: '', options: ['Rojo'] }] };
+    const p = normalizarProductoWc(raw);
+    expect(p.atributos).toEqual([]);
+  });
+
+  it('options con valores vacíos/null mezclados: se filtran antes de unir, sin ", " colgando', () => {
+    const raw = {
+      id: 45, name: 'Eje mixto', type: 'variable',
+      attributes: [{ name: 'Largo del eje', options: ['110mm', '', null, '123mm'] }],
+    };
+    const p = normalizarProductoWc(raw);
+    expect(p.atributos).toEqual([{ name: 'Largo del eje', option: '110mm, 123mm' }]);
+  });
+
+  it('varios attributes: cada uno se mapea a un atributo, mezclando descartados y válidos', () => {
+    const raw = {
+      id: 46, name: 'Multi', type: 'variable',
+      attributes: [
+        { name: 'Color', options: ['Rojo', 'Azul'] },
+        { name: 'Talle', options: [] },
+        { name: '', options: ['X'] },
+      ],
+    };
+    const p = normalizarProductoWc(raw);
+    expect(p.atributos).toEqual([{ name: 'Color', option: 'Rojo, Azul' }]);
+  });
+});
+
 describe('normalizarVariacionWc', () => {
   const padre = normalizarProductoWc({
     id: 20, name: 'Casco X', type: 'variable', categories: [{ name: 'Cascos' }],

@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pausadas con stock — Fusion Bikes</title>
+<link rel="stylesheet" href="../../lib/theme.css">
+<link rel="stylesheet" href="../../lib/components.css">
+<style>
+:root{
+  --row-h:64px;--gutter:clamp(12px,3vw,32px);
+  --shadow-bar:0 -8px 24px rgba(0,0,0,.45);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+button{font:inherit;color:inherit}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+[hidden]{display:none!important}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 var(--gutter) 120px}
+.crumb{font-size:var(--fs-meta);color:var(--muted);padding-top:.6rem}.crumb a{display:inline-block;padding:.35rem 0}
+.head{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.5rem 1rem;justify-content:space-between;margin:.25rem 0 1rem}
+.head h1{font-size:var(--fs-titulo);margin:0;font-weight:700}
+.head p{margin:.15rem 0 0;color:var(--muted);font-size:.9rem}
+.head p b{color:var(--txt)}
+.tools{display:flex;gap:.5rem;align-items:center;flex:1 1 260px;justify-content:flex-end;min-width:0}
+.search{flex:1 1 auto;max-width:320px;min-width:0;height:40px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--txt);padding:0 .75rem;font:inherit}
+.search::placeholder{color:var(--muted)}
+.iconbtn{height:40px;min-width:40px;padding:0 .7rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;cursor:pointer;color:var(--muted);display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap}
+.iconbtn:hover{color:var(--txt);border-color:var(--border2)}
+kbd{font-family:var(--mono);font-size:var(--fs-label);background:var(--surface2);border:1px solid var(--border2);border-radius:4px;padding:0 .3rem;color:var(--txt)}
+
+/* chips por causa */
+.chips{display:flex;gap:.45rem;overflow-x:auto;scroll-snap-type:x proximity;padding:2px 2px 8px;margin:0 -2px 1rem;scrollbar-width:thin}
+.chip{scroll-snap-align:start;flex:0 0 auto;height:36px;padding:0 .8rem;border-radius:var(--radius-pill);background:var(--surface2);border:1px solid var(--border);color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:.4rem;white-space:nowrap;font-size:.85rem}
+.chip b{color:var(--txt);font-variant-numeric:tabular-nums}
+.chip[aria-pressed="true"]{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+.chip[aria-pressed="true"] b{color:var(--accent)}
+.chip:disabled{opacity:.55;cursor:default}
+
+/* aviso de error de carga */
+.aviso{display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;justify-content:space-between;padding:.6rem .85rem;border:1px solid var(--amber-bd);background:var(--amber-bg);border-radius:var(--radius);margin-bottom:1rem;font-size:.88rem}
+
+/* grupo */
+.group{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1rem;overflow:clip}
+.group--locked{border-style:dashed;background:transparent}
+.ghead-line{display:flex;align-items:center;padding-left:.9rem}
+.ghead{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:.6rem;min-height:48px;padding:.4rem .9rem .4rem 0;background:transparent;border:0;cursor:pointer;text-align:left}
+.ghead .chev{color:var(--muted2);transition:transform .15s;flex:0 0 auto}
+.ghead[aria-expanded="false"] .chev{transform:rotate(-90deg)}
+.ghead .gname{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ghead .gcount{color:var(--muted);font-variant-numeric:tabular-nums}
+.ghead .gmoney{margin-left:auto;color:var(--muted);font-size:var(--fs-meta);white-space:nowrap}
+.group--locked .gname{color:var(--muted)}
+.gbody[hidden]{display:none}
+.ghint{padding:0 .9rem .6rem calc(44px + .9rem + 16px + .6rem);color:var(--muted);font-size:var(--fs-meta);margin-top:-.2rem}
+.more{display:block;width:100%;min-height:44px;background:transparent;border:0;border-top:1px solid var(--border);color:var(--accent);cursor:pointer}
+
+/* fila */
+.row{position:relative;display:grid;grid-template-columns:44px 56px minmax(0,1fr) auto 112px;
+  grid-template-areas:"cb ph tt stk act" "det det det det det";
+  align-items:center;column-gap:.75rem;min-height:var(--row-h);padding:.35rem .9rem .35rem 0;border-top:1px solid var(--border)}
+.row>.cb,.row>.lock{grid-area:cb}.row>.ph{grid-area:ph}.row>.tt,.row>.lockmsg{grid-area:tt}.row>.stk{grid-area:stk}.row>.act{grid-area:act}.row>.det{grid-area:det}
+.row--locked{grid-template-areas:"cb ph tt tt tt" "det det det det det"}
+.row:hover{background:var(--surface2)}
+.row.is-focus{outline:2px solid var(--accent);outline-offset:-2px}
+.row[aria-selected="true"]{background:var(--accent-dim);box-shadow:inset 3px 0 0 var(--accent)}
+.row.is-error{background:var(--amber-bg);box-shadow:inset 3px 0 0 var(--amber)}
+.row .act .btn{background:transparent;border-color:transparent;color:var(--accent)}
+.row:hover .act .btn,.row.is-focus .act .btn,.row .act .btn:focus-visible{border-color:var(--border2);background:var(--surface2)}
+.row[aria-selected="true"]:not(.is-error) .act .btn{visibility:hidden}
+.row.is-done{opacity:.55;transition:opacity .2s}
+.cb{display:flex;align-items:center;justify-content:center;height:44px;cursor:pointer}
+.cb input,.gcb input{width:18px;height:18px;accent-color:var(--accent);cursor:pointer;margin:0}
+.lock{display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.ph{width:56px;height:56px;border-radius:6px;background:var(--surface2);display:grid;place-items:center;color:var(--muted2);overflow:hidden}
+.ph svg{width:28px;height:28px;opacity:.6}
+.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.tt{min-width:0}
+.tt .title{display:block;width:100%;font-size:var(--fs-dato);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:none;border:0;padding:0;text-align:left;cursor:pointer;min-height:24px}
+.tt .title:hover{color:var(--accent)}
+.tt .sub{font-size:var(--fs-meta);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tt .sub i{font-style:italic}
+.tt .err{font-size:var(--fs-meta);color:var(--amber);margin-top:.1rem;overflow-wrap:anywhere}
+.stk{font-size:var(--fs-meta);white-space:nowrap;text-align:right}
+.stk .lbl{color:var(--muted)}
+.stk .ne{color:var(--amber);white-space:nowrap}
+.stk .money{display:block;color:var(--muted)}
+.act{display:flex;justify-content:flex-end}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 .9rem;border-radius:8px;background:var(--surface2);border:1px solid var(--border2);cursor:pointer;white-space:nowrap;font-weight:600;font-size:.88rem;text-decoration:none;color:var(--txt)}
+.btn:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+.btn[disabled]{opacity:.55;cursor:default}
+.btn--pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.btn--pri:hover{background:var(--accent-dk);border-color:var(--accent-dk);color:var(--bg)}
+.btn--confirm{background:var(--amber-bg);border-color:var(--amber);color:var(--amber);position:relative;overflow:hidden}
+.btn--confirm::after{content:"";position:absolute;left:0;bottom:0;height:2px;background:var(--amber);width:100%;animation:drain 4s linear forwards}
+@keyframes drain{to{width:0}}
+.ok{display:inline-flex;align-items:center;gap:.3rem;color:var(--green);font-weight:600;font-size:.85rem;border:1px solid var(--green-bd);background:var(--green-bg);padding:.2rem .6rem;border-radius:var(--radius-pill);white-space:nowrap}
+.busy{position:absolute;left:0;right:0;bottom:0;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent);background-size:40% 100%;background-repeat:no-repeat;animation:slide 1s linear infinite}
+@keyframes slide{from{background-position:-40% 0}to{background-position:140% 0}}
+.lockmsg{min-width:0;display:flex;flex-wrap:wrap;gap:.1rem 1rem;align-items:center;font-size:var(--fs-meta)}
+.lockmsg .lt{flex:1 1 240px;min-width:0}
+.lockmsg .lt b{display:block;font-size:var(--fs-dato);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lockmsg .lt span{color:var(--muted);display:block;overflow-wrap:anywhere}
+.lockmsg a{display:inline-flex;align-items:center;min-height:36px;white-space:nowrap}
+.gcb{display:flex;align-items:center;justify-content:center;width:44px;height:44px;flex:0 0 44px;margin-left:-.9rem;cursor:pointer}
+.gcb--none{cursor:default}
+
+/* detalle */
+.det{grid-column:1 / -1;margin:.1rem 0 .4rem 44px;padding:.75rem .85rem;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:var(--fs-meta);cursor:auto;min-width:0}
+.det .tw{overflow-x:auto}
+.det table{border-collapse:collapse;width:100%;max-width:560px}
+.det th{text-align:left;color:var(--muted);font-weight:500;padding:.25rem .5rem .25rem 0;border-bottom:1px solid var(--border)}
+.det td{padding:.3rem .5rem .3rem 0;border-bottom:1px solid var(--border)}
+.det td.r,.det th.r{text-align:right}
+.det .foot{align-items:center;display:flex;flex-wrap:wrap;gap:.4rem 1.2rem;margin-top:.6rem;color:var(--muted)}
+.det .foot a{display:inline-block;padding:.3rem 0}
+
+/* barra inferior: lote + franja persistente */
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:20;pointer-events:none}
+.dock > *{pointer-events:auto}
+.bar,.band{max-width:1180px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .75rem;padding:.55rem var(--gutter);padding-bottom:calc(.55rem + env(safe-area-inset-bottom))}
+.barbg{background:var(--surface2);border-top:1px solid var(--border2);box-shadow:var(--shadow-bar)}
+.bar .n{font-weight:600}
+.bar .cap{color:var(--muted);font-size:var(--fs-meta)}
+.bar .sp{flex:1}
+.bar .max{color:var(--amber);font-size:var(--fs-meta)}
+.bandbg{border-top:1px solid var(--border2);box-shadow:var(--shadow-bar);background:var(--surface2)}
+.bandbg.ok{background:linear-gradient(var(--green-bg),var(--green-bg)),var(--surface2)}
+.bandbg.warn{background:linear-gradient(var(--amber-bg),var(--amber-bg)),var(--surface2)}
+.bandbg.bad{background:linear-gradient(var(--red-bg),var(--red-bg)),var(--surface2)}
+.band{flex-wrap:nowrap}.band .msg{flex:1 1 0;min-width:0;overflow-wrap:anywhere}.band #bandact{flex:0 0 auto}
+.bandbg.ok .ic{color:var(--green)}.bandbg.warn .ic{color:var(--amber)}.bandbg.bad .ic{color:var(--red)}
+.linkbtn{background:none;border:0;color:var(--accent);cursor:pointer;padding:0 .25rem;min-height:36px}
+.bandclose{min-width:44px;min-height:44px;font-size:1.1rem}
+
+/* atajos */
+.help{background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius);padding:.75rem 1rem;margin-bottom:1rem;font-size:.85rem}
+.help ul{list-style:none;margin:.4rem 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:.35rem 1rem}
+.help li{color:var(--muted)}
+
+/* estados */
+.empty{border:2px dashed var(--border);border-radius:var(--radius);padding:2.5rem 1rem;text-align:center;color:var(--muted)}
+.empty .big{color:var(--txt);font-weight:600;margin-bottom:.3rem}
+.sk{height:var(--row-h);border-top:1px solid var(--border);display:flex;align-items:center;gap:.75rem;padding-left:44px}
+.sk i{display:block;border-radius:6px;background:linear-gradient(90deg,var(--surface2),var(--border2),var(--surface2));background-size:200% 100%;animation:sh 1.2s infinite}
+@keyframes sh{to{background-position:-200% 0}}
+
+/* hoja inferior (móvil) */
+.veil{position:fixed;inset:0;background:color-mix(in srgb,var(--black) 70%,transparent);z-index:30}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:31;background:var(--surface);border-top:1px solid var(--border2);border-radius:var(--radius-lg) var(--radius-lg) 0 0;max-height:80vh;overflow:auto;padding:.5rem 1rem calc(1rem + env(safe-area-inset-bottom))}
+.sheet .grip{width:36px;height:4px;border-radius:2px;background:var(--border2);margin:.25rem auto .75rem}
+.sheet h2{font-size:1rem;margin:0 0 .5rem;overflow-wrap:anywhere}
+.sheet .det{margin:0;display:block}
+.sheet .acts{display:flex;gap:.5rem;margin-top:.75rem}
+.sheet .acts .btn{min-height:var(--tap-comfort,56px)}
+
+/* responsive */
+/* confirmación de precio (Calcular precio y reactivar) */
+.psheet{position:fixed;left:0;right:0;bottom:0;z-index:31;background:var(--surface);border-top:1px solid var(--border2);border-radius:var(--radius-lg) var(--radius-lg) 0 0;max-height:88vh;overflow:auto;padding:.75rem 1rem calc(1rem + env(safe-area-inset-bottom))}
+@media (min-width:700px){.psheet{left:50%;right:auto;bottom:auto;top:50%;transform:translate(-50%,-50%);width:min(780px,calc(100vw - 2rem));border:1px solid var(--border2);border-radius:var(--radius-lg)}}
+.psheet h2{font-size:1rem;margin:0 0 .25rem;overflow-wrap:anywhere}
+.psheet .pnote{color:var(--muted);font-size:var(--fs-meta);margin:0 0 .75rem}
+.pr{display:grid;gap:.15rem;padding:.6rem .7rem;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:.5rem;min-width:0}
+.pr .pt{display:flex;gap:.5rem;align-items:baseline;flex-wrap:wrap;min-width:0}
+.pr .pt b{overflow-wrap:anywhere}
+.pr .pt span,.pr .pn{color:var(--muted);font-size:var(--fs-meta)}
+.pr .pv{display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap}
+.pr .pv b{color:var(--txt)}
+.pr .pbaja{color:var(--amber);font-weight:700}
+.pr--baja{border-color:var(--amber);background:var(--amber-bg)}
+.pr--no{background:var(--surface2)}
+.pr .pres{font-weight:600}
+.pr--ok .pres{color:var(--green)}.pr--bad .pres{color:var(--red)}.pr--warn .pres{color:var(--amber)}
+.psheet .ptot{display:flex;gap:.75rem;flex-wrap:wrap;color:var(--muted);font-size:var(--fs-meta);margin:.5rem 0 0}
+.psheet .acts{display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap;justify-content:flex-end}
+.psheet .acts .btn{min-height:var(--tap-min)}
+.row .act{gap:.4rem;flex-wrap:wrap}
+@media (max-width:640px){
+  .head{align-items:stretch}
+  .tools{flex-basis:100%}
+  .search{max-width:none;height:var(--tap-min)}
+  .hint-keys{display:none}
+  .chip{height:var(--tap-min)}
+  .chips{mask-image:linear-gradient(90deg,#000 85%,transparent);-webkit-mask-image:linear-gradient(90deg,#000 85%,transparent);padding-right:24px}
+  .ghead .gmoney,.gcb{display:none}
+  .ghead{padding-left:.75rem}
+  .ghint{padding-left:.75rem}
+  .row{grid-template-columns:64px minmax(0,1fr) auto;grid-template-areas:"ph tt tt" "ph stk act" "det det det";
+    row-gap:.2rem;column-gap:.7rem;padding:.7rem .75rem;align-items:center}
+  .row>.cb,.row>.lock,.row>.det{display:none}
+  .row .ph{width:64px;height:64px;align-self:start}
+  .row .tt .title{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;min-height:var(--tap-min);padding:0}
+  .row .stk{text-align:left;align-self:center;white-space:normal}
+  .row--locked .lockmsg .lt b{white-space:normal;overflow-wrap:anywhere}
+  .row .tt .sub{white-space:normal}
+  .row .act{align-self:end}
+  .row .stk .money{display:none}
+  .row .act .btn{border-color:var(--border2);background:var(--surface2);min-height:var(--tap-min);min-width:var(--tap-min);padding:0 .8rem}
+  .row .lockmsg a{min-height:var(--tap-min)}
+  .row[aria-selected="true"]{box-shadow:none;background:transparent}
+  .row[aria-selected="true"] .act .btn{visibility:visible}
+  .row--locked{grid-template-columns:64px minmax(0,1fr);grid-template-areas:"ph tt" "ph tt";padding:.7rem .75rem}
+  .row--locked .ph{width:64px;height:64px}
+  .linkbtn{min-height:var(--tap-min)}
+  .crumb a{display:inline-flex;align-items:center;min-height:var(--tap-min)}
+  .barbg{display:none!important}
+  .band{padding-bottom:calc(.55rem + env(safe-area-inset-bottom))}
+}
+@media (max-width:360px){
+  .chip{padding:0 .6rem;font-size:.8rem}
+  .head h1{font-size:1.1rem}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<main class="wrap" id="main">
+  <div class="crumb"><a href="/herramientas/sync-ml/">Sincronización ML</a> / Pausadas con stock</div>
+  <div class="head">
+    <div>
+      <h1>Pausadas con stock en la web</h1>
+      <p id="sub" aria-live="polite">Cargando…</p>
+    </div>
+    <div class="tools">
+      <input class="search" id="q" type="search" placeholder="Buscar producto o SKU" aria-label="Buscar producto o SKU">
+      <button class="iconbtn hint-keys" id="helpbtn" aria-expanded="false" aria-controls="help"><kbd>?</kbd> Atajos</button>
+    </div>
+  </div>
+
+  <section class="help" id="help" hidden aria-label="Atajos de teclado">
+    <strong>Atajos</strong> <span style="color:var(--muted)">· funcionan fuera de la búsqueda</span>
+    <ul>
+      <li><kbd>j</kbd> <kbd>k</kbd> bajar / subir</li><li><kbd>x</kbd> seleccionar</li>
+      <li><kbd>Enter</kbd> ver detalle</li><li><kbd>r</kbd> reactivar la fila</li>
+      <li><kbd>Shift</kbd>+<kbd>R</kbd> reactivar selección</li><li><kbd>/</kbd> buscar</li>
+      <li><kbd>Esc</kbd> cancelar / cerrar</li>
+    </ul>
+  </section>
+
+  <div class="aviso" id="loaderr" hidden role="alert">
+    <span id="loaderrmsg"></span>
+    <button class="btn" id="retry">Reintentar</button>
+  </div>
+
+  <nav class="chips" id="chips" aria-label="Filtrar por causa"></nav>
+  <div id="list"></div>
+</main>
+
+<div class="dock">
+  <div class="bandbg" id="bandwrap" hidden><div class="band" role="status" aria-live="polite">
+    <span class="msg" id="bandmsg"></span><span id="bandact"></span>
+    <button class="linkbtn bandclose" id="bandclose" aria-label="Cerrar aviso">✕</button></div></div>
+  <div class="barbg" id="barwrap" hidden><div class="bar">
+    <span class="n" id="barn"></span><span class="cap">máximo 50 por vez</span><span class="sp"></span>
+    <span class="max" id="barmax" hidden>Llegaste al máximo de 50</span>
+    <button class="btn" id="barcancel">Cancelar</button>
+    <button class="btn" id="barprecio" hidden></button>
+    <button class="btn btn--pri" id="bargo"></button></div></div>
+</div>
+
+<script src="../../lib/api.js"></script>
+<script src="precio.js"></script>
+<script>
+Api.installAuth();
+
+var MAX_LOTE=50, CONFIRMAR_DESDE=10, PAGINA=25;
+var BASE_SYNC='/herramientas/sync-ml/', BASE_CONFIG='/herramientas/config-ml/', BASE_CATALOGO='/herramientas/matcher/';
+/* lock: no se reactiva desde acá; go/href: dónde se resuelve. */
+var CAUSAS={
+  paused_by_seller:{n:'Pausadas a mano',lock:false,txt:'La pausó alguien en ML'},
+  pausa_app:{n:'Pausadas desde esta app',lock:false,txt:'Se pausó desde una pantalla de Fusion'},
+  pausa_vieja:{n:'Pausa vieja',lock:false,txt:'Pausada hace tiempo, sin motivo registrado'},
+  out_of_stock:{n:'Sin stock en ML',lock:false,txt:'ML la pausó por quedarse sin stock',hint:'Reactivá solo si ya cargaste stock en ML.'},
+  otra:{n:'Otras',lock:false,txt:'Pausada, ML no informa el motivo'},
+  vigia:{n:'Cambio de producto',lock:true,txt:'ML cambió el producto del catálogo',how:'Revisá el aviso antes de reactivar.',go:'Ver aviso',href:BASE_SYNC+'#cambios-formato'},
+  solo_local:{n:'Stock forzado a 0',lock:true,txt:'Está en 0 a propósito (stock solo local)',how:'Para venderla, cambiá esa configuración.',go:'Ir a Configuración ML',href:BASE_CONFIG},
+  sin_vinculo:{n:'Sin vínculo',lock:true,txt:'No está unida a un producto de la web',how:'Unila primero.',go:'Ir a Catálogo',href:BASE_CATALOGO}
+};
+var ORDEN=['paused_by_seller','pausa_app','pausa_vieja','out_of_stock','otra','vigia','solo_local','sin_vinculo'];
+/* Una fila no reactivable dentro de un grupo normal: por qué y dónde resolverlo. */
+var MOTIVO={
+  aviso_abierto:{txt:'Tiene un aviso del vigía sin revisar',go:'Ver aviso',href:BASE_SYNC+'#cambios-formato'},
+  solo_local:{txt:CAUSAS.solo_local.txt,go:CAUSAS.solo_local.go,href:BASE_CONFIG},
+  sin_vinculo:{txt:CAUSAS.sin_vinculo.txt,go:CAUSAS.sin_vinculo.go,href:BASE_CATALOGO},
+  sin_stock_disponible:{txt:'Sin stock disponible para ML'}
+};
+
+var items=[], resumen={}, cargadoEn=null, estado='cargando';
+var filtro='todas', q='', sel=new Set(), open=new Set(), errs={}, busy=new Set(), okIds=new Set();
+var collapsed=new Set(['vigia','solo_local','sin_vinculo']), shown={}, focusId=null, confirmT=null, sheetEl=null;
+var puedePrecio=false, pp=null;
+
+var $=function(s){return document.querySelector(s)};
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function money(v){return '$ '+Math.round((v||0)/1000).toLocaleString('es-AR')+' mil'}
+function moneyFull(v){return '$ '+Math.round(v||0).toLocaleString('es-AR')}
+function narrow(){return matchMedia('(max-width:640px)').matches}
+function hace(iso){
+  var t=Date.parse(iso); if(!isFinite(t))return '';
+  var m=Math.max(0,Math.round((Date.now()-t)/60000));
+  if(m<1)return 'hace instantes'; if(m<60)return 'hace '+m+' min';
+  var h=Math.round(m/60); if(h<24)return 'hace '+h+' h';
+  var d=Math.round(h/24); if(d<14)return 'hace '+d+(d===1?' día':' días');
+  var w=Math.round(d/7); if(w<9)return 'hace '+w+' sem';
+  return 'hace '+Math.round(d/30)+(Math.round(d/30)===1?' mes':' meses');
+}
+function quienTxt(i){
+  var d=i.detalle; if(!d||!d.actor)return null;
+  var a=d.actor==='vigia'?'Vigía':d.actor;
+  return a+(d.desde?' · '+hace(d.desde):'');
+}
+var imgSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="16" r="4"/><circle cx="18" cy="16" r="4"/><path d="M6 16l4-8h5l3 8M10 8l-1-2H7"/></svg>';
+
+function locked(i){return !i.reactivable}
+function lockInfo(i){return CAUSAS[i.causa]&&CAUSAS[i.causa].lock?CAUSAS[i.causa]:(MOTIVO[i.motivo_no_reactivable]||{txt:'No se puede reactivar desde acá'})}
+function vis(){
+  var qq=q;
+  return items.filter(function(i){
+    if(filtro!=='todas'&&i.causa!==filtro)return false;
+    if(!qq)return true;
+    var hay=(i.titulo||'')+' '+i.item_id+' '+i.variaciones.map(function(v){return v.sku||''}).join(' ');
+    return hay.toLowerCase().indexOf(qq)>=0;
+  });
+}
+/* El orden (plata en juego, luego título) lo define el servidor; acá se conserva tal cual llega. */
+
+/* ---------- carga ---------- */
+function urlSegura(u,https){
+  if(typeof u!=='string'||!/^https?:\/\//i.test(u))return null;
+  return https?u.replace(/^http:\/\//i,'https://'):u;
+}
+async function cargar(){
+  if(!items.length){estado='cargando';render();}
+  try{
+    var r=await fetch('/api/sync/pausadas-con-stock');
+    if(r.status===403){var pe=new Error('permiso');pe.permiso=true;throw pe}
+    var d=await r.json();
+    if(!r.ok||!d.ok)throw new Error('carga');
+    items=(d.data||[]).map(function(i){i.permalink=urlSegura(i.permalink);i.thumbnail=urlSegura(i.thumbnail,true);return i}); resumen=d.resumen||{};
+    /* El bloqueo por neto bajo sobrevive a la recarga: viene de ml_reactivacion_frenada. Lo que se marcó acá por reintentar tiene prioridad. */
+    items.forEach(function(i){
+      var cl=i.frenada_neto_claves, e0=errs[i.item_id];
+      if(cl&&cl.length){if(!e0||e0.deFrenada)errs[i.item_id]={prefijo:'',texto:PausadasPrecio.ERR_NETO,neto:cl,deFrenada:true};}
+      else if(e0&&e0.deFrenada)delete errs[i.item_id];
+    }); cargadoEn=Date.now(); estado='lista';
+    $('#loaderr').hidden=true;$('#retry').hidden=false;
+    /* lo que ya no está en la lista (se reactivó por otro lado) sale de la selección */
+    var ids=new Set(items.map(function(i){return i.item_id}));
+    sel.forEach(function(x){if(!ids.has(x))sel.delete(x)});
+    Object.keys(errs).forEach(function(x){if(!ids.has(x))delete errs[x]});
+  }catch(e){
+    $('#loaderr').hidden=false;
+    $('#retry').hidden=!!e.permiso;
+    $('#loaderrmsg').textContent=e.permiso?'No tenés permiso para ver esto.':items.length
+      ? '⚠ No se pudo actualizar la lista. Mostrando datos de '+hace(new Date(cargadoEn).toISOString())+'.'
+      : '⚠ No se pudo cargar la lista.';
+    estado=items.length?'lista':'error';
+  }
+  render();
+}
+
+/* ---------- vista ---------- */
+function chips(){
+  var vivos=items, decid=vivos.filter(function(i){return !locked(i)}).length;
+  $('#sub').innerHTML=estado==='cargando'?'Cargando…':
+    '<b>'+decid+'</b> para reactivar · '+(vivos.length-decid)+' necesitan otro paso antes';
+  var h='<button class="chip" aria-pressed="'+(filtro==='todas')+'" data-f="todas">Todas <b>'+vivos.length+'</b></button>';
+  ORDEN.forEach(function(c){
+    var n=vivos.filter(function(i){return i.causa===c}).length;
+    if(!n&&filtro!==c)return;
+    h+='<button class="chip" aria-pressed="'+(filtro===c)+'" data-f="'+c+'">'+esc(CAUSAS[c].n)+' <b>'+n+'</b></button>';
+  });
+  $('#chips').innerHTML=h;
+}
+function detalle(i){
+  var filas=i.variaciones.map(function(v){
+    return '<tr><td>'+esc(v.variations_texto||'Única')+'</td><td class="num">'+esc(v.sku||'—')+'</td><td class="num r">'+(v.stock_woo==null?'—':v.stock_woo)+'</td><td class="num r">'+(v.stock_ml==null?'—':v.stock_ml)+'</td></tr>';
+  }).join('');
+  var precio=i.variaciones.map(function(v){return v.precio_contado}).filter(function(p){return p!=null})[0];
+  return '<div class="tw"><table><thead><tr><th>Variación</th><th>SKU</th><th class="r">Web</th><th class="r">ML</th></tr></thead><tbody>'+filas+'</tbody></table></div>'
+    +'<div class="foot"><span>Precio de contado '+(precio!=null?moneyFull(precio):'sin precio cargado')+'</span><span>Publicación '+esc(i.item_id)+'</span><span>Stock de ML según la última lectura</span>'
+    +(i.permalink?'<a href="'+esc(i.permalink)+'" target="_blank" rel="noopener">Abrir en ML ↗</a>':'')+'</div>';
+}
+function row(i){
+  var id=esc(i.item_id), t=esc(i.titulo||i.item_id);
+  var ph='<div class="ph" aria-hidden="true">'+(i.thumbnail?'<img src="'+esc(i.thumbnail)+'" alt="" loading="lazy">':imgSvg)+'</div>';
+  if(locked(i)){
+    var L=lockInfo(i);
+    return '<div class="row row--locked" data-id="'+id+'"><div class="lock" aria-hidden="true">🔒</div>'+ph
+      +'<div class="lockmsg"><div class="lt"><b title="'+t+'">'+t+'</b><span>'+esc(L.txt)+'</span></div>'+(L.href?'<a href="'+esc(L.href)+'">'+esc(L.go)+' →</a>':'')+'</div></div>';
+  }
+  var s=sel.has(i.item_id), o=open.has(i.item_id), e=errs[i.item_id];
+  var quien=quienTxt(i)||'<i>No sabemos quién la pausó</i>';
+  var nv=i.variaciones.length;
+  var varTxt=nv>1?nv+' variaciones':esc((i.variaciones[0]&&i.variaciones[0].variations_texto)||'1 variación');
+  var ne=i.stock_ml===0?' <span class="ne" title="ML sin stock">≠ ML 0</span>':' · <span class="lbl">ML</span> '+(i.stock_ml==null?'—':i.stock_ml);
+  var dinero=i.en_juego>0?money(i.en_juego):(i.sin_precio?'sin precio':'—');
+  var stk='<div class="stk num"><span class="lbl">Web</span> '+i.stock_woo+ne+'<span class="money">'+dinero+'</span></div>';
+  var act;
+  if(okIds.has(i.item_id))act='<span class="ok">✓ Activa</span>';
+  else if(busy.has(i.item_id))act='<button class="btn" disabled aria-busy="true">Reactivando…</button>';
+  else act=(e&&e.neto&&puedePrecio?'<button class="btn" data-calc="'+id+'" aria-label="Calcular precio de '+t+'">Calcular precio</button>':'')
+    +'<button class="btn" data-go="'+id+'" aria-label="'+(e?'Reintentar':'Reactivar')+' '+t+'">'+(e?'Reintentar':'Reactivar')+'</button>';
+  return '<div class="row'+(e?' is-error':'')+(okIds.has(i.item_id)?' is-done':'')+(focusId===i.item_id?' is-focus':'')+'" data-id="'+id+'" aria-selected="'+s+'">'
+    +'<label class="cb"><input type="checkbox" '+(s?'checked':'')+' data-sel="'+id+'" aria-label="Seleccionar '+t+'"></label>'+ph
+    +'<div class="tt"><button class="title" data-open="'+id+'" aria-expanded="'+o+'" title="'+t+'">'+t+'</button>'
+    +'<div class="sub">'+varTxt+' · '+quien+'</div>'
+    +(e?'<div class="err">⚠ '+esc(e.prefijo)+esc(e.texto)+(i.permalink?' · <a href="'+esc(i.permalink)+'" target="_blank" rel="noopener">Abrir en ML</a>':'')+'</div>':'')+'</div>'
+    +stk+'<div class="act">'+act+'</div>'+(busy.has(i.item_id)?'<div class="busy"></div>':'')
+    +(o?'<div class="det">'+detalle(i)+'</div>':'')+'</div>';
+}
+function render(){
+  chips();
+  var L=$('#list');
+  if(estado==='cargando'){
+    L.innerHTML='<div class="group" aria-busy="true"><span class="sr" role="status">Cargando</span>'+Array.from({length:6},function(){
+      return '<div class="sk"><i style="width:56px;height:56px"></i><div style="flex:1"><i style="height:12px;width:55%;margin-bottom:6px"></i><i style="height:10px;width:30%"></i></div><i style="width:96px;height:32px;margin-right:.9rem"></i></div>'}).join('')+'</div>';
+    bar();return;
+  }
+  if(estado==='error'){L.innerHTML='';$('#sub').textContent='No se pudo cargar';bar();return;}
+  if(!items.length){
+    L.innerHTML='<div class="empty" role="status"><div class="big">✓ No hay pausadas con stock</div>Todo lo que está pausado tiene motivo.<br><a href="'+BASE_SYNC+'">Volver a Sincronización ML</a></div>';
+    $('#sub').textContent='Todo al día';bar();return;
+  }
+  var V=vis();
+  if(!V.length){
+    L.innerHTML=q
+      ? '<div class="empty" role="status"><div class="big">Ninguna con «'+esc($('#q').value.trim())+'»</div><button class="btn" data-limpiar="1" style="margin-top:.5rem">Limpiar búsqueda</button></div>'
+      : '<div class="empty" role="status"><div class="big">Ninguna por esta causa</div><button class="btn" data-f="todas" style="margin-top:.5rem">Ver todas</button></div>';
+    bar();return;
+  }
+  var h='';
+  ORDEN.forEach(function(c){
+    var g=V.filter(function(i){return i.causa===c}); if(!g.length)return;
+    var C=CAUSAS[c], col=collapsed.has(c)&&filtro!==c, lim=shown[c]||PAGINA;
+    var tot=g.reduce(function(a,i){return a+(i.en_juego||0)},0);
+    var vv=g.slice(0,lim), react=vv.filter(function(i){return !locked(i)});
+    var nsel=react.filter(function(i){return sel.has(i.item_id)}).length;
+    var selG=(react.length&&!C.lock)?'<label class="gcb" title="Seleccionar las '+react.length+' visibles"><input type="checkbox" data-gsel="'+c+'" '+(nsel&&nsel===react.length?'checked':'')+' '+(nsel&&nsel<react.length?'data-mixed="1"':'')+' aria-label="Seleccionar las '+react.length+' de '+esc(C.n)+'"></label>':'<span class="gcb gcb--none" aria-hidden="true"></span>';
+    h+='<section class="group'+(C.lock?' group--locked':'')+'" aria-label="'+esc(C.n)+'">'
+      +'<div class="ghead-line">'+selG+'<button class="ghead" data-g="'+c+'" aria-expanded="'+(!col)+'">'
+      +'<svg class="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" fill="none"/></svg>'
+      +(C.lock?'<span aria-hidden="true">🔒</span>':'')+'<span class="gname">'+esc(C.n)+'</span><span class="gcount">'+g.length+'</span>'
+      +'<span class="gmoney num">'+(C.lock?'necesitan otro paso':money(tot)+' en juego')+'</span></button></div>'
+      +((C.hint||C.lock)&&!col?'<div class="ghint">'+esc(C.lock?C.txt+'. '+C.how:C.hint)+'</div>':'')
+      +'<div class="gbody" '+(col?'hidden':'')+'>'+vv.map(row).join('')
+      +(g.length>lim?'<button class="more" data-more="'+c+'">Ver '+Math.min(PAGINA,g.length-lim)+' más de '+(g.length-lim)+'</button>':'')+'</div></section>';
+  });
+  L.innerHTML=h;
+  document.querySelectorAll('[data-mixed]').forEach(function(x){x.indeterminate=true});
+  bar();
+}
+function bar(){
+  var n=sel.size, w=$('#barwrap');
+  if(!n||narrow()){w.hidden=true;return}
+  w.hidden=false;$('#barn').textContent=n===1?'1 seleccionada':n+' seleccionadas';
+  $('#barmax').hidden=n<MAX_LOTE;
+  var nNeto=selNeto().length, bp=$('#barprecio');
+  bp.hidden=!(puedePrecio&&nNeto);
+  if(!bp.hidden)bp.textContent='Calcular precio de '+nNeto;
+  var b=$('#bargo');
+  if(!confirmT){
+    b.className='btn btn--pri';
+    var todasFallidas=Array.from(sel).every(function(x){return errs[x]});
+    b.textContent=(todasFallidas?'Reintentar ':'Reactivar ')+n;
+    b.disabled=Array.from(sel).some(function(x){return busy.has(x)});
+  }
+}
+function band(kind,msg,actHtml){
+  var w=$('#bandwrap');w.hidden=false;w.className='bandbg '+kind;
+  $('#bandmsg').innerHTML='<span class="ic" aria-hidden="true">'+(kind==='ok'?'✓':kind==='warn'?'⚠':'✕')+'</span> '+msg;
+  $('#bandact').innerHTML=actHtml||'';
+}
+
+/* ---------- reactivar: un solo POST por lote ---------- */
+async function reactivar(ids){
+  ids=Array.from(new Set(ids)).filter(function(x){return !busy.has(x)&&!okIds.has(x)}).slice(0,MAX_LOTE);
+  if(!ids.length)return;
+  ids.forEach(function(x){busy.add(x);delete errs[x]});render();
+  var resultados={}, noReact=new Set(), fallaGeneral=null;
+  try{
+    var r=await fetch('/api/sync/pausadas-con-stock/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:ids})});
+    var texto=await r.text(), d;
+    if(r.status===403)throw new Error('No tenés permiso para reactivar');
+    try{d=JSON.parse(texto)}catch(_e){throw new Error('el servidor respondió '+r.status+' sin datos')}
+    if(!d.ok)throw new Error(d.error||('HTTP '+r.status));
+    (d.resultados||[]).forEach(function(x){resultados[x.item_id]=x});
+    (d.no_reactivables||[]).forEach(function(x){noReact.add(x)});
+  }catch(e){fallaGeneral=e.message}
+  var malos=[], okN=0;
+  ids.forEach(function(x){
+    busy.delete(x);
+    var res=resultados[x];
+    if(res&&res.ok){okIds.add(x);sel.delete(x);okN++;}
+    else{
+      var texto=fallaGeneral?fallaGeneral:noReact.has(x)?'Ya no se puede reactivar desde acá':(res&&res.error)||'no se pudo';
+      errs[x]={prefijo:(res&&res.bloqueado)||noReact.has(x)||fallaGeneral?'':'ML no la dejó: ',texto:texto,neto:PausadasPrecio.clavesBloqueoNeto(res)};
+      sel.add(x);malos.push(x);
+    }
+  });
+  render();
+  if(!malos.length)band('ok',okN===1?'Reactivada. Ya está a la venta en ML.':'Reactivaste '+okN+'. Ya están a la venta en ML.','');
+  else if(fallaGeneral&&!okN)band('bad','No se reactivó ninguna: '+esc(fallaGeneral)+'.','<button class="linkbtn" id="vermalos">Ver '+(malos.length===1?'cuál':'las '+malos.length)+'</button>');
+  else band(okN?'warn':'bad',ids.length===1?'No se pudo reactivar.':'Reactivadas '+okN+' de '+ids.length+'. '+malos.length+' no se pudieron.','<button class="linkbtn" id="vermalos">Ver '+(malos.length===1?'cuál':'las '+malos.length)+'</button>');
+  /* las reactivadas se desvanecen y la lista se refresca desde el servidor; las fallidas quedan seleccionadas */
+  setTimeout(function(){
+    items=items.filter(function(i){return !okIds.has(i.item_id)});
+    ids.forEach(function(x){okIds.delete(x)});
+    render();cargar();
+  },1500);
+}
+
+/* ---------- Calcular precio y reactivar ----------
+   Solo para las publicaciones que la reactivación frenó por neto bajo. Nada se cambia sin que se vea el precio
+   y se confirme; si el precio nuevo es menor al actual se marca. Reusa /api/precios/* y la reactivación existente. */
+function selNeto(){return Array.from(sel).filter(function(x){return errs[x]&&errs[x].neto&&!busy.has(x)}).slice(0,MAX_LOTE)}
+function itemPorId(id){return items.filter(function(i){return i.item_id===id})[0]}
+async function llamar(url,body,sinPermiso){
+  var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  var txt=await r.text(), d=null;
+  try{d=JSON.parse(txt)}catch(_e){}
+  if(r.status===403)throw new Error(sinPermiso||'No tenés permiso para hacer esto');
+  if(!d)throw new Error('el servidor respondió '+r.status+' sin datos');
+  return {r:r,d:d};
+}
+async function abrirPrecio(ids){
+  ids=Array.from(new Set(ids)).filter(function(x){return errs[x]&&errs[x].neto}).slice(0,MAX_LOTE);
+  if(!ids.length||pp)return;
+  var clavesDe={};ids.forEach(function(x){clavesDe[x]=errs[x].neto.slice()});
+  pp={ids:ids,estado:'calculando',planes:[],resultados:null,error:null,opener:document.activeElement};
+  var v=document.createElement('div');v.className='veil';v.id='pveil';
+  var s2=document.createElement('div');s2.className='psheet';s2.id='psheet';s2.setAttribute('role','dialog');s2.setAttribute('aria-modal','true');s2.setAttribute('aria-label','Calcular precio y reactivar');
+  v.onclick=function(){if(pp&&pp.estado!=='aplicando')cerrarPrecio()};
+  document.body.append(v,s2);renderPrecio();
+  try{
+    var claves=[];ids.forEach(function(x){clavesDe[x].forEach(function(c){claves.push(c)})});
+    var mapa={};
+    var lotes=PausadasPrecio.tandas(claves);
+    for(var k=0;k<lotes.length;k++){
+      var o=await llamar('/api/precios/objetivo',{claves:lotes[k]},'No tenés permiso para calcular precios');
+      if(!o.r.ok||!o.d.ok)throw new Error(o.d.error||('HTTP '+o.r.status));
+      (o.d.resultados||[]).forEach(function(x){mapa[x.clave]=x});
+    }
+    pp.planes=ids.map(function(x){return PausadasPrecio.planItem(x,clavesDe[x],mapa)});
+    pp.estado='listo';
+  }catch(e){pp.estado='error';pp.error=e.message}
+  renderPrecio();
+}
+function cerrarPrecio(){
+  if(!pp)return;
+  var op=pp.opener, hecho=pp.estado==='resultado';
+  var a=$('#pveil'),b=$('#psheet');if(a)a.remove();if(b)b.remove();
+  pp=null;
+  if(hecho){items=items.filter(function(i){return !okIds.has(i.item_id)});okIds.clear();render();cargar();}
+  if(op&&op.focus&&document.contains(op))op.focus();
+}
+function pFila(p){
+  var i=itemPorId(p.itemId)||{}, t=esc(i.titulo||p.itemId), r=pp.resultados&&pp.resultados[p.itemId];
+  var cab='<div class="pt"><b>'+t+'</b><span>'+(p.variaciones?p.variaciones+(p.variaciones===1?' variación':' variaciones')+' · ':'')+esc(p.itemId)+'</span></div>';
+  if(!p.ok)return '<div class="pr pr--no">'+cab+'<div class="pn">No se puede calcular: '+esc(p.motivos.join(' · '))+'. No se cambia nada en esta publicación.</div></div>';
+  var pv='<div class="pv num">'+(p.actual!=null?moneyFull(p.actual):'sin precio')+' <span aria-hidden="true">→</span> <b>'+moneyFull(p.nuevo)+'</b>'
+    +(p.baja?' <span class="pbaja">⬇ baja el precio</span>':!p.cambia?' <span class="pn">sin cambio, solo se reactiva</span>':'')+'</div>'
+    +(p.cruzaEnvio?'<div class="pn pbaja">⚠ Con este precio cambia el costo de envío (cruza el umbral de envío gratis de ML).</div>':'');
+  var pn='<div class="pn num">Neto resultante '+(p.neto!=null?moneyFull(p.neto):'—')+' · precio web '+(p.precioWeb!=null?moneyFull(p.precioWeb):'—')+'</div>';
+  var res='',cls=p.baja?' pr--baja':'';
+  if(r){
+    if(r.estado==='ok'){cls=' pr--ok';res='<div class="pres">✓ '+(r.precioAplicado!=null?'Precio actualizado y reactivada':'Reactivada')+'</div>'}
+    else if(r.estado==='fallo_precio'){cls=' pr--bad';res='<div class="pres">✕ Falló el precio, no se reactivó: '+esc(r.error)+'</div>'}
+    else if(r.estado==='fallo_reactivacion'){cls=' pr--warn';res='<div class="pres">⚠ Precio actualizado a '+moneyFull(r.precioAplicado!=null?r.precioAplicado:p.nuevo)+'. Falló la reactivación: '+esc(r.error)+'</div>'}
+    else if(r.estado==='omitida'){cls=' pr--bad';res='<div class="pres">✕ '+esc(r.error)+'</div>'}
+  }
+  return '<div class="pr'+cls+'">'+cab+pv+pn+res+'</div>';
+}
+function renderPrecio(){
+  var s2=$('#psheet');if(!s2||!pp)return;
+  var uno=pp.ids.length===1, i0=itemPorId(pp.ids[0])||{};
+  var h='<h2>'+(uno?esc(i0.titulo||pp.ids[0]):'Calcular precio de '+pp.ids.length)+'</h2>';
+  var acts='';
+  if(pp.estado==='calculando'){
+    h+='<p class="pnote" role="status" aria-busy="true">Calculando el precio que iguala el neto de ML al precio web…</p>';
+    acts='<button class="btn" id="pcancel">Cancelar</button>';
+  }else if(pp.estado==='error'){
+    h+='<p class="pnote" role="alert">⚠ No se pudo calcular: '+esc(pp.error)+'. No se cambió nada.</p>';
+    acts='<button class="btn" id="pcancel">Cerrar</button>';
+  }else{
+    var R=PausadasPrecio.resumen(pp.planes);
+    h+='<p class="pnote">'+(pp.estado==='resultado'?'Resultado por publicación.':'Precio actual de ML → precio nuevo, para que el neto iguale al precio web. No se cambia nada hasta que confirmes.')+'</p>';
+    h+=pp.planes.map(pFila).join('');
+    h+='<div class="ptot num"><span>'+R.confirmables+' a procesar</span>'+(R.sinCambio?'<span>'+R.sinCambio+' sin cambio de precio</span>':'')+(R.bajan?'<span class="pbaja">'+R.bajan+' bajan el precio</span>':'')+(R.sinCalculo?'<span>'+R.sinCalculo+' sin cálculo</span>':'')
+      +(R.cambian?'<span>Diferencia total '+(R.diferencia>0?'+':'')+moneyFull(R.diferencia)+'</span>':'')+'</div>';
+    if(pp.estado==='listo'){
+      acts='<button class="btn" id="pcancel">Cancelar</button>'+(R.confirmables?'<button class="btn btn--pri" id="pconfirm">'+(uno?(pp.planes[0].cambia?'Actualizar precio y reactivar':'Reactivar (el precio no cambia)'):'Confirmar '+R.confirmables)+'</button>':'');
+    }else if(pp.estado==='aplicando'){
+      acts='<button class="btn btn--pri" disabled aria-busy="true">Aplicando…</button>';
+    }else{
+      acts='<button class="btn btn--pri" id="pcancel">Cerrar</button>';
+    }
+  }
+  var foco=document.activeElement&&document.activeElement.id;
+  s2.innerHTML=h+'<div class="acts">'+acts+'</div>';
+  var f=s2.querySelector('#pconfirm')||s2.querySelector('#pcancel');
+  if(f&&(!foco||pp.estado!=='aplicando'))f.focus();
+}
+async function confirmarPrecio(){
+  if(!pp||pp.estado!=='listo')return;
+  pp.estado='aplicando';
+  var ids=pp.planes.filter(function(p){return p.ok}).map(function(p){return p.itemId});
+  ids.forEach(function(x){busy.add(x)});
+  renderPrecio();render();
+  var deps={
+    putPrecio:async function(itemId,precio){
+      try{
+        var o=await llamar('/api/precios/actualizar-precio-item',{itemId:itemId,precio:precio},'No tenés permiso para cambiar precios');
+        return o.r.ok&&o.d.ok?{ok:true}:{ok:false,error:o.d.error||('HTTP '+o.r.status)};
+      }catch(e){return {ok:false,error:e.message}}
+    },
+    reactivar:async function(itemIds){
+      var o=await llamar('/api/sync/pausadas-con-stock/reactivar',{itemIds:itemIds},'No tenés permiso para reactivar');
+      if(!o.d.ok)throw new Error(o.d.error||('HTTP '+o.r.status));
+      var mapa={};
+      (o.d.resultados||[]).forEach(function(x){mapa[x.item_id]=x});
+      (o.d.no_reactivables||[]).forEach(function(x){mapa[x]={ok:false,error:'Ya no se puede reactivar desde acá'}});
+      return mapa;
+    }
+  };
+  var res=await PausadasPrecio.ejecutar(pp.planes,deps);
+  pp.resultados={};
+  res.forEach(function(r){pp.resultados[r.itemId]=r});
+  res.forEach(function(r){
+    var x=r.itemId, previo=errs[x];
+    busy.delete(x);
+    if(r.estado==='ok'){okIds.add(x);sel.delete(x);delete errs[x]}
+    else if(r.estado==='fallo_reactivacion'){errs[x]={prefijo:'',texto:'El precio ya se actualizó'+(r.precioAplicado!=null?' a '+moneyFull(r.precioAplicado):'')+'. '+r.error,neto:null};sel.add(x)}
+    else if(r.estado==='fallo_precio'||r.estado==='omitida'){errs[x]={prefijo:'',texto:'No se pudo actualizar el precio: '+r.error,neto:(previo&&previo.neto)||null};sel.add(x)}
+  });
+  pp.estado='resultado';
+  renderPrecio();render();
+}
+/* Focus trap: con el panel abierto, Tab y Shift+Tab ciclan dentro de él. */
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Tab'||!pp)return;
+  var s2=$('#psheet');if(!s2)return;
+  var f=Array.prototype.filter.call(s2.querySelectorAll('button,a[href],input,select,textarea,[tabindex]'),function(x){return !x.disabled&&x.tabIndex>=0&&x.offsetParent!==null});
+  if(!f.length){e.preventDefault();s2.setAttribute('tabindex','-1');s2.focus();return}
+  var a=document.activeElement, i=f.indexOf(a);
+  if(!s2.contains(a)){e.preventDefault();f[0].focus();return}
+  if(e.shiftKey&&i<=0){e.preventDefault();f[f.length-1].focus()}
+  else if(!e.shiftKey&&i===f.length-1){e.preventDefault();f[0].focus()}
+});
+document.addEventListener('click',function(e){
+  var t=e.target.closest('button');if(!t)return;
+  if(t.id==='pcancel'){cerrarPrecio();return}
+  if(t.id==='pconfirm'){confirmarPrecio();return}
+});
+
+/* ---------- eventos ---------- */
+document.addEventListener('click',function(e){
+  var t=e.target.closest('button,input,a');if(!t)return;
+  var d=t.dataset;
+  if(d.limpiar){q='';$('#q').value='';render();$('#q').focus();return}
+  if(d.f!==undefined){filtro=d.f;if(d.f==='todas'&&q){q='';$('#q').value='';}render();return}
+  if(d.g){collapsed.has(d.g)?collapsed.delete(d.g):collapsed.add(d.g);render();return}
+  if(d.more){shown[d.more]=(shown[d.more]||PAGINA)+PAGINA;render();return}
+  if(d.gsel){
+    var grupo=vis().filter(function(i){return i.causa===d.gsel&&!locked(i)}).slice(0,shown[d.gsel]||PAGINA);
+    if(!t.checked){grupo.forEach(function(i){sel.delete(i.item_id)});render();return}
+    grupo.forEach(function(i){if(sel.size<MAX_LOTE)sel.add(i.item_id)});render();return;
+  }
+  if(d.sel){var x=d.sel;if(t.checked){if(sel.size>=MAX_LOTE){t.checked=false;$('#barmax').hidden=false;return}sel.add(x)}else sel.delete(x);render();return}
+  if(d.open){var it=items.filter(function(i){return i.item_id===d.open})[0];if(!it)return;focusId=it.item_id;if(narrow()){abrirHoja(it);return}open.has(it.item_id)?open.delete(it.item_id):open.add(it.item_id);render();return}
+  if(d.go){reactivar([d.go]);return}
+  if(d.calc){abrirPrecio([d.calc]);return}
+  if(t.id==='barprecio'){abrirPrecio(selNeto());return}
+  if(t.id==='bargo'){
+    var n=sel.size;
+    if(n>CONFIRMAR_DESDE&&!confirmT){t.className='btn btn--confirm';t.textContent='Confirmar: reactivar '+n;confirmT=setTimeout(function(){confirmT=null;bar()},4000);return}
+    clearTimeout(confirmT);confirmT=null;reactivar(Array.from(sel));return;
+  }
+  if(t.id==='barcancel'){sel.clear();clearTimeout(confirmT);confirmT=null;render();return}
+  if(t.id==='bandclose'){$('#bandwrap').hidden=true;return}
+  if(t.id==='vermalos'){
+    filtro='todas';var f=Object.keys(errs)[0];render();
+    var el=f&&document.querySelector('[data-id="'+f.replace(/"/g,'')+'"]');if(el)el.scrollIntoView({block:'center'});return;
+  }
+  if(t.id==='retry'){cargar();return}
+  if(t.id==='helpbtn'){var h=$('#help');h.hidden=!h.hidden;t.setAttribute('aria-expanded',!h.hidden);return}
+});
+
+function cerrarHoja(){if(!sheetEl)return;sheetEl.v.remove();sheetEl.s.remove();var f=sheetEl.f;sheetEl=null;if(f&&f.focus)f.focus()}
+function abrirHoja(i){
+  cerrarHoja();
+  var v=document.createElement('div');v.className='veil';
+  var s=document.createElement('div');s.className='sheet';s.setAttribute('role','dialog');s.setAttribute('aria-modal','true');s.setAttribute('aria-label',i.titulo||i.item_id);
+  s.innerHTML='<div class="grip"></div><h2>'+esc(i.titulo||i.item_id)+'</h2><div class="det">'+detalle(i)+'</div>'
+    +'<div class="acts"><button class="btn" style="flex:1" id="shc">Cerrar</button>'+(locked(i)?'':'<button class="btn btn--pri" style="flex:2" id="shgo">Reactivar</button>')+'</div>';
+  sheetEl={v:v,s:s,f:document.activeElement};
+  v.onclick=cerrarHoja;document.body.append(v,s);
+  s.querySelector('#shc').onclick=cerrarHoja;s.querySelector('#shc').focus();
+  var go=s.querySelector('#shgo');if(go)go.onclick=function(){cerrarHoja();reactivar([i.item_id])};
+}
+
+$('#q').addEventListener('input',function(e){q=e.target.value.trim().toLowerCase();render()});
+document.addEventListener('keydown',function(e){
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  if(e.target.matches('input[type=search]')){if(e.key==='Escape')e.target.blur();return}
+  if(e.key==='Escape'){
+    if(pp){if(pp.estado!=='aplicando')cerrarPrecio();return}
+    if(sheetEl){cerrarHoja();return}
+    if(confirmT){clearTimeout(confirmT);confirmT=null;bar();return}
+    if(!$('#help').hidden){$('#helpbtn').click();return}
+    if(sel.size){sel.clear();render()}
+    return;
+  }
+  if(sheetEl||pp)return;
+  var ids=Array.prototype.map.call(document.querySelectorAll('.row:not(.row--locked)'),function(r){return r.dataset.id});
+  var k=ids.indexOf(focusId);
+  if(e.key==='j'||e.key==='k'){
+    k=e.key==='j'?Math.min(ids.length-1,k+1):Math.max(0,k-1);focusId=ids[k];render();
+    var el=focusId&&document.querySelector('[data-id="'+focusId.replace(/"/g,'')+'"]');if(el)el.scrollIntoView({block:'nearest'});e.preventDefault();
+  }
+  else if(e.key==='x'&&focusId){sel.has(focusId)?sel.delete(focusId):(sel.size<MAX_LOTE&&sel.add(focusId));render()}
+  else if(e.key==='Enter'&&focusId&&!e.target.matches('button,a,input')){open.has(focusId)?open.delete(focusId):open.add(focusId);render()}
+  else if(e.key==='r'&&focusId){reactivar([focusId])}
+  else if(e.key==='R'&&sel.size){$('#bargo').click()}
+  else if(e.key==='/'){$('#q').focus();e.preventDefault()}
+  else if(e.key==='?'){$('#helpbtn').click()}
+});
+addEventListener('resize',function(){clearTimeout(window._rz);window._rz=setTimeout(render,120)});
+document.addEventListener('error',function(e){var t=e.target;if(t&&t.tagName==='IMG'&&t.parentNode&&t.parentNode.classList.contains('ph'))t.parentNode.innerHTML=imgSvg},true);
+fetch('/api/auth/me').then(function(r){return r.ok?r.json():null}).then(function(me){puedePrecio=PausadasPrecio.puedeEscribirPrecios(me);render()}).catch(function(){});
+cargar();
+</script>
+</body>
+</html>

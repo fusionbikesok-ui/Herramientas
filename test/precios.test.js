@@ -34,8 +34,11 @@ function seedDecision(db, clave, sku) {
 }
 function seedPub(db, { clave, itemId, varId = '', status = 'active' }) {
   db.prepare(`INSERT INTO ml_publicaciones_cache
-    (clave, item_id, variation_id, titulo, status, es_variante, seller_sku, variations_texto, actualizado_en)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(clave, itemId, varId, 'Pub ' + itemId, status, varId ? 1 : 0, '', '', ahora());
+    (clave, item_id, variation_id, titulo, status, es_variante, seller_sku, variations_texto,
+     precio, category_id, listing_type_id, free_shipping, actualizado_en)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    clave, itemId, varId, 'Pub ' + itemId, status, varId ? 1 : 0, '', '',
+    1000, 'MLA1', 'gold_special', 1, ahora());
 }
 
 // Mock de axios.request que enruta por URL (listing_prices / shipping / multiget items).
@@ -44,9 +47,9 @@ function mockMl({ saleFee = 100, envio = 50, itemPrice = 1000, freeShipping = tr
     const url = cfg.url || '';
     if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: saleFee }, headers: {} };
     if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: envio } } }, headers: {} };
-    if (url.includes('/items?ids=')) {
+    if (url.includes('/items/bulk?ids=')) {
       const ids = decodeURIComponent(url.split('ids=')[1].split('&')[0]).split(',');
-      return { status: 200, data: ids.map(id => ({ code: 200, body: {
+      return { status: 200, data: ids.map(id => ({ id, status_code: 200, body: {
         id, price: itemPrice, category_id: 'MLA1', listing_type_id: 'gold_special',
         shipping: { free_shipping: freeShipping }, variations: [],
       } })), headers: {} };
@@ -122,6 +125,7 @@ describe('mlPrecios — netoMl + precioWebClave', () => {
     expect(r.envio).toBe(50);
     expect(r.neto).toBe(850);
   });
+
 
   it('precioWebClave lee el precio de LISTA del SKU mapeado y devuelve el de CONTADO (2/3)', () => {
     seedCatalogo(db, { idWoo: 10, sku: 'FB-1', precio: 1234 });
@@ -246,35 +250,87 @@ describe('auditarPrecios + router', () => {
     expect(vacio.body.data).toHaveLength(0);
   });
 
-  it('GET /api/precios incluye precio_sugerido solo para filas "bajo"', async () => {
+  // Comportamiento cambiado a propósito (2026-09-11): `precio_sugerido` salía de una fórmula
+  // cerrada que ignoraba la parte fija de la comisión y que el envío se recotiza al precio
+  // nuevo, así que dejaba el neto corto. La pantalla ya no muestra ese número: el precio
+  // objetivo se pide a `POST /objetivo`, que lo calcula contra ML.
+  it('GET /api/precios ya NO devuelve precio_sugerido (la fórmula cerrada quedó obsoleta)', async () => {
     seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
-    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 1305 });
-    seedDecision(db, 'MLO|v1', 'FB-O'); seedPub(db, { clave: 'MLO|v1', itemId: 'MLO', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
 
     const res = await request(app).get('/api/precios?estado=all');
     const bajo = res.body.data.find(r => r.clave === 'MLB|v1');
-    const ok = res.body.data.find(r => r.clave === 'MLO|v1');
-    expect(bajo.precio_sugerido).toBeGreaterThan(bajo.precio_ml);
-    expect(ok.precio_sugerido).toBeNull();
+    expect(bajo.estado).toBe('bajo');
+    expect(bajo).not.toHaveProperty('precio_sugerido');
   });
 
-  it('GET /api/precios: total es el COUNT real (no el LIMIT) y avisa truncado', async () => {
+  it('POST /api/precios/objetivo: el precio propuesto deja el neto igual al contado y trae el desglose', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 }); // lista 1500 → contado 1000
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+
+    const res = await request(app).post('/api/precios/objetivo').send({ claves: ['MLB|v1'] });
+    expect(res.status).toBe(200);
+    const bulkCall = axios.request.mock.calls.map(c => c[0]).find(cfg => (cfg.url || '').includes('/items/bulk?ids='));
+    expect(bulkCall).toBeDefined();
+    expect(bulkCall.url).toMatch(/attributes=status_code,id,body\.id,body\.price,body\.category_id,body\.listing_type_id,body\.shipping,body\.variations,body\.status/);
+    const r = res.body.resultados[0];
+    expect(r.contado).toBe(1000);
+    // El desglose que muestra la pantalla tiene que sumar exactamente el precio propuesto
+    // (criterio 4 del plan). El redondeo hacia arriba a $100 es el cuarto término: sin él,
+    // los tres primeros quedan cortos y el precio parece inventado.
+    const redondeo = r.precio - (r.contado + r.comision + r.envio);
+    expect(redondeo).toBeGreaterThanOrEqual(0);
+    expect(redondeo).toBeLessThan(100);
+    expect(r.contado + r.comision + r.envio + redondeo).toBe(r.precio);
+    // El neto nunca por debajo del contado: el redondeo siempre juega a favor.
+    expect(r.neto).toBeGreaterThanOrEqual(r.contado);
+  });
+
+  it('POST /api/precios/objetivo: producto en oferta apunta al precio de LISTA, no al vigente', async () => {
+    // Mismo bug que ya se había corregido en auditarPrecios y que `/objetivo` reintrodujo:
+    // con `c.precio` (vigente, ya con el sale_price) el contado caía de 1000 a 666.67 y el
+    // objetivo quedaba ~333 por debajo del precio que la tienda cobra de verdad.
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-OFERTA', precio: 1000, regularPrice: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-OFERTA'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+
+    const res = await request(app).post('/api/precios/objetivo').send({ claves: ['MLB|v1'] });
+    expect(res.body.resultados[0].contado).toBe(1000); // 2/3 de 1500, no de 1000
+  });
+
+  it('POST /api/precios/objetivo: sin precio de lista no inventa un objetivo', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-S', precio: null });
+    seedDecision(db, 'MLS|v1', 'FB-S'); seedPub(db, { clave: 'MLS|v1', itemId: 'MLS', varId: 'v1' });
+    mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
+
+    const res = await request(app).post('/api/precios/objetivo').send({ claves: ['MLS|v1'] });
+    expect(res.body.resultados[0].precio).toBeNull();
+    expect(res.body.resultados[0].motivo).toBeTruthy();
+  });
+
+  it('POST /api/precios/objetivo: rechaza más de 100 claves de una', async () => {
+    const claves = Array.from({ length: 101 }, (_, i) => `MLX${i}|v1`);
+    const res = await request(app).post('/api/precios/objetivo').send({ claves });
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/precios: devuelve el universo completo para que los filtros locales no oculten marcas', async () => {
     const ins = db.prepare(`
       INSERT INTO ml_precio_auditoria
         (clave, item_id, titulo, sku, precio_ml, sale_fee, envio, neto, precio_web, deficit_pct, estado, actualizado_en)
       VALUES (?, ?, 't', 'FB-X', 100, 10, 5, 85, 200, 50, 'bajo', datetime('now'))
     `);
     const tx = db.transaction((n) => { for (let i = 0; i < n; i++) ins.run(`MLX${i}|v1`, `MLX${i}`); });
-    tx(1050); // por encima del LIMIT 1000 de la query
+    tx(1050); // regresión: antes la query cortaba en 1000 y el filtro de marca quedaba incompleto
 
     const res = await request(app).get('/api/precios?estado=all');
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(1050);
-    expect(res.body.truncado).toBe(true);
-    expect(res.body.data).toHaveLength(1000);
+    expect(res.body.truncado).toBe(false);
+    expect(res.body.data).toHaveLength(1050);
   });
 
   it('GET /api/precios: sin truncar, total coincide con la cantidad de filas devueltas', async () => {
@@ -316,6 +372,58 @@ describe('auditarPrecios + router', () => {
     const fila = db.prepare("SELECT estado, precio_ml FROM ml_precio_auditoria WHERE clave='MLB|v1'").get();
     expect(fila.estado).toBe('ok');
     expect(fila.precio_ml).toBe(1200);
+  });
+
+  // 2026-09-18: en una publicación del modelo viejo de variaciones, ML exige que TODAS las variaciones tengan
+  // el mismo precio salvo cuentas con Mercado Envíos 1 ("Found different prices in variations | User has not
+  // mode me1"). Cambiarlas de a una tampoco sirve: al cambiar la primera, las demás quedan distintas y ML
+  // rechaza. Hay que mandar todas las variaciones, con el mismo precio, en un solo PUT al ítem.
+  it('POST /api/precios/actualizar-precio-item pone el mismo precio a TODAS las variaciones en un solo pedido', async () => {
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    seedDecision(db, 'MLB|v2', 'FB-B'); seedPub(db, { clave: 'MLB|v2', itemId: 'MLB', varId: 'v2' });
+    const puts = [];
+    axios.request.mockImplementation((cfg) => {
+      const url = cfg.url || '';
+      const method = (cfg.method || '').toLowerCase();
+      if (method === 'put') { puts.push({ url, data: cfg.data }); return { status: 200, data: {}, headers: {} }; }
+      if (url.includes('/listing_prices')) return { status: 200, data: { sale_fee_amount: 100 }, headers: {} };
+      if (url.includes('/shipping_options/free')) return { status: 200, data: { coverage: { all_country: { list_cost: 50 } } }, headers: {} };
+      // v3 existe en ML pero no está en el sistema: igual tiene que ir en el PUT, o queda con otro precio.
+      if (/\/items\/MLB\?/.test(url)) return { status: 200, data: { id: 'MLB', price: 1200, category_id: 'MLA1', listing_type_id: 'gold_special', shipping: { free_shipping: true }, status: 'active',
+        variations: [{ id: 'v1', price: 1000 }, { id: 'v2', price: 1100 }, { id: 'v3', price: 900 }] }, headers: {} };
+      return { status: 404, data: {}, headers: {} };
+    });
+
+    const res = await request(app).post('/api/precios/actualizar-precio-item').send({ itemId: 'MLB', precio: 1200 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    // Un solo PUT, al ítem, con las tres variaciones al mismo precio.
+    expect(puts).toHaveLength(1);
+    expect(puts[0].url).toMatch(/\/items\/MLB$/);
+    const cuerpo = typeof puts[0].data === 'string' ? JSON.parse(puts[0].data) : puts[0].data;
+    expect(cuerpo.variations).toEqual([{ id: 'v1', price: 1200 }, { id: 'v2', price: 1200 }, { id: 'v3', price: 1200 }]);
+    // El caché local queda al día para las dos variaciones que el sistema conoce.
+    const precios = db.prepare("SELECT clave, precio FROM ml_publicaciones_cache WHERE item_id='MLB' ORDER BY clave").all();
+    expect(precios).toEqual([{ clave: 'MLB|v1', precio: 1200 }, { clave: 'MLB|v2', precio: 1200 }]);
+    expect(res.body.claves.sort()).toEqual(['MLB|v1', 'MLB|v2']);
+  });
+
+  it('POST /api/precios/actualizar-precio-item devuelve el error de ML si lo rechaza', async () => {
+    seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
+    axios.request.mockImplementation((cfg) => ((cfg.method || '').toLowerCase() === 'put'
+      ? { status: 400, data: { message: 'precio inválido' }, headers: {} }
+      : { status: 200, data: { id: 'MLB', variations: [{ id: 'v1', price: 1000 }] }, headers: {} }));
+    const res = await request(app).post('/api/precios/actualizar-precio-item').send({ itemId: 'MLB', precio: 1200 });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toMatch(/inválido/);
+  });
+
+  it('POST /api/precios/actualizar-precio-item rechaza datos inválidos sin llamar a ML', async () => {
+    const res = await request(app).post('/api/precios/actualizar-precio-item').send({ itemId: 'MLB', precio: 0 });
+    expect(res.status).toBe(400);
+    expect(axios.request).not.toHaveBeenCalled();
   });
 
   it('POST /api/precios/actualizar-precio devuelve error si ML rechaza el precio', async () => {

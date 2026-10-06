@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Identidad de productos — Fusion Bikes</title>
+  <link rel="stylesheet" href="../lib/theme.css">
+  <link rel="stylesheet" href="../lib/components.css">
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:.7rem;padding:.7rem 1rem;background:var(--surface);border-bottom:1px solid var(--border)}
+    .top h1{margin:0;font-size:1rem;flex:1}
+    .btn,.top a{display:inline-flex;align-items:center;justify-content:center;min-height:var(--tap-min,44px);padding:.52rem .7rem;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font:inherit;text-decoration:none;cursor:pointer}
+    .btn:disabled{cursor:not-allowed;opacity:.55}
+    .btn.primary{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+    .btn.danger{border-color:var(--red-bd);background:var(--red-bg);color:var(--red)}
+    .wrap{width:100%;margin:0;padding:1rem 1.25rem}
+    .health{display:grid;grid-template-columns:1fr auto;align-items:center;gap:.8rem;padding:.8rem;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin-bottom:.85rem}
+    .health.bad{border-color:var(--red)}.health.warn{border-color:var(--amber)}.health.ok{border-color:var(--green)}
+    .health strong{display:block}
+    .muted{color:var(--muted);font-size:.88rem}
+    .recon{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.9rem}
+    .stat{flex:1 1 130px;padding:.6rem .7rem;border:1px solid var(--border);border-radius:9px;background:var(--surface)}
+    .stat b{display:block;font-size:1.28rem;line-height:1.25}
+    .stat.exact{border-color:var(--green)}.stat.inexact{border-color:var(--red)}
+    .recon .notice{flex:1 1 100%}
+    .tabs{display:flex;gap:.45rem;overflow:auto;padding-bottom:.6rem;margin-bottom:.5rem}
+    .tab{white-space:nowrap;background:transparent}
+    .tab[aria-selected="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+    .view{display:grid;grid-template-columns:minmax(280px,340px) 1fr;gap:1rem;align-items:start}
+    /* El ancho extra se gasta en poner ML y Woo lado a lado, que es la comparación que la
+       persona tiene que hacer, en vez de estirar una sola columna de texto. */
+    .comparador{display:grid;grid-template-columns:1fr;gap:.8rem;align-items:start}
+    .col-comp{display:flex;flex-direction:column;gap:.8rem;min-width:0}
+    .col-comp .panel{margin-bottom:0}
+    /* ML trae más campos que Woo aun con el resto colapsado: 55/45 reduce el vacío
+       sin fabricar contenido del lado Woo. */
+    @media(min-width:1200px){ .comparador{grid-template-columns:55fr 45fr} }
+    @media(min-width:1800px){ .view{grid-template-columns:minmax(300px,380px) 1fr} }
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:10px}
+    .side{max-height:72vh;overflow:auto}
+    .card-head{padding:.75rem .85rem;border-bottom:1px solid var(--border)}
+    .card-head strong{display:block;margin-bottom:.2rem}
+    .case{display:block;width:100%;padding:.75rem .85rem;border:0;border-bottom:1px solid var(--border);background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}
+    .case:hover,.case[aria-current="true"]{background:var(--surface2)}
+    .case strong{display:block;font-size:.92rem;overflow-wrap:anywhere}
+    .case small{display:block;margin-top:.22rem;color:var(--muted)}
+    .detail{padding:1rem;min-height:340px}
+    .detail h2{font-size:var(--fs-titulo);margin:.15rem 0 .35rem;overflow-wrap:anywhere}
+    .actionbar{display:flex;gap:.5rem;flex-wrap:wrap;margin:.8rem 0}
+    .panel{padding:.85rem;border:1px solid var(--border);border-radius:9px;background:var(--surface2);margin-bottom:.8rem}
+    .panel h3{margin:.1rem 0 .6rem;font-size:.94rem}
+    .facts{font-size:.88rem;line-height:1.6;overflow-wrap:anywhere}
+    .facts b{color:var(--text)}
+    .notice{padding:.7rem;border-radius:8px;background:var(--amber-bg);border:1px solid var(--amber-bd);font-size:.88rem}
+    .notice.read{background:var(--blue-bg);border-color:var(--blue-bd)}
+    .tablewrap{overflow-x:auto}
+    .table{width:100%;border-collapse:collapse;font-size:.88rem;min-width:520px}
+    .table th,.table td{padding:.6rem;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}
+    .empty{padding:1rem}
+    .error{color:var(--red)}
+    label{display:block;margin:.7rem 0 .25rem;font-size:.88rem}
+    input,select,textarea{width:100%;padding:.6rem;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit}
+    .back{display:none}
+    .buscador{margin-top:.6rem}
+    .producto{display:flex;gap:.85rem;align-items:flex-start}
+    .foto{width:104px;height:104px;flex:0 0 auto;object-fit:contain;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+    .foto.vacia{display:grid;place-items:center;color:var(--muted);font-size:.74rem;text-align:center}
+    .case{display:grid;grid-template-columns:44px 1fr;gap:.6rem;align-items:start}
+    .case .mini{width:44px;height:44px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:var(--surface2)}
+    .case .mini.vacia{display:grid;place-items:center;color:var(--muted);font-size:.6rem}
+    .enlace{display:inline-block;margin-top:.4rem;color:var(--accent)}
+    .dato-urgente{color:var(--amber)}
+    .dato-critico{color:var(--red)}
+    .attrs-bloque{margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--border);font-size:.86rem}
+    .attrs-bloque b{display:inline}
+    .attr{display:block;color:var(--txt);margin-top:.18rem}
+    .aviso{margin-bottom:.85rem;padding:.7rem .85rem;border:1px solid var(--green-bd);border-radius:9px;background:var(--green-bg);color:var(--green)}
+    @media(max-width:850px){.foto{width:84px;height:84px}}
+    .search-row{display:flex;gap:.5rem}
+    .search-row input{flex:1;min-width:0}
+    .opciones{max-height:340px;overflow:auto;margin-top:.6rem}
+    .opcion{display:grid;grid-template-columns:56px 1fr auto;gap:.6rem;align-items:center;padding:.55rem;margin:.45rem 0;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+    .opcion img,.opcion .sinfoto{width:56px;height:56px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:var(--surface2)}
+    .opcion .sinfoto{display:grid;place-items:center;color:var(--muted);font-size:.68rem;text-align:center}
+    .opcion strong{display:block;overflow-wrap:anywhere;font-size:.92rem}
+    .opcion small{color:var(--muted);font-size:.8rem}
+    .opcion small.attrs{display:block;color:var(--txt);font-size:var(--fs-meta);margin:.1rem 0}
+    .senal{display:inline-block;margin-left:.4rem;padding:.08rem .4rem;border-radius:99px;font-size:.7rem;border:1px solid var(--border);background:var(--surface2);color:var(--muted)}
+    .senal.gtin{background:var(--green-bg);color:var(--green);border-color:var(--green-bd)}
+    .senal.sku{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-bd)}
+    .opcion.destacada{border-color:var(--green);background:var(--green-bg)}
+    .conflicto{margin-top:.6rem;padding:.7rem;border:1px solid var(--red-bd);border-radius:8px;background:var(--red-bg);font-size:.88rem;line-height:1.55}
+    .ambiguo{margin-top:.6rem;padding:.6rem;border:1px solid var(--amber-bd);border-radius:8px;background:var(--amber-bg);font-size:.86rem}
+    .previa{margin-top:.6rem;padding:.7rem;border:1px solid var(--accent);border-radius:8px;background:var(--accent-dim);font-size:.88rem;line-height:1.6}
+    @media(max-width:850px){.opcion{grid-template-columns:56px 1fr}.opcion .btn{grid-column:2}}
+    @media(max-width:850px){
+      .health{grid-template-columns:1fr}
+      .view{grid-template-columns:1fr}
+      .side{max-height:none}
+      .top{padding:.55rem}.wrap{padding:.75rem}
+      /* Un caso a pantalla completa: la cola y el detalle no conviven en móvil. */
+      .view.has-detail .side{display:none}
+      .view:not(.has-detail) .detail-col{display:none}
+      .back{display:inline-flex}
+    }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <a href="/herramientas/home/">← Herramientas</a>
+    <h1>Identidad de productos</h1>
+    <button class="btn" id="reload">Actualizar</button>
+  </header>
+  <main class="wrap">
+    <section id="health" class="health" aria-live="polite"><strong>Cargando estado…</strong></section>
+    <section id="recon" class="recon" aria-live="polite" aria-label="Conciliación del universo ML"></section>
+    <nav class="tabs" role="tablist" aria-label="Secciones">
+      <button class="btn tab" role="tab" aria-selected="true" data-view="pendientes">Pendientes</button>
+      <button class="btn tab" role="tab" aria-selected="false" data-view="productos">Productos Fusion</button>
+      <button class="btn tab" role="tab" aria-selected="false" data-view="operaciones">Operaciones</button>
+      <button class="btn tab" role="tab" aria-selected="false" data-view="codigos">Códigos en conflicto</button>
+      <button class="btn tab" role="tab" aria-selected="false" data-view="historial">Historial</button>
+    </nav>
+    <section id="app" aria-live="polite"></section>
+  </main>
+  <script>
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // MercadoLibre usa 99999 como centinela de stock ilimitado/atípico, no como cantidad real:
+  // mostrarlo crudo hace creer que hay 99.999 unidades. Hoy son 72 publicaciones.
+  const stockML = (n) => (Number(n) >= 99999
+    ? '<b>ilimitado / atípico</b> <span class="muted">(ML informa ' + esc(n) + ')</span>'
+    : '<b>' + esc(n ?? 'sin dato') + '</b>');
+  const opId = () => (crypto.randomUUID ? crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+
+  const state = { view: 'pendientes', resumen: null, casos: [], colas: null, productos: [], operaciones: [], codigos: [], detalleCodigo: null,
+    historial: [], actual: null, detalle: null, error: null,
+    buscando: false, candidatos: null, elegido: null, consulta: '', aviso: null };
+
+  async function api(path, opt = {}) {
+    const r = await fetch('/api/identidad-productos' + path, { headers: { 'Content-Type': 'application/json' }, ...opt });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw Object.assign(new Error(d.error || 'No se pudo completar la acción'), { code: d.code, sibling_count: d.sibling_count });
+    return d;
+  }
+
+  // El modo `shadow` no es un detalle interno: decide qué puede hacer la persona, así que
+  // se muestra siempre y deshabilita las acciones que tocarían MercadoLibre.
+  const enShadow = () => (state.resumen?.salud?.modo || 'shadow') === 'shadow';
+
+  function renderHealth() {
+    const s = state.resumen?.salud;
+    const el = $('#health');
+    if (!s) { el.className = 'health'; el.innerHTML = '<strong>Sin estado disponible</strong>'; return; }
+    const clase = s.sano ? 'ok' : s.degradado ? 'warn' : 'bad';
+    const titulo = s.sano ? 'Identidad sana' : s.degradado ? 'Lectura degradada' : 'Requiere atención';
+    el.className = 'health ' + clase;
+    el.innerHTML = '<div><strong>' + esc(titulo) + '</strong>'
+      + '<span class="muted">Urgentes: ' + esc(s.urgentes ?? 0) + ' · Operaciones pendientes: ' + esc(s.operaciones_pendientes ?? 0)
+      + ' · Última lectura confiable: ' + esc(s.ultimo_scan_confiable_en || 'sin lectura confiable') + '</span>'
+      + (s.ultimo_scan_error ? '<br><span class="muted error">Error de lectura: ' + esc(s.ultimo_scan_error) + '</span>' : '')
+      + '<br><span class="muted">Una lectura local no confirma MercadoLibre.</span></div>'
+      + '<span class="ui-chip ' + (enShadow() ? 'ui-chip--urgente' : 'ui-chip--ok') + '">Modo ' + esc(s.modo || 'shadow') + '</span>';
+  }
+
+  /**
+   * Publicaciones que comparten una misma bolsa de stock de MercadoLibre apuntando a productos
+   * distintos. No va en la cola porque no es una tarea de identidad que se resuelva decidiendo:
+   * son dos artículos que ML agrupó como uno, y mientras siga así el sync les pisa la cantidad
+   * en cada corrida y una de las dos vende sin existencia.
+   *
+   * Se muestra aunque hoy no dé síntoma: el par de mazas Boost 15×110 / estándar 15×100 tenía
+   * las cantidades coincidiendo por casualidad y por eso nunca apareció en ningún log, con una
+   * sola unidad real y las dos publicaciones ofreciéndola.
+   */
+  function bloqueBolsaCompartida() {
+    const conflictos = state.resumen?.conflictos_bolsa || [];
+    if (!conflictos.length) return '';
+    const filas = conflictos.map(function (x) {
+      const skus = String(x.skus || '').split(',').filter(Boolean);
+      const claves = String(x.claves || '').split(',').filter(Boolean);
+      return '<li>' + skus.map(function (k) { return '<span class="ui-id">' + esc(k) + '</span>'; }).join(' y ')
+        + ' <span class="ui-label">comparten</span> <span class="ui-id">' + esc(x.user_product_id) + '</span>'
+        + '<br><span class="ui-label">' + esc(claves.join(' · ')) + '</span></li>';
+    }).join('');
+    return '<div class="ui-aviso ui-aviso--critico" style="margin-top:.6rem">'
+      + '<b>' + (conflictos.length === 1 ? '1 par de publicaciones comparte' : conflictos.length + ' pares de publicaciones comparten')
+      + ' una misma bolsa de stock en MercadoLibre apuntando a productos distintos.</b>'
+      + '<br>ML los trata como un solo producto, así que hay una sola cantidad para los dos: el sync se la pisa '
+      + 'en cada corrida y uno de los dos queda ofreciendo stock que no tiene. No se arregla desde acá — hay que '
+      + 'separarlos en MercadoLibre o corregir el vínculo del que esté mal.'
+      + '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' + filas + '</ul></div>';
+  }
+
+  /**
+   * Publicaciones vendiendo sin un producto Woo detrás: la unidad se dio de baja, se mandó a
+   * la papelera o le cambiaron el SKU, y la publicación de ML quedó viva ofreciendo stock.
+   *
+   * Si entra una venta el pedido se retiene solo —las dos vías de cobertura exigen que el SKU
+   * exista en el catálogo—, pero eso pasa cuando el cliente YA compró. Esto es para verlo antes.
+   */
+  function bloqueSinRespaldoWoo() {
+    const filas = state.resumen?.sin_respaldo_woo || [];
+    if (!filas.length) return '';
+    const items = filas.slice(0, 8).map(function (f) {
+      return '<li><span class="ui-id">' + esc(f.seller_sku) + '</span> '
+        + '<span class="ui-label">' + esc(f.available_quantity) + ' en venta</span>'
+        + '<br><span class="ui-label">' + esc(f.clave) + ' · ' + esc((f.titulo || '').slice(0, 60)) + '</span></li>';
+    }).join('');
+    return '<div class="ui-aviso ui-aviso--critico" style="margin-top:.6rem">'
+      + '<b>' + filas.length + (filas.length === 1 ? ' publicación está vendiendo' : ' publicaciones están vendiendo')
+      + ' sin un producto en WooCommerce detrás.</b>'
+      + '<br>Woo es la autoridad de stock: sin producto no hay nada que respalde lo que se ofrece. '
+      + 'Si entra una venta el pedido se retiene solo, pero para entonces el cliente ya compró. '
+      + 'Hay que dar de alta el producto en Woo o pausar la publicación en MercadoLibre.'
+      + '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' + items + '</ul>'
+      + (filas.length > 8 ? '<div class="ui-label">y ' + (filas.length - 8) + ' más</div>' : '')
+      + '</div>';
+  }
+
+  /**
+   * Claves cuyo producto Woo se dio de baja: la publicación de ML sigue viva.
+   *
+   * Woo es la autoridad de stock, así que sin producto no hay nada que respalde lo que se
+   * ofrece. La protección remota pone la publicación en cero y lo verifica; hasta que eso
+   * ocurra la clave sigue expuesta, y por eso se muestra el stock que todavía tiene.
+   */
+  function bloqueEsperandoProteccion() {
+    const filas = state.resumen?.esperando_proteccion || [];
+    if (!filas.length) return '';
+    const items = filas.slice(0, 8).map(function (f) {
+      return '<li><span class="ui-id">' + esc(f.seller_sku || f.ml_key) + '</span> '
+        + '<span class="ui-label">' + esc(f.available_quantity ?? 0) + ' en venta · ' + esc(f.status || 'sin estado') + '</span>'
+        + '<br><span class="ui-label">' + esc((f.titulo || f.ml_key || '').slice(0, 60)) + '</span></li>';
+    }).join('');
+    return '<div class="ui-aviso ui-aviso--critico" style="margin-top:.6rem">'
+      + '<b>' + filas.length + (filas.length === 1 ? ' clave quedó' : ' claves quedaron')
+      + ' sin su producto de WooCommerce.</b>'
+      + '<br>El producto se dio de baja o le cambiaron el SKU y la publicación de MercadoLibre '
+      + 'sigue viva. Los pedidos que todavía no bajaron a Woo quedaron retenidos. La protección '
+      + 'remota pone la publicación en cero y lo verifica contra MercadoLibre; hasta entonces '
+      + 'sigue expuesta.'
+      + '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' + items + '</ul>'
+      + (filas.length > 8 ? '<div class="ui-label">y ' + (filas.length - 8) + ' más</div>' : '')
+      + '</div>';
+  }
+
+  function renderRecon() {
+    const c = state.resumen?.conciliacion;
+    if (!c) { $('#recon').innerHTML = ''; return; }
+    // Telemetría en UNA línea, no en cinco tarjetas. Son números de contexto: la tarea es el
+    // caso, no el tablero. En 390px las tarjetas ocupaban la pantalla entera antes de mostrar
+    // nada accionable. Sólo lo que exige acción conserva peso visual.
+    const urg = Number(c.urgentes) || 0;
+    // Gate 2 de UM1.1: total = verificadas + excepciones + urgentes. Se sigue mostrando el
+    // RESULTADO de la igualdad, no sólo los números, para que un desvío no pase inadvertido.
+    const partes = [
+      esc(c.total) + ' activas con stock',
+      esc(c.verificadas) + ' verificadas',
+      esc(c.excepciones) + ' excepciones',
+      urg ? '<b class="dato-urgente">' + urg + ' urgentes</b>' : '0 urgentes',
+    ];
+    if (!c.exacta) partes.push('<b class="dato-critico">universo SIN conciliar</b>');
+    $('#recon').innerHTML = '<span class="ui-resumen">' + partes.join(' · ') + '</span>'
+      + bloqueBolsaCompartida()
+      + bloqueSinRespaldoWoo()
+      + bloqueEsperandoProteccion()
+      // Una observación anterior a la 082 no se puede clasificar. Si se contara como urgente
+      // fabricaría un backlog falso del tamaño del universo entero, así que va aparte y con
+      // tratamiento fuerte: es lo único de este bloque que exige una acción.
+      + (c.observacion_incompleta
+        ? '<div class="ui-aviso ui-aviso--atencion" style="margin-top:.5rem"><b>' + esc(c.observacion_incompleta)
+          + '</b> claves activas con stock tienen su última observación anterior al detalle de atributos actual. '
+          + 'No se clasifican ni cuentan como urgencias: hasta un refresco ML completo, el universo no está conciliado.</div>'
+        : '');
+  }
+
+  // `severidad` es normal|urgente|critica y mapea directo al chip: gris, ámbar, rojo.
+  const CHIP_SEV = { normal: '', urgente: 'ui-chip--urgente', critica: 'ui-chip--critico' };
+  const sev = (c) => '<span class="ui-chip ' + (CHIP_SEV[c.severidad] || 'ui-chip--urgente') + '">' + esc(c.severidad) + '</span>';
+
+  function cola() {
+    const casos = state.casos;
+    const verif = (state.resumen?.conciliacion?.verificadas ?? 0);
+    return '<aside class="card side"><div class="card-head"><strong>Pendientes ML → Fusion</strong>'
+      + '<span class="muted">' + casos.length + ' por resolver · '
+      + (state.resumen?.conciliacion?.esperando_operacion ?? 0) + ' esperando operación · '
+      + verif + ' ya verificadas</span></div>'
+      + (casos.length ? casos.map((c) => '<button class="case" data-caso="' + c.id + '"'
+        + (state.actual === c.id ? ' aria-current="true"' : '') + '>'
+        + (c.thumbnail ? '<img class="mini" src="' + esc(c.thumbnail) + '" alt="" loading="lazy">' : '<span class="mini vacia">sin<br>foto</span>')
+        + '<span>' + sev(c)
+        + '<strong>' + esc(c.titulo || c.ml_key) + '</strong><small>'
+        + (c.es_marketplace === false ? '<span class="senal">link de pago</span> ' : '')
+        + esc(c.variations_texto || 'sin variante') + ' · ' + esc(c.clasificacion)
+        + ' · Stock ML ' + (Number(c.available_quantity) >= 99999 ? 'ilimitado' : esc(c.available_quantity ?? 'sin dato'))
+        + ' · ' + esc(c.estado) + (c.responsable ? ' · ' + esc(c.responsable) : '') + '</small></span></button>').join('')
+        : '<p class="muted empty">No hay casos pendientes.</p>') + '</aside>';
+  }
+
+  function detalle() {
+    if (!state.actual) return '<section class="card detail detail-col"><h2>Elegí un caso</h2>'
+      + '<p class="muted">Cada caso es una clave ML (publicación + variación). Solo se cubre con SKU y stock verificados contra MercadoLibre, o con una excepción explícita.</p></section>';
+    const d = state.detalle;
+    if (!d) return '<section class="card detail detail-col"><p class="muted">Cargando caso…</p></section>';
+    const ev = d.evidencia?.[d.evidencia.length - 1]?.contenido || {};
+    const ml = ev.ml || {}; const woo = ev.woo; const prod = d.producto;
+    const pub = d.publicacion || {};
+    return '<section class="card detail detail-col">'
+      + '<button class="btn back" id="volver">← Volver a la cola</button>'
+      + sev(d) + '<h2>' + esc(pub.titulo || ml.clave || d.ml_key) + '</h2>'
+      + '<span class="muted">' + esc(pub.variations_texto || 'sin variante') + ' · ' + esc(ml.clave || d.ml_key) + '</span><br>'
+      + '<span class="muted">Caso ' + d.id + ' · ' + esc(d.estado) + ' · Responsable: ' + esc(d.responsable || 'sin asignar')
+      + ' · versión ' + esc(d.expected_version) + '</span>'
+      + (pub.es_marketplace === false
+        ? '<div class="ambiguo" style="margin-top:.8rem"><b>Esta publicación no está en el marketplace.</b> Su canal es'
+          + ' Mercado Pago (link de pago): existe en la API y figura activa, pero no se encuentra buscando en'
+          + ' MercadoLibre y no vende por el marketplace. Revisá si corresponde exigirle identidad de catálogo.</div>'
+        : '')
+      + (enShadow() ? '<div class="notice read" style="margin-top:.8rem">Modo <b>shadow</b>: se registran decisiones y se encolan operaciones, pero <b>no se escribe en MercadoLibre</b>.</div>' : '')
+      + '<div class="actionbar">'
+      + '<button class="ui-btn ui-btn--primario" id="vincular">Vincular a Producto Fusion</button>'
+      + '<button class="ui-btn" id="tomar">' + (d.responsable ? 'Relevar caso' : 'Tomar caso') + '</button>'
+      + '<button class="ui-btn" id="nota">Agregar nota</button>'
+      + '<button class="ui-btn ui-btn--peligro" id="excepcion">Excepción solo_ml</button>'
+      + '</div>'
+      + '<div class="comparador">'
+      + '<div class="col-comp">'
+      + '<section class="panel panel-ml"><h3>MercadoLibre · observado</h3><div class="producto">'
+      + (pub.thumbnail ? '<img class="foto" src="' + esc(pub.thumbnail) + '" alt="Foto de la publicación en MercadoLibre">' : '<div class="foto vacia">Sin foto</div>')
+      + '<div class="facts"><b>' + esc(pub.titulo || 'sin título') + '</b><br>'
+      + 'Publicación: <b>' + esc(ml.item_id || '—') + '</b><br>Variación: <b>' + esc(ml.variation_id || 'sin variación') + '</b><br>'
+      + 'SELLER_SKU: <b>' + esc(ml.seller_sku || 'ausente') + '</b> ' + (ml.seller_sku_presente ? '' : '<span class="ui-chip ui-chip--critico">sin atributo</span>') + '<br>'
+      + 'GTIN: <b>' + esc(ml.gtin || pub.gtin || 'sin GTIN') + '</b><br>'
+      // Stock y hora de observación salen de la publicación vigente, no de la instantánea de
+      // evidencia: esa guarda identidad, y desde que se le quitaron los campos volátiles
+      // (para que un refresco no reseteara las decisiones) ya no los tiene.
+      + 'Stock informado: ' + stockML(pub.available_quantity ?? ml.stock) + '<br>'
+      + 'Observado: <b>' + esc(pub.actualizado_en || ml.observado_en || 'sin dato') + '</b><br>'
+      + '<span class="muted">seller_custom_field: ' + esc(ml.seller_custom_field || 'vacío') + ' — es evidencia auxiliar y nunca da cobertura.</span>'
+      + bloqueAtributosMl(pub.atributos)
+      + (pub.permalink ? '<br><a class="enlace" href="' + esc(pub.permalink) + '" target="_blank" rel="noopener">Abrir en MercadoLibre ↗</a>'
+ : '')
+      + '</div></div></section>'
+      + '</div><div class="col-comp">'
+      + '<section class="panel panel-woo"><h3>WooCommerce · identidad candidata</h3>'
+      + (prod ? '<div class="producto">'
+          + (prod.img ? '<img class="foto" src="' + esc(prod.img) + '" alt="Foto del producto en WooCommerce">' : '<div class="foto vacia">Sin foto</div>')
+          + '<div class="facts"><b>' + esc(prod.nombre_woo || prod.nombre_canonico || 'sin nombre') + '</b><br>'
+          + 'Fusion SKU: <b>' + esc(prod.fusion_sku || 'provisional') + '</b><br>'
+          + 'SKU Woo: <b>' + esc(prod.sku_woo || 'sin SKU') + '</b><br>'
+          + 'GTIN: <b>' + esc(prod.gtin_woo || 'sin GTIN') + '</b><br>'
+          + 'Stock Woo: <b>' + esc(prod.stock_woo ?? 'sin dato') + '</b>'
+          + (prod.es_padre ? '<div class="ambiguo" style="margin-top:.5rem">Este es el <b>producto padre</b> de una familia: no es una unidad vendible y no debería ser el destino del vínculo. Elegí una de sus variaciones.</div>' : '')
+          + (prod.atributos
+            ? '<div class="attrs-bloque"><b>Atributos en WooCommerce</b><span class="attr">' + esc(prod.atributos) + '</span></div>'
+            : '<div class="attrs-bloque muted">Este SKU no tiene atributos cargados en WooCommerce'
+              + (prod.gtin_woo ? ': el <b>GTIN</b> es lo único que lo distingue de sus hermanas.' : ' ni GTIN: no hay nada que lo distinga de sus hermanas.')
+              + ' Si el producto variable no define un atributo variable, la diferencia real no existe en Woo y es una corrección de catálogo.</div>')
+          + '</div></div>'
+        : '<div class="facts">' + (woo ? 'Producto Woo: <b>' + esc(woo.id_woo) + '</b><br>SKU: <b>' + esc(woo.sku) + '</b><br>Stock Woo: <b>' + esc(woo.stock ?? 'sin dato') + '</b>'
+            : '<span class="muted">Sin identidad Woo única. Falta catálogo: no es una excepción, es una tarea de alta o corrección. Usá «Vincular a Producto Fusion» para buscar el producto por nombre, SKU o GTIN.</span>') + '</div>')
+      + '</section>'
+      + triangulacion(d)
+      + panelVinculo(ml)
+      + '</div></div>'
+      + '<section class="panel"><h3>Clasificación</h3><div class="facts"><b>' + esc(d.clasificacion) + '</b>'
+      + '<br><span class="muted">Huella de evidencia: ' + esc((d.evidencia_fingerprint || '').slice(0, 16)) + '…</span></div></section>'
+      + (d.notas?.length ? '<section class="panel"><h3>Notas</h3>' + d.notas.map((n) => '<div class="facts">' + esc(n.creada_en) + ' · ' + esc(n.creada_por) + ': ' + esc(n.nota) + '</div>').join('') + '</section>' : '')
+      + (d.decisiones?.length ? '<section class="panel"><h3>Decisiones</h3>' + d.decisiones.map((x) => '<div class="facts">' + esc(x.decidida_en) + ' · ' + esc(x.tipo) + ' · ' + esc(x.decidida_por) + (x.explicacion ? ' — ' + esc(x.explicacion) : '') + '</div>').join('') + '</section>' : '')
+      + (d.excepciones?.length ? '<section class="panel"><h3>Excepciones</h3>' + d.excepciones.map((x) => '<div class="facts">' + esc(x.creada_en) + ' · ' + esc(x.motivo) + ' · vence: ' + esc(x.vence_en || 'sin vencimiento') + (x.activa ? '' : ' <span class="ui-chip">invalidada</span>') + '</div>').join('') + '</section>' : '')
+      + '</section>';
+  }
+
+  // Selector de identidad para el vínculo manual. Es búsqueda humana explícita: el candidato
+  // aproximado por familia, con puntaje y explicación, es UM1.4 y todavía no existe.
+  // Un atributo discrimina identidad si habla de la MEDIDA o el modelo del producto. Todo lo
+  // demás ("Regalable", "Es marca TOM", "Género: Sin género") es contexto de categoría: no
+  // decide nada y, con 40 filas del mismo peso que el SKU, tapa lo que sí decide.
+  const DISCRIMINA = /(largo|medida|tama|talle|size|modelo|model|color|di[aá]metro|ancho|alto|peso|capacidad|volumen|rodado|material)/i;
+
+  function bloqueAtributosMl(attrs) {
+    if (!attrs?.length) {
+      return '<div class="attrs-bloque"><span class="ui-label">La publicación no declara atributos útiles para identificar la variante.</span></div>';
+    }
+    const fila = (a) => '<span class="attr"><span class="ui-label">' + esc(a.nombre) + '</span> <b>' + esc(a.valor) + '</b></span>';
+    const clave = attrs.filter((a) => DISCRIMINA.test(a.nombre));
+    const resto = attrs.filter((a) => !DISCRIMINA.test(a.nombre));
+    return '<div class="attrs-bloque">'
+      + (clave.length
+        ? '<span class="ui-label">Atributos que identifican la variante</span>' + clave.map(fila).join('')
+        : '<span class="ui-label">Ningún atributo declara medida ni modelo: no hay con qué distinguir la variante desde ML.</span>')
+      + (resto.length
+        ? '<details class="ui-mas"><summary>Ver los otros ' + resto.length + ' atributos de la publicación</summary>'
+          + resto.map(fila).join('') + '</details>'
+        : '')
+      + '</div>';
+  }
+
+  function panelVinculo(ml) {
+    if (!state.buscando) return '';
+    const c = state.candidatos;
+    const e = state.elegido;
+    return '<section class="panel buscador"><h3>Vincular a Producto Fusion</h3>'
+      + '<div class="search-row">'
+      + '<input id="q-producto" type="search" autocomplete="off" placeholder="Nombre, SKU o GTIN" '
+      + 'aria-label="Buscar Producto Fusion" value="' + esc(state.consulta) + '">'
+      + '<button class="btn" id="buscar">Buscar</button>'
+      + '<button class="btn" id="cancelar-vinculo">Cancelar</button></div>'
+      + conflictoIdentidad(ml)
+      + '<div class="opciones">'
+      + (c === null ? '<p class="muted">Escribí para buscar. Solo aparecen productos activos: uno provisional no tiene <code>fusion_sku</code> y no puede sincronizarse.</p>'
+        : c.length ? c.map((o) => '<article class="opcion' + (e && e.id === o.id ? ' elegido' : '') + (o.coincide_gtin ? ' destacada' : '') + '">'
+          + (o.img ? '<img src="' + esc(o.img) + '" alt="">' : '<div class="sinfoto">Sin foto</div>')
+          + '<div><strong>' + esc(o.nombre_canonico)
+          + (o.coincide_gtin ? '<span class="senal gtin">GTIN coincide</span>' : '')
+          + (o.coincide_sku ? '<span class="senal sku">SELLER_SKU coincide</span>' : '')
+          + (o.coincidencia_parcial ? '<span class="senal">coincidencia parcial</span>' : '')
+          + (o.es_padre ? '<span class="senal">producto padre — no enlazable</span>' : '')
+          + (o.de_familia_gtin ? '<span class="senal gtin">de la familia del GTIN</span>' : '')
+          + '</strong>'
+          + (o.ml_con_su_gtin?.length
+            ? '<small class="attrs">En ML su GTIN aparece como: ' + esc(o.ml_con_su_gtin.join(' · ')) + '</small>'
+            : '')
+          + (o.atributos ? '<small class="attrs">' + esc(o.atributos) + '</small>' : '')
+          + '<small>' + esc(o.fusion_sku)
+          + ' · SKU Woo ' + esc(o.sku_woo || 'sin SKU') + ' · Stock Woo ' + esc(o.stock_woo ?? 'sin dato')
+          + (o.gtin ? ' · GTIN ' + esc(o.gtin) : '')
+          + (o.identidades_ml_activas ? ' · ya publicado en ' + esc(o.identidades_ml_activas) + ' clave(s) ML' : '')
+          + '</small></div>'
+          + (o.es_padre ? '<span class="muted">variación requerida</span>'
+            : '<button class="btn" data-elegir="' + o.id + '">Elegir</button>') + '</article>').join('')
+          : '<p class="muted">Sin resultados. Si el producto no existe en Woo, no es una excepción: es una tarea de alta de catálogo.</p>')
+      + '</div>'
+      // Vista previa obligatoria: qué se va a escribir y con qué stock, antes de confirmar.
+      + (e ? '<div class="previa"><b>Vista previa del vínculo</b><br>'
+        + 'Clave ML <b>' + esc(ml.clave || '') + '</b> (' + esc(ml.variation_id || 'sin variación') + ')<br>'
+        + 'SELLER_SKU actual: <b>' + esc(ml.seller_sku || 'ausente') + '</b> → objetivo: <b>' + esc(e.fusion_sku) + '</b><br>'
+        + 'Producto: <b>' + esc(e.nombre_canonico) + '</b><br>'
+        + 'Stock Woo a publicar: <b>' + esc(e.stock_woo ?? 'sin dato') + '</b>'
+        + (e.identidades_ml_activas ? '<br>Este producto ya publica en ' + esc(e.identidades_ml_activas) + ' clave(s) ML. Compartir SKU es la operación normal: cada clave publica el stock Woo completo.' : '')
+        + '<br>' + (enShadow() ? 'Modo <b>shadow</b>: se registra la decisión y se encola la operación, pero no se escribe en MercadoLibre.' : 'La operación se ejecutará contra MercadoLibre paso a paso y verificando.')
+        + '<div class="actionbar"><button class="btn primary" id="confirmar-vinculo">Confirmar vínculo</button></div></div>' : '')
+      + '</section>';
+  }
+
+  // El GTIN puede coincidir con un producto PADRE (variable). Eso no es un conflicto: dice
+  // que la publicación pertenece a esa familia y que la respuesta es una de sus variaciones.
+  // Sólo hay conflicto real cuando SKU y GTIN apuntan a unidades vendibles distintas.
+  function conflictoIdentidad(ml) {
+    const c = state.candidatos;
+    if (!Array.isArray(c) || !c.length) return '';
+    const porGtin = c.find((o) => o.coincide_gtin && !o.es_padre);
+    const porSku = c.find((o) => o.coincide_sku);
+    const familia = c.find((o) => o.de_familia_gtin);
+    let html = '';
+    if (porGtin && porSku && porGtin.id !== porSku.id) {
+      html += '<div class="conflicto"><b>Conflicto de identidad.</b> El <b>SELLER_SKU</b> apunta a <b>'
+        + esc(porSku.fusion_sku) + '</b>, pero el <b>GTIN</b> ' + esc(ml.gtin || '') + ' coincide con <b>'
+        + esc(porGtin.fusion_sku) + '</b>, que es otro producto vendible. Hay que decidir cuál identidad'
+        + ' vale; el identificador descartado queda para corregir en catálogo.</div>';
+    } else if (familia && familia.padre_gtin_sku) {
+      const concuerda = porSku && porSku.de_familia_gtin;
+      html += '<div class="conflicto" style="border-color:var(--green-bd);background:var(--green-bg)">'
+        + 'El <b>GTIN</b> ' + esc(ml.gtin || '') + ' coincide con el <b>producto padre</b> '
+        + esc(familia.padre_gtin_sku) + ', que no es una unidad vendible. La publicación pertenece a esa'
+        + ' familia: elegí una de sus <b>variaciones</b>, marcadas abajo.'
+        + (concuerda ? ' El SELLER_SKU apunta a <b>' + esc(porSku.fusion_sku) + '</b>, que es una de ellas:'
+          + ' SKU y GTIN concuerdan.' : '')
+        + '</div>';
+    } else if (porGtin) {
+      html += '<div class="conflicto" style="border-color:var(--green-bd);background:var(--green-bg)">'
+        + '<b>' + esc(porGtin.fusion_sku) + '</b> coincide por GTIN con la publicación. Es la señal más'
+        + ' fuerte: el GTIN es del fabricante y no depende de cómo esté cargado el catálogo.</div>';
+    }
+    if (c.some((o) => o.nombre_ambiguo && !o.atributos)) {
+      html += '<div class="ambiguo">Varios candidatos tienen <b>el mismo nombre y ningún atributo</b> en'
+        + ' WooCommerce, así que no hay con qué distinguirlos desde acá. La diferencia real (largo, medida)'
+        + ' existe en el título de MercadoLibre pero no está cargada en Woo: es una corrección de catálogo.</div>';
+    }
+    return html;
+  }
+
+  // Cuando el catálogo Woo no distingue dos variaciones, las OTRAS publicaciones de ML sí lo
+  // hacen: otra publicación con el mismo SELLER_SKU delata un duplicado, y las publicaciones
+  // que llevan el GTIN del producto candidato revelan a qué medida corresponde ese SKU.
+  function triangulacion(d) {
+    const h = d.hermanas_ml || [];
+    const g = d.ml_por_gtin_producto || [];
+    if (!h.length && !g.length) return '';
+    const lista = (items) => items.map((x) => '<span class="attr">' + esc(x.titulo)
+      + ' <span class="muted">(' + esc(x.item_id) + (x.gtin ? ' · GTIN ' + esc(x.gtin) : '') + ')</span></span>').join('');
+    return '<section class="panel"><h3>Otras publicaciones de la misma familia</h3><div class="facts">'
+      + (h.length ? '<b>Reclaman el mismo SELLER_SKU (' + esc(d.publicacion?.seller_sku || '') + '):</b>'
+        + lista(h) + '<span class="muted">Tener varias publicaciones para el mismo producto es normal: son opciones de compra distintas. Se listan como contexto, no como problema. Sí conviene mirarlas si sus títulos declaran medidas o variantes diferentes entre sí.</span>' : '')
+      + (g.length ? (h.length ? '<br>' : '') + '<b>Llevan el GTIN del producto Woo candidato:</b>' + lista(g)
+        + '<span class="muted">Esto identifica la medida real de ese SKU aunque el catálogo no la tenga cargada.</span>' : '')
+      + '</div></section>';
+  }
+
+  function vistaPendientes() {
+    return '<div class="view' + (state.actual ? ' has-detail' : '') + '">' + cola() + detalle() + '</div>';
+  }
+
+  function vistaProductos() {
+    const p = state.productos;
+    return '<section class="card detail"><h2>Productos Fusion</h2>'
+      + '<p class="muted">Identidad canónica. El <code>fusion_sku</code> se deriva de Woo (<code>FB-{id_woo}</code>) y no se edita.</p>'
+      + (p.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>Fusion SKU</th><th>Nombre</th><th>Estado</th><th>Claves ML activas</th><th>Última verificación ML</th></tr></thead><tbody>'
+        + p.map((x) => '<tr><td><b>' + esc(x.fusion_sku || 'provisional') + '</b></td><td>' + esc(x.nombre_canonico || '—')
+        + '</td><td>' + esc(x.estado) + '</td><td>' + esc(x.identidades_ml_activas) + '</td><td>' + esc(x.ultima_verificacion_ml || 'nunca') + '</td></tr>').join('')
+        + '</tbody></table></div>' : '<p class="muted empty">Todavía no hay productos. El bootstrap desde Woo es parte de UM1.3.</p>')
+      + '</section>';
+  }
+
+  function vistaOperaciones() {
+    const o = state.operaciones;
+    return '<section class="card detail"><h2>Operaciones</h2>'
+      + '<p class="muted">Saga por pasos, cada uno persistido antes del efecto remoto y verificado contra MercadoLibre. '
+      + 'Corregir un SKU por otro válido se escribe de una sola vez: poner el stock en cero y limpiar el SKU sólo hace '
+      + 'falta cuando la publicación debe quedar sin SKU, que es la ventana que ese cero cubre. '
+      + 'Una protección por baja de WooCommerce sólo pone el stock en cero y lo verifica: no hay SKU que escribir ni stock que restaurar.</p>'
+      + (o.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>#</th><th>Tipo</th><th>Clave ML</th><th>SKU objetivo</th><th>Estado</th><th>Paso</th><th>Intentos</th><th></th></tr></thead><tbody>'
+        + o.map((x) => '<tr><td>' + esc(x.id) + '</td><td>' + (x.tipo === 'proteccion_woo' ? '<span class="ui-chip ui-chip--urgente">protección</span>' : '<span class="ui-label">SKU</span>') + '</td><td>' + esc(x.ml_key) + '</td><td>' + esc(x.sku_objetivo || '—') + '</td><td>'
+        + esc(x.estado) + (x.impacto_hermanas ? ' <span class="ui-chip ui-chip--urgente">hermanas: ' + esc(x.impacto_hermanas) + '</span>' : '')
+        + (x.ultimo_error ? '<br><span class="muted error">' + esc(x.ultimo_error) + '</span>' : '')
+        + '</td><td>' + esc(x.paso_actual) + '</td><td>' + esc(x.intentos) + '</td><td>'
+        + (x.estado === 'intervencion' ? '<button class="btn" data-reintentar="' + x.id + '">Reintentar</button>' : '')
+        + (x.estado === 'bloqueada_impacto'
+          ? '<button class="btn danger" data-impacto="' + x.id + '" data-hermanas="' + esc(x.impacto_hermanas || 0) + '" data-clave="' + esc(x.ml_key) + '">Confirmar impacto</button>'
+          : '')
+        + '</td></tr>').join('') + '</tbody></table></div>' : '<p class="muted empty">No hay operaciones registradas.</p>')
+      + '</section>';
+  }
+
+  /**
+   * Un mismo código GTIN reclamado por varios Producto Fusion.
+   *
+   * La unidad de trabajo es el CÓDIGO y no la fila: a uno solo pueden reclamarlo cien
+   * productos, y resolverlo los cierra a todos de una. Por eso la lista muestra códigos y el
+   * detalle se pide al abrir uno.
+   *
+   * El orden es por stock expuesto en ML, no por antigüedad: un código en disputa con unidades
+   * a la venta puede estar descontando del producto equivocado; uno sin stock es deuda de
+   * catálogo que puede esperar.
+   */
+  function vistaCodigos() {
+    const c = state.codigos || [];
+    const d = state.detalleCodigo;
+    return '<section class="card detail"><h2>Códigos en conflicto</h2>'
+      + '<p class="muted">Un mismo GTIN que varios productos reclaman como propio. Se resuelve por código: '
+      + 'el producto que se lo queda conserva la identidad y a los demás se les marca el código como '
+      + '<code>incorrecto</code>, que es una tarea de catálogo, no un borrado.</p>'
+      + (c.length
+        ? '<div class="tablewrap"><table class="table"><thead><tr><th>Código</th><th>Tipo</th><th>Productos</th><th>Stock en ML</th><th></th></tr></thead><tbody>'
+          + c.map(function (x) {
+            const abierto = d && d.valor_normalizado === x.valor_normalizado;
+            return '<tr><td><b>' + esc(x.valor_normalizado) + '</b></td>'
+              + '<td>' + esc(x.subtipo || '—') + '</td>'
+              + '<td>' + esc(x.productos) + '</td>'
+              + '<td>' + (Number(x.stock_ml) > 0
+                ? '<span class="ui-chip ui-chip--urgente">' + esc(x.stock_ml) + ' en venta</span>'
+                : '<span class="ui-label">sin stock</span>') + '</td>'
+              + '<td><button class="btn" data-codigo="' + esc(x.valor_normalizado) + '">'
+              + (abierto ? 'Cerrar' : 'Ver y resolver') + '</button></td></tr>'
+              + (abierto ? '<tr><td colspan="5">' + detalleCodigo(d) + '</td></tr>' : '');
+          }).join('')
+          + '</tbody></table></div>'
+        : '<p class="muted empty">Ningún código en conflicto.</p>')
+      + '</section>';
+  }
+
+  function detalleCodigo(d) {
+    if (!d) return '<p class="muted">Cargando…</p>';
+    const filas = d.productos.map(function (p) {
+      const claves = String(p.claves_ml || '').split(',').filter(Boolean);
+      return '<tr><td><b>' + esc(p.fusion_sku) + '</b>'
+        + (p.estado === 'activo' ? ' <span class="ui-chip">activo</span>' : ' <span class="ui-chip ui-chip--urgente">en conflicto</span>')
+        + '<br><span class="ui-label">' + esc((p.nombre_canonico || '').slice(0, 70)) + '</span>'
+        + (claves.length ? '<br><span class="ui-label">' + esc(claves.slice(0, 3).join(' · ')) + '</span>' : '')
+        + '</td>'
+        + '<td>' + esc(p.stock_woo == null ? '—' : p.stock_woo) + '</td>'
+        + '<td>' + esc(p.stock_ml) + '</td>'
+        + '<td><button class="btn primary" data-ganador="' + esc(p.id) + '" data-valor="' + esc(d.valor_normalizado) + '">Es de este</button> '
+        + '<button class="btn danger" data-incorrecto="' + esc(p.id) + '" data-valor="' + esc(d.valor_normalizado) + '">No le corresponde</button></td></tr>';
+    }).join('');
+    return '<div class="panel"><h3>' + esc(d.valor_normalizado) + ' · ' + esc(d.total_productos) + ' productos</h3>'
+      + '<p class="muted">«Es de este» le deja el código a ese producto y marca a todos los demás como incorrectos. '
+      + '«No le corresponde» descarta sólo a ese, y sirve cuando el código no es de ninguno —una bicicleta sin '
+      + 'código universal posible, por ejemplo—.</p>'
+      + '<div class="tablewrap"><table class="table"><thead><tr><th>Producto</th><th>Stock Woo</th><th>Stock ML</th><th></th></tr></thead><tbody>'
+      + filas + '</tbody></table></div>'
+      + (d.truncado ? '<p class="muted">Se muestran los ' + esc(d.productos.length) + ' con más stock, de ' + esc(d.total_productos) + '. '
+        + 'Un código que reclaman tantos productos suele ser un comodín de fabricante: conviene revisarlo en el catálogo antes de elegir uno.</p>' : '')
+      + '</div>';
+  }
+
+  function vistaHistorial() {
+    const h = state.historial;
+    return '<section class="card detail"><h2>Historial</h2>'
+      + '<p class="muted">Append-only: una corrección agrega eventos y nunca reescribe los anteriores. '
+      + 'De las verificaciones automáticas se guarda la primera y la última de cada caso —desde cuándo la '
+      + 'identidad está verificada y hasta cuándo se la vio bien—; las repeticiones intermedias no se conservan.</p>'
+      + (h.length ? '<div class="tablewrap"><table class="table"><thead><tr><th>Cuándo</th><th>Entidad</th><th>Evento</th><th>Actor</th></tr></thead><tbody>'
+        + h.map((x) => '<tr><td>' + esc(x.creado_en) + '</td><td>' + esc(x.entidad) + ' ' + esc(x.entidad_id) + '</td><td>' + esc(x.evento) + '</td><td>' + esc(x.actor || 'sistema') + '</td></tr>').join('')
+        + '</tbody></table></div>' : '<p class="muted empty">Sin eventos registrados.</p>')
+      + '</section>';
+  }
+
+  function render() {
+    renderHealth(); renderRecon();
+    document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.view === state.view)));
+    const vistas = { pendientes: vistaPendientes, productos: vistaProductos, operaciones: vistaOperaciones, codigos: vistaCodigos, historial: vistaHistorial };
+    $('#app').innerHTML = (state.error ? '<p class="error">' + esc(state.error) + '</p>' : '')
+      + (state.aviso ? '<div class="aviso" role="status">' + esc(state.aviso) + '</div>' : '')
+      + vistas[state.view]();
+    bind();
+  }
+
+  async function cargar() {
+    try {
+      state.error = null;
+      const [resumen, casos] = await Promise.all([api('/resumen'), api('/casos?pendientes=1')]);
+      state.resumen = resumen.data; state.casos = casos.data;
+      if (state.view === 'productos') state.productos = (await api('/productos')).data;
+      if (state.view === 'operaciones') state.operaciones = (await api('/operaciones')).data;
+      if (state.view === 'historial') state.historial = (await api('/historial')).data;
+      if (state.view === 'codigos') state.codigos = (await api('/identificadores/conflictos')).data;
+    } catch (e) { state.error = e.message; }
+    render();
+  }
+
+  async function abrirCaso(id) {
+    state.actual = id; state.detalle = null; render();
+    try { state.detalle = (await api('/casos/' + id)).data; } catch (e) { state.error = e.message; }
+    render();
+  }
+
+  // Toda mutación viaja con operation_id, expected_version y evidence_fingerprint: son
+  // obligatorios en el contrato y lo que hace segura la repetición.
+  function sobre() {
+    return { operation_id: opId(), expected_version: state.detalle.expected_version, evidence_fingerprint: state.detalle.evidencia_fingerprint };
+  }
+
+  async function mutar(path, body, opts = {}) {
+    try {
+      await api(path, { method: opts.method || 'POST', body: JSON.stringify(body) });
+      await cargar();
+      if (opts.aviso) state.aviso = opts.aviso;
+      // Si el caso salió de la cola de pendientes, no tiene sentido volver a abrirlo.
+      const sigue = state.casos.some((c) => c.id === state.actual);
+      if (state.actual && sigue) await abrirCaso(state.actual);
+      else { state.actual = null; state.detalle = null; render(); }
+    } catch (e) {
+      if (e.code === 'VERSION_CONFLICT' || e.code === 'EVIDENCE_CONFLICT') {
+        alert(e.message + '\n\nSe recarga el caso para que decidas sobre la evidencia actual.');
+        await cargar(); if (state.actual) await abrirCaso(state.actual);
+        return;
+      }
+      alert(e.message);
+    }
+  }
+
+  async function buscarCandidatos() {
+    state.consulta = $('#q-producto')?.value || '';
+    try {
+      // Se mandan GTIN y SELLER_SKU de la publicación: son las dos señales que deciden cuando
+      // varios productos Woo comparten nombre.
+      const pub = state.detalle?.publicacion || {};
+      const extra = (pub.gtin ? '&gtin_ml=' + encodeURIComponent(pub.gtin) : '')
+        + (pub.seller_sku ? '&sku_ml=' + encodeURIComponent(pub.seller_sku) : '');
+      state.candidatos = (await api('/productos/buscar?q=' + encodeURIComponent(state.consulta.trim()) + extra)).data;
+      state.elegido = null;
+    } catch (e) { state.error = e.message; }
+    render();
+    const campo = $('#q-producto'); if (campo) { campo.focus(); campo.setSelectionRange(campo.value.length, campo.value.length); }
+  }
+
+  function bind() {
+    document.querySelectorAll('[data-codigo]').forEach((b) => {
+      b.onclick = async () => {
+        const valor = b.dataset.codigo;
+        // Segundo click sobre el mismo código lo cierra.
+        if (state.detalleCodigo && state.detalleCodigo.valor_normalizado === valor) {
+          state.detalleCodigo = null; render(); return;
+        }
+        state.detalleCodigo = null; state.aviso = null; render();
+        try { state.detalleCodigo = (await api('/identificadores/conflictos/' + encodeURIComponent(valor))).data; }
+        catch (e) { state.error = e.message; }
+        render();
+      };
+    });
+    document.querySelectorAll('[data-ganador]').forEach((b) => {
+      b.onclick = async () => {
+        // Le saca el código a todos los demás: se dice cuántos son antes de pedir la
+        // confirmación, porque el alcance no se ve en el botón.
+        const d = state.detalleCodigo;
+        const otros = (d ? d.total_productos : 1) - 1;
+        if (!confirm('El código ' + b.dataset.valor + ' queda en este producto y se marca como '
+          + 'incorrecto en ' + otros + ' producto(s) más.\n\n¿Confirmás?')) return;
+        const motivo = prompt('Motivo (queda auditado):') || null;
+        try {
+          await api('/identificadores/conflictos/resolver', { method: 'POST',
+            body: JSON.stringify({ valor_normalizado: b.dataset.valor, producto_id: Number(b.dataset.ganador), motivo }) });
+          state.detalleCodigo = null; state.aviso = 'Conflicto resuelto: ' + b.dataset.valor;
+          await cargar();
+        } catch (e) { alert(e.message); }
+      };
+    });
+    document.querySelectorAll('[data-incorrecto]').forEach((b) => {
+      b.onclick = async () => {
+        const motivo = prompt('¿Por qué este código no le corresponde? (queda auditado)') || null;
+        if (motivo === null) return;
+        try {
+          await api('/identificadores/incorrecto', { method: 'POST',
+            body: JSON.stringify({ valor_normalizado: b.dataset.valor, producto_id: Number(b.dataset.incorrecto), motivo }) });
+        } catch (e) {
+          // El backend frena si es el único identificador del producto: dejarlo sin identidad
+          // tiene que ser una decisión, así que se pregunta en vez de forzarlo.
+          if (e.code === 'INVALID_STATE'
+            && confirm(e.message + '\n\nEs el único código del producto y va a quedar sin GTIN.\n\n¿Confirmás igual?')) {
+            try {
+              await api('/identificadores/incorrecto', { method: 'POST',
+                body: JSON.stringify({ valor_normalizado: b.dataset.valor, producto_id: Number(b.dataset.incorrecto), motivo, permitir_unico: true }) });
+            } catch (e2) { alert(e2.message); return; }
+          } else { alert(e.message); return; }
+        }
+        state.detalleCodigo = null; state.aviso = 'Marcado incorrecto: ' + b.dataset.valor;
+        await cargar();
+      };
+    });
+    document.querySelectorAll('[data-caso]').forEach((b) => { b.onclick = () => { state.aviso = null; abrirCaso(Number(b.dataset.caso)); }; });
+    document.querySelectorAll('[data-impacto]').forEach((b) => {
+      b.onclick = async () => {
+        // La confirmación tiene consecuencia remota sobre otras variaciones: se dice cuántas
+        // son y sobre qué publicación, antes de pedirla. Confirmar a ciegas vacía el freno.
+        const n = b.dataset.hermanas;
+        if (!confirm('Esta corrección puede afectar ' + n + ' variación(es) hermana(s) de la publicación '
+          + b.dataset.clave + '.\n\nSe escribirá el SKU y las hermanas pueden verse alteradas.'
+          + '\n\n¿Confirmás el impacto?')) return;
+        const motivo = prompt('Motivo de la confirmación (queda auditado):') || null;
+        try {
+          await api('/operaciones/' + b.dataset.impacto + '/confirmar-impacto', {
+            method: 'POST', body: JSON.stringify({ operation_id: opId(), motivo }),
+          });
+          state.aviso = 'Impacto confirmado. La operación vuelve a la cola y el worker la va a ejecutar.';
+          await cargar();
+        } catch (e) { alert(e.message); }
+      };
+    });
+    document.querySelectorAll('[data-reintentar]').forEach((b) => {
+      b.onclick = () => mutar('/operaciones/' + b.dataset.reintentar + '/reintentar', { operation_id: opId() });
+    });
+    const volver = $('#volver'); if (volver) volver.onclick = () => { state.actual = null; state.detalle = null; render(); };
+    const tomar = $('#tomar'); if (tomar) tomar.onclick = () => {
+      const relevo = !!state.detalle.responsable;
+      const motivo = relevo ? prompt('Motivo del relevo (obligatorio):') : '';
+      if (relevo && !motivo) return;
+      mutar('/casos/' + state.detalle.id + (relevo ? '/relevar' : '/tomar'), { ...sobre(), motivo });
+    };
+    const nota = $('#nota'); if (nota) nota.onclick = () => {
+      const texto = prompt('Nota (queda auditada):'); if (!texto) return;
+      mutar('/casos/' + state.detalle.id + '/notas', { operation_id: opId(), nota: texto, expected_version: state.detalle.expected_version, evidence_fingerprint: state.detalle.evidencia_fingerprint });
+    };
+    const exc = $('#excepcion'); if (exc) exc.onclick = () => {
+      const motivo = prompt('Motivo de la excepción solo_ml (obligatorio):'); if (!motivo) return;
+      const vence = prompt('Vence el (ISO, vacío = sin vencimiento):') || null;
+      mutar('/casos/' + state.detalle.id + '/excepciones', { ...sobre(), motivo, expires_at: vence },
+        { aviso: 'Excepción solo_ml registrada. El caso sale de la cola hasta que venza o se invalide.' });
+    };
+    const vinc = $('#vincular'); if (vinc) vinc.onclick = () => {
+      state.buscando = true; state.candidatos = null; state.elegido = null;
+      // Arranca con el título de la publicación ya cargado y busca solo: si la persona
+      // tiene que adivinar qué escribir, no hay con qué comparar. Sigue siendo búsqueda
+      // humana editable, no un candidato automático (eso es UM1.4).
+      state.consulta = state.detalle?.publicacion?.titulo || state.detalle?.publicacion?.seller_sku || '';
+      render();
+      $('#q-producto')?.focus();
+      if (state.consulta.trim()) buscarCandidatos();
+    };
+    const cancelar = $('#cancelar-vinculo'); if (cancelar) cancelar.onclick = () => {
+      state.buscando = false; state.candidatos = null; state.elegido = null; render();
+    };
+    const buscar = $('#buscar'); if (buscar) buscar.onclick = buscarCandidatos;
+    const input = $('#q-producto'); if (input) input.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); buscarCandidatos(); } };
+    document.querySelectorAll('[data-elegir]').forEach((b) => {
+      b.onclick = () => {
+        state.elegido = state.candidatos.find((o) => o.id === Number(b.dataset.elegir));
+        render();
+      };
+    });
+    const confirmar = $('#confirmar-vinculo'); if (confirmar) confirmar.onclick = async () => {
+      const body = { ...sobre(), tipo: 'vincular', product_id: state.elegido.id };
+      try {
+        await api('/casos/' + state.detalle.id + '/decisiones', { method: 'POST', body: JSON.stringify(body) });
+      } catch (e) {
+        // El impacto sobre variaciones hermanas nunca se asume: se muestra y se confirma.
+        if (e.code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED') {
+          const n = e.sibling_count;
+          if (!confirm('Esta corrección puede afectar ' + (n ? n + ' variación(es) hermana(s)' : 'variaciones hermanas')
+            + ' de la misma publicación.\n\n¿Confirmás el impacto?')) return;
+          state.buscando = false; state.elegido = null;
+          return mutar('/casos/' + state.detalle.id + '/decisiones', { ...body, operation_id: opId(), confirm_sibling_impact: true });
+        }
+        if (e.code === 'VERSION_CONFLICT' || e.code === 'EVIDENCE_CONFLICT') {
+          alert(e.message + '\n\nSe recarga el caso para que decidas sobre la evidencia actual.');
+        } else { alert(e.message); return; }
+      }
+      // El caso decidido sale de la cola de trabajo: dejar a la persona mirando el mismo caso
+      // hace parecer que no se guardó nada. Se avisa qué quedó registrado y se pasa al siguiente.
+      const nombre = state.elegido.nombre_canonico; const sku = state.elegido.fusion_sku;
+      const resuelto = state.actual;
+      state.buscando = false; state.candidatos = null; state.elegido = null;
+      await cargar();
+      const siguiente = state.casos.find((c) => c.id !== resuelto);
+      state.aviso = 'Decisión guardada: vinculado a ' + nombre + ' (' + sku + '). '
+        + (enShadow() ? 'La operación quedó encolada en modo shadow, sin escribir en MercadoLibre.' : 'La operación se está ejecutando.')
+        + (siguiente ? ' Pasamos al siguiente caso.' : '');
+      if (siguiente) await abrirCaso(siguiente.id); else { state.actual = null; state.detalle = null; render(); }
+    };
+  }
+
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.onclick = () => { state.view = t.dataset.view; state.aviso = null; cargar(); };
+  });
+  $('#reload').onclick = cargar;
+  cargar();
+  </script>
+</body>
+</html>

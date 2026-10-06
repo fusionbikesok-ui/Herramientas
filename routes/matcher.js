@@ -1,25 +1,40 @@
 import { Router } from 'express';
-import { mlFetch } from '../lib/mlClient.js';
-import { clavesNecesitanAtencion } from '../lib/mlMapeo.js';
+import { mlFetch, categorizarErrorMl, estadoCooldownMl } from '../lib/mlClient.js';
+import { clavesNecesitanAtencion, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { aplanarItemMl } from '../lib/modelos/publicacionMl.js';
 import {
   construirWC, construirMLdesdeApi, candidatosDeItem, derivarEstadoApi,
 } from '../lib/matcherResolver.js';
 import {
-  escribirSkuEnMl, contarPendientes, pushSkusPendientes, getEstadoPush,
+  getEstadoPush,
 } from '../lib/matcherPush.js';
 import { armarClaveMl } from '../lib/mlUtil.js';
+import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
+import { escanearGuardiaMl } from '../lib/guardiaMl.js';
+import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl, marcarClaveNoSincroniza } from '../lib/identidadProductos.js';
+import { detectarCambios } from '../lib/vigiaFormato.js';
+import { procesarCambios } from '../lib/vigiaPausado.js';
+import { espera } from '../lib/esperas.js';
+import { dispararAuditoriaPrecios } from '../lib/auditoriaPrecios.js';
+import { filasDeVinculos, cargarDescartes, senalesVigentes } from './sync.js';
 
 // Solo interesan publicaciones matcheables (las cerradas son listings muertos).
 const STATUSES_A_TRAER = ['active', 'paused'];
 const MULTIGET_CHUNK = 20;   // ML permite hasta 20 ids por multiget
 const SEARCH_LIMIT = 100;    // máximo por página de items/search
-const CALL_DELAY_MS = 350;   // respeta rate limit (mlFetch ya tiene timeout)
+// MEDIDO el 2026-08-07 en routes/sync.js (RECONCILIACION_PAUSA_CHUNK_MS): ML empieza a
+// devolver 429 tras 2-3 multiget consecutivos con menos de ~1,5s de por medio. 350ms
+// (el valor previo acá) garantizaba 429 en cualquier refresco de más de un puñado de
+// chunks — root cause adicional del incidente 2026-08-27 además de la falta de retry.
+const CALL_DELAY_MS = 1500;
 
-// Estado del refresco de publicaciones (async, no bloqueante). El scan completo tarda
-// 1-3 min y superaba el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de
-// error que el frontend no podía parsear. Ahora el POST arranca el trabajo y devuelve 202
-// al toque; el frontend sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+// Estado del refresco de publicaciones (async, no bloqueante). El scan completo superaba
+// el proxy_read_timeout de nginx (120s) → el POST devolvía HTML de error que el frontend
+// no podía parsear. Ahora el POST arranca el trabajo y devuelve 202 al toque; el frontend
+// sondea GET /refrescar-ml/estado. Un solo refresco a la vez.
+// Duración: con CALL_DELAY_MS=1500ms (pacing seguro contra el 429 de ML, incidente
+// 2026-08-27) y ~6840 publicaciones, un refresco completo son ~10-15 min reales (antes,
+// con 350ms sin ese resguardo, "1-3 min" — pero eso mismo garantizaba el 429).
 //
 // Candado COMPARTIDO a nivel de módulo (no solo dentro de matcherRouter): el botón
 // "Actualizar desde ML" de Cobertura (routes/cobertura.js) pega exactamente al mismo
@@ -46,6 +61,10 @@ export function estadoRefrescoMl() {
  * paralelo. Mismo patrón que _wcToMlEnCurso/_reconciliarStockEnCurso/_refrescarCatalogoEnCurso
  * de routes/sync.js. Devuelve `{ ok:false, running:true, error, scope }` si estaba en curso
  * (para responder 409), o `{ ok:true, running:true, scope }` si lo arrancó (para responder 202).
+ *
+ * UM1: además de los endpoints HTTP manuales, server.js lo programa cada 15 minutos para
+ * mantener la Guardia actualizada. El mismo candado y los cooldowns globales aplican a ambos
+ * caminos; un refresco fallido no avanza la frescura ni borra el último resultado válido.
  */
 export function dispararRefrescoMl(db, cfg, scope = 'all') {
   if (_refresco.running) {
@@ -72,12 +91,43 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
         const itemIds = [...new Set(clavesNecesitanAtencion(db).map(c => String(c).split('|')[0]))];
         r = await refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress);
       } else {
-        r = await refrescarPublicacionesMl(db, cfg, onProgress);
+        // Refresco TOTAL con métricas e integración de incidentes (Hito 4)
+        r = await refrescarPublicacionesMlConMetricas(db, cfg, onProgress);
       }
       _refresco.resultado = r;
       _refresco.actualizado_en = now();
+      // UM1: solo genera/actualiza casos locales; nunca escribe seller_sku, stock ni estados
+      // remotos. Si el refresco fue completo, la lectura de Guardia tiene una base confiable.
+      escanearGuardiaMl(db, 'sistema', { lecturaMlConfirmada: true });
+      // Los GTIN que sólo conoce ML se incorporan como identificadores acá porque acá es
+      // donde `ml_publicaciones_cache` acaba de quedar fresca. Sólo con lectura confiable:
+      // es idempotente y aditiva, pero registrar un conflicto pone trabajo en la bandeja de
+      // una persona, y con un refresco acotado ese conflicto podría venir de datos viejos.
+      if (scopeNorm === 'all') {
+        // Sólo con el scan completo: el criterio para archivar es «no está en el cache», así que
+        // con un refresco acotado se archivarían identidades vivas que no se leyeron esta vez.
+        const archivado = archivarIdentidadesMlHuerfanas(db, { lecturaConfiable: true });
+        if (archivado.archivadas) console.log('[um1] identidades ML archivadas por publicación ausente:', archivado.archivadas);
+        const siembra = sembrarIdentificadoresMl(db, 'sistema');
+        _refresco.identificadores = {
+          sembrados: siembra.sembrados, conflictos: siembra.conflictos,
+          absorbidos: siembra.absorbidos, sin_respaldo_woo: siembra.sinRespaldoWoo.length,
+        };
+      }
+      auditarIdentidadProductos(db, 'sistema', { lecturaConfiable: scopeNorm === 'all' });
+      // El mismo snapshot ML que acabamos de confirmar también es la fuente de la auditoría
+      // de precios. Es una proyección local: no relanza /items ni bloquea Guardia/Matcher.
+      if (scopeNorm === 'all') {
+        dispararAuditoriaPrecios(db, { origen: 'ml_completo', podar: true, mlCfg: cfg });
+      }
     } catch (e) {
       _refresco.error = e.message;
+      try {
+        db.prepare('UPDATE guardia_ml_config SET ultimo_scan_error=?, actualizado_en=? WHERE id=1')
+          .run(e.message.slice(0, 500), now());
+        db.prepare('UPDATE identidad_config SET ultimo_scan_error=?, actualizado_en=? WHERE id=1')
+          .run(e.message.slice(0, 500), now());
+      } catch (_) { /* la lectura de Guardia no debe ocultar el error original del refresco */ }
     } finally {
       _refresco.running = false;
       _refresco.phase = _refresco.error ? 'error' : 'listo';
@@ -91,12 +141,114 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// Backoff acotado a 3 reintentos (mismo patrón que wooFetchConReintento en routes/woo.js).
+const ML_RETRY_BACKOFF_MS = [500, 1500, 4000];
+
+// Excepciones NO transitorias que getAccessToken/mlFetch puede tirar (lib/mlClient.js):
+// credencial mal configurada, refresh_token quemado, cooldown de OAuth activo o
+// presupuesto de /oauth/token agotado. Reintentar estas 4 veces en ~6s no las arregla —
+// en el caso de "cooldown"/"Presupuesto" activa el MISMO martilleo del incidente
+// 2026-08-04 que el cooldown de mlClient.js existe para evitar; en el caso de
+// "Autenticación ML rechazada" son 4 POST de más a /oauth/token con un refresh_token
+// ya quemado. Mismo criterio que el filtro de wooFetchConReintento (routes/woo.js) para
+// el error de configuración "URL debe usar HTTPS".
+const ML_ERRORES_NO_TRANSITORIOS = [
+  'ML_CLIENT_ID no configurado',
+  'Token ML no inicializado',
+  'Autenticación ML rechazada',
+  'cooldown',
+  'Presupuesto de llamadas a /oauth/token agotado',
+  // 4ta pasada del revisor (ALTO 1): sin este patrón, un fallo de ESCRITURA en sqlite tras
+  // rotar el refresh_token (disco lleno, DB en readonly, lock) no matcheaba nada de la lista
+  // de arriba → se reintentaba con el refresh_token YA QUEMADO por ML → el 400 invalid_grant
+  // resultante SÍ matcheaba 'Autenticación ML rechazada' y llegaba al incidente en vez del
+  // mensaje CRÍTICO original, mandando al operador a revisar client_secret cuando el problema
+  // real es la base de datos local.
+  'no se pudo persistir en sqlite',
+];
+
+/**
+ * mlFetch con reintento ante errores TRANSITORIOS (5xx, excepción de red/timeout).
+ * NO reintenta 4xx (401/403/404/429/etc.) ni las excepciones no transitorias de
+ * getAccessToken (credenciales, cooldown de OAuth, presupuesto agotado): esos no se
+ * arreglan reintentando la misma request.
+ *
+ * Motivo (incidente 2026-08-27, mismo patrón que refrescarCatalogo en routes/woo.js):
+ * `ml_publicaciones_cache` quedó con TODAS sus 6840 filas en el mismo timestamp del
+ * 2026-08-19 — el refresco completo (`refrescarPublicacionesMl`) no había terminado con
+ * éxito ni una sola vez en 8 días. La causa: `listarItemIds` pagina por scroll (hasta 200
+ * páginas por status) y el multiget de acá abajo pagina en chunks de 20 (para ~6840
+ * publicaciones, ~342 llamadas secuenciales) — cualquiera de esas llamadas que devuelva un
+ * error transitorio aborta TODO el refresco (fail-closed a propósito: nunca se pisa el
+ * cache con datos parciales). Con cientos de llamadas secuenciales sin ningún reintento, la
+ * probabilidad de que el refresco completo termine bien tiende a cero. Reintentar cada
+ * llamada individual, en vez de todo el refresco, resuelve la enorme mayoría de esos casos
+ * sin tocar la semántica fail-closed (que sigue siendo necesaria y no cambia acá).
+ */
+export async function mlFetchConReintento(db, cfg, method, path, body = null, opts = {}) {
+  let ultimoResp, ultimoError;
+  for (let intento = 0; intento <= ML_RETRY_BACKOFF_MS.length; intento++) {
+    if (intento > 0) await sleep(espera(ML_RETRY_BACKOFF_MS[intento - 1]));
+    try {
+      const resp = await mlFetch(db, cfg, method, path, body, opts);
+      if (resp.status === 200) return resp;
+      ultimoResp = resp;
+      // 429 (real o sintético por cooldown/cupo) NO se reintenta acá a propósito, a
+      // diferencia de wooFetchConReintento: mlFetch ya tiene su PROPIO cooldown global
+      // (_cooldownActivo(), lib/mlClient.js) que dura decenas de segundos — un backoff
+      // corto (hasta 4s) no lo va a esquivar, así que reintentar acá solo demoraría sin
+      // chance real de éxito. El caller ya recibe el 429 y decide (abortar fail-closed,
+      // como hace hoy `refrescarPublicacionesMl`/`listarItemIds`).
+      if (resp.status < 500) return resp; // 4xx (incluido 429): no reintentar.
+      // 5xx: sí es transitorio, reintentar.
+    } catch (e) {
+      const msg = e?.message ?? '';
+      if (ML_ERRORES_NO_TRANSITORIOS.some(patron => msg.includes(patron))) throw e;
+      ultimoError = e;
+      // Excepción de red/timeout genuina (u otra no reconocida arriba): reintentar.
+    }
+  }
+  if (ultimoResp) return ultimoResp; // agotados los reintentos: devolver el último status, que el caller ya sabe manejar (aborta fail-closed).
+  throw ultimoError;
+}
+
 function now() {
   return new Date().toISOString();
 }
 
 function mlCfgOk(cfg) {
   return cfg?.clientId && cfg?.clientSecret && cfg?.userId;
+}
+
+// ── Integración con sistema de incidentes y métricas (Hito 4) ───────────────────────────
+
+const INTEGRACION_ML = 'mercadolibre';
+const PROCESO_REFRESCAR_PUBLICACIONES = 'refrescar_publicaciones';
+
+const MENSAJE_HUMANO_POR_CATEGORIA = Object.create(null); // evita herencia indeseada del prototipo de Object (BAJO 8)
+MENSAJE_HUMANO_POR_CATEGORIA['rate_limit'] = 'MercadoLibre está limitando la frecuencia de refrescos de publicaciones (429).';
+MENSAJE_HUMANO_POR_CATEGORIA['auth'] = 'MercadoLibre rechazó las credenciales del refresco — revisar Client ID/Secret.';
+MENSAJE_HUMANO_POR_CATEGORIA['permiso'] = 'MercadoLibre rechazó la consulta (403). Suele ser un límite temporal y se resuelve solo; si se repite de forma sostenida, revisar los permisos de la aplicación en MercadoLibre.';
+MENSAJE_HUMANO_POR_CATEGORIA['config'] = 'Configuración inválida de MercadoLibre (Client ID/Secret/User ID faltantes) — revisar variables de entorno, no la conexión.';
+MENSAJE_HUMANO_POR_CATEGORIA['transitorio'] = 'MercadoLibre no responde de forma sostenida al refrescar publicaciones.';
+MENSAJE_HUMANO_POR_CATEGORIA['datos'] = 'MercadoLibre rechazó una solicitud puntual al refrescar publicaciones.';
+MENSAJE_HUMANO_POR_CATEGORIA['interno'] = 'Error interno al refrescar publicaciones de MercadoLibre.';
+
+function registrarMetricaCicloMl(db, { iniciadoEn, inicioMonotonico, procesados, fallidos, circuitoAbierto }) {
+  try {
+    const finalizadoEn = new Date().toISOString();
+    // performance.now() (reloj monotónico) para DURACIÓN, nunca Date.now() o timestamps ISO:
+    // un ajuste de reloj del sistema durante el ciclo podía dar duración negativa.
+    const duracionMs = Math.round(performance.now() - inicioMonotonico);
+    db.prepare(`
+      INSERT INTO metricas_ciclo_sync
+        (integracion, proceso, iniciado_en, finalizado_en, duracion_ms, procesados, fallidos, reintentados, circuito_abierto, creado_en)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(INTEGRACION_ML, PROCESO_REFRESCAR_PUBLICACIONES, iniciadoEn, finalizadoEn, duracionMs, procesados, fallidos, circuitoAbierto ? 1 : 0, finalizadoEn);
+  } catch (e) {
+    // Telemetría: nunca debe tumbar el ciclo real que la dispara.
+    console.error('[ML] error registrando métrica de ciclo (no afecta el refresco):', e.message);
+  }
 }
 
 /**
@@ -115,7 +267,7 @@ async function listarItemIds(db, cfg, status) {
     // manual: true — este refresco lo dispara el usuario a mano desde el botón
     // "Refrescar ML" (POST /refrescar-ml), no un cron. No debe quedar bloqueado
     // por el cooldown global de los crons.
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
       `/users/${cfg.userId}/items/search?search_type=scan&status=${status}&limit=${SEARCH_LIMIT}${scrollParam}`,
       null, { manual: true }
@@ -124,14 +276,21 @@ async function listarItemIds(db, cfg, status) {
     // — el llamador reemplaza el cache de forma atómica y una lista incompleta
     // borraría publicaciones válidas del cache.
     if (resp.status !== 200) {
-      throw new Error(`ML scan falló (status ${resp.status}) para status=${status}`);
+      // BLOQUEANTE 1: setear status para que categorizarErrorMl lo reciba
+      const err = new Error(`ML scan falló (status ${resp.status}) para status=${status}`);
+      err.status = resp.status;
+      // Si el status viene marcado como sintético por nuestro propio cooldown, anotarlo
+      if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      // ALTO 2: también propagar flag de "sin cupo" para distinguir 429s sintéticos
+      if (resp.__sinCupo) err.__sinCupo = true;
+      throw err;
     }
     const results = resp.data.results ?? [];
     if (results.length === 0) break;
     ids.push(...results);
     scrollId = resp.data.scroll_id;
     if (!scrollId) break;
-    await sleep(CALL_DELAY_MS);
+    await sleep(espera(CALL_DELAY_MS));
   }
   return ids;
 }
@@ -142,7 +301,12 @@ async function listarItemIds(db, cfg, status) {
  * Devuelve { total, items, variaciones }.
  */
 export async function refrescarPublicacionesMl(db, cfg, onProgress) {
-  if (!mlCfgOk(cfg)) throw new Error('Configuración de MercadoLibre incompleta');
+  if (!mlCfgOk(cfg)) {
+    // BLOQUEANTE 2: categoría 'config' para que incidente sea 'critico', no 'advertencia'
+    const err = new Error('Configuración de MercadoLibre incompleta');
+    err.categoria = 'config';
+    throw err;
+  }
 
   // 1) Reunir todos los item_id (activos + pausados), sin duplicados
   onProgress?.({ phase: 'listando', done: 0, total: 0 });
@@ -150,61 +314,205 @@ export async function refrescarPublicacionesMl(db, cfg, onProgress) {
   for (const st of STATUSES_A_TRAER) {
     const ids = await listarItemIds(db, cfg, st);
     ids.forEach(id => idSet.add(id));
-    await sleep(CALL_DELAY_MS);
+    await sleep(espera(CALL_DELAY_MS));
   }
   const allIds = [...idSet];
 
   // 2) Multiget de a 20 con los atributos necesarios
   const filas = [];
+  const creadas = new Map(); // item_id → date_created, para que el vigía reconozca altas recientes
   for (let i = 0; i < allIds.length; i += MULTIGET_CHUNK) {
     const chunk = allIds.slice(i, i + MULTIGET_CHUNK);
     // manual: true — mismo refresco disparado a mano que en listarItemIds.
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`,
+      `/items/bulk?ids=${chunk.join(',')}&include_attributes=all&attributes=status_code,id,body.id,body.title,body.status,body.sub_status,body.seller_custom_field,body.attributes,body.variations,body.secure_thumbnail,body.thumbnail,body.permalink,body.catalog_listing,body.catalog_product_id,body.price,body.available_quantity,body.user_product_id,body.channels,body.category_id,body.listing_type_id,body.shipping,body.date_created`,
       null, { manual: true }
     );
     // Fallo del multiget: abortar. Reconstruir el cache con chunks faltantes
     // borraría publicaciones válidas sin aviso.
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
-      throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      // BLOQUEANTE 1: setear status para que categorizarErrorMl lo reciba
+      const err = new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      err.status = resp.status;
+      // Si el status viene marcado como sintético por nuestro propio cooldown, anotarlo
+      if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      // ALTO 2: también propagar flag de "sin cupo" para distinguir 429s sintéticos
+      if (resp.__sinCupo) err.__sinCupo = true;
+      throw err;
     }
     for (const entry of resp.data) {
-      // entry.code !== 200 por-ítem: ítem borrado/no accesible en ML — se excluye
+      // (entry.status_code ?? entry.code) !== 200 por-ítem: ítem borrado/no accesible en ML — se excluye
       // legítimamente (no es un fallo de fetch del chunk completo).
-      if (entry.code !== 200 || !entry.body) continue;
+      if ((entry.status_code ?? entry.code) !== 200 || !entry.body) continue;
       filas.push(...aplanarItemMl(entry.body));
+      if (entry.body.date_created) creadas.set(String(entry.body.id), entry.body.date_created);
     }
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, allIds.length), total: allIds.length });
-    await sleep(CALL_DELAY_MS);
+    await sleep(espera(CALL_DELAY_MS));
   }
 
   // 3) Reemplazar el cache de forma atómica
-  const upsert = prepararUpsertCache(db);
-  const ts = now();
-  const tx = db.transaction((rows) => {
-    // Limpiar publicaciones que ya no están activas/pausadas
-    db.prepare('DELETE FROM ml_publicaciones_cache').run();
-    for (const f of rows) upsert.run({ ...f, actualizado_en: ts });
-  });
-  tx(filas);
+  // ALTO 4: si filas es vacío, NO borrar el cache existente (mismo criterio que Woo)
+  // — una lista 0 es ambigua (podría ser legítimo o degradación) y no debe pisar datos válidos.
+  let vigia = { detectados: 0, pausadas: 0, omitidos_por_umbral: 0, errores: 0 };
+  let autoVinculadas = 0;
+  if (filas.length > 0) {
+    // SNAPSHOT ANTES DE TOCAR NADA. El refresco total borra el cache entero y reinserta dentro
+    // de una transacción: si la comparación se hiciera adentro, el valor anterior ya no existe.
+    const previas = new Map(
+      db.prepare('SELECT clave, item_id, seller_sku, catalog_product_id, atributos_json FROM ml_publicaciones_cache').all()
+        .map((f) => [f.clave, f])
+    );
+    const cambios = detectarCambios(previas, filas).map((c) => ({ ...c, creada_en: creadas.get(c.item_id) || null }));
+
+    const upsert = prepararUpsertCache(db);
+    const ts = now();
+    const tx = db.transaction((rows) => {
+      // Limpiar publicaciones que ya no están activas/pausadas
+      db.prepare('DELETE FROM ml_publicaciones_cache').run();
+      for (const f of rows) upsert.run({ ...f, actualizado_en: ts });
+    });
+    tx(filas);
+
+    // Después de persistir: pausar toca ML y no puede correr dentro de la transacción.
+    vigia = await procesarCambios(db, cfg, cambios);
+
+    // Vincular solo lo que no necesita criterio: una publicación cuyo SELLER_SKU coincide con
+    // UN único producto de Woo que todavía no está vinculado a otra. La función existía,
+    // estaba testeada desde el incidente del 2026-08-27 y NADIE la llamaba fuera de los tests:
+    // por eso las publicaciones nuevas con SKU correcto quedaban sin vincular y sin sincronizar
+    // stock. Es conservadora por diseño — ante cualquier ambigüedad no vincula ninguna.
+    autoVinculadas = autoVincularPorSellerSku(db);
+    if (autoVinculadas) console.log(`[matcher] auto-vinculadas por seller_sku: ${autoVinculadas}`);
+  }
 
   const variaciones = filas.filter(f => f.es_variante === 1).length;
-  return { total: filas.length, items: allIds.length, variaciones };
+  return { total: filas.length, items: allIds.length, variaciones, vigia, auto_vinculadas: autoVinculadas };
+}
+
+/**
+ * Wrapper de `refrescarPublicacionesMl` que registra métricas, conecta el cooldown al
+ * sistema de incidentes, y confirma ciclo sano. Patrón análogo al de `refrescarCatalogo`
+ * en routes/woo.js (Hito 3).
+ *
+ * Sobre "0 publicaciones": a diferencia de Woo (donde un catálogo vacío es SIEMPRE sospechoso
+ * porque la tienda tiene miles de productos), ML puede devolver legítimamente 0 si:
+ * - El vendedor pausó todos los items (1 solo status = 'paused', 0 'active')
+ * - El seller acaba de empezar (aún sin publicaciones)
+ *
+ * Sin embargo, un REFRESCO COMPLETO que devuelve 0 items cuando el anterior devolvió miles
+ * ES sospechoso (la API degradada en silencio o respondiendo 200 pero vacío). Como no
+ * tenemos la historia entre refrescos aquí, usamos un criterio conservador: 0 publicaciones
+ * en refresco total es AMBIGUO — no se confirma ciclo sano (por si acaso es degradación
+ * silenciosa), pero tampoco se abre incidente crítico (podría ser legítimo). Se registra
+ * como `fallidos=0` (no es un error HTTP) y se deja la investigación para el operador si
+ * ve que el cache quedó vacío de repente tras días con miles de items.
+ */
+export async function refrescarPublicacionesMlConMetricas(db, cfg, onProgress) {
+  const iniciadoEn = new Date().toISOString();
+  const inicioMonotonico = performance.now();
+  try {
+    const resultado = await refrescarPublicacionesMl(db, cfg, onProgress);
+    const totalPublicaciones = resultado?.total ?? 0;
+
+    // Registrar métrica exitosa
+    registrarMetricaCicloMl(db, {
+      iniciadoEn, inicioMonotonico,
+      procesados: totalPublicaciones,
+      fallidos: 0,
+      circuitoAbierto: false,
+    });
+
+    // Criterio de "0 sospechoso" para ML: NO confirmamos ciclo sano si vino 0,
+    // porque es ambiguo (podría ser degradación silenciosa). Confirmamos solo
+    // si trajo publicaciones de verdad (señal inequívoca de que ML respondió con datos).
+    if (totalPublicaciones > 0) {
+      confirmarCicloSano(db, { integracion: INTEGRACION_ML, proceso: PROCESO_REFRESCAR_PUBLICACIONES });
+    } else {
+      // MEDIO 6: 0 publicaciones es legítimo en ML (vendedor nuevo o pausó todo), pero es
+      // ambiguo. No es error, pero sí es info que merece visibilidad sin ser crítica.
+      // La dedupe se autoresuelve: en el próximo ciclo con datos reales, confirmarCicloSano
+      // resuelve todos los incidentes activos del proceso.
+      // ALTO 4: subir severidad a 'advertencia' ahora que evitamos pisar el cache
+      // (antes era 'info' porque era ambiguo; ahora hay un daño real que se previene).
+      abrirOActualizarIncidente(db, {
+        integracion: INTEGRACION_ML,
+        proceso: PROCESO_REFRESCAR_PUBLICACIONES,
+        tipoError: 'publicaciones_vacias',
+        severidad: 'advertencia',
+        mensajeTecnico: 'Refresco devolvió 0 publicaciones',
+        mensajeHumano: 'MercadoLibre devolvió 0 publicaciones — podría ser legítimo (vendedor nuevo, todo pausado) o degradación silenciosa.',
+        contexto: { circuitoAbierto: false },
+      });
+    }
+
+    return resultado;
+  } catch (e) {
+    // MEDIO 7: `categorizarErrorMl` ya respeta `e.categoria` si está seteada, y clasifica
+    // TypeError/RangeError/SqliteError como 'interno'. Llamar directo sin denylist duplicada.
+    const categoria = categorizarErrorMl(e);
+
+    // ALTO 3: consultar cooldown ANTES de registrar métrica para que ambas usen el mismo
+    // estado (la métrica y el incidente deben ser consistentes en circuitoAbierto)
+    const cd = estadoCooldownMl();
+
+    // BAJO 8: optional chaining para evitar excepción si e es null/undefined
+    registrarMetricaCicloMl(db, {
+      iniciadoEn, inicioMonotonico,
+      procesados: 0,
+      fallidos: 1,
+      circuitoAbierto: cd?.activo ?? !!e?.circuitoAbierto,
+    });
+
+    // MEDIO 5: si es un 429 sintético (por cooldown propio o cupo agotado), usar un
+    // tipoError distinto para no pisar incidentes de 429s reales. La dedupe es por
+    // integracion|proceso|tipo_error, así que esto abre un incidente separado.
+    let tipoError = categoria;
+    if (categoria === 'rate_limit' && (e?.__cooldownSintetico || e?.__sinCupo)) {
+      tipoError = 'rate_limit_propio';
+    }
+
+    // BAJO 8: optional chaining en accesos a propiedades de e
+    abrirOActualizarIncidente(db, {
+      integracion: INTEGRACION_ML,
+      proceso: PROCESO_REFRESCAR_PUBLICACIONES,
+      tipoError,
+      severidad: (categoria === 'auth' || categoria === 'config') ? 'critico' : (categoria === 'datos' ? 'info' : 'advertencia'),
+      mensajeTecnico: e?.message ?? 'Error desconocido',
+      mensajeHumano: MENSAJE_HUMANO_POR_CATEGORIA[categoria] ?? MENSAJE_HUMANO_POR_CATEGORIA.interno,
+      contexto: { circuitoAbierto: cd?.activo ?? !!e?.circuitoAbierto, esErrorSinteticoCooldown: !!e?.__cooldownSintetico, esErrorSinCupo: !!e?.__sinCupo },
+    });
+
+    // Re-lanzar: el comportamiento ante el caller (cron/endpoint) no cambia — solo se agrega telemetría.
+    throw e;
+  }
 }
 
 /** Statement de upsert al cache de publicaciones (compartido entre refresco total y acotado). */
 function prepararUpsertCache(db) {
   return db.prepare(`
     INSERT INTO ml_publicaciones_cache
-      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, thumbnail, permalink, catalogo, precio, available_quantity, precio_actualizado_en, actualizado_en)
-    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle, @seller_sku, @variations_texto, @thumbnail, @permalink, @catalogo, @precio, @available_quantity, @actualizado_en, @actualizado_en)
+      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle,
+       seller_sku, seller_sku_presente, seller_custom_field, atributos_json, gtin, user_product_id, canales_json,
+       variations_texto, thumbnail, permalink, catalogo, catalog_product_id, precio, available_quantity,
+       category_id, listing_type_id, free_shipping, precio_actualizado_en, actualizado_en)
+    VALUES (@clave, @item_id, @variation_id, @titulo, @status, @sub_status, @es_variante, @color, @talle,
+      @seller_sku, @seller_sku_presente, @seller_custom_field, @atributos_json, @gtin, @user_product_id, @canales_json,
+      @variations_texto, @thumbnail, @permalink, @catalogo, @catalog_product_id, @precio, @available_quantity,
+      @category_id, @listing_type_id, @free_shipping, @actualizado_en, @actualizado_en)
     ON CONFLICT(clave) DO UPDATE SET
       item_id=excluded.item_id, variation_id=excluded.variation_id, titulo=excluded.titulo,
       status=excluded.status, sub_status=excluded.sub_status, es_variante=excluded.es_variante, color=excluded.color,
-      talle=excluded.talle, seller_sku=excluded.seller_sku, variations_texto=excluded.variations_texto,
+      talle=excluded.talle, seller_sku=excluded.seller_sku,
+      seller_sku_presente=excluded.seller_sku_presente, seller_custom_field=excluded.seller_custom_field,
+      atributos_json=excluded.atributos_json, gtin=excluded.gtin, user_product_id=excluded.user_product_id,
+      canales_json=excluded.canales_json,
+      variations_texto=excluded.variations_texto,
       thumbnail=excluded.thumbnail, permalink=excluded.permalink, catalogo=excluded.catalogo,
+      catalog_product_id=excluded.catalog_product_id,
       precio=excluded.precio, available_quantity=excluded.available_quantity,
+      category_id=excluded.category_id, listing_type_id=excluded.listing_type_id, free_shipping=excluded.free_shipping,
       precio_actualizado_en=excluded.precio_actualizado_en, actualizado_en=excluded.actualizado_en
   `);
 }
@@ -214,29 +522,60 @@ function prepararUpsertCache(db) {
  * scan del catálogo completo) y hace upsert. A diferencia del refresco total, NUNCA
  * borra el resto del cache — un subconjunto no puede saber si las demás publicaciones
  * siguen vigentes. Devuelve { total, items, variaciones }.
+ *
+ * BAJO 9: no se envuelve con métricas+incidentes porque es el ciclo parcial bajo demanda
+ * (disparado desde Cobertura con ?scope=atencion en POST /refrescar-ml), no el periódico.
+ * El refresco total usa `refrescarPublicacionesMlConMetricas` que sí registra telemetría.
  */
 export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgress) {
-  if (!mlCfgOk(cfg)) throw new Error('Configuración de MercadoLibre incompleta');
+  if (!mlCfgOk(cfg)) {
+    // 4ta pasada del revisor (MEDIO 2): mismo estilo que el camino total (BLOQUEANTE 2) —
+    // hoy este ciclo no está envuelto en métricas+incidentes (ver BAJO 9 arriba), pero dejar
+    // el throw sin categoría es la trampa que ya se pisó 3 veces: el día que alguien lo
+    // envuelva, un problema de config abriría incidente 'transitorio'/'advertencia' en vez
+    // de 'config'/'critico'.
+    const err = new Error('Configuración de MercadoLibre incompleta');
+    err.categoria = 'config';
+    throw err;
+  }
   const ids = [...new Set((itemIds || []).map(String).filter(Boolean))];
-  if (ids.length === 0) return { total: 0, items: 0, variaciones: 0 };
+  // `vigia` va también acá: el contrato de retorno tiene que ser el mismo por todos los
+  // caminos, o quien lea r.vigia.detectados rompe justo en el caso borde.
+  if (ids.length === 0) return { total: 0, items: 0, variaciones: 0, vigia: { detectados: 0, pausadas: 0, omitidos_por_umbral: 0, errores: 0 } };
 
   const filas = [];
+  const creadas = new Map();
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
-    const resp = await mlFetch(
+    const resp = await mlFetchConReintento(
       db, cfg, 'get',
-      `/items?ids=${chunk.join(',')}&attributes=id,title,status,sub_status,seller_custom_field,attributes,variations,secure_thumbnail,thumbnail,permalink,catalog_listing,price,available_quantity`
+      `/items/bulk?ids=${chunk.join(',')}&include_attributes=all&attributes=status_code,id,body.id,body.title,body.status,body.sub_status,body.seller_custom_field,body.attributes,body.variations,body.secure_thumbnail,body.thumbnail,body.permalink,body.catalog_listing,body.catalog_product_id,body.price,body.available_quantity,body.user_product_id,body.channels,body.category_id,body.listing_type_id,body.shipping,body.date_created`
     );
     if (resp.status !== 200 || !Array.isArray(resp.data)) {
-      throw new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      // Mismo criterio que BLOQUEANTE 1 en el camino total: .status explícito para que
+      // categorizarErrorMl no caiga a 'transitorio' por default, más los flags sintéticos
+      // para distinguir un freno propio de un rechazo real de ML.
+      const err = new Error(`ML multiget falló (status ${resp.status}) en chunk ${i}-${i + chunk.length}`);
+      err.status = resp.status;
+      if (resp.__cooldownSintetico) err.__cooldownSintetico = true;
+      if (resp.__sinCupo) err.__sinCupo = true;
+      throw err;
     }
     for (const entry of resp.data) {
-      if (entry.code !== 200 || !entry.body) continue;
+      if ((entry.status_code ?? entry.code) !== 200 || !entry.body) continue;
       filas.push(...aplanarItemMl(entry.body));
+      if (entry.body.date_created) creadas.set(String(entry.body.id), entry.body.date_created);
     }
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, ids.length), total: ids.length });
-    await sleep(CALL_DELAY_MS);
+    await sleep(espera(CALL_DELAY_MS));
   }
+
+  const previas = new Map(
+    db.prepare(`SELECT clave, item_id, seller_sku, catalog_product_id, atributos_json
+                FROM ml_publicaciones_cache WHERE item_id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids).map((f) => [f.clave, f])
+  );
+  const cambios = detectarCambios(previas, filas).map((c) => ({ ...c, creada_en: creadas.get(c.item_id) || null }));
 
   const upsert = prepararUpsertCache(db);
   const ts = now();
@@ -245,8 +584,15 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
   });
   tx(filas);
 
+  const vigia = await procesarCambios(db, cfg, cambios);
+  const autoVinculadas = autoVincularPorSellerSku(db);
+  if (autoVinculadas) console.log(`[matcher] auto-vinculadas por seller_sku: ${autoVinculadas}`);
+
   const variaciones = filas.filter(f => f.es_variante === 1).length;
-  return { total: filas.length, items: ids.length, variaciones };
+  // Este camino también lo llama el worker de webhooks directamente, sin pasar por
+  // dispararRefrescoMl: proyectar ahora evita que un cambio puntual de precio espere el scan.
+  dispararAuditoriaPrecios(db, { origen: 'ml_acotado', itemIds: ids, podar: true, mlCfg: cfg });
+  return { total: filas.length, items: ids.length, variaciones, vigia, auto_vinculadas: autoVinculadas };
 }
 
 /**
@@ -372,6 +718,39 @@ export function computarCandidatosApi(db, scope) {
 // recalcula).
 const _cacheCandidatos = new Map(); // scope -> { firma, resultado }
 
+// Espejo en disco de _cacheCandidatos (tabla matcher_candidatos_cache, ver db/index.js). El
+// Map en memoria se pierde en cada reinicio de pm2; esto evita que el primer usuario del día
+// pague de nuevo el cruce completo (~70s) cuando la firma (catálogo Woo + últimas publicaciones
+// ML) no cambió desde la última corrida real.
+function obtenerCacheValida(db, scope, firma) {
+  const enMemoria = _cacheCandidatos.get(scope);
+  if (enMemoria && enMemoria.firma === firma) return enMemoria.resultado;
+  const fila = db.prepare('SELECT firma, resultado_json FROM matcher_candidatos_cache WHERE scope=?').get(scope);
+  if (fila && fila.firma === firma) {
+    try {
+      const resultado = JSON.parse(fila.resultado_json);
+      _cacheCandidatos.set(scope, { firma, resultado });
+      return resultado;
+    } catch (_) { /* JSON corrupto en disco: tratar como miss y recomputar */ }
+  }
+  return null;
+}
+
+function guardarCacheDisco(db, scope, firma, resultado) {
+  // La caché en disco es una optimización de arranque, nunca debe tumbar un cómputo que ya
+  // salió bien — cualquier fallo de escritura se ignora y el próximo restart recomputa.
+  try {
+    db.prepare(`
+      INSERT INTO matcher_candidatos_cache (scope, firma, resultado_json, actualizado_en)
+      VALUES (?,?,?,?)
+      ON CONFLICT(scope) DO UPDATE SET firma=excluded.firma, resultado_json=excluded.resultado_json, actualizado_en=excluded.actualizado_en
+    `).run(scope, firma, JSON.stringify(resultado), now());
+  } catch (_) {
+    // La caché de candidatos es un acelerador: si no se puede escribir, el cómputo
+    // se rehace la próxima vez. No debe tumbar la respuesta que ya se calculó.
+  }
+}
+
 // Estado del cómputo de candidatos en background por scope. El cruce completo
 // (computarCandidatosApi: O(publicaciones × catálogo) con LCS) tarda decenas de segundos en
 // frío (tras un restart de pm2, con el cache de proceso vacío) y superaba el proxy_read_timeout
@@ -396,6 +775,7 @@ function lanzarComputoCandidatos(db, scope) {
       const firma = firmaCandidatos(db);
       const resultado = computarCandidatosApi(db, scope);
       _cacheCandidatos.set(scope, { firma, resultado });
+      guardarCacheDisco(db, scope, firma, resultado);
       _computoCandidatos.set(scope, { running: false, done: resultado.total, total: resultado.total, error: null, iniciado_en: nuevo.iniciado_en });
     } catch (e) {
       _computoCandidatos.set(scope, { running: false, done: 0, total: 0, error: e.message, iniciado_en: nuevo.iniciado_en });
@@ -449,14 +829,15 @@ function firmaCandidatos(db) {
 // retomar sin pagar el costo del cruce completo (objetivo: abrir el matcher nunca se traba).
 function candidatosApiCacheado(db, scope, { peek = false } = {}) {
   const firma = firmaCandidatos(db);
-  const hit = _cacheCandidatos.get(scope);
+  const cacheado = obtenerCacheValida(db, scope, firma);
   let out;
-  if (hit && hit.firma === firma) {
-    out = { ...hit.resultado, cache: true };
+  if (cacheado) {
+    out = { ...cacheado, cache: true };
   } else {
     if (peek) return { items: [], total: 0, cache: false };
     const resultado = computarCandidatosApi(db, scope);
     _cacheCandidatos.set(scope, { firma, resultado });
+    guardarCacheDisco(db, scope, firma, resultado);
     out = { ...resultado, cache: false };
   }
   // Recálculo de stock FUERA del bloque cacheado: la firma ignora el stock a propósito, así
@@ -470,6 +851,153 @@ export function matcherRouter(db, cfg) {
   const router = Router();
   const mlCfg = cfg?.ml ?? cfg;
 
+  router.post('/vinculos/no-sincronizar', (req, res) => {
+    const clave = req.body?.clave;
+    if (typeof clave !== 'string' || !clave.trim()) {
+      return res.status(400).json({ ok: false, error: 'clave requerida' });
+    }
+    const usuario = req.user?.username;
+    if (!usuario) return res.status(401).json({ ok: false, error: 'usuario requerido' });
+    if (!db.prepare('SELECT 1 FROM ml_publicaciones_cache WHERE clave=?').get(clave)) {
+      return res.status(404).json({ ok: false, error: 'clave no encontrada' });
+    }
+
+    const expectedSkuProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'expected_sku');
+    const vinculo = db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave=? AND accion IN ('asignar','confirmar')").get(clave);
+    if (vinculo && !expectedSkuProvided) return res.status(400).json({ ok: false, error: 'expected_sku requerido para un vínculo activo' });
+    if (!vinculo && (!expectedSkuProvided || req.body.expected_sku !== null)) {
+      return res.status(400).json({ ok: false, error: 'expected_sku debe ser null explícito cuando no hay vínculo activo' });
+    }
+
+    const resultado = marcarClaveNoSincroniza(db, { clave, actor: usuario, expectedSku: req.body?.expected_sku, expectedSkuProvided });
+    if (!resultado.ok) return res.status(resultado.status || 400).json(resultado);
+    return res.json(resultado);
+  });
+
+  router.get('/productos/buscar', (req, res) => {
+    const q = String(req.query.q || '').trim();
+    const limiteRaw = req.query.limite === undefined ? 20 : Number(req.query.limite);
+    if (!Number.isInteger(limiteRaw) || limiteRaw < 1 || limiteRaw > 50) {
+      return res.status(400).json({ ok: false, error: 'limite debe estar entre 1 y 50' });
+    }
+
+    const normalizar = (valor) => String(valor || '').toLowerCase().normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const consulta = normalizar(q);
+    const palabras = consulta.split(' ').filter(Boolean);
+    if (palabras.join('').length < 2) return res.status(400).json({ ok: false, error: 'q debe tener al menos 2 caracteres alfanuméricos' });
+    const like = (valor) => `%${String(valor).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const sinTildes = (c) => `replace(replace(replace(replace(replace(replace(replace(lower(COALESCE(${c},'')),'á','a'),'é','e'),'í','i'),'ó','o'),'ú','u'),'ü','u'),'ñ','n')`;
+    const clausula = (columnas) => palabras.map(() => `(${columnas.map((c) => `${sinTildes(c)} LIKE ? ESCAPE '\\'`).join(' OR ')})`).join(' AND ');
+    const params = (columnas) => palabras.flatMap((p) => columnas.map(() => like(p)));
+    const contieneTodas = (valor) => {
+      const texto = normalizar(valor);
+      return palabras.every((palabra) => texto.includes(palabra));
+    };
+    const filaLimite = Math.max(50, limiteRaw * 10);
+    const catalogo = db.prepare(`SELECT sku, nombre, stock, precio, img, id_woo
+      FROM catalogo_cache
+      WHERE COALESCE(trim(sku),'')<>'' AND ${clausula(['sku', 'nombre'])}
+      ORDER BY stock ASC, id_woo ASC LIMIT ?`).all(...params(['sku', 'nombre']), filaLimite);
+    const productoPorSku = new Map();
+    for (const c of catalogo) if (!productoPorSku.has(c.sku)) productoPorSku.set(c.sku, c);
+    const skusCatalogo = [...productoPorSku.keys()];
+    const publicacionesIniciales = db.prepare(`SELECT p.*, d.sku AS decision_sku, d.accion,
+      d.confirmado_por FROM ml_publicaciones_cache p
+      LEFT JOIN sku_matcher_decisiones d ON d.clave=p.clave
+      WHERE ${clausula(['p.item_id', 'p.titulo', 'p.seller_sku'])}
+      ORDER BY p.clave LIMIT ?`).all(...params(['p.item_id', 'p.titulo', 'p.seller_sku']), filaLimite);
+    const publicaciones = [...publicacionesIniciales];
+    const skusVinculados = [...new Set([...publicaciones, ...catalogo]
+      .filter((p) => p.decision_sku && ['asignar', 'confirmar'].includes(p.accion))
+      .map((p) => p.decision_sku).concat(skusCatalogo))];
+    if (skusVinculados.length) {
+      const placeholders = skusVinculados.map(() => '?').join(',');
+      const vinculados = db.prepare(`SELECT sku, nombre, stock, precio, img, id_woo FROM catalogo_cache
+        WHERE sku IN (${placeholders}) ORDER BY stock ASC, id_woo ASC LIMIT ?`).all(...skusVinculados, filaLimite);
+      for (const c of vinculados) if (!productoPorSku.has(c.sku)) productoPorSku.set(c.sku, c);
+      const hermanas = db.prepare(`SELECT p.*, d.sku AS decision_sku, d.accion, d.confirmado_por
+        FROM ml_publicaciones_cache p JOIN sku_matcher_decisiones d ON d.clave=p.clave
+        WHERE d.sku IN (${placeholders}) AND d.accion IN ('asignar','confirmar')
+        ORDER BY p.clave LIMIT ?`).all(...skusVinculados, filaLimite);
+      const claves = new Set(publicaciones.map((p) => p.clave));
+      publicaciones.push(...hermanas.filter((p) => !claves.has(p.clave)));
+    }
+
+    const razonesPorSku = new Map();
+    const huerfanas = [];
+    const prioridad = new Map();
+    const sumarRazon = (sku, razon, peso) => {
+      if (!razonesPorSku.has(sku)) razonesPorSku.set(sku, new Set());
+      razonesPorSku.get(sku).add(razon);
+      prioridad.set(sku, Math.min(prioridad.get(sku) ?? 99, peso));
+    };
+    const prioridadPub = new Map();
+
+    for (const c of productoPorSku.values()) {
+      const sku = normalizar(c.sku);
+      if (sku === consulta || sku.startsWith(consulta) || sku.includes(consulta)) {
+        sumarRazon(c.sku, 'sku', sku === consulta ? 0 : 2);
+      }
+      if (contieneTodas(c.nombre)) sumarRazon(c.sku, 'nombre_woo', 2);
+    }
+
+    for (const p of publicaciones) {
+      const razones = new Set();
+      let peso = 99;
+      const item = normalizar(p.item_id);
+      if (item === consulta || item.includes(consulta)) { razones.add('mla'); peso = Math.min(peso, item === consulta ? 1 : 2); }
+      if (contieneTodas(p.titulo)) { razones.add('titulo_ml'); peso = Math.min(peso, 2); }
+      if (p.seller_sku && normalizar(p.seller_sku).includes(consulta)) { razones.add('sku'); peso = Math.min(peso, 2); }
+
+      if (razones.size) {
+        prioridadPub.set(p.clave, peso);
+        if (p.decision_sku && ['asignar', 'confirmar'].includes(p.accion) && productoPorSku.has(p.decision_sku)) {
+          for (const razon of razones) sumarRazon(p.decision_sku, razon, peso);
+        } else {
+          huerfanas.push(p);
+        }
+      }
+    }
+
+    const filas = filasDeVinculos(db);
+    const descartes = cargarDescartes(db);
+    const filaPorClave = new Map(filas.map((f) => [f.clave, f]));
+    const publicacion = (p, f = filaPorClave.get(p.clave)) => ({
+      clave: p.clave, item_id: p.item_id, variation_id: p.variation_id, titulo: p.titulo,
+      status: p.status, sub_status: p.sub_status, color: p.color, talle: p.talle,
+      variations_texto: p.variations_texto, seller_sku: p.seller_sku, thumbnail: p.thumbnail,
+      permalink: p.permalink, precio_ml: p.precio, stock_ml: p.available_quantity,
+      vinculo: {
+        estado: p.accion === 'omitir' ? 'no_sincroniza' : (f ? 'vinculada' : 'sin_vinculo'),
+        sku_vinculado: f?.sku || null, accion: p.accion || null, confirmado_por: p.confirmado_por || null,
+        senales: f ? senalesVigentes(f, descartes) : [],
+      },
+    });
+    const grupos = [...razonesPorSku.entries()].map(([sku, razones]) => {
+      const vinculadas = publicaciones.filter((p) => p.decision_sku === sku && ['asignar', 'confirmar'].includes(p.accion));
+      return {
+        sku,
+        woo: (() => { const c = productoPorSku.get(sku); return c ? { nombre: c.nombre, stock: c.stock, precio: c.precio, img: c.img } : null; })(),
+        publicaciones: vinculadas.map((p) => publicacion(p)),
+        coincidio_por: [...razones],
+        _prioridad: prioridad.get(sku) ?? 2,
+      };
+    });
+    const huerfanasSalida = huerfanas
+      .sort((a, b) => (prioridadPub.get(a.clave) ?? 2) - (prioridadPub.get(b.clave) ?? 2) || normalizar(a.titulo).localeCompare(normalizar(b.titulo)))
+      .map((p) => publicacion(p));
+    const unidades = [
+      ...grupos.map((grupo) => ({ tipo: 'producto', prioridad: grupo._prioridad, nombre: grupo.woo?.nombre, valor: grupo })),
+      ...huerfanasSalida.map((pub) => ({ tipo: 'huerfana', prioridad: prioridadPub.get(pub.clave) ?? 2, nombre: pub.titulo, valor: pub })),
+    ].sort((a, b) => a.prioridad - b.prioridad || normalizar(a.nombre).localeCompare(normalizar(b.nombre)));
+    const seleccionadas = unidades.slice(0, limiteRaw);
+    const datos = seleccionadas.filter((u) => u.tipo === 'producto').map((u) => u.valor);
+    const sinProducto = seleccionadas.filter((u) => u.tipo === 'huerfana').map((u) => u.valor);
+    grupos.forEach((g) => delete g._prioridad);
+    return res.json({ ok: true, data: datos, sin_producto_woo: sinProducto, total: unidades.length });
+  });
+
   router.get('/decisiones', (req, res) => {
     const rows = db.prepare('SELECT clave, sku, wc_nombre, accion FROM sku_matcher_decisiones').all();
     const data = {};
@@ -477,22 +1005,20 @@ export function matcherRouter(db, cfg) {
     res.json({ ok: true, data });
   });
 
-  router.post('/decisiones', (req, res) => {
-    const { decisiones } = req.body;
-    if (!decisiones || typeof decisiones !== 'object') {
-      return res.status(400).json({ ok: false, error: 'decisiones requeridas' });
-    }
-    const now = new Date().toISOString();
-    const stmt = db.prepare(
-      'INSERT OR REPLACE INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, ?, ?)'
-    );
-    const upsertAll = db.transaction((entries) => {
-      for (const [clave, d] of entries) {
-        if (d && d.accion) stmt.run(clave, d.sku || null, d.wc_nombre || null, d.accion, now);
+  router.post('/decisiones', (_req, res) => {
+    // UM1: esta ruta legacy de mutación directa está bloqueada. Todas las escrituras de
+    // vínculo, pausa y seller_sku deben pasar por el servicio Guardia para mantener la
+    // auditoría y la coherencia del estado de cobertura.
+    return res.status(410).json({
+      ok: false,
+      error: 'Ruta de mutación legacy bloqueada para UM1 (cobertura única)',
+      migracion: 'Las decisiones de vínculo deben hacerse vía /api/guardia-ml/casos/:id/vincular (requiere Guardia habilitada)',
+      detalles: {
+        old_endpoint: 'POST /api/matcher/decisiones',
+        new_flow: 'Accedé a Guardia ML en el frontend → localizá el caso urgente → seleccioná "Vincular" → indicá el SKU Woo',
+        direct_api: 'POST /api/guardia-ml/casos/{casoId}/vincular con {sku} en body'
       }
     });
-    upsertAll(Object.entries(decisiones));
-    res.json({ ok: true });
   });
 
   // Arranca el refresco de publicaciones y devuelve 202 sin bloquear (evita el timeout de
@@ -523,17 +1049,11 @@ export function matcherRouter(db, cfg) {
 
   // Escribe el SKU de UNA decisión en la publicación de ML (usado al confirmar)
   router.post('/push-sku', async (req, res) => {
-    const { clave, sku } = req.body || {};
-    if (!clave || !sku || !/^FB-\d+$/.test(String(sku))) {
-      return res.status(400).json({ ok: false, error: 'clave y sku (FB-xxx) requeridos' });
-    }
-    try {
-      // manual: true — escritura disparada por el usuario al confirmar un match.
-      const r = await escribirSkuEnMl(db, mlCfg, clave, sku, { manual: true });
-      res.json({ ok: r.ok, ...r });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
+    return res.status(410).json({
+      ok: false,
+      error: 'Push legacy bloqueado: toda escritura de seller_sku debe originarse en una operación durable de Guardia ML',
+      migracion: 'POST /api/guardia-ml/casos/:id/vincular',
+    });
   });
 
   // Arranca la escritura en ML de las decisiones mapeadas pendientes en background (mismo
@@ -547,12 +1067,11 @@ export function matcherRouter(db, cfg) {
   // manual IGNORA la cuota de pausadas (cuotaPausadas: null) porque el usuario disparó la
   // acción a propósito y está esperando el resultado completo.
   router.post('/push-skus-pendientes', (req, res) => {
-    if (getEstadoPush().running) {
-      return res.status(409).json({ ok: false, running: true, error: 'Ya hay un push en curso' });
-    }
-    pushSkusPendientes(db, mlCfg, { cuotaPausadas: null })
-      .catch(err => console.error('push SKUs matcher error:', err.message));
-    res.status(202).json({ ok: true, running: true, cuota_pausadas_ignorada: true });
+    return res.status(410).json({
+      ok: false,
+      error: 'Push masivo legacy bloqueado: Guardia procesa únicamente operaciones encoladas y auditadas',
+      migracion: 'POST /api/guardia-ml/casos/:id/vincular',
+    });
   });
 
   // Estado del push (para sondeo del frontend, y para ver el resultado del último ciclo
@@ -564,8 +1083,11 @@ export function matcherRouter(db, cfg) {
   // Cuántas decisiones tienen SKU pendiente de escribir en ML. Incluye activas Y pausadas
   // (las pausadas también se escriben; las activas van primero en la cola de push).
   router.get('/push-skus-pendientes/count', (req, res) => {
-    const { total, activas, pausadas, enEspera } = contarPendientes(db);
-    res.json({ ok: true, pendientes: total, activas, pausadas, en_espera: enEspera });
+    res.status(410).json({
+      ok: false,
+      error: 'La cola de push legacy fue retirada; consultar y accionar desde Guardia ML',
+      migracion: 'GET /api/guardia-ml/casos',
+    });
   });
 
   // Listado (solo lectura) de las decisiones pendientes de escribir en ML — mismo filtro

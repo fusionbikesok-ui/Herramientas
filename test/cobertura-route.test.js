@@ -3,7 +3,7 @@ import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 import { openDb } from '../db/index.js';
-import { coberturaRouter } from '../routes/cobertura.js';
+import { coberturaRouter, computarCruce } from '../routes/cobertura.js';
 
 const TEST_DB = './test/tmp-cobertura-route.sqlite';
 
@@ -89,5 +89,51 @@ describe('GET /api/cobertura — no_vendible en solo_wc', () => {
     expect(skus).not.toContain('FB-E'); // tiene una decisión activa → fuera, aunque otra sea omitir
     expect(skus).toContain(''); // sku vacío se trata igual que null → entra
     db.close();
+  });
+});
+
+// ── Links de pago de Mercado Pago (2026-09-12) ──────────────────────────────
+// Un ítem cuyo `channels` no incluye "marketplace" es un link de pago: no se vende por ML, no
+// tiene producto de Woo detrás y su stock es 99.999 por diseño. Contarlos en el cruce los
+// mostraba como publicaciones sin vincular y sin control de stock. Al 2026-09-12 eran 70 en el
+// cruce, 67 de ellas activas — y ya habían generado una falsa alarma de sobreventa.
+//
+// Es la tercera vez que hay que tapar este mismo ruido: guardiaMl.js ya los excluía (sus 67
+// casos abiertos eran todos links de pago) e identidadProductos.js definió FILTRO_MARKETPLACE.
+describe('cobertura — los links de pago de Mercado Pago no son publicaciones', () => {
+  it('computarCruce ignora los ítems cuyo channels no incluye marketplace', () => {
+    const db = openDb(TEST_DB);
+    try {
+      const ins = db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, seller_sku,
+         variations_texto, available_quantity, canales_json, actualizado_en)
+        VALUES (?,?,'',?,'active','',0,?,'',?,?,datetime('now'))`);
+      ins.run('MLAPUB|', 'MLAPUB', 'Publicación real', 'FB-NOEXISTE', 1, '["marketplace"]');
+      ins.run('MLALINK|', 'MLALINK', 'Link de pago', 'CUI06049', 99999, '["mp-merchants","mp-link"]');
+
+      const cruce = computarCruce(db);
+      const claves = (cruce.solo_ml || []).map((x) => String(x.ml_item_id));
+      expect(claves).toContain('MLAPUB');    // la publicación real sí se reporta
+      expect(claves).not.toContain('MLALINK'); // el link de pago no
+    } finally {
+      db.close();
+      if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    }
+  });
+
+  it('canales_json NULL se conserva: todavía no lo observamos, no se saca del universo', () => {
+    const db = openDb(TEST_DB);
+    try {
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, seller_sku,
+         variations_texto, available_quantity, canales_json, actualizado_en)
+        VALUES ('MLAVIEJA|','MLAVIEJA','','Sin observar','active','',0,'FB-NOEXISTE','',1,NULL,datetime('now'))`).run();
+
+      const cruce = computarCruce(db);
+      expect((cruce.solo_ml || []).map((x) => String(x.ml_item_id))).toContain('MLAVIEJA');
+    } finally {
+      db.close();
+      if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+    }
   });
 });
