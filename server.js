@@ -45,8 +45,6 @@ import { inventarioRouter } from './routes/inventario.js';
 import { etiquetasRouter } from './routes/etiquetas.js';
 import { criticidadRouter } from './routes/criticidad.js';
 import { backfillVentas } from './lib/criticidad.js';
-import { auditoriaRouter } from './routes/auditoria.js';
-import { barridoAuditoria } from './lib/auditoria.js';
 import { incidentesRouter } from './routes/incidentes.js';
 import { abrirOActualizarIncidente, confirmarCicloSano, procesarAlertasEmailIncidentes } from './lib/incidentes.js';
 import { revisarBackupNube, revisarBackupPostgres } from './lib/vigiaBackup.js';
@@ -754,7 +752,6 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
   app.use('/api/etiquetas', etiquetasRouter(db));
   app.use('/api/criticidad', criticidadRouter(db, syncCfg));
-  app.use('/api/auditoria', auditoriaRouter(db));
   app.use('/api/incidentes', incidentesRouter(db, syncCfg));
   app.use('/api/stock-exceptions', stockExceptionsRouter(db));
   app.use('/api/warranties', warrantiesRouter(db));
@@ -1012,16 +1009,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         backfillVentas(app._db, syncCfg)
           .then(r => console.log('backfillVentas:', JSON.stringify(r)))
           .catch(err => console.error('Error en backfillVentas:', err.message));
-      });
-
-      // Fase 5 (auditoría de publicaciones): barrido rotativo cada 15 min, cursor en sync_estado.
-      // 2 chunks de 20 por corrida → ~40 publicaciones por tick. Con ~4541 SKUs vinculados
-      // una vuelta completa tarda ~19 h. No compite con la reconciliación de stock (cada 10 min)
-      // ni con backfillVentas (diario) porque usa atributos distintos del multiget de ML.
-      cron.schedule('*/15 * * * *', () => {
-        barridoAuditoria(app._db, mlCfg)
-          .then(r => { if (r.auditados) console.log('barridoAuditoria:', JSON.stringify(r)); })
-          .catch(err => console.error('Error en barridoAuditoria:', err.message));
       });
 
       // Cola de procesamiento de fotos de preparación (plan 2026-08-12-fotos-preparacion.md):
