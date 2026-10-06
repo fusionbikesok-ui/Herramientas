@@ -72,6 +72,17 @@ describe('server', () => {
     expect(res.body).toEqual({ ok: true, integridad: 'ok' });
   });
 
+  it('los enlaces viejos de Auditoría redirigen al home (no dan 404 crudo)', async () => {
+    const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
+    currentApp = app;
+    const agent = await loginComoAdmin(app);
+    for (const ruta of ['/auditoria/', '/auditoria-publicaciones/']) {
+      const res = await agent.get(ruta);
+      expect(res.status, ruta).toBe(302);
+      expect(res.headers.location).toBe('/herramientas/home/');
+    }
+  });
+
   it('healthz no repite integrity_check en cada llamada pero sí detecta la base caída', async () => {
     const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
     currentApp = app;

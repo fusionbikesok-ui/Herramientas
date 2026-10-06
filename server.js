@@ -749,6 +749,8 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   // Vínculos se absorbió dentro del Matcher (Buscar producto + Sospechosos, ver
   // routes/cobertura.js) — mismo criterio de redirect con aviso que /cobertura arriba.
   app.use('/vinculos', (req, res) => res.redirect('/herramientas/matcher/?aviso=unificado'));
+  // Auditoría de publicaciones se retiró: los enlaces viejos no pueden dar 404 crudo.
+  app.use(['/auditoria', '/auditoria-publicaciones'], (req, res) => res.redirect('/herramientas/home/'));
   app.use('/api/inventario', inventarioRouter(db, wooCfg));
   app.use('/api/etiquetas', etiquetasRouter(db));
   app.use('/api/criticidad', criticidadRouter(db, syncCfg));
