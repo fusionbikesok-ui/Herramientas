@@ -358,7 +358,7 @@ frenada. Fail-closed deliberado, no se saltea la guarda de precio bajo ningún f
 ## Vínculos WC↔ML — MOVIDO a `/api/cobertura/vinculos*`
 
 **Matcher unificado, entrega 1 (2026-08-14)** — ver la sección al final del documento.
-`public/vinculos/index.html` se retira
+`public/vinculos/index.html` se retiró (2026-10-06 se borró también `public/cobertura/`)
 (`/vinculos` ahora redirige). El motor (`filasDeVinculos`, `cargarDescartes`,
 `senalesVigentes`, `logSync`) se mantiene en `routes/sync.js` (lo sigue usando `GET
 /api/sync/dashboard` para `vinculos_sospechosos`) y se reusa por export, no se duplicó. El
