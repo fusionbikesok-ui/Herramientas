@@ -1,0 +1,13 @@
+# Clientes y pedidos compartidos en el VPS
+
+Alcance autorizado: completar las búsquedas locales de clientes y pedidos de Gestión VPS, conservar la tienda como autoridad y preparar datos para POS, Facturador, Taller y métricas. Master Control intacto.
+
+1. Crear un índice derivado, reconstruible, privado y de sólo lectura para la interfaz. Reutilizar credenciales REST ya autorizadas en el VPS, únicamente en el sincronizador. No copiar contraseñas, roles, tokens, notas privadas, datos de tarjetas ni metadatos arbitrarios. El índice no crea otra autoridad comercial ni modifica SQLite/Postgres existentes.
+2. Descargar por lotes los clientes con rol customer y el historial Woo. Guardar ID de origen, direcciones de facturación/envío, documento cuando exista, ítems, importes históricos, moneda, estados y referencia ML. Los invitados se identifican por pedido: no fusionar por nombre ni asignar IDs internos de Gestión como IDs Woo. Consentimiento comercial desconocido salvo evidencia verificable; no enviar ni exportar campañas.
+3. Publicar cada sincronización completa de forma atómica; conservar última copia válida ante error. Mostrar fecha, cobertura y error sin datos personales en logs. Actualizar pedidos modificados con solapamiento y reconstrucción completa semanal para bajas. Consultas nunca llaman a Woo. El servicio sólo hace GET y tiene exclusión mutua.
+4. Buscador compartido con nombre, email, teléfono, documento, número/ID de pedido y SKU; datos históricos, origen y enlaces a la tienda. Adaptar GET clientes de POS/Taller al índice; agregar acceso al directorio desde todos los módulos. El modo operativo y las facturas permanecen pendientes: seleccionar una ficha no autoriza cobros ni crea usuarios WordPress.
+5. Probar autenticación/revocación, búsqueda normalizada, homónimos, invitados, espejo ML, límites, fallo de sincronización y publicación atómica. Verificar interfaz real y responsive, respaldo y reversión por archivos. Mantener documentación y memoria.
+
+Métricas: Panel de ventas 1.1.0 usa importes de línea netos de descuentos/devoluciones, sin impuestos/envío, moneda separada y fecha del pedido original; clasifica marca/modelo/categorías desde catálogo actual. El índice conserva las relaciones, pero no sustituye aún ese informe. Carritos Abandonados 1.3.3 usa tabla propia y necesita captura en Woo. Centro de operaciones 0.8.0 también consulta leads propios del chat: no equivalen a cuentas de cliente.
+
+Pendientes operativos separados: paridad comercial completa del catálogo, guardar borrador/cotización, checkout web con idempotencia, ARCA/certificados, OAuth ML exclusivo y registro de consentimientos/bajas para campañas. No retirar plugins originales durante esta etapa.

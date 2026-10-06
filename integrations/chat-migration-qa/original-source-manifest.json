@@ -1,0 +1,217 @@
+[
+  {
+    "path": "requirements.txt",
+    "sha256": "393a3e7cc2192c27e8b2afcbdc4571c99f6857ace536705c7d8bb9b70b44e969",
+    "bytes": 117
+  },
+  {
+    "path": "Dockerfile",
+    "sha256": "616f7ee8c406805d85a0d9f188129a3a2ee6aa5563df7e0edd67707be474a07c",
+    "bytes": 449
+  },
+  {
+    "path": "README.md",
+    "sha256": "ce639c297bc08f97d1dfbbfe8f0438f931841ba49ac219ed21ba39a9fb323ae5",
+    "bytes": 6255
+  },
+  {
+    "path": "docker-compose.yml",
+    "sha256": "ee7f14a884000654fe1edc7e34681a6e5f7d4591bd59893918b11862abdd8965",
+    "bytes": 1729
+  },
+  {
+    "path": "docker-compose.override.yml",
+    "sha256": "6cb48f199ca2310af168f373eae751e799a90f551e000d6da912e18a5a59ea55",
+    "bytes": 1689
+  },
+  {
+    "path": "app/tire_filter.py",
+    "sha256": "7658ece66b65b4be1d3c8c6f7ef4bd26930e3ec31a86f53c43ba78c81d2ba948",
+    "bytes": 3286
+  },
+  {
+    "path": "app/commercial_policy.py",
+    "sha256": "e6a98e54867f917e266bb1d56cfab560712b3b1f3556270895b9b6e1deda23d3",
+    "bytes": 3542
+  },
+  {
+    "path": "app/routing.py",
+    "sha256": "0c55823734ff1a64d49e70da7429b5a9cab3f348f0911db10daa1133c3429b2a",
+    "bytes": 10729
+  },
+  {
+    "path": "app/inquiry_flow.py",
+    "sha256": "9e7b79bf0f7658fb5a8d4ad95cbf0a6a03903bfb00092a86c053b84d46a63bf9",
+    "bytes": 27303
+  },
+  {
+    "path": "app/learning_console.py",
+    "sha256": "ff8bb3fc7b3b7d00c33148f2364ecfe45d471d7928e43ffde66748a4d2a871c9",
+    "bytes": 3164
+  },
+  {
+    "path": "app/handoff_contact.py",
+    "sha256": "e342384ebfee563fc4bff9feb6b75e0a912de1d6c7c8ae479c774f549645e4d7",
+    "bytes": 6446
+  },
+  {
+    "path": "app/learning.py",
+    "sha256": "3dddffba4561a445432d12d0bda9977a076e4b2cbe1afc4ad9e8855718119ebc",
+    "bytes": 6860
+  },
+  {
+    "path": "app/prompting.py",
+    "sha256": "6eec33707f8e7a32fe96380417887511819435d241dc4c0b5f778864dcab3fd0",
+    "bytes": 3247
+  },
+  {
+    "path": "app/order_flow.py",
+    "sha256": "6d7c8a5fabdc80553ff758b453ebd572b5c6c19fadd5a2663f6619a85e538393",
+    "bytes": 7896
+  },
+  {
+    "path": "app/shipping_flow.py",
+    "sha256": "0ed0a26cc71ba4a73b5c85975c8c201fedbcd45d4985ebd50f8e08427e052423",
+    "bytes": 4126
+  },
+  {
+    "path": "app/catalog_exporter.py",
+    "sha256": "19b4289d00b2200d8009e1918d756a7a045fd7d32e01b6540261ee2248c7fd07",
+    "bytes": 5826
+  },
+  {
+    "path": "app/budget_amounts.py",
+    "sha256": "f42a87ad61bb354356dec4c5d7aaa726c8208dbfd2e7a3419806229b399b5826",
+    "bytes": 5286
+  },
+  {
+    "path": "app/catalog_words.py",
+    "sha256": "9c8b0cb7d661af56a6f97cbeb81732a1502a88ce1f0ae909e41ee6367fcb93ac",
+    "bytes": 3747
+  },
+  {
+    "path": "app/storage.py",
+    "sha256": "55c13bd142e9a1cedec851b0be5c07857b06645d5fc545d282a531aedc0489eb",
+    "bytes": 13779
+  },
+  {
+    "path": "app/availability.py",
+    "sha256": "1695ce5a61ce4f9d92b471b6905e0a6f85d37ecb63be270465ad8cc35f46dfc9",
+    "bytes": 4658
+  },
+  {
+    "path": "app/budget_size.py",
+    "sha256": "6bc61eb06b6bc76a533bf0078208b20f5c9e994a5c030f9f2618507d4c9d31e2",
+    "bytes": 5240
+  },
+  {
+    "path": "app/tire_context.py",
+    "sha256": "86f6f523d951ca1e53862248bb2e7913a7db0f6c360e255d705f15d8de7849b1",
+    "bytes": 4626
+  },
+  {
+    "path": "app/catalog_spelling.py",
+    "sha256": "e58922fc798d4b0dcfba177e864e6f08dca8beff7b8285ff1a1404c11097c5a9",
+    "bytes": 5950
+  },
+  {
+    "path": "app/product_description.py",
+    "sha256": "4961ddf6d82f78f13a4349c4cd7962588378bff5b1a39456ce00f22d299176b7",
+    "bytes": 2081
+  },
+  {
+    "path": "app/catalog_stock.py",
+    "sha256": "a89d6743a79805cd0c58ee44306efdeaf6ec0138b20c23d210e913fcad4f2313",
+    "bytes": 838
+  },
+  {
+    "path": "app/queueing.py",
+    "sha256": "b26fe28cb8bc973c29de3a4efb14cb316acce1c4d606a0c1cea9c84783bef6b5",
+    "bytes": 1933
+  },
+  {
+    "path": "app/clients.py",
+    "sha256": "334ea05045d3e7dde39ff28f4b154d28e3f2acfc23f899c8837708e2a4edee18",
+    "bytes": 17084
+  },
+  {
+    "path": "app/ai.py",
+    "sha256": "229eb0a1ce714ef8bdde9661ca754f854b50d31cf3003a15b8baab464260cccd",
+    "bytes": 28777
+  },
+  {
+    "path": "app/__init__.py",
+    "sha256": "94fe9d5bf87f1f0db778aaff38ed3c52ff8e002c346e30b5e8ddaa784c93ab44",
+    "bytes": 72
+  },
+  {
+    "path": "app/config.py",
+    "sha256": "0cd7d03b00f47b439d267853ef57832475f6f03c34b472ab31c6975b0f5a7163",
+    "bytes": 5052
+  },
+  {
+    "path": "app/catalog_source.py",
+    "sha256": "a994e6bf239f5f2d91bd7e06859b7379b6d0a472bb00410ed875e17496b47f66",
+    "bytes": 733
+  },
+  {
+    "path": "app/order_status.py",
+    "sha256": "fee520749eae9052ea71882f365912a7e87afc2c8b76cfdbde2ec424b34421ff",
+    "bytes": 1855
+  },
+  {
+    "path": "app/budget_flow.py",
+    "sha256": "ddc6bff09f8361b0c30909f295d3f39e3637028d4c9674e819d38c5e3a550426",
+    "bytes": 12962
+  },
+  {
+    "path": "app/worker.py",
+    "sha256": "86164e94986e1ba05e2de07ac65c3f48ea3df1a91f20afb133708810c97c9b34",
+    "bytes": 17947
+  },
+  {
+    "path": "app/main.py",
+    "sha256": "ee3df81e29384b45d102b91f8e7a035a6796e080d15896036728396df675b668",
+    "bytes": 17550
+  },
+  {
+    "path": "app/query_spelling.py",
+    "sha256": "69162c4d53122d7637063c217dfdb994a87c03f0f50fe12490d7b218b56b5d8f",
+    "bytes": 2227
+  },
+  {
+    "path": "app/tire_flow.py",
+    "sha256": "24b0650eddbb70c51cc9708e9664fe34615aae2a5bef34d5343434e19bc6f9c2",
+    "bytes": 2732
+  },
+  {
+    "path": "app/catalog_flow.py",
+    "sha256": "78b13fbabb3df6e8b56dcde1bd8adcf48c6737f473fd4c5fbd7329b22eb9a06c",
+    "bytes": 29863
+  },
+  {
+    "path": "app/catalog_sqlite.py",
+    "sha256": "330f02be1913ca5fc7485eb21a2994fe60e84fe0c053c6d05a5cd11b7df047f8",
+    "bytes": 12593
+  },
+  {
+    "path": "app/service_flow.py",
+    "sha256": "e7d2299083034830f1f9a6c379c9857414ff19c9f5e75edb39088dd2d2261084",
+    "bytes": 4112
+  },
+  {
+    "path": "app/business_info.py",
+    "sha256": "ce5ff9fb23a6c7b998bd51025de508810cc071b19793fc0ec715b0f5df1a48ec",
+    "bytes": 10050
+  },
+  {
+    "path": "app/security.py",
+    "sha256": "b7160073e9d279a2456bbeb95bd46580efceff656348f70054f0eb7c17db66e6",
+    "bytes": 1653
+  },
+  {
+    "path": "tests/test_core.py",
+    "sha256": "81a47e49eb39ed37b78ce0a120d238c336acf595319b51d38b470df91adbea2b",
+    "bytes": 3428
+  }
+]

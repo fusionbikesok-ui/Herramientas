@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="qa-csrf" content="__CSRF__">
+  <title>Chat · Prueba privada | Fusion Bikes</title>
+  <link rel="stylesheet" href="/qa/assets/theme.css"><link rel="stylesheet" href="/qa/assets/preview.css">
+  <script src="/qa/assets/preview.js" defer></script>
+</head>
+<body>
+  <header><div><p class="eyebrow">FUSION BIKES · HERRAMIENTAS</p><h1>Probá la atención del chat</h1></div><span class="badge">Prueba privada</span></header>
+  <p class="intro">Escribí como cliente y respondé como asesor. Los mensajes son de prueba y el bot usa respuestas simuladas.</p>
+  <div class="notice">La tienda sigue atendiendo con el chat actual. Esta prueba no envía mensajes a clientes ni a WhatsApp.</div>
+  <main>
+    <section aria-labelledby="visitor-title">
+      <div class="section-head"><div><p class="eyebrow">VISTA DEL CLIENTE</p><h2 id="visitor-title">Tu consulta</h2></div><button id="new-chat" class="secondary" type="button">Nueva prueba</button></div>
+      <form id="contact-form"><label>Nombre de prueba<input id="customer-name" name="name" maxlength="100" autocomplete="off" value="Cliente de prueba"></label><label>Teléfono de prueba<input id="customer-phone" name="phone" type="tel" maxlength="30" autocomplete="off" value="541123456789" required></label><button type="submit">Iniciar conversación</button></form>
+      <p id="customer-state" class="state" role="status">Iniciá una conversación para probar el chat.</p>
+      <ol id="customer-messages" class="messages" aria-label="Mensajes del cliente"></ol>
+      <form id="customer-form"><label>Tu mensaje<textarea id="customer-text" maxlength="4000" rows="2" placeholder="Hola, quiero consultar por una bicicleta" required disabled></textarea></label><button id="customer-send" type="submit" disabled>Enviar mensaje</button></form>
+      <p id="customer-error" class="error" role="alert"></p><button id="customer-retry" type="button" class="secondary" hidden>Reintentar envío</button>
+    </section>
+    <section aria-labelledby="operator-title">
+      <div class="section-head"><div><p class="eyebrow">VISTA DEL ASESOR</p><h2 id="operator-title">Atención</h2></div><button id="refresh" class="secondary" type="button">Actualizar</button></div>
+      <label>Conversaciones<select id="inbox" aria-label="Seleccionar conversación"><option value="">Cargando conversaciones…</option></select></label>
+      <p id="operator-state" class="state" role="status">Buscando conversaciones de prueba…</p>
+      <div class="actions"><button id="take" type="button" disabled>Tomar conversación</button><button id="release" class="secondary" type="button" disabled>Devolver al bot</button><button id="archive" class="secondary" type="button" disabled>Archivar</button></div>
+      <ol id="operator-messages" class="messages" aria-label="Mensajes del asesor"></ol>
+      <form id="operator-form"><label>Respuesta del asesor<textarea id="operator-text" maxlength="4000" rows="2" placeholder="Tomá la conversación para responder" required disabled></textarea></label><button id="operator-send" type="submit" disabled>Enviar respuesta</button></form>
+      <p id="operator-error" class="error" role="alert"></p><button id="operator-retry" type="button" class="secondary" hidden>Reintentar acción</button>
+    </section>
+  </main>
+  <footer>Para ensayar una derivación, escribí «quiero hablar con una persona». Cuando tomás la conversación, el bot deja de responder.</footer>
+</body></html>
