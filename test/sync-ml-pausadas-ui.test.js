@@ -119,4 +119,10 @@ describe('Sincronización ML rediseñada', () => {
     expect(sync).toContain('d.motivo_pendiente');
     expect(sync).toContain('hasta que se pueda reactivar');
   });
+  it('muestra en "Para resolver" las correcciones de identidad encoladas sin ejecutar', () => {
+    expect(sync).toContain('D.identidad_encoladas');
+    expect(sync).toContain("k:'idq'");
+    expect(sync).toContain('Llevan más de 2 horas esperando');
+    expect(sync).toContain('fuera del canario');
+  });
 });

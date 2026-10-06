@@ -24,6 +24,7 @@ import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
+import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
 import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
@@ -3186,6 +3187,7 @@ export function syncRouter(db, cfg) {
       reactivables,
       // Pausadas con stock en Woo (cualquier causa) y SKUs en solo_local: visibles en Sincronización.
       pausadas_con_stock: (() => { try { return listarPausadasConStock(db).resumen; } catch (_) { return null; } })(),
+      identidad_encoladas: (() => { try { return encoladasSinEjecutar(db); } catch (_) { return null; } })(),
       solo_local: (() => { try { return resumenSoloLocal(db); } catch (_) { return null; } })(),
       pedidos: {
         total: pedidos.total ?? 0,

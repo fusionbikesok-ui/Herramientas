@@ -84,6 +84,24 @@ describe('Pausadas con stock en Woo: endpoints', () => {
     expect(r.body.solo_local.skus).toBe(1);
   });
 
+  it('dashboard avisa de las correcciones de identidad encoladas sin ejecutar hace más de 2 h', async () => {
+    const antes = await request(app).get('/api/sync/dashboard');
+    expect(antes.body.identidad_encoladas).toMatchObject({ n: 0, fuera_de_canario: 0 });
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,available_quantity,atributos_json,actualizado_en)
+      VALUES ('MLA77|','MLA77','','P','active','FB-A',1,1,'[]','2026-09-01T00:00:00.000Z')`).run();
+    db.prepare(`INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (77,'W','FB-B','simple',1,'2026-09-01T00:00:00.000Z')`).run();
+    const prod = db.prepare(`INSERT INTO productos_fusion (primary_woo_id,nombre_canonico,estado,creado_en,actualizado_en) VALUES (77,'W','activo','2026-09-01','2026-09-01')`).run().lastInsertRowid;
+    const caso = db.prepare(`INSERT INTO identidad_casos (direccion,ml_key,producto_id,clasificacion,estado,severidad,evidencia_fingerprint,expected_version,primera_deteccion_en,ultima_deteccion_en)
+      VALUES ('ml_fusion','MLA77|',?,'t','pendiente','normal','fp',1,'2026-09-01','2026-09-01')`).run(prod).lastInsertRowid;
+    const dec = db.prepare(`INSERT INTO identidad_decisiones (caso_id,producto_id,tipo,operation_id,expected_version,evidencia_fingerprint,decidida_por,decidida_en)
+      VALUES (?,?,'vincular','dd',1,'fp','t','2026-09-01')`).run(caso, prod).lastInsertRowid;
+    db.prepare(`INSERT INTO identidad_operaciones (operation_id,tipo,caso_id,decision_id,producto_id,ml_key,sku_anterior,sku_objetivo,stock_objetivo,estado,iniciada_en,actualizada_en)
+      VALUES ('oo','correccion_sku',?,?,?,'MLA77|','FB-A','FB-B',1,'pendiente','2026-09-01T00:00:00.000Z','2026-09-01T00:00:00.000Z')`).run(caso, dec, prod);
+    const r = await request(app).get('/api/sync/dashboard');
+    expect(r.body.identidad_encoladas.n).toBe(1);
+    expect(r.body.identidad_encoladas.mas_vieja_horas).toBeGreaterThan(2);
+  });
+
   it('revisar sin reactivar ofrece reactivar si sigue pausada con stock en Woo', async () => {
     sembrar(db, 1);
     const id = db.prepare(`INSERT INTO ml_publicacion_cambios (clave,item_id,sku,campo,valor_anterior,valor_nuevo,pausada,detectado_en)
