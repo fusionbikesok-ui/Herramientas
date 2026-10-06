@@ -11,6 +11,9 @@
     a { color: inherit; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
     .hidden { display: none !important; }
+    .aviso-retiro { background: rgba(251,191,36,.12); border-bottom: 1px solid rgba(251,191,36,.35); color: var(--amber); padding: .6rem .75rem; font-size: .85rem; line-height: 1.4; }
+    .actions-footer a.btn-action { text-decoration: none; text-align: center; display: block; }
+    .aviso-retiro a { font-weight: 700; text-decoration: underline; }
 
     /* ── Topbar ──────────────────────────────────────────────────────── */
     .topbar { position: sticky; top: 0; z-index: 40; background: rgba(12,15,22,.92); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 .75rem; height: 54px; gap: 8px; }
@@ -110,11 +113,6 @@
     .attr-badge.fail { background: rgba(248,113,113,.12); color: var(--red); }
     .attr-badge.neutral { color: var(--muted); }
 
-    .manual-sku { margin-bottom: 1rem; }
-    .manual-sku-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; outline: none; min-height: var(--tap-min); }
-    .manual-sku-input:focus { border-color: var(--accent); }
-    .manual-sku-btn { width: 100%; background: var(--accent-dim); border: 1px solid var(--accent); color: var(--accent); border-radius: 8px; padding: 8px 12px; font-size: .8rem; font-weight: 600; cursor: pointer; font-family: inherit; min-height: var(--tap-min); margin-top: 6px; }
-    .manual-sku-btn:hover { background: var(--accent); color: #06131C; }
 
     .actions-footer { display: flex; gap: 6px; margin-top: auto; }
     .btn-action { flex: 1; padding: .6rem .75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); font-size: .8rem; font-weight: 600; cursor: pointer; font-family: inherit; min-height: var(--tap-min); transition: border-color .15s, color .15s; }
@@ -162,6 +160,10 @@
     <a href="/herramientas/home/" class="topbar-back">← Home</a>
     <div class="topbar-title">Matcher</div>
     <div></div>
+  </div>
+  <div class="aviso-retiro" role="note">
+    Esta pantalla quedó de <strong>solo lectura</strong>: ya no vincula ni omite publicaciones.
+    Para decidir usá la <a href="/herramientas/bandeja-identidad/">Bandeja de identidad</a>.
   </div>
 
   <div class="filtros-header">
@@ -439,12 +441,6 @@
           </button>
         `;
       }).join('');
-
-      // Actualizar índice local para esta vista filtrada
-      const firstIdx = state.filteredItems[0]?.idx;
-      if (firstIdx !== undefined) {
-        state.currentIndex = state.filteredItems.findIndex(it => it.idx === firstIdx);
-      }
     }
 
     function selectItem(filteredIndex) {
@@ -496,7 +492,7 @@
                         data-sku="${esc(cand.wc_sku)}"
                         title="${esc(cand.wc_nombre)}"
                         aria-label="Seleccionar SKU ${esc(cand.wc_sku)}: ${esc(cand.wc_nombre)}"
-                        onclick="selectCandidate(event, '${esc(cand.wc_sku)}')">
+                        >
                   ${cand.wc_img ? `<img src="${esc(cand.wc_img)}" alt="Foto: ${esc(cand.wc_nombre)}" class="candidate-photo">` : `<div class="candidate-photo" style="display: flex; align-items: center; justify-content: center; color: var(--muted);">—</div>`}
                   <div class="candidate-score ${scoreClass}">${Math.round(cand.score * 100)}%</div>
                   <div class="candidate-sku">${esc(cand.wc_sku)}</div>
@@ -540,78 +536,11 @@
 
         ${candidatesHtml}
 
-        <div class="manual-sku">
-          <input type="text" class="manual-sku-input" id="manual-sku-input" placeholder="O escribí un SKU manual..." aria-label="Ingresar SKU manual">
-          <button class="manual-sku-btn" onclick="selectManualSku()">Usar este SKU</button>
-        </div>
-
         <div class="actions-footer">
           <button class="btn-action" onclick="previousItem()" aria-label="Ir a la publicación anterior (↑/k)">← Ant</button>
-          <button class="btn-action" onclick="skipItem()" aria-label="Omitir esta publicación (s)">Omitir</button>
-          <button class="btn-action primary" onclick="confirmItem()" aria-label="${item.modo === 'verificar' ? 'Confirmar SKU (Enter)' : 'Aprobar SKU (Enter)'}">${item.modo === 'verificar' ? '✓ Confirmar' : 'Aprobar: ' + (item.sku_actual || 'FB-?')} →</button>
+          <a class="btn-action primary" href="/herramientas/bandeja-identidad/">Decidir en la Bandeja de identidad →</a>
         </div>
       `;
-    }
-
-    function selectCandidate(e, sku) {
-      e.preventDefault();
-      const input = document.getElementById('manual-sku-input');
-      input.value = sku;
-      input.focus();
-    }
-
-    function selectManualSku() {
-      const sku = document.getElementById('manual-sku-input').value.trim().toUpperCase();
-      if (!sku) {
-        toast('Ingresá un SKU', 'error');
-        return;
-      }
-      confirmWithSku(sku);
-    }
-
-    async function confirmItem() {
-      const item = state.filteredItems[state.currentIndex];
-      if (!item) return;
-
-      const sku = item.sku_actual || document.getElementById('manual-sku-input').value.trim().toUpperCase();
-      if (!sku) {
-        toast('Seleccioná o ingresá un SKU', 'error');
-        return;
-      }
-
-      await confirmWithSku(sku);
-    }
-
-    async function confirmWithSku(sku) {
-      const item = state.filteredItems[state.currentIndex];
-      if (!item) return;
-
-      const accion = item.modo === 'verificar' ? 'confirmar' : 'asignar';
-      const anterior = state.decisions[item.clave];
-      // Optimista: marcamos y avanzamos sin esperar a ML, pero si la operación no
-      // llega a encolarse revertimos, para no dar por vinculado lo que no lo está.
-      state.decisions[item.clave] = { sku, accion, estado: 'pendiente' };
-      toast(`SKU registrado: ${sku}`, 'pending');
-      nextItem();
-
-      try {
-        await vincularSku(item.clave, sku);
-        state.decisions[item.clave] = { sku, accion, estado: 'encolado' };
-        toast(`✓ ${accion} · ${sku}`, 'ok');
-      } catch (e) {
-        if (anterior) state.decisions[item.clave] = anterior;
-        else delete state.decisions[item.clave];
-        toast(`No se pudo vincular ${sku}: ${e.message}`, 'error');
-      }
-      renderList();
-      updateCounters();
-    }
-
-    function skipItem() {
-      const item = state.filteredItems[state.currentIndex];
-      if (!item) return;
-      state.decisions[item.clave] = { accion: 'omitir' };
-      nextItem();
     }
 
     function previousItem() {
@@ -647,33 +576,7 @@
           e.preventDefault();
           previousItem();
           break;
-        case 'enter':
-          e.preventDefault();
-          confirmItem();
-          break;
-        case 's':
-          e.preventDefault();
-          skipItem();
-          break;
       }
-    }
-
-    // ── API: vincularSku ──────────────────────────────────────────────────────
-    // Contrato: vincularSku(clave, sku) -> Promise<{caso_id}>
-    // Encola la vinculación en Guardia ML; el caso se crea al vuelo si no existía.
-    // Devuelve 202: la escritura en ML la hace el worker, no esta llamada.
-    async function vincularSku(clave, sku) {
-      const res = await fetch('/api/guardia-ml/vincular-clave', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clave, sku })
-      });
-      let data = null;
-      try { data = await res.json(); } catch { /* respuesta sin cuerpo */ }
-      if (!res.ok || data?.ok === false) {
-        throw new Error(data?.error || `HTTP ${res.status}`);
-      }
-      return data;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────

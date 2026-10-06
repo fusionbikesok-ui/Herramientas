@@ -23,7 +23,7 @@ Tomamos de otras herramientas lo siguiente:
 | Dedupe y herramientas de record linkage | Comparación **campo por campo** con la evidencia de cada diferencia. | Un único puntaje sin contexto. |
 | Gmail, Superhuman, Linear | Flujo lineal, avance automático, atajos memorizables, **deshacer en vez de confirmar**, el foco siempre en un lugar predecible. | Atajos que se disparan mientras se escribe. |
 | Label Studio | Cola priorizada, estado visible y quién decidió y cuándo. | Cambiar decisiones anteriores sin avisar. |
-| El matcher actual del legado (`public/matcher/KEYBOARD_SHORTCUTS.md`) | José ya usa `j`/`k`, `Enter` y `s`. Esas teclas se conservan. | — |
+| El matcher actual del legado (`docs/superpowers/archive/matcher/KEYBOARD_SHORTCUTS.md` (archivado)) | José ya usa `j`/`k`, `Enter` y `s`. Esas teclas se conservan. | — |
 
 ## 2. La comparación, que es lo central
 

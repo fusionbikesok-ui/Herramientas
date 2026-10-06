@@ -1,3 +1,7 @@
+> **ARCHIVADO el 2026-10-06 (Fase B).** La pantalla del Matcher quedó de solo lectura: ya no vincula, confirma ni omite, y estos
+> atajos/contrato no existen más en la UI. Lo vigente para decidir una publicación es la **Bandeja de identidad**
+> (`public/bandeja-identidad/`, ver `docs/superpowers/specs/2026-09-24-e3-bandeja-interfaz.md`). Se conserva solo como historia.
+
 # Atajos de teclado del Matcher
 
 ## Navegación por publicaciones
