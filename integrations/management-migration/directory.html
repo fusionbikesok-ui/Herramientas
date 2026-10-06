@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clientes y pedidos · Herramientas</title>
+<link rel="stylesheet" href="/herramientas/lib/theme.css"><link rel="stylesheet" href="/herramientas/lib/components.css">
+<link rel="stylesheet" href="/herramientas/gestion-vps/assets/management.css"><link rel="stylesheet" href="/herramientas/gestion-vps/assets/directory.css">
+<script src="/herramientas/gestion-vps/assets/directory.js" defer></script></head>
+<body class="fm-home"><header class="fm-top"><a class="fm-brand" href="/herramientas/home/">FUSION <span>BIKES</span></a><a class="ui-btn" href="/herramientas/gestion-vps/">← Gestión VPS</a></header>
+<main class="fm-main"><p class="fm-eyebrow">HERRAMIENTAS · DIRECTORIO COMPARTIDO</p><h1>Clientes y pedidos</h1>
+<p class="fm-intro">Consultá la copia local de la tienda, sin cargar una búsqueda en WooCommerce.</p>
+<div id="directory-status" class="ui-card directory-status" role="status">Leyendo estado de la sincronización…</div>
+<form id="directory-search" class="ui-card directory-search"><label>Buscar en<select name="kind" id="directory-kind"><option value="customers">Clientes y compradores invitados</option><option value="orders">Pedidos de la tienda</option></select></label><label class="directory-query">Nombre, email, teléfono, documento, pedido o SKU<input id="directory-query" name="q" type="search" minlength="2" maxlength="160" placeholder="Escribí al menos 2 caracteres" autocomplete="off" required></label><button type="submit" class="ui-btn">Buscar</button></form>
+<p class="directory-hint">Clientes registrados: ficha de WooCommerce. Compradores sin una cuenta vinculada: datos de facturación por pedido, sin fusionar personas por nombre. Los pedidos conservan los importes de la compra. Usá #123 para buscar un pedido exacto.</p>
+<p id="directory-summary" role="status" aria-live="polite">Elegí qué buscar y escribí un dato.</p><section id="directory-results" aria-label="Resultados"></section><nav id="directory-pages" aria-label="Páginas de resultados"></nav>
+<section id="directory-detail" hidden tabindex="-1" aria-label="Detalle del pedido" class="ui-card"></section>
+<p class="fm-footnote">Consulta compartida para POS, Facturador y Taller. Las operaciones siguen en la tienda. El historial de Mercado Libre directo sigue en Gestión de pedidos; sus copias Woo se identifican aquí. El <a href="/herramientas/gestion-vps/ventas/">Panel de ventas</a> calcula las métricas locales con devoluciones por producto, sin duplicar el registro directo de Mercado Libre.</p>
+<p class="fm-footnote">Mailing: tener un email de compra no establece una suscripción. El permiso comercial figura como no verificado; esta pantalla no envía campañas.</p>
+</main></body></html>

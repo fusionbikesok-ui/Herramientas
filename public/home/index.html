@@ -614,8 +614,13 @@ fetch('/api/auth/me').then(function(r) {
      Se muestran sólo a admin y con el estado a la vista — esconderlas es cómo llegamos a tener
      cuatro pantallas construidas que nadie podía alcanzar. */
   var GRUPOS = [
-    { titulo: 'Gestión en el VPS', color: 'control', adminOnly: true, tools: [
-      { tool: 'gestion-vps', href: 'gestion-vps', t: 'Gestión VPS — POS, Facturador y Taller', d: 'Consultá el historial copiado de presupuestos, comprobantes y trabajos. Todavía no se actualiza automáticamente; para operar, usá la web habitual.', tag: 'Presupuestos · Comprobantes · Taller', parcial: 'solo consulta' },
+    { titulo: 'Ventas, informes y etiquetas', color: 'control', adminOnly: true, tools: [
+      { tool: 'gestion-vps', href: 'gestion-vps/pos-web', t: 'Punto de venta · web', d: 'Abrí el POS original para vender, consultar cuotas y cobrar con los pedidos de la tienda.', tag: 'Ventas · Cuotas · Cobros' },
+      { tool: 'gestion-vps', href: 'gestion-vps/facturador-web', t: 'Facturador ARCA · web', d: 'Facturá pedidos y ventas de Mercado Libre desde la web. Historial, correo y WhatsApp.', tag: 'ARCA · Web · Mercado Libre' },
+      { tool: 'gestion-vps', href: 'gestion-vps/ventas', t: 'Panel de ventas · VPS', d: 'Consultá informes, rankings y evolución de ventas con el historial sincronizado en Herramientas.', tag: 'Métricas · Rankings · Exportar' },
+      { tool: 'gestion-vps', href: 'gestion-vps/andreani', t: 'Envíos Andreani · VPS', d: 'Revisá pedidos, destinatarios y medidas. Generá el archivo para las etiquetas de Andreani.', tag: 'Envíos · Bultos · Excel' },
+      { tool: 'pdf-etiquetas', href: 'gestion-vps/corregir-etiquetas', t: 'Corregir etiquetas PDF', d: 'Actualizá peso y medidas de las etiquetas de Andreani. Podés ver, imprimir y descargar el PDF corregido.', tag: 'PDF · Peso y medidas' },
+      { tool: 'gestion-vps', href: 'gestion-vps', t: 'Más herramientas de gestión', d: 'Directorio de clientes y pedidos, copia de consulta del taller y accesos a venta, facturación y logística.', tag: 'Clientes · Pedidos · Taller' },
     ]},
     { titulo: 'Vender y despachar', color: 'ingreso', tools: [
       { tool: 'preparacion', href: 'preparacion', t: 'Preparación de pedidos', d: 'Buscá los productos, escaneá cada unidad, embalá y dejá el pedido listo para despachar.', tag: 'Picking · Embalaje · Evidencia' },
@@ -1151,4 +1156,3 @@ fetch('/api/auth/me').then(function(r) {
 </script>
 </body>
 </html>
-
