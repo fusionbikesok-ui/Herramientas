@@ -644,9 +644,8 @@ fetch('/api/auth/me').then(function(r) {
       // Cobertura de catálogo NO es una herramienta aparte desde el 2026-08-14: se unificó
       // dentro del Matcher como su dirección Woo→ML, y /cobertura sólo redirige ahí. Tenerla
       // como tarjeta propia mandaba a una pantalla que ya no existe por separado.
-      { tool: 'matcher', href: 'matcher', t: 'SKU Matcher y cobertura', d: 'Vinculá cada publicación de ML con su producto de Woo, y mirá qué falta publicar o vincular.', tag: 'Vínculos · Cobertura · ML ↔ Woo' },
+      { tool: 'matcher', href: 'matcher', t: 'Matcher (solo lectura)', d: 'Consulta de vínculos y cobertura entre ML y Woo. Para decidir una publicación usá la Bandeja de identidad.', tag: 'Consulta · ML ↔ Woo' },
       { tool: 'matcher', href: 'bandeja-identidad', t: 'Bandeja de identidad', d: 'Cola de decisión sobre publicaciones de ML: vinculá, omitís o indicá que no existe en el catálogo.', tag: 'Identidad · ML · Vinculación' },
-      { tool: 'auditoria', href: 'auditoria', t: 'Auditoría de publicaciones', d: 'Fotos, videos y salud de cada publicación, con lo que le falta a cada una.', tag: 'Fotos · Video · Salud' },
       { tool: 'config-ml', href: 'config-ml', t: 'Config ML — reservas', d: 'Cuánto stock reservás para el local y qué política sigue cada SKU.', tag: 'Reservas · Política' },
     ]},
     { titulo: 'Posventa', color: 'control', adminOnly: true, tools: [
@@ -789,7 +788,6 @@ fetch('/api/auth/me').then(function(r) {
         peChip(at.requiere_atencion_ml, 'con exceso de fotos', 'crit', '/herramientas/sync-detalle/?cat=requiere_atencion_ml', 'sync-ml'),
         peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
         peChip(d.frenadas, 'pausadas frenadas por precio', 'warn', '/herramientas/sync-ml/#frenadas', 'sync-ml'),
-        peChip(d.vinculos_sospechosos, 'vínculos sospechosos', 'warn', '/herramientas/vinculos/#sospechosos', 'sync-ml'),
         peChip((d.identidad_encoladas || {}).n, 'correcciones de SKU encoladas sin ejecutar (más de 2 h)', 'warn', '/herramientas/sync-ml/', 'sync-ml'),
         peChip(sk.pendientes, 'SKUs decididos que ML no refleja', 'warn', '/herramientas/identidad-productos/', 'matcher'),
         peChip(at.sin_mapeo, 'ventas sin mapear', 'warn', '/herramientas/sync-detalle/?cat=sin_mapeo', 'sync-ml'),
