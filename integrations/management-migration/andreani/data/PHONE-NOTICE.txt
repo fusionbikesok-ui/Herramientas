@@ -1,0 +1,6 @@
+Argentina phone formatting metadata derived from Google libphonenumber.
+Copyright The Libphonenumber Authors.
+Source: https://github.com/google/libphonenumber/blob/master/resources/PhoneNumberMetadata.xml
+Retrieved 2026-09-25. Local modification: geographic code enumeration and extraction
+of three domestic geographic formatting patterns into argentina-phone.json.
+Licensed under the Apache License, Version 2.0; see PHONE-LICENSE.txt.
