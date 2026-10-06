@@ -790,6 +790,7 @@ fetch('/api/auth/me').then(function(r) {
         peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
         peChip(d.frenadas, 'pausadas frenadas por precio', 'warn', '/herramientas/sync-ml/#frenadas', 'sync-ml'),
         peChip(d.vinculos_sospechosos, 'vínculos sospechosos', 'warn', '/herramientas/vinculos/#sospechosos', 'sync-ml'),
+        peChip((d.identidad_encoladas || {}).n, 'correcciones de SKU encoladas sin ejecutar (más de 2 h)', 'warn', '/herramientas/sync-ml/', 'sync-ml'),
         peChip(sk.pendientes, 'SKUs decididos que ML no refleja', 'warn', '/herramientas/identidad-productos/', 'matcher'),
         peChip(at.sin_mapeo, 'ventas sin mapear', 'warn', '/herramientas/sync-detalle/?cat=sin_mapeo', 'sync-ml'),
         peChip(at.remapeo_requerido, 'a re-mapear', 'warn', '/herramientas/sync-detalle/?cat=remapeo_requerido', 'sync-ml')
