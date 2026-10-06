@@ -39,7 +39,7 @@ El 2026-10-05 eso trabó un despliegue y borró de producción una tarjeta del i
 6. **Todo el código va en git.** Lo que vive fuera del repo, como `/opt/fusion-management-migration`, entra al repo
    como módulo (`integrations/…`) o como repositorio propio.
    - Secretos y `.env` quedan fuera, en `.gitignore`.
-7. **Trabajo modular.** Cada área tiene un dueño en `.github/CODEOWNERS`.
+7. **Trabajo modular.** Cada área tiene un responsable de referencia (tabla de abajo; sin `CODEOWNERS` por decisión de José del 2026-10-06).
    - Se tocan solo las rutas del área propia.
    - Si hace falta cambiar algo de otra área, se avisa a su dueño y se hace en un commit separado.
 8. **Archivos compartidos con cuidado.** `server.js`, `db/`, `migrations/`, `public/lib/`, `public/home/`,
@@ -53,9 +53,9 @@ El 2026-10-05 eso trabó un despliegue y borró de producción una tarjeta del i
 10. **Memoria.** Cada uno actualiza solo el módulo de `docs/memory/modules/` de su área. `active.md` recibe una línea
     corta por entrega.
 
-## Áreas y dueños (propuesta, a confirmar por José)
+## Áreas y responsables (guía informal)
 
-| Área | Rutas | Dueño |
+| Área | Rutas | Responsable |
 |---|---|---|
 | ML / Sincronización / Identidad | `routes/sync.js`, `lib/ml*`, `lib/vigia*`, `lib/identidad*`, `public/sync-ml/`, `public/matcher/`, `public/guardia-ml/`, `public/identidad-productos/`, `public/bandeja-identidad/` | José + Claude |
 | Depósito | `public/preparacion/`, `public/recepcion/`, `public/inventario/`, `public/gestion-pedidos/` y sus rutas | José + Claude |
@@ -75,4 +75,3 @@ El 2026-10-05 eso trabó un despliegue y borró de producción una tarjeta del i
    - crear su worktree;
    - versionar `/opt/fusion-management-migration`;
    - decidir qué pasa con la rama `wip/checkout-prod-2026-10-05`, que tiene `openapi/mobile-v1.yaml`.
-5. Crear `.github/CODEOWNERS` con la tabla de arriba, una vez confirmada.
