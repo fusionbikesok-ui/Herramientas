@@ -23,7 +23,7 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 [hidden]{display:none!important}
 
 .wrap{max-width:1180px;margin:0 auto;padding:0 var(--gutter) 120px}
-.crumb{font-size:var(--fs-meta);color:var(--muted);padding-top:.6rem}.crumb a{display:inline-block;padding:.35rem 0}
+.crumb{display:flex;flex-wrap:wrap;align-items:center;gap:0 .1rem;margin-left:-.4rem;font-size:var(--fs-meta);color:var(--muted2);padding-top:.35rem}.crumb a{display:inline-flex;align-items:center;min-height:var(--tap-min);padding:0 .4rem;color:var(--muted)}.crumb a:hover{color:var(--accent)}
 .head{display:flex;flex-wrap:wrap;align-items:flex-end;gap:.5rem 1rem;justify-content:space-between;margin:.25rem 0 1rem}
 .head h1{font-size:var(--fs-titulo);margin:0;font-weight:700}
 .head p{margin:.15rem 0 0;color:var(--muted);font-size:.9rem}
@@ -202,7 +202,7 @@ kbd{font-family:var(--mono);font-size:var(--fs-label);background:var(--surface2)
 <body>
 
 <main class="wrap" id="main">
-  <div class="crumb"><a href="/herramientas/sync-ml/">Sincronización ML</a> / Pausadas con stock</div>
+  <nav class="crumb" aria-label="Navegación"><a href="/herramientas/sync-ml/">&larr; Volver a Sincronización ML</a><span aria-hidden="true">·</span><a href="/herramientas/home/">Inicio</a></nav>
   <div class="head">
     <div>
       <h1>Pausadas con stock en la web</h1>

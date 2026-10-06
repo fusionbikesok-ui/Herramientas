@@ -41,6 +41,12 @@ describe('Pausadas con stock: vista propia (/sync-ml/pausadas)', () => {
     expect(vista).toContain("setAttribute('role','dialog')");
     expect(vista).not.toMatch(/Deshacer/);
   });
+  it('tiene volver a Sincronización ML y a Inicio, con target táctil', () => {
+    expect(vista).toMatch(/<nav class="crumb" aria-label="[^"]+">/);
+    expect(vista).toContain('<a href="/herramientas/sync-ml/">&larr; Volver a Sincronización ML</a>');
+    expect(vista).toContain('<a href="/herramientas/home/">Inicio</a>');
+    expect(vista).toMatch(/\.crumb a\{[^}]*min-height:var\(--tap-min\)/);
+  });
 });
 
 describe('Sincronización ML rediseñada', () => {
