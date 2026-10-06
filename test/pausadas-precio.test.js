@@ -44,7 +44,12 @@ describe('Calcular precio y reactivar: lógica', () => {
         'MLA1|2': { clave: 'MLA1|2', precio: null, motivo: 'Falta el precio de contado: no hay objetivo contra el cual calcular.' },
       });
       expect(p.ok).toBe(false);
-      expect(p.motivos).toEqual(['Falta el precio de contado: no hay objetivo contra el cual calcular.']);
+      expect(p.motivos).toEqual(['Falta el precio de contado: no hay objetivo contra el cual calcular']);
+    });
+    it('el motivo no lleva punto final (la pantalla agrega el suyo: sin «..»)', () => {
+      const p = PP.planItem('A', ['A|', 'A|2'], { 'A|': { clave: 'A|', precio: null, motivo: 'La comisión de ML no deja un precio posible para ese neto.  ' }, 'A|2': { clave: 'A|2', precio: null, motivo: 'Sin dato...' } });
+      expect(p.motivos).toEqual(['La comisión de ML no deja un precio posible para ese neto', 'Sin dato']);
+      expect(p.motivos.join(' · ') + '. No se cambia nada').not.toContain('..');
     });
     it('una clave que /objetivo no devolvió cuenta como sin cálculo', () => {
       expect(PP.planItem('MLA9', ['MLA9|'], {}).ok).toBe(false);

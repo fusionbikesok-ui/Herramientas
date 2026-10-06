@@ -35,7 +35,8 @@
     var sin = filas.filter(function (f) { return !(Number(f.precio) > 0); });
     if (sin.length) {
       var motivos = [];
-      sin.forEach(function (f) { var m = f.motivo || 'No se pudo calcular el precio.'; if (motivos.indexOf(m) < 0) motivos.push(m); });
+      // Sin punto final: la pantalla arma «No se puede calcular: <motivo>. No se cambia nada…» y el motivo de /objetivo ya trae el suyo.
+      sin.forEach(function (f) { var m = String(f.motivo || 'No se pudo calcular el precio').trim().replace(/[.\s]+$/, ''); if (motivos.indexOf(m) < 0) motivos.push(m); });
       return { itemId: itemId, ok: false, motivos: motivos };
     }
     var det = filas.reduce(function (a, f) { return Number(f.precio) > Number(a.precio) ? f : a; }, filas[0]);
