@@ -66,8 +66,8 @@ El 2026-10-05 eso trabó un despliegue y borró de producción una tarjeta del i
 
 ## Transición (pendiente, coordinar con José y Astra)
 
-1. Subir `conteo-confiable` a GitHub. Está 113 commits adelante de `origin`.
-2. Llevar `master` a lo que corre producción, con fast-forward si se puede. Si no, con un merge revisado. Después:
+1. ~~Subir `conteo-confiable` a GitHub.~~ Hecho.
+2. ~~Llevar `master` a lo que corre producción.~~ Hecho el 2026-10-06 (PR #1, merge `1891af6e`; la nota obsoleta de `master` del 26/08 se integró con `-s ours`). Falta:
    - archivar `conteo-confiable`;
    - cambiar el checkout de producción a `master`.
 3. Proteger `master` en GitHub.
