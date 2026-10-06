@@ -153,7 +153,7 @@ cmd_down() {
   limpiar_archivos
   docker image rm fusion-qa-app:local >/dev/null 2>&1 || true
   # No se hace `docker builder prune`: la caché de build es compartida con otros proyectos del VPS
-  # (chatbot, fusion-vision) y no se puede filtrar sólo la de QA. La de QA es chica y acelera el próximo up.
+  # (chatbot y otros) y no se puede filtrar sólo la de QA. La de QA es chica y acelera el próximo up.
   log "QA apagado; snapshot, certificados, secretos y código borrados"
 }
 
