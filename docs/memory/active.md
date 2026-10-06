@@ -13,6 +13,8 @@ Actualizado: 2026-09-20.
 - E0 fue aceptada por decisión de José tras sus verificaciones de DR; conserva su número y no se reabre por una inferencia documental. E1 tiene los tramos 1 y 2 implementados y verificados sólo en infraestructura efímera (`E1_TRAMO=2 npm run test:e1` verde el 2026-09-16); la entrega E1 aún no está aceptada ni desplegada.
 - La App remota `feature/stock-flow-ui` alineó `README.md` y `docs/backend-sync/README.md` en `ac4c48f` y `380640f`; no se publicó build móvil.
 - El VPS `/opt/fusionbikes/herramientas` es producción real y sirve `conteo-confiable`.
+- 2026-10-05: desplegada la Fase A de consolidación (`fix/pausas-con-sentido`, `71833ea6`, ff desde `171bd074`): Vigía sin pausa por catálogo vacío→producto, tope por 24 h, `ml_pausas_log` (migración 119), vista `/sync-ml/pausadas/` con reactivación manual y Sincronización ML rediseñada. Rollback: volver el código a `171bd074` y reiniciar pm2 (DB aditiva). WIP ajeno que estaba sin commitear en el checkout quedó en la rama local `wip/checkout-prod-2026-10-05` (`fdda6518`), dueño a identificar. Su tarjeta de home «Gestión VPS» se restauró en prod con `e733ef6c`; sus docs se rescataron a la memoria; `openapi/mobile-v1.yaml` (quita `IdempotencyKey`) sigue sólo en esa rama, sin decidir.
+- 2026-10-06: desplegada la Fase B (`fix/fase-b-vinculo`, `0a785389`, ff desde `e733ef6c`; HEAD vigente de `conteo-confiable`): Matcher solo lectura, Cobertura/Vínculos/Auditoría de publicaciones retiradas (302), restore con contradicción devuelve stock, alarma de correcciones encoladas/trabadas, validación al encolar. Sin migraciones. Rollback: volver a `e733ef6c` y reiniciar pm2. Backup `data/backup-pre-fase-b-2026-10-06.sqlite`. El WIP de Codex Astra (tarjeta «Corregir etiquetas PDF» y notas de memoria) quedó re-aplicado sin commitear; copia en la rama local `wip/checkout-prod-fase-b` (`f28cc0ee`). Pendiente de José: cancelar 18 ops de identidad (`scripts/identidad-cancelar-noop.mjs`), aplicar 126/127 y la muestra de auto-vincular (`docs/informes/`).
 
 ## Base y cambios preservados
 
@@ -1161,6 +1163,93 @@ una fila `persona`: devuelve `'respetada'`; bajar/promover una primaria cierra l
 (enganchar en la ingestión, se prueba en contenedor aparte).
 
 
+## Revisión del plan de recepción contra el programa E0–E26 (2026-09-21)
+
+Revisión de diseño completa en
+`docs/superpowers/plans/2026-09-21-revision-recepcion-vs-plan-maestro.md`. Motivo: José tiene
+urgencia por lentitud en tres frentes — recibir mercadería, dar de alta productos/variaciones
+nuevas, y la app en general. Encuadre que fijó José: *"esto no tiene que ser total, el plan
+maestro lo iba a tratar, pero hay urgencia inmediata para algunas cosas"*. Hallazgos durables:
+
+- **El alta de productos nuevos no existe en ninguna de las 27 fichas.** Grep de "alta",
+  "producto nuevo", "alias" y "anticipad" sobre `deliveries/`: cero hits relevantes. E2 importa lo
+  existente y no tiene camino de creación; E12 normaliza ("nunca inventar atributos sin
+  evidencia", "no publica en Woo"); E13 publica sólo lotes de E12; E6 no lo menciona. El único
+  lugar donde está especificado es §4.5 del plan de recepción, que lo delega a un "módulo completo
+  de catálogo" **sin número E asignado**. Es un hueco del programa, no un orden de secuencia.
+- **E6 oficial ≠ "Etapa 2" del plan de recepción.** La ficha E6 tiene 6 tablas y su alcance es
+  recepción parcial, putaway y conteos; las palabras *documento, remito, factura y proveedor no
+  figuran en ella*. La Etapa 2 agrega compras, documentos con extracción IA, alias de proveedor,
+  `product_drafts` y `advance_activations` (~11 tablas en 3 esquemas) y **pierde los conteos**.
+  Llamarle E6 subdimensiona ~3x. Por la regla de IDs congelados corresponde número nuevo posterior
+  a E26 con decisión documental, no estirar E6.
+- **La dependencia E3/E4 → recepción es nominal.** E4 es la campaña de 39 SKU y el apagado de
+  escritores de identidad: no condiciona compras, documentos ni alias. E3 aporta un motor de
+  identidad que en el legado **ya existe** (`lib/ingresoMatcher.js`), y **no** aporta la capa
+  proveedor que recepción necesita (alias por proveedor, código de proveedor confirmado). La
+  dependencia dura del E6 canónico es **E5** (el libro append-only), no E3/E4.
+- **El programa no direcciona la lentitud del legado en ningún punto.** Grep de
+  `lent|performance|rendimiento` sobre las 27 fichas: cero. El legado sólo aparece en E14/E15 para
+  archivarlo y apagarlo, ambas al final del DAG. Si la lentitud duele hoy, no hay alivio previsto
+  antes de E14.
+- **E5, E6, E7 y E12 no cumplen `delivery-contract.md` para salir de borrador.** Su única
+  definición de interfaces es del tipo "API v2 de recepción/conteo con leases", que es exactamente
+  la "API supuesta" que el contrato declara bloqueante. Salvo E2, las fichas son todas de
+  exactamente 78 líneas del mismo template. `npm run docs:validate-deliveries` pasa porque chequea
+  presencia de secciones, no profundidad: el gate existe pero no muerde.
+- **Tres decisiones que el plan de recepción declara abiertas en su §7 y nunca cierra:** la
+  fórmula de disponibilidad con anticipado (que además debe conciliar con el invariante del
+  maestro `disponible = existencia - reservas - retenciones`, que **no tiene término de
+  anticipado**); la autoridad entre pedido, remito, factura y conteo físico; y los "22 casos
+  `sin_match`", número que aparece **una sola vez en todo el repo** — en la línea 449 del propio
+  plan, como criterio de salida de sí mismo — con los fixtures que lo respaldarían listados como su
+  propia tarea 1. Hay que re-derivarlo de producción.
+
+**Corrección registrada:** una primera pasada de esta revisión recomendó hacer stock anticipado en
+SQLite para evitar PostgreSQL. Quedó **retirada**: contradice la decisión vigente de que Postgres
+es el destino canónico, con E1 y E2 T1 ya desplegados, y crearía una segunda autoridad que E7
+tendría que apagar.
+
+**Recomendación en tres piezas** (pendiente de decisión de José, nada ejecutado): (1) urgencia
+inmediata sobre el legado — cablear `ingresoMatcher` en backend, alias por proveedor en SQLite y
+cerrar el alta con el `POST /products` faltante; cabe bajo PM-160 porque sumar stock a la variación
+equivocada es pérdida económica; (2) ficha nueva posterior a E26 para alta + alias + anticipado;
+(3) E6 se queda como está, colgada de E5.
+
+### Decisiones de José sobre esa revisión (2026-09-21)
+
+1. **La urgencia sobre el legado SE EJECUTA.** José acepta explícitamente que E7 después descarte
+   ese trabajo, a cambio de alivio inmediato. Alcance autorizado: cablear `lib/ingresoMatcher.js`
+   en backend retirando `matchItem`/`fuzzyMatchItem` del navegador, alias por proveedor en SQLite,
+   y cerrar el alta con el `POST /products` a Woo en borrador que hoy falta. Encaja en PM-160
+   porque sumar stock a la variación equivocada es pérdida económica.
+2. **El número nuevo posterior a E26 queda en suspenso.** José: *"lo vemos, capaz es cuestión que
+   se toca en alguna entrega intermedia"*. No se crea ficha nueva por ahora; queda abierto si el
+   alta/alias/anticipado entra en una entrega existente. **No** significa que E6 los absorba: E6
+   sigue sin documentos, compras ni anticipado.
+3. **La fórmula de disponibilidad con anticipado se cierra después, en el plan maestro.** No
+   bloquea la urgencia del punto 1, que no toca anticipado. **Sí** es prerrequisito de cualquier
+   trabajo de stock anticipado: mientras no esté, el invariante vigente sigue siendo
+   `disponible = existencia - reservas - retenciones`, sin término de anticipado.
+4. **RESUELTA el 2026-09-21: el 22 es real.** Consulta readonly sobre `data/fusion.sqlite`
+   (`SELECT estado_item, COUNT(*) FROM recepcion_items GROUP BY estado_item`): **22 `sin_match`**,
+   42 `aplicado`, 42 `null`, 5 `no_recibido`, 111 ítems totales. El número que sólo existía dentro
+   del plan que lo proponía ahora tiene respaldo, y el criterio de salida del punto 1 es
+   verificable. Nota lateral del mismo query: **0 filas en `error`**, así que cualquier migración
+   de estados históricos de recepción es no-op en producción hoy.
+- 2026-09-23 **E2 T3 tarea 6 cerrada en producción.**
+  - **6a:** la 0019 está aplicada (schema_migrations=19). `catalogo-clasificar-foto.mjs --ejecutar` dejó 3.882 primarias, 124 secundarias y 313 casos (37 `categoria_en_desacuerdo`, 276 `categoria_sin_mapeo`), con 0 modelos con dos primarias.
+  - **6b** (commits `870357fd`, `f5cd79ba`, `fc5614ff`): el proyector clasifica los modelos tocados dentro de un SAVEPOINT en la misma transacción. Un fallo de clasificación va a `log.error` y no deshace la proyección; se recupera volviendo a correr el script de 6a.
+  - **Regla D24:** `categoria_persona_contradicha` se abre sólo si `categoria_canal` CAMBIÓ en esa proyección.
+  - **Candados:** advisory lock de la empresa (compartido en la ingestión, exclusivo en la foto) más uno por modelo, en orden estable.
+  - **Ensayo:** sobre una copia de la base, 300 mensajes reencolados y 192 modelos desclasificados; los reconstruyó exactamente (3.882/4.006) sin errores.
+  - **Despliegue del worker:** 23:11 UTC. Imagen previa para rollback: `fusion-plataforma:antes-6b`.
+  - Suite de plataforma 676/676.
+- 2026-09-24 **DEUDA E2 (hallada por Codex al revisar E3 T3), fuera del corte 1 de E3:**
+  - En la fusión de `plataforma/src/catalogo/decisiones.ts:119-129` (`reconciliarClave`), la cuenta de «quedan publicaciones» incluye representaciones archivadas, así que una variante pendiente puede no archivarse.
+  - Al archivar una variante sólo se cierran `sku_pendiente`/`sku_inexistente_en_woo`. Otros casos abiertos sobre esa variante (conflict, intervention) quedan colgados de una variante archivada.
+  - Hay que resolverlo antes de que E3 encienda el auto-SKU (corte 4).
+
 
 ## Despliegue de reconciliación de preparaciones (2026-09-29)
 
@@ -1168,3 +1257,15 @@ una fila `persona`: devuelve `'respetada'`; bajar/promover una primaria cierra l
 - Vista previa completa en vivo ejecutada el 2026-09-29: 11/11 preparaciones abiertas consultadas, cero errores. ML `2000018214080180` (prep 238) figuraba `cancelled`; las diez órdenes Web abiertas (preps 307, 366, 393, 404, 430, 431, 454, 458, 459, 466) figuraban `enviadoandreani`.
 - Cron habilitado con `PREPARACION_RECONCILIACION_ACTIVA=true`; primer tick 23:58 UTC procesó las 11: prep 238 → `cancelada_sin_retiro_registrado`; las otras diez → `despachada_sin_verificar`. Cero errores, 11 intentos, cero abiertas. Cada transición tiene exactamente un evento; ítems, fotos y eventos anteriores/autores quedaron conservados. PM2 online y `/healthz` 200. Flag permanece activa para corridas acotadas cada 10 minutos.
 - La salida diagnóstica previa imprimió credenciales de autenticación de Woo. No hay evidencia de acceso de terceros; el usuario rotará la clave otro día y decidió que eso no bloquea esta operación. La vista previa y el tick consultaron los pedidos con la credencial vigente sin volver a imprimirla. Pedido 70312 (prep 446) quedó intacto y fuera del lote: sigue completado, con 0 ítems, 2 fotos y 10 eventos; requiere revisión separada de sus fotos/discrepancia de escaneo, sin inventar un escaneo.
+
+## Consolidación de herramientas: hallazgos operativos (2026-10-05)
+
+Fuente: `docs/superpowers/specs/2026-10-03-consolidacion-herramientas.md` (hechos verificados en sólo lectura el 2026-10-03). Decisión: PM-189 (Fases A y B = correcciones del legado; C y D en E3/E4; E en E1/E14).
+
+- **Canario de Identidad trabado:** 1 clave y lote 1 (`lib/identidadProductos.js:1932-1944`); 21 operaciones sin ejecutar desde el 05 y el 12/09 (15 no-op, la 128 mala, 104/126/127/130 reales). No tocar el canario sin decisión de José.
+- **Guardia en `modo=lectura` desde el 03/09:** `/vincular-clave` responde 409; hoy no se vincula a mano por ningún camino. La Bandeja E3 sólo escribe en Postgres (no mueve stock).
+- **Bug latente del Matcher:** confirma sobre `filteredItems[0]` y no sobre la publicación mirada (`public/matcher/index.html:443-447,573,586`); hoy no escribe porque Guardia responde 409. Corrección en la Fase B.
+- **75 publicaciones pausadas con vínculo y stock en Woo** (40 `paused_by_seller`, 16 `out_of_stock,paused_by_seller`, 12 sin `sub_status`, 7 `out_of_stock`) + 22 sin vínculo. El reactivador excluye `paused_by_seller` a propósito; la reactivación de esas es siempre manual. La Fase A está en la rama `fix/pausas-con-sentido` (sin desplegar; la UI de la lista se rediseña antes).
+- **~4.800 mensajes `pending` en `integrations.inbox_messages`** sin consumidor desde el 17–18/09 (corrientes en sombra); José decide en E1 si se consumen o se deja de guardarlos.
+- Bandeja E3 (`fix/integracion-0028`): despliegue en pausa; con la decisión de no llevar su UX al legado se replantea (posiblemente sólo la migración 0028 y correcciones de catálogo).
+

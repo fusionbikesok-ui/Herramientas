@@ -74,6 +74,9 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
 
 - La recepción se procesa por línea; documentos pueden llegar antes, durante o después de la
   mercadería.
+- La extracción de comprobantes de recepción acepta fotos, PDF, CSV, XLSX y XML. Los XML se
+  envían como texto a Gemini (en vez de como adjunto binario), para que los listados que emiten
+  proveedores puedan extraerse y vincularse al número de pedido detectado.
 - Cada línea confirma identidad, cantidad y condición visible, con modo directo, acumulado o unitario.
 - SKU desconocido en Woo queda como físico provisional no vendible hasta catalogación.
 - Devoluciones entran a inspección/no disponible y solo pasan a vendible tras aprobación.
@@ -83,6 +86,35 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
 - No se lleva a cero lo no contado sin confirmación explícita.
 - Objetivo E17: el conteo offline conservará eventos cifrados hasta siete días, reproducirá en orden
   y se detendrá ante conflictos incompatibles; no usará last-write-wins.
+
+## Estado real del matcher y del alta en recepción (verificado 2026-09-21)
+
+Verificado leyendo el código, no la documentación. Contradice lo que sugieren las fichas:
+
+- **El matching automático de recepción corre entero en el navegador.**
+  `public/recepcion/index.html:608-644`: `matchItem` usa SKU exacto contra `codigo_proveedor` y,
+  si falla, `fuzzyMatchItem`, que cuenta substrings de palabras >2 caracteres sobre el catálogo
+  completo y acepta con `mejorScore >= 2`. Sin IDF, sin atributos, sin desempate entre hermanos de
+  variación, sin confianza. **Ningún test lo cubre.** El backend (`routes/recepciones.js`) recibe
+  `id_woo` ya resuelto y nunca matchea.
+- **`lib/ingresoMatcher.js` existe, está probado y está huérfano.** 168 líneas con TF-IDF,
+  atributos estructurados, contradicción de color/talle y detección de empate entre hermanos;
+  devuelve confianza y razones. 252 líneas de test en `test/ingreso-matcher.test.js`. Su docblock
+  dice que reemplaza el `score >= 2` del prototipo y fue escrito contra el incidente real de los
+  talles 41/43/45 (todo el stock a una sola variación). **Ninguna ruta Express lo importa.**
+- **No existe tabla de alias por proveedor.** `recepcion_items.codigo_proveedor` se guarda y jamás
+  se relee, así que ninguna corrección manual se reutiliza. `mapeo_fusion` es de otro dominio y no
+  tiene columna proveedor.
+- **El alta de productos está a medio cablear.** `routes/nuevosProductos.js` analiza con IA y
+  devuelve una ficha, pero no hace `POST /products` a Woo. `estado_item='pendiente_creacion'` y
+  `ficha_json` existen en el esquema y el front de recepción no los usa nunca. El alta real es
+  100 % manual.
+- **XLSX no está soportado pese a lo que dice este módulo más arriba.** No hay parser de Excel en
+  el repo; el front lo mandaría como binario a Gemini. PDF e imagen van por `inline_data`;
+  CSV/XML/TXT por la rama de texto.
+- `cargarCatalogo()` (`public/recepcion/index.html:396`) baja el catálogo completo al navegador y
+  `fuzzyMatchItem` lo barre entero por cada línea. Mover el matching al backend elimina ambas
+  cosas.
 
 ## Integraciones y excepciones: objetivo E11–E22
 
@@ -135,8 +167,14 @@ aplicables, conservando sus diferencias históricas. La sesión quedó sin filas
 - Cada corrida consulta como máximo 50 pedidos y no se solapa por conexión. La simulación
   `scripts/preview-preparacion-reconciliacion.mjs` informa IDs/estados sin mutar preparaciones.
   El cron requiere `PREPARACION_RECONCILIACION_ACTIVA=true` para habilitarse después de un
-  respaldo verificado y de revisar la vista previa. La reconciliación y el cambio de base de
-  producción no se han ejecutado; requieren el paso operativo separado.
+  respaldo verificado y de revisar la vista previa. Las migraciones 115 y 116 quedaron aplicadas
+  en producción el 2026-09-29 tras respaldo verificado. Vista previa viva: 11 preparaciones abiertas
+  (10 Web `enviadoandreani`, 1 ML `cancelled`), cero errores. El primer tick a las 23:58 UTC cerró
+  el lote: diez `despachada_sin_verificar`, una `cancelada_sin_retiro_registrado`, cero errores;
+  quedó exactamente un evento de transición por prep, con ítems, fotos y auditoría previos intactos.
+  Cron activo cada 10 minutos, bandera `PREPARACION_RECONCILIACION_ACTIVA=true`, PM2 online y
+  `/healthz` 200. La vista previa y la corrida usaron la credencial Woo vigente; la rotación
+  preventiva acordada por el usuario para otro día no bloquea esta operación.
 
 - Movimientos y auditoría se conservan indefinidamente.
 - Fotos operativas se conservan 180 días; reclamos, incidentes, garantías o auditorías activas suspenden la purga.
