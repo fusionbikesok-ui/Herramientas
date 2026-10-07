@@ -21,7 +21,7 @@ import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVe
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
+import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, esOmitir, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
@@ -735,8 +735,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const clavesSinCobertura = [];
   const clavesBloqueadas = [];
   for (const item of ov.items) {
+    // Fase C R5: en activo, un link de pago (`omitir`) no se sincroniza ni retiene la venta.
+    if (modoProteccion() === 'activo' && esOmitir(db, item.clave)) continue;
     const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
-    const cubiertaPorVinculo = !!skuVinculado && !!buscarEnCache(db, skuVinculado) && esClaveCubierta(db, item.clave);
+    const cubiertaPorVinculo = !!skuVinculado && !!buscarEnCache(db, skuVinculado) && claveCubiertaParaVenta(db, item.clave);
     // Decisión del usuario (2026-09-05). Esta guarda y el fallback anti-sobreventa de más
     // abajo (~línea 700) venían del commit base conflictivo y se contradecían: la guarda
     // retenía la orden entera antes de que el fallback pudiera usar el `seller_sku` que trae
@@ -755,13 +757,13 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     // GUARDIA: verificar también si la clave está bloqueada (seller_sku divergente o sin
     // resolver). Esto NO lo levanta la cobertura por seller_sku: una clave que Guardia marcó
     // como divergente se retiene igual, porque ahí el seller_sku es justamente el dato en duda.
-    if (claveBloqueadaGuardia(db, item.clave)) clavesBloqueadas.push(item.clave);
+    if (claveFrenadaParaVenta(db, item.clave)) clavesBloqueadas.push(item.clave);
   }
   if (clavesSinCobertura.length || clavesBloqueadas.length) {
     retenerPedidoMl(db, { orderId, items, claves: [...new Set([...clavesSinCobertura, ...clavesBloqueadas])] });
     const motivos = [];
     if (clavesSinCobertura.length) motivos.push(`sin vínculo exacto (${clavesSinCobertura.join(', ')})`);
-    if (clavesBloqueadas.length) motivos.push(`bloqueada por Guardia (${clavesBloqueadas.join(', ')})`);
+    if (clavesBloqueadas.length) motivos.push(`${modoProteccion() === 'activo' ? 'frenada por Identidad' : 'bloqueada por Guardia'} (${clavesBloqueadas.join(', ')})`);
     logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'retenido_guardia_ml', error: motivos.join('; ') });
     return;
   }
