@@ -7,6 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "vitest run",
+    "test:migration": "node --test --test-concurrency=1 integrations/management-migration/*.test.mjs integrations/management-migration/*.test.cjs",
+    "test:all": "npm test && npm run test:migration",
     "verify:mobile-contract": "node scripts/verify-mobile-contract.mjs",
     "docs:generate-deliveries": "node scripts/generate-deliveries.mjs",
     "docs:validate-deliveries": "node scripts/validate-deliveries.mjs",

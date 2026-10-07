@@ -336,3 +336,12 @@ Cierre POS 2026-10-06: respaldo diario privado ampliado con snapshot consistente
 
 
 - 2026-10-06: Entrega manual recuperada en facturador VPS: email con PDF adjunto mediante SMTP existente (TLS verificado, confirmación de destinatario) y WhatsApp wa.me con enlace PDF siete días. Módulo Node delivery.mjs; persistencia privada delivery.sqlite, UUID/exclusión por comprobante/destinatario entre operadores, resultado incierto sin reintento automático. Solo descarga por token aleatorio expirable es pública; email/share/estado requieren administrador y escrituras Origin/CSRF. PDF nativo vía GET firmado, WordPress conserva bloqueo de correo/red genéricos. Backup fiscal incluye snapshot entrega/configuración SMTP privada. Validación funcional sin comunicaciones a clientes; entrega real de correo no probada. Contratos y rollback: integrations/management-migration/README-DELIVERY.md. Master Control y emisión ARCA sin cambios.
+
+## Mensajería profesional (2026-10-07)
+
+- Nueva bandeja `/herramientas/mensajeria/` en Node con sesión existente; conversaciones y adjuntos privados en PostgreSQL del bot. Proxy HMAC independiente y cola durable `outbox`; migraciones aditivas. Backup/rollback y contrato: `integrations/mensajeria/README.md`.
+- José supervisión; Santi/Miguel/Fabri agentes; Matías consulta. Overrides propios `mensajeria_roles` prevalecen sobre admin global. Otros permisos conservados.
+- Chat web y captura de WhatsApp conservados; contexto web relacionado por teléfono cuando llega un chat de WhatsApp. POS/ARCA y plugin oficial de Meta no se migran ni modifican.
+- Coexistencia de ambos números y publicación Meta pendientes con teléfonos. `INBOX_CONNECTED_NUMBER_IDS` vacío: sin envíos desde la nueva bandeja. Controles de bot independientes conservados.
+
+- Publicación verificada el 2026-10-07: Home abre la bandeja con sesión real; rol de Matías consulta; API/worker/outbox operativos; ambos números permanecen pendientes y sin emisión. Respaldo de software/configuración y bases en `/opt/fusionbikes/backups/mensajeria-20261007`.
