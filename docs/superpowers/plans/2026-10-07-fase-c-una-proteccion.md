@@ -44,24 +44,24 @@ afectados. La suite completa no hace falta salvo que José la pida.
   - `intervencion` da 0;
   - en modo sombra el resultado no cambia respecto de hoy.
 
-## Paso 3. Casos `sin_vinculo` (R4) y sync de claves sin decisión
+## Paso 3. R4 sobre los casos de la auditoría y sync de claves sin decisión
 
 - **Archivos:**
-  - `lib/identidadProductos.js`: alta y cierre de caso `sin_vinculo`;
+  - `lib/identidadProductos.js`: `upsertCaso` baja la severidad por R2 (sin clase nueva);
   - `routes/matcher.js`, después de `autoVincularPorSellerSku`;
   - `routes/sync.js` (`_syncWcToMl`);
   - `migrations/120_fase_c_identidad.sql`;
   - los tests.
-- **Después del autovínculo,** cada publicación activa sin decisión y fuera de `errores_descartados` abre o mantiene
-  un caso `sin_vinculo`:
-  - severidad `urgente`;
-  - motivo: `sin_sku`, `sku_inexistente`, `sku_ambiguo` o `contradiccion_atributos`.
-- **Cierre:** el caso se cierra solo cuando aparece una decisión (`asignar`, `confirmar` u `omitir`).
-- **En `activo`,** `_syncWcToMl` manda `available_quantity=0` a las claves con caso `sin_vinculo` abierto y cantidad
-  ML mayor que 0. Usa el mismo camino de escritura y el mismo log que el resto. No pausa.
+- **Los casos ya existen:** `auditarIdentidadProductos` (`lib/identidadProductos.js:509`, llamado en
+  `routes/matcher.js:117` después del autovínculo) abre y reclasifica un caso por cada publicación activa con stock,
+  incluidas las sin decisión. No se crea una clase nueva (ajuste del 2026-10-07, por el UNIQUE `(direccion, ml_key)`).
+- **En `activo`,** `_syncWcToMl` manda `available_quantity=0` a las claves activas sin decisión con caso abierto
+  (`urgente`, `tomado`, `pendiente` o `intervencion`) de clasificación `sku_ausente`, `sku_vacio`, `sku_inexistente`,
+  `sku_no_unico` o `contradiccion_titulo`, y cantidad ML mayor que 0. Usa el mismo camino de escritura y el mismo log
+  que el resto. No pausa.
 - **Migración 120:**
   - índice `identidad_casos(ml_key, estado)`;
-  - `sin_vinculo`, si la clasificación tiene CHECK (hoy es TEXT libre: verificarlo);
+  - `clasificacion` es TEXT libre: no hay CHECK que ampliar;
   - cerrar los casos de `guardia_ml_casos` abiertos cuya clave tiene decisión `omitir`, con
     `estado='resuelto'`, `bloquea_sync=0` y motivo `omitida_link_pago` en el evento (R1).
 - **Aceptación:**
