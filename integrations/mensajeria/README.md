@@ -41,6 +41,12 @@ control independiente y el apagado general. Los ensayos usan datos y transporte 
 - Bot: `/opt/fusion-chatbot/app/inbox*.py` y `outbox_worker.py`.
 - Proxy exclusivo firmado mediante `INBOX_PROXY_SECRET`, guardado sólo en los `.env` del VPS.
   Sesión, permisos vigentes, Origin, CSRF, nonce anti-replay y revisión del chat son obligatorios.
+- Origin de escritura: `INBOX_PUBLIC_ORIGIN` (por defecto `https://herramientas.fusionbikes.com.ar`).
+  En QA o local hay que definirlo con la URL del entorno (QA lo trae en `qa.env`); si no, toda
+  escritura responde 403 `csrf`.
+- Un rol guardado en `mensajeria_roles` manda sobre `is_admin` (a propósito: un admin global puede ser
+  solo lector o agente). Quitarle el rol a un admin lo deja sin Mensajería; la guarda `last_supervisor`
+  impide quedarse sin ningún supervisor.
 - PostgreSQL conserva las conversaciones; migraciones aditivas, cola durable, notas, auditoría
   y adjuntos privados. SQLite de Herramientas guarda únicamente los roles del módulo.
 - Docker servicios `api`, `worker`, `outbox`; imagen `fusion-chatbot-mensajeria:20261007`.
