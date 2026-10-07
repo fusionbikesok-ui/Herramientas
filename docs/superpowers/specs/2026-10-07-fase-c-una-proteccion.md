@@ -54,13 +54,16 @@ Una publicación **sin decisión** se vincula sola si cumple todo esto:
 
 El GTIN **no veta**, por R2. Es la regla actual de `autoVincularPorSellerSku`, que ya no mira el GTIN. Se mantiene su
 veto por contradicción de título o atributos (`contradiccionDeClave`: color, talle, rodado), porque para vincular sin
-una persona conviene ser conservador. Una publicación vetada así abre un caso `sin_vinculo` (R4).
+una persona conviene ser conservador. Una publicación vetada así queda con su caso de auditoría (R4).
 
 ### R4. Publicación nueva no vinculable: stock 0 + caso (decisión de José del 2026-10-06)
 
 Si una publicación activa sin decisión no cumple R3 (no tiene SKU, el SKU no existe en Woo o hay varios candidatos):
 - se manda stock 0 a ML;
-- se abre un caso de Identidad `sin_vinculo`, severidad `urgente`, con el motivo.
+- el caso de Identidad lo abre la auditoría existente (`auditarIdentidadProductos`, que corre en cada refresco después
+  del autovínculo). No hay clase nueva: frenan las clasificaciones `sku_ausente`, `sku_vacio`, `sku_inexistente`,
+  `sku_no_unico` y `contradiccion_titulo` de una clave activa sin decisión. Ajuste del 2026-10-07: una clase
+  `sin_vinculo` aparte chocaría con el UNIQUE `(direccion, ml_key)` y con la reclasificación de cada corrida.
 
 Cuando alguien la vincula o la marca `omitir`, el caso se cierra y el sync la toma (o la ignora) en la corrida
 siguiente.
@@ -78,17 +81,17 @@ clave `omitir` no retiene (links de pago).
    - Se agrega `frena_identidad`, calculado por R2. Cuando vale 1, `stock_disponible_ml = 0` en lugar de excluir la
      clave.
 2. **Claves sin decisión (R4).** Hoy el sync no las ve. Se agrega una rama en `_syncWcToMl` que les manda 0, solo a
-   las que tienen caso `sin_vinculo` abierto.
+   las claves sin decisión con caso de auditoría que frena (R4).
 3. **`lib/mlMapeo.js` `autoVincularPorSellerSku`.** Mantiene sus reglas. Las publicaciones activas sin decisión que no
-   vincula abren el caso `sin_vinculo` (R4).
-4. **`lib/identidadProductos.js`.** Se agrega la clasificación `sin_vinculo` y se baja la severidad según R2.
+   vincula quedan con el caso que ya abre la auditoría (R4).
+4. **`lib/identidadProductos.js`.** `upsertCaso` baja la severidad según R2 (la auditoría la reescribe en cada corrida).
 5. **Guardia.**
    - Se apagan el escaneo (`routes/matcher.js:101`) y el worker (`server.js:925`).
    - Sus tablas quedan en solo lectura durante 30 días.
    - La página muestra un aviso que lleva a Identidad.
    - `esClaveCubierta` y `claveBloqueadaGuardia` pasan a leer Identidad.
 6. **Migración 120.**
-   - Agrega `identidad_casos.clasificacion` `sin_vinculo`, si hace falta en el CHECK.
+   - `clasificacion` es TEXT libre: no hay CHECK que ampliar.
    - Agrega un índice por `ml_key` y estado.
    - Cierra los casos `sin_cobertura` de Guardia cuyas claves están en `omitir`, por R1.
 
@@ -111,7 +114,7 @@ clave `omitir` no retiene (links de pago).
   - `omitir` se ignora.
 - **Tests (autovínculo y casos nuevos):**
   - con SKU exacto y único, el autovínculo vincula aunque el GTIN de ML no coincida;
-  - SKU ambiguo en la corrida no vincula y abre `sin_vinculo`;
+  - SKU ambiguo en la corrida no vincula y queda con su caso `sku_no_unico` y, en activo, en 0;
   - la publicación nueva sin SKU abre caso y manda 0.
 - **Tests (retención):** un pedido de una clave `omitir` no se retiene; uno sin vínculo sí.
 - **En sombra, con producción:**
