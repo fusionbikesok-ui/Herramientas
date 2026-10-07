@@ -13,11 +13,11 @@
 <body>
   <a class="skip-link" href="#inbox">Ir a conversaciones</a>
   <header class="app-header">
-    <div class="heading"><a class="home-link" href="../home/">← Herramientas</a><h1>Mensajería</h1><p class="subtitle">Atención de WhatsApp</p></div>
+    <div class="heading"><a class="home-link" href="../home/">← Herramientas</a><h1>Mensajería</h1><p class="subtitle">Web y WhatsApp</p></div>
     <div class="session"><div><strong id="actor-name">Cargando sesión…</strong><span id="actor-role" class="meta"></span></div><label id="presence-field" hidden><span class="sr-only">Tu disponibilidad</span><select id="presence" class="ui-input"><option value="available">Disponible</option><option value="busy">Ocupado</option><option value="offline">No disponible</option></select></label><button id="team" class="ui-btn" type="button" hidden>Equipo</button></div>
   </header>
   <details class="service-panel" id="service-panel">
-    <summary><span id="connection-summary">Consultando conexión de los números…</span><span id="metrics" class="meta"></span><span class="service-more">Ver operación</span></summary>
+    <summary><span id="connection-summary">Consultando estado de los canales…</span><span id="metrics" class="meta"></span><span class="service-more">Ver operación</span></summary>
     <div class="service-content"><div id="channels" class="channel-list"><p class="meta">Todavía no hay un estado de conexión confirmado.</p></div><div id="team-status" class="team-status"></div></div>
   </details>
   <div id="global-notice" class="global-notice ui-aviso" role="status" hidden></div>
@@ -25,7 +25,7 @@
     <section id="inbox" class="inbox" aria-labelledby="inbox-heading" tabindex="-1">
       <div class="inbox-toolbar"><div class="section-heading"><h2 id="inbox-heading">Conversaciones</h2><button id="refresh" type="button" class="ui-btn refresh-button" aria-label="Actualizar bandeja" title="Actualizar bandeja">↻</button></div>
         <label class="search-field"><span class="sr-only">Buscar por nombre, número o texto</span><input id="search" class="ui-input" type="search" placeholder="Buscar nombre, número o texto" autocomplete="off" maxlength="200"></label>
-        <label class="number-field"><span class="ui-label">Número de negocio</span><select id="number" class="ui-input"><option value="">Todos los números</option></select></label>
+        <div class="source-fields"><label class="channel-field"><span class="ui-label">Canal</span><select id="channel" class="ui-input"><option value="all">Todos</option><option value="web">Chat web</option><option value="whatsapp">WhatsApp</option></select></label><label id="number-field" class="number-field"><span class="ui-label">Número de WhatsApp</span><select id="number" class="ui-input"><option value="">Todos los números</option></select></label></div>
         <div id="filters" class="filter-grid" role="group" aria-label="Filtrar conversaciones">
           <button type="button" class="ui-btn" data-filter="all" aria-pressed="true">Todas <span data-count="all"></span></button>
           <button type="button" class="ui-btn" data-filter="unassigned" aria-pressed="false">Sin asignar <span data-count="unassigned"></span></button>
@@ -39,9 +39,9 @@
       <footer class="inbox-footer"><span id="sync-state">Esperando conexión</span><span>Borradores privados en esta pestaña</span></footer>
     </section>
     <section class="conversation" aria-labelledby="conversation-heading">
-      <div id="welcome" class="welcome"><div class="welcome-symbol" aria-hidden="true">☏</div><h2 id="conversation-heading">Tu próxima conversación, acá</h2><p>Elegí un chat de la bandeja para consultar su historial o tomar la atención.</p><p class="meta">Las conversaciones se mostrarán cuando los números estén conectados y reciban mensajes.</p></div>
+      <div id="welcome" class="welcome"><div class="welcome-symbol" aria-hidden="true">☏</div><h2 id="conversation-heading">Tu próxima conversación, acá</h2><p>Elegí un chat de la bandeja para consultar su historial o tomar la atención.</p><p class="meta">Las consultas del chat web y de WhatsApp se atienden desde esta misma bandeja.</p></div>
       <div id="thread-view" class="thread-view" hidden>
-        <header class="thread-header"><button id="back" type="button" class="ui-btn back-button">← Bandeja</button><div class="contact-title"><h2 id="contact-name" tabindex="-1"></h2><p id="contact-meta" class="meta"></p></div><button id="copy-phone" type="button" class="ui-btn" title="Copiar número de WhatsApp">Copiar número</button><div id="thread-badges" class="thread-badges"></div></header>
+        <header class="thread-header"><button id="back" type="button" class="ui-btn back-button">← Bandeja</button><div class="contact-title"><h2 id="contact-name" tabindex="-1"></h2><p id="contact-meta" class="meta"></p></div><button id="copy-phone" type="button" class="ui-btn" title="Copiar teléfono de contacto">Copiar teléfono</button><div id="thread-badges" class="thread-badges"></div></header>
         <div class="thread-controls"><p id="ownership" class="ownership"></p><div class="actions" aria-label="Acciones de conversación">
           <button type="button" id="take" class="ui-btn" hidden>Tomar conversación</button>
           <button type="button" id="transfer" class="ui-btn" hidden>Transferir</button>
