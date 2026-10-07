@@ -812,6 +812,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_pausas_log_119')").run();
     })();
   }
+  const faseCIdentidadMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='fase_c_identidad_120'").get();
+  if (!faseCIdentidadMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '120_fase_c_identidad.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('fase_c_identidad_120')").run();
+    })();
+  }
   const chatEventsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='chat_events_inbox_093'").get();
   if (!chatEventsMigration) {
     db.transaction(() => {
