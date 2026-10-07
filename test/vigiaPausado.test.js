@@ -71,7 +71,7 @@ describe('vigiaPausado', () => {
     expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato'").get().n).toBe(1);
   });
 
-  it('una publicación YA pausada no se vuelve a pausar, pero el cambio se asienta y avisa', async () => {
+  it('una publicación YA pausada (sin stock) no se vuelve a pausar: el cambio se asienta y NO abre incidente', async () => {
     db.prepare(`INSERT INTO ml_publicaciones_cache
       (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
       VALUES ('MLA1|','MLA1','','x','paused','out_of_stock',0,datetime('now'))`).run();
@@ -81,7 +81,42 @@ describe('vigiaPausado', () => {
     expect(r.sin_stock).toBe(1);
     expect(r.errores).toBe(0);
     expect(db.prepare('SELECT pausada FROM ml_publicacion_cambios').get().pausada).toBe(0);
-    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato'").get().n).toBe(1);
+    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato'").get().n).toBe(0);
+  });
+
+  it('ya pausada por otro motivo (con stock): se asienta y no abre incidente, ni pausa de nuevo', async () => {
+    db.prepare(`INSERT INTO ml_publicaciones_cache
+      (clave,item_id,variation_id,titulo,status,sub_status,available_quantity,actualizado_en)
+      VALUES ('MLA1|','MLA1','','x','paused','',5,datetime('now'))`).run();
+    const r = await procesarCambios(db, CFG, [cambio(1)]);
+    expect(r).toMatchObject({ pausadas: 0, ya_pausadas: 1, errores: 0 });
+    expect(mlFetch).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato'").get().n).toBe(0);
+    expect(db.prepare('SELECT nota FROM ml_publicacion_cambios').get().nota).toContain('ya estaba pausada');
+  });
+
+  it('6 variaciones de la misma publicación: una sola línea "(6 variaciones)" en el incidente', async () => {
+    const seis = Array.from({ length: 6 }, (_, i) => cambio(1, { clave: `MLA1|${i + 1}`, sku: `FB-1${i}` }));
+    const r = await procesarCambios(db, CFG, seis);
+    expect(r).toMatchObject({ detectados: 6, errores: 0 });
+    expect(mlFetch).toHaveBeenCalledTimes(1);
+    const inc = db.prepare("SELECT * FROM incidentes_operativos WHERE proceso='vigia_formato'").all();
+    expect(inc).toHaveLength(1);
+    for (const texto of [inc[0].mensaje_tecnico, inc[0].mensaje_humano]) {
+      expect(texto.match(/MLA1 \(6 variaciones\): UNITS_PER_PACK pasó de 1 a 6/g)).toHaveLength(1);
+      expect(texto).not.toContain('FB-10');
+    }
+    expect(inc[0].mensaje_humano).toMatch(/^1 publicación\(es\) cambiaron/);
+  });
+
+  it('el encabezado cuenta las publicaciones reales, incluidas las sin stock', async () => {
+    db.prepare(`INSERT INTO ml_publicaciones_cache
+      (clave,item_id,variation_id,titulo,status,sub_status,available_quantity,actualizado_en)
+      VALUES ('MLA2|','MLA2','','x','paused','out_of_stock',0,datetime('now'))`).run();
+    await procesarCambios(db, CFG, [cambio(1), cambio(2)]);
+    const inc = db.prepare("SELECT mensaje_humano FROM incidentes_operativos WHERE proceso='vigia_formato'").get();
+    expect(inc.mensaje_humano).toMatch(/^2 publicación\(es\) cambiaron/);
+    expect(inc.mensaje_humano).toContain('Sin stock, solo registrados: 1');
   });
 
   it('sin stock auto-cierra el cambio y bloquea al reactivador', async () => {
@@ -281,7 +316,7 @@ describe('vigiaPausado', () => {
       expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato'").get().n).toBe(0);
     });
 
-    it('vacío → producto ya visto en 7 días no pausa', async () => {
+    it('vacío → producto ya visto en los últimos 30 días no pausa', async () => {
       previo(1, 'MLA44441017', null);
       const r = await procesarCambios(db, CFG, [cambioCat(1)]);
       expect(r).toMatchObject({ pausadas: 0, ignorados_por_ruido: 1 });
@@ -294,8 +329,15 @@ describe('vigiaPausado', () => {
       expect(r.pausadas).toBe(0);
     });
 
-    it('un valor visto hace más de 7 días ya no es oscilación: queda como aviso, sin pausar', async () => {
-      previo(1, 'MLA44441017', null, 8 * 86400e3);
+    it('un valor visto hace 12 días sigue siendo oscilación (ventana de 30 días): ruido, sin aviso', async () => {
+      previo(1, 'MLA44441017', null, 12 * 86400e3);
+      const r = await procesarCambios(db, CFG, [cambioCat(1)]);
+      expect(r).toMatchObject({ pausadas: 0, ignorados_por_ruido: 1, avisos_sin_pausa: 0 });
+      expect(mlFetch).not.toHaveBeenCalled();
+    });
+
+    it('un valor visto hace más de 30 días ya no es oscilación: queda como aviso, sin pausar', async () => {
+      previo(1, 'MLA44441017', null, 31 * 86400e3);
       const r = await procesarCambios(db, CFG, [cambioCat(1)]);
       expect(r).toMatchObject({ pausadas: 0, avisos_sin_pausa: 1 });
       expect(mlFetch).not.toHaveBeenCalled();
