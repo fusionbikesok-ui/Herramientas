@@ -62,7 +62,7 @@ export function mensajeriaRouter(db,{env=process.env,fetchImpl=fetch,now=()=>Dat
   const safe=fn=>async(req,res)=>{try{await fn(req,res);}catch(e){error(res,e.status>=400&&e.status<=599?e.status:502,e.code||'internal_error',e.status?e.message:'No se pudo completar la operación.');}};
   router.get('/bootstrap',(req,res)=>{
     req.session.inboxCsrf ||= crypto.randomBytes(32).toString('hex');
-    res.json({ok:true,actor:req.inboxActor,csrf:req.session.inboxCsrf,agents:agents()});
+    res.json({ok:true,actor:{...req.inboxActor,is_admin:req.inboxActor.role==='supervisor'&&Boolean(req.user.is_admin)},csrf:req.session.inboxCsrf,agents:agents()});
   });
   router.get('/team',(req,res)=>{
     if(req.inboxActor.role!=='supervisor')return error(res,403,'supervisor_required','Solo el supervisor puede gestionar el equipo.');
@@ -89,7 +89,8 @@ export function mensajeriaRouter(db,{env=process.env,fetchImpl=fetch,now=()=>Dat
   });
   router.get('/list',safe(async(req,res)=>res.json(await proxy(req,'list',{
     filter:['all','mine','unassigned','closed'].includes(req.query.filter)?req.query.filter:'all',
-    search:String(req.query.search||'').slice(0,150),number:String(req.query.number||'').slice(0,100),
+    channel:['all','web','whatsapp'].includes(req.query.channel)?req.query.channel:'all',
+    search:String(req.query.search||'').slice(0,150),number:req.query.channel==='web'?'':String(req.query.number||'').slice(0,100),
     offset:Math.max(0,Math.min(Number(req.query.offset)||0,100000)),limit:Math.max(1,Math.min(Number(req.query.limit)||30,100))
   }))));
   router.get('/thread',safe(async(req,res)=>res.json(await proxy(req,'thread',{key:String(req.query.key||'').slice(0,300),...(req.query.before?{before:String(req.query.before).slice(0,60)}:{})}))));

@@ -337,11 +337,22 @@ Cierre POS 2026-10-06: respaldo diario privado ampliado con snapshot consistente
 
 - 2026-10-06: Entrega manual recuperada en facturador VPS: email con PDF adjunto mediante SMTP existente (TLS verificado, confirmación de destinatario) y WhatsApp wa.me con enlace PDF siete días. Módulo Node delivery.mjs; persistencia privada delivery.sqlite, UUID/exclusión por comprobante/destinatario entre operadores, resultado incierto sin reintento automático. Solo descarga por token aleatorio expirable es pública; email/share/estado requieren administrador y escrituras Origin/CSRF. PDF nativo vía GET firmado, WordPress conserva bloqueo de correo/red genéricos. Backup fiscal incluye snapshot entrega/configuración SMTP privada. Validación funcional sin comunicaciones a clientes; entrega real de correo no probada. Contratos y rollback: integrations/management-migration/README-DELIVERY.md. Master Control y emisión ARCA sin cambios.
 
-## Mensajería profesional (2026-10-07)
+## Mensajería unificada (2026-10-07)
 
-- Nueva bandeja `/herramientas/mensajeria/` en Node con sesión existente; conversaciones y adjuntos privados en PostgreSQL del bot. Proxy HMAC independiente y cola durable `outbox`; migraciones aditivas. Backup/rollback y contrato: `integrations/mensajeria/README.md`.
-- José supervisión; Santi/Miguel/Fabri agentes; Matías consulta. Overrides propios `mensajeria_roles` prevalecen sobre admin global. Otros permisos conservados.
-- Chat web y captura de WhatsApp conservados; contexto web relacionado por teléfono cuando llega un chat de WhatsApp. POS/ARCA y plugin oficial de Meta no se migran ni modifican.
-- Coexistencia de ambos números y publicación Meta pendientes con teléfonos. `INBOX_CONNECTED_NUMBER_IDS` vacío: sin envíos desde la nueva bandeja. Controles de bot independientes conservados.
+Bandeja Web/WhatsApp con sesión de Herramientas y roles propios. Matías con control completo
+y administración global conservada; José supervisa; Santi/Miguel/Fabri atienden. Búsquedas,
+historial, asignaciones, notas, IA y outbox en PostgreSQL del VPS. Widget y copia de presentación
+en WordPress. Callbacks firmados con revisión, IDs opacos y cola de estado; importación sin IA.
+Los modos de corte y rollback se coordinan; no restaurar bases antiguas sobre mensajes nuevos.
+Contrato y rutas de respaldos: `integrations/mensajeria/README.md`. WhatsApp real pendiente de
+coexistencia; emisores POS/ARCA, precios y Master Control no cambian.
 
-- Publicación verificada el 2026-10-07: Home abre la bandeja con sesión real; rol de Matías consulta; API/worker/outbox operativos; ambos números permanecen pendientes y sin emisión. Respaldo de software/configuración y bases en `/opt/fusionbikes/backups/mensajeria-20261007`.
+Corte completado 2026-10-07 13:33 UTC: 526 sesiones y 1.372 mensajes fuente;
+1.203 mensajes existentes reconocidos y 169 importados, todos mapeados. Ambos flags
+activados; callback de presencia firmado confirmado y cola Web vacía en la verificación.
+Entradas Chat de WordPress y Gestión redirigen a la bandeja. Imagen activa
+`fusion-chatbot-unified:20261007`; plugin 1.7.18. Respaldos privados incluyen WordPress
+antes/después, PostgreSQL, SQLite e historial fuente. El coordinador usa stdin para
+ejecutar el corte como usuario restringido; no depende de un archivo temporal root.
+Suite Node completa, 73 pruebas backend, 60 PHP y 3 de recuperación aprobadas;
+QA visual con datos ficticios. Entrega real a clientes no usada como prueba.

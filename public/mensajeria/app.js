@@ -8,10 +8,11 @@ const ROLES = { reader: 'Consulta', agent: 'Agente', supervisor: 'Supervisión' 
 const PRESENCE = { available: 'Disponible', busy: 'Ocupado', offline: 'No disponible' };
 const DELIVERY = { queued: '◷ En cola', queue: '◷ En cola', pending: '◷ En cola', sending: '◷ Enviando', sent: '✓ Enviado', delivered: '✓✓ Entregado', read: '✓✓ Leído', failed: '× Falló el envío', cancelled: '× Cancelado', unknown: '? Sin confirmación' };
 const DELIVERY_PROGRESS = { queue: 0, queued: 0, pending: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
-const SEND_BLOCKED = { thread_closed: 'La conversación está cerrada. Reabrila para responder.', number_not_connected: 'El número de negocio todavía no está conectado. Completá la conexión para responder.', window_closed: 'Fuera de la ventana de atención de 24 horas. Se necesita una plantilla aprobada.', owner_required: 'Necesitás ser responsable de esta conversación para responder.' };
+const SEND_BLOCKED = { thread_closed: 'La conversación está cerrada. Reabrila para responder.', number_not_connected: 'El número de negocio todavía no está conectado. Completá la conexión para responder.', web_not_connected: 'La atención del chat web todavía no está disponible. Actualizá el estado antes de responder.', window_closed: 'Fuera de la ventana de atención de 24 horas. Se necesita una plantilla aprobada.', owner_required: 'Necesitás ser responsable de esta conversación para responder.' };
 const ERRORS = { ...SEND_BLOCKED, already_owned: 'Otra persona ya tomó esta conversación. Se actualizará el responsable.', revision_conflict: 'La conversación cambió mientras trabajabas. Revisá su estado actualizado antes de continuar.', idempotency_conflict: 'Esta operación ya tiene un registro diferente. Revisá el historial antes de volver a enviar.', inbox_not_configured: 'La conexión del servicio de mensajería todavía no está configurada.', write_required: 'Tu acceso permite consultar, pero no cambiar la atención.', invalid_target: 'La persona elegida ya no está disponible para atender. Actualizá el equipo.', thread_not_found: 'No se encontró esta conversación.', invalid_media_caption: 'Los archivos admiten hasta 1024 caracteres. El audio debe enviarse sin texto adjunto.', invalid_message: 'Escribí un mensaje o elegí un archivo válido antes de enviar.', media_not_available: 'El archivo no está disponible. Volvé a adjuntarlo antes de enviar.', media_not_found: 'No se encontró el archivo.', media_unavailable: 'El archivo todavía no está disponible.', unsupported_media_type: 'Este tipo de archivo no está permitido.', media_too_large: 'El archivo supera el tamaño permitido.', media_signature_mismatch: 'El contenido no coincide con el tipo de archivo. Elegí un archivo válido.', unsafe_pdf: 'Este PDF contiene elementos no admitidos. Elegí una versión sin contenido activo.', upload_quota_exceeded: 'Se alcanzó el límite de archivos de esta conversación.', nonce_store_unavailable: 'No se pudo confirmar la conexión segura. El servicio volverá a intentar conectarse.' };
 
 export function errorMessage(result) {
+  if (result?.code === 'web_media_unsupported') return 'El chat web admite solo texto por ahora. Quitá el archivo para responder.';
   if (ERRORS[result?.code]) return ERRORS[result.code];
   const message = typeof result?.error === 'string' ? result.error : '';
   return message && !/^[a-z0-9_]+$/.test(message) ? message : 'No se pudo completar la operación. Actualizá el estado antes de continuar.';
@@ -19,12 +20,30 @@ export function errorMessage(result) {
 
 export function sendWindow(thread, now = Date.now()) {
   if (!thread) return { allowed: false, label: 'Sin conversación' };
+  if (threadChannel(thread) === 'web') {
+    if (thread.can_send === true) return { allowed: true, label: 'Chat web disponible' };
+    const reason = ['thread_closed', 'owner_required', 'web_not_connected'].includes(thread.send_blocked_reason) ? SEND_BLOCKED[thread.send_blocked_reason] : 'No se pudo confirmar la disponibilidad del chat web. Actualizá el estado antes de responder.';
+    return { allowed: false, label: reason };
+  }
   if (thread.can_send === false) return { allowed: false, label: SEND_BLOCKED[thread.send_blocked_reason] || 'No se pudo confirmar que este número pueda enviar texto libre. Actualizá el estado antes de responder.' };
   if (thread.can_send === true) return { allowed: true, label: 'Ventana de atención abierta' };
   const inbound = Date.parse(thread.last_inbound_at || '');
   if (!Number.isFinite(inbound) || inbound > now) return { allowed: false, label: 'No se pudo confirmar la ventana de atención de 24 horas.' };
   if (now - inbound >= SEND_WINDOW_MS) return { allowed: false, label: 'Pasaron 24 horas desde el último mensaje del cliente. Se necesita una plantilla aprobada.' };
   return { allowed: true, label: 'Ventana de atención abierta' };
+}
+
+export function threadChannel(thread) { return thread?.channel === 'web' ? 'web' : 'whatsapp'; }
+export function channelLabel(thread) { return threadChannel(thread) === 'web' ? 'Chat web' : 'WhatsApp'; }
+export function mediaAllowed(thread) { return Boolean(thread && (typeof thread.capabilities?.media === 'boolean' ? thread.capabilities.media : threadChannel(thread) === 'whatsapp')); }
+export function aiStateLabel(thread, status) {
+  if (thread?.bot_paused) return 'IA pausada';
+  const channel = threadChannel(thread) === 'web' ? status?.web : status?.numbers?.find(number => String(number.number_id) === String(thread?.number_id));
+  if (!channel || typeof channel.connected !== 'boolean' || typeof channel.bot_enabled !== 'boolean') return 'Estado de IA pendiente';
+  return channel.connected && channel.bot_enabled ? 'IA habilitada' : 'IA deshabilitada';
+}
+export function safePageUrl(value) {
+  try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : ''; } catch { return ''; }
 }
 
 export function permissions(actor, thread, now = Date.now()) {
@@ -104,7 +123,7 @@ if (typeof document !== 'undefined') start();
 
 function start() {
   const $ = id => document.getElementById(id);
-  const state = { actor: null, csrf: '', agents: [], numbers: [], threads: [], selected: null, thread: null, relatedWeb: [], messages: [], more: false, listMore: false, filter: 'all', search: '', number: '', mode: 'reply', drafts: new Map(), operations: new Map(), messageNodes: new Map(), listSeq: 0, threadSeq: 0, selectionEpoch: 0, historyLoading: false, pollTimer: null, pollDelay: POLL_MIN, refreshing: false, identityRefreshing: false, presenceSeq: 0, presencePostAt: 0, presencePosting: false, storageKey: '', statusReady: false, dialogAction: null, lastListError: '', listPages: 1 };
+  const state = { actor: null, csrf: '', agents: [], numbers: [], web: null, threads: [], selected: null, thread: null, relatedWeb: [], messages: [], more: false, listMore: false, filter: 'all', channel: 'all', search: '', number: '', mode: 'reply', drafts: new Map(), operations: new Map(), messageNodes: new Map(), listSeq: 0, threadSeq: 0, selectionEpoch: 0, historyLoading: false, pollTimer: null, pollDelay: POLL_MIN, refreshing: false, identityRefreshing: false, presenceSeq: 0, presencePostAt: 0, presencePosting: false, storageKey: '', statusReady: false, dialogAction: null, lastListError: '', listPages: 1 };
   const text = value => value == null ? '' : String(value);
   const announce = value => { $('announcement').textContent = value; };
   const element = (tag, className, content) => { const node = document.createElement(tag); if (className) node.className = className; if (content != null) node.textContent = text(content); return node; };
@@ -159,8 +178,9 @@ function start() {
     return new Intl.DateTimeFormat('es-AR', short ? { day: '2-digit', month: 'short' } : { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
   }
   function chip(label, tone) { return element('span', `ui-chip${tone ? ` ui-chip--${tone}` : ''}`, label); }
-  function nameOf(thread) { return thread?.name || thread?.phone || 'Contacto de WhatsApp'; }
-  function numberLabel(thread) { return thread?.number_label || state.numbers.find(number => String(number.number_id) === String(thread?.number_id))?.number_label || thread?.number_id || 'Número de negocio'; }
+  function nameOf(thread) { return thread?.name || thread?.phone || (threadChannel(thread) === 'web' ? 'Visitante del chat web' : 'Contacto de WhatsApp'); }
+  function numberLabel(thread) { return threadChannel(thread) === 'web' ? thread?.page_title || '' : thread?.number_label || state.numbers.find(number => String(number.number_id) === String(thread?.number_id))?.number_label || thread?.number_id || 'Número de negocio'; }
+  function sourceLabel(thread) { return [...new Set([channelLabel(thread), numberLabel(thread)].filter(Boolean))].join(' · '); }
   function renderList() {
     const existing = new Map([...$('thread-list').children].map(node => [node.dataset.key, node]));
     const live = new Set();
@@ -172,7 +192,7 @@ function start() {
         const top = element('div', 'thread-card-top'); top.append(element('strong', '', nameOf(thread))); const time = element('time', '', formatTime(thread.updated_at, true)); if (thread.updated_at) time.dateTime = thread.updated_at; top.append(time);
         const bottom = element('div', 'thread-card-bottom'); bottom.append(element('span', '', thread.status === 'closed' ? `Cerrada · ${thread.owner_name || 'Sin responsable'}` : thread.owner_name || (thread.owner_id ? 'Responsable asignado' : 'Sin asignar')));
         if (Number(thread.unread) > 0) bottom.append(element('span', 'unread-count', `${thread.unread} sin leer`));
-        card.replaceChildren(top, element('p', 'thread-preview', thread.preview || 'Sin mensajes de texto'), bottom, element('span', 'thread-channel', numberLabel(thread)));
+        card.replaceChildren(top, element('p', 'thread-preview', thread.preview || 'Sin mensajes de texto'), bottom, element('span', 'thread-channel', sourceLabel(thread)));
         card.dataset.signature = signature;
       }
       card.setAttribute('aria-current', key === state.selected ? 'true' : 'false');
@@ -181,13 +201,13 @@ function start() {
     for (const [key, node] of existing) if (!live.has(key)) node.remove();
     $('load-list').hidden = !state.listMore;
     $('list-state').classList.toggle('error', Boolean(state.lastListError));
-    $('list-state').textContent = state.lastListError || (!state.threads.length ? (state.search || state.number ? 'No hay conversaciones que coincidan con estos filtros.' : state.filter === 'mine' ? 'Todavía no tenés conversaciones asignadas.' : state.filter === 'closed' ? 'No hay conversaciones cerradas.' : state.filter === 'unassigned' ? 'No hay conversaciones esperando responsable.' : 'Todavía no hay conversaciones. Los mensajes reales aparecerán al conectar los números.') : '');
+    $('list-state').textContent = state.lastListError || (!state.threads.length ? (state.search || state.number || state.channel !== 'all' ? 'No hay conversaciones que coincidan con estos filtros.' : state.filter === 'mine' ? 'Todavía no tenés conversaciones asignadas.' : state.filter === 'closed' ? 'No hay conversaciones cerradas.' : state.filter === 'unassigned' ? 'No hay conversaciones esperando responsable.' : 'Todavía no hay conversaciones. Las consultas reales del chat web y de WhatsApp aparecerán acá.') : '');
     $('list-state').hidden = !$('list-state').textContent;
   }
   async function loadList({ more = false } = {}) {
     const seq = ++state.listSeq;
     const offset = more ? state.threads.length : 0;
-    const queries = Array.from({ length: more ? 1 : state.listPages }, (_, index) => new URLSearchParams({ filter: state.filter, search: state.search, number: state.number, offset: text(more ? offset : index * 50), limit: '50' }));
+    const queries = Array.from({ length: more ? 1 : state.listPages }, (_, index) => new URLSearchParams({ filter: state.filter, channel: state.channel, search: state.search, number: state.channel === 'web' ? '' : state.number, offset: text(more ? offset : index * 50), limit: '50' }));
     if (more) $('load-list').disabled = true;
     try {
       const pages = await Promise.all(queries.map(query => api(`/list?${query}`))); if (seq !== state.listSeq) return;
@@ -202,22 +222,26 @@ function start() {
     finally { if (seq === state.listSeq) $('load-list').disabled = false; }
   }
   function renderStatus(result, allowPresence = true) {
-    state.statusReady = true; state.numbers = Array.isArray(result.numbers) ? result.numbers : [];
+    state.statusReady = true; state.numbers = Array.isArray(result.numbers) ? result.numbers : []; state.web = result.web && typeof result.web === 'object' ? result.web : null;
     const connected = state.numbers.filter(number => number.connected === true).length;
     const pending = state.numbers.filter(number => number.coexistence_pending).length;
-    $('connection-summary').textContent = !state.numbers.length ? 'Sin números conectados confirmados' : `${connected} de ${state.numbers.length} números conectados${pending ? ' · Coexistencia pendiente' : ''}`;
+    const webSummary = state.web?.connected === true ? 'Web disponible' : state.web?.connected === false ? 'Web pendiente' : 'Web sin confirmar';
+    $('connection-summary').textContent = `${webSummary} · WhatsApp: ${state.numbers.length ? `${connected} de ${state.numbers.length} números conectados` : 'sin números confirmados'}${pending ? ' · Coexistencia pendiente' : ''}`;
     const metrics = result.metrics || {};
     $('metrics').textContent = [['open', 'abiertas'], ['unassigned', 'sin asignar'], ['pending', 'en cola'], ['errors', 'con error']].filter(([key]) => metrics[key] != null).map(([key, label]) => `${metrics[key]} ${label}`).join(' · ');
     const channels = state.numbers.map(number => {
-      const node = element('div', 'channel'); node.append(element('strong', '', number.number_label || number.number || number.number_id || 'Número de negocio'));
+      const node = element('div', 'channel'); node.append(element('strong', '', `WhatsApp · ${number.number_label || number.number || number.number_id || 'Número de negocio'}`));
       node.append(chip(number.connected ? '✓ Conectado' : number.status === 'disabled' ? 'Deshabilitado' : 'Conexión pendiente', number.connected ? 'ok' : ''));
       if (number.number) node.append(element('p', '', number.number));
       node.append(element('p', '', number.coexistence_pending ? 'Coexistencia pendiente de completar con el teléfono.' : (number.bot_enabled === false ? 'IA deshabilitada para este número.' : 'La atención usa el estado real de este número.')));
       return node;
     });
-    $('channels').replaceChildren(...(channels.length ? channels : [element('p', 'meta', 'No hay números conectados confirmados. Las conversaciones aparecerán después de completar la conexión.') ]));
+    const webCard = element('div', 'channel'); webCard.append(element('strong', '', 'Chat web'));
+    webCard.append(chip(state.web?.connected === true ? '✓ Disponible' : state.web?.connected === false ? 'Atención pendiente de habilitar' : 'Estado pendiente', state.web?.connected === true ? 'ok' : ''));
+    webCard.append(element('p', '', `${aiStateLabel({ channel: 'web' }, { web: state.web })}. El chat web admite respuestas de texto.`));
+    $('channels').replaceChildren(webCard, ...channels);
     const desiredNumbers = [{ value: '', label: 'Todos los números' }, ...state.numbers.filter(number => number.number_id).map(number => ({ value: text(number.number_id), label: text(number.number_label || number.number || number.number_id) }))];
-    $('number').disabled = desiredNumbers.length === 1;
+    $('number').disabled = state.channel === 'web' || desiredNumbers.length === 1;
     if (JSON.stringify(desiredNumbers) !== $('number').dataset.signature) {
       $('number').replaceChildren(...desiredNumbers.map(number => { const option = element('option', '', number.label); option.value = number.value; return option; })); $('number').value = state.number; $('number').dataset.signature = JSON.stringify(desiredNumbers);
     }
@@ -231,7 +255,7 @@ function start() {
   async function loadStatus() {
     const seq = state.presenceSeq;
     try { renderStatus(await api('/status'), seq === state.presenceSeq); }
-    catch (error) { state.statusReady = false; $('connection-summary').textContent = 'No se pudo confirmar la conexión de los números'; renderThreadBadges(); throw error; }
+    catch (error) { state.statusReady = false; $('connection-summary').textContent = 'No se pudo confirmar el estado de los canales'; renderThreadBadges(); throw error; }
   }
   async function selectThread(key) {
     if (state.selected === key && state.thread) { $('workspace').classList.add('has-selection'); return; }
@@ -270,7 +294,7 @@ function start() {
   }
   function renderWebContext() {
     const related = state.relatedWeb;
-    const records = Array.isArray(related) ? related : related ? [related] : [];
+    const records = [...(threadChannel(state.thread) === 'web' && (state.thread.page_title || state.thread.page_url || state.thread.handoff_reason) ? [state.thread] : []), ...(Array.isArray(related) ? related : related ? [related] : [])];
     $('web-context').hidden = !records.length;
     if (!records.length) return;
     const nodes = [];
@@ -278,7 +302,9 @@ function start() {
       if (typeof item === 'string') nodes.push(element('p', '', item));
       else if (item && typeof item === 'object') {
         if (item.summary || item.text || item.preview) nodes.push(element('p', '', item.summary || item.text || item.preview));
-        if (item.context?.page_title) nodes.push(element('p', '', `Consulta desde: ${item.context.page_title}`));
+        if (item.page_title || item.context?.page_title) nodes.push(element('p', '', `Consulta desde: ${item.page_title || item.context.page_title}`));
+        const pageUrl = safePageUrl(item.page_url || item.context?.page_url);
+        if (pageUrl) { const paragraph = element('p'); const link = element('a', '', pageUrl); link.href = pageUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; paragraph.append(link); nodes.push(paragraph); }
         if (item.handoff_reason || item.reason || item.context?.handoff_reason) nodes.push(element('p', '', `Motivo de derivación: ${item.handoff_reason || item.reason || item.context.handoff_reason}`));
         for (const message of Array.isArray(item.messages) ? item.messages.slice(-10) : []) nodes.push(element('p', '', `${message.sender === 'customer' || message.role === 'user' ? 'Cliente' : 'Asistente'}: ${message.text || message.content || ''}`));
       }
@@ -288,17 +314,15 @@ function start() {
   }
   function renderThreadBadges() {
     const thread = state.thread; if (!thread) return;
-    const number = state.numbers.find(item => String(item.number_id) === String(thread.number_id));
-    const confirmed = state.statusReady && number && typeof number.connected === 'boolean' && typeof number.bot_enabled === 'boolean';
-    const ia = thread.bot_paused ? 'IA pausada' : !confirmed ? 'Estado de IA pendiente' : number.connected && number.bot_enabled ? 'IA habilitada' : 'IA deshabilitada';
-    const badges = [chip(thread.status === 'closed' ? 'Cerrada' : 'Abierta'), chip(ia)];
+    const ia = aiStateLabel(thread, state.statusReady ? { numbers: state.numbers, web: state.web } : null);
+    const badges = [chip(channelLabel(thread)), chip(thread.status === 'closed' ? 'Cerrada' : 'Abierta'), chip(ia)];
     for (const label of Array.isArray(thread.labels) ? thread.labels : []) badges.push(chip(typeof label === 'string' ? label : label.name || label.label || ''));
     $('thread-badges').replaceChildren(...badges);
   }
   function renderThread() {
     const thread = state.thread; if (!thread) return;
     $('contact-name').textContent = nameOf(thread);
-    $('contact-meta').textContent = [thread.phone, numberLabel(thread)].filter(Boolean).join(' · ');
+    $('contact-meta').textContent = [thread.phone || 'Teléfono no informado', sourceLabel(thread)].filter(Boolean).join(' · ');
     $('copy-phone').disabled = !thread.phone;
     renderThreadBadges();
     $('ownership').textContent = thread.owner_id ? `Responsable: ${thread.owner_name || (String(thread.owner_id) === String(state.actor?.id) ? state.actor.name : 'Agente asignado')}` : thread.status === 'closed' ? 'Sin responsable · Conversación cerrada' : 'Sin responsable · Tomá la conversación para atenderla';
@@ -306,29 +330,31 @@ function start() {
   }
   function renderPermissions() {
     const access = permissions(state.actor, state.thread); const pending = state.operations.has(state.selected); const closed = state.thread?.status === 'closed';
+    const web = threadChannel(state.thread) === 'web'; const canAttach = mediaAllowed(state.thread);
     for (const action of ['take', 'transfer', 'release', 'close', 'reopen', 'pause', 'resume']) {
       const visible = action === 'take' ? access.take : action === 'transfer' ? access.manage && !closed : action === 'release' ? access.manage && Boolean(state.thread?.owner_id) : action === 'close' ? access.manage && !closed : action === 'reopen' ? access.control && closed : action === 'pause' ? access.control && !state.thread?.bot_paused : access.control && !closed && Boolean(state.thread?.bot_paused);
       $(action).hidden = !visible; $(action).disabled = pending;
     }
     const note = state.mode === 'note'; const canCompose = note ? access.note : access.send;
     $('reply-mode').setAttribute('aria-pressed', text(!note)); $('note-mode').setAttribute('aria-pressed', text(note)); $('note-mode').disabled = !access.write;
-    $('composer').classList.toggle('is-note', note); $('message-input').disabled = !canCompose; $('message-input').placeholder = note ? 'Escribí una nota para el equipo…' : 'Escribí tu respuesta…';
-    document.querySelector('label[for="message-input"]').textContent = note ? 'Escribir nota privada' : 'Escribir respuesta';
-    $('send').textContent = note ? 'Guardar nota' : 'Enviar respuesta';
-    const draft = currentDraft(); const caption = note ? '' : captionError(draft.uploaded?.mime || (draft.file ? attachmentType(draft.file) : ''), text(draft.reply));
+    $('composer').classList.toggle('is-note', note); $('message-input').disabled = !canCompose; $('message-input').placeholder = note ? 'Escribí una nota para el equipo…' : web ? 'Escribí tu respuesta para el chat web…' : 'Escribí tu respuesta…';
+    document.querySelector('label[for="message-input"]').textContent = note ? 'Escribir nota privada' : web ? 'Escribir respuesta para el chat web' : 'Escribir respuesta para WhatsApp';
+    $('send').textContent = note ? 'Guardar nota' : web ? 'Responder en el chat web' : 'Enviar respuesta';
+    const draft = currentDraft(); const caption = note ? '' : !canAttach && (draft.file || draft.uploaded) ? 'Este canal no admite archivos. Quitá el adjunto para responder con texto.' : captionError(draft.uploaded?.mime || (draft.file ? attachmentType(draft.file) : ''), text(draft.reply));
     $('send').disabled = !canCompose || pending || Boolean(caption) || (!text(draft[state.mode]).trim() && (note || !draft.file && !draft.uploaded));
-    $('attach').hidden = note || !access.write; $('attach').disabled = !access.send || pending; $('file-input').disabled = !access.send || pending; $('remove-file').disabled = pending;
+    $('attach').hidden = note || !access.write; $('attach').disabled = !access.send || !canAttach || pending; $('attach').title = canAttach ? 'Adjuntar archivo' : 'Este canal admite solo texto'; $('file-input').disabled = !access.send || !canAttach || pending; $('remove-file').disabled = pending;
     $('attachment').hidden = note || (!draft.file && !draft.uploaded); $('attachment-name').textContent = draft.file ? `${draft.file.name} · ${formatBytes(draft.file.size)}` : draft.uploaded?.name || '';
-    $('file-help').hidden = note; $('window-status').textContent = state.thread ? (sendWindow(state.thread).allowed ? '24 h · Atención abierta' : 'Texto libre no disponible') : '';
-    $('composer-help').textContent = !state.thread ? 'Elegí una conversación para comenzar.' : !access.write ? 'Tu acceso permite consultar el historial. No permite responder, adjuntar ni cambiar la atención.' : !access.manage ? (state.thread.owner_id ? 'Esta conversación la atiende otra persona. Podés consultar su historial.' : 'Tomá esta conversación antes de responder o agregar notas.') : note ? 'Solo el equipo verá esta nota. No se envía al cliente.' : closed ? 'La conversación está cerrada. Reabrila para responder.' : !sendWindow(state.thread).allowed ? sendWindow(state.thread).label : pending ? 'Hay una operación pendiente de confirmar. El borrador se conserva.' : caption || 'La respuesta se envía desde el número de negocio de esta conversación.';
+    $('file-help').hidden = note; $('file-help').textContent = canAttach ? 'Imagen, audio, video o PDF' : 'Este canal admite solo texto';
+    $('window-status').textContent = state.thread ? (web ? 'Chat web' : sendWindow(state.thread).allowed ? '24 h · Atención abierta' : 'Texto libre no disponible') : '';
+    $('composer-help').textContent = !state.thread ? 'Elegí una conversación para comenzar.' : !access.write ? 'Tu acceso permite consultar el historial. No permite responder, adjuntar ni cambiar la atención.' : !access.manage ? (state.thread.owner_id ? 'Esta conversación la atiende otra persona. Podés consultar su historial.' : 'Tomá esta conversación antes de responder o agregar notas.') : note ? 'Solo el equipo verá esta nota. No se envía al cliente.' : closed ? 'La conversación está cerrada. Reabrila para responder.' : !sendWindow(state.thread).allowed ? sendWindow(state.thread).label : pending ? 'Hay una operación pendiente de confirmar. El borrador se conserva.' : caption || (web ? 'La respuesta llega a este chat web. Por ahora admite solo texto.' : 'La respuesta se envía desde el número de negocio de esta conversación.');
   }
   function formatBytes(bytes) { return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`; }
   function makeMessage(message) {
     const note = message.sender === 'note' || message.kind === 'note'; const outbound = ['operator', 'bot', 'agent', 'human'].includes(message.sender); const system = message.sender === 'system';
     const node = element('article', `message${note ? ' note' : outbound ? ' outbound' : system ? ' system' : ''}`); node.setAttribute('role', 'listitem'); node.dataset.id = text(message.id);
     node.append(element('span', 'message-author', note ? `Nota privada · ${message.agent_name || 'Equipo'}` : message.sender === 'bot' ? message.agent_name || 'Asistente IA' : outbound ? message.agent_name || 'Atención humana' : system ? 'Actividad' : nameOf(state.thread)));
-    if (message.revoked || message.text) node.append(element('p', 'message-text', message.revoked ? 'Mensaje eliminado en WhatsApp.' : message.text));
-    if (message.edited && !message.revoked) node.append(element('span', 'meta', 'Editado en WhatsApp'));
+    if (message.revoked || message.text) node.append(element('p', 'message-text', message.revoked ? `Mensaje eliminado en ${channelLabel(state.thread)}.` : message.text));
+    if (message.edited && !message.revoked) node.append(element('span', 'meta', `Editado en ${channelLabel(state.thread)}`));
     if (message.media_id && !message.revoked) {
       const url = `${API}/media/${encodeURIComponent(message.media_id)}`; const mime = text(message.mime); const kind = text(message.kind);
       if (mime.startsWith('image/') || kind === 'image') { const link = element('a', 'media-preview'); link.href = url; link.target = '_blank'; link.rel = 'noopener'; const image = element('img', 'message-media'); image.src = url; image.alt = message.file_name || 'Imagen adjunta'; image.loading = 'lazy'; image.referrerPolicy = 'same-origin'; link.append(image); node.append(link); }
@@ -460,6 +486,7 @@ function start() {
     event.preventDefault(); saveText(); const key = state.selected; const thread = state.thread; if (!key || !thread || state.operations.has(key)) return;
     const access = permissions(state.actor, thread); const mode = state.mode; const draft = currentDraft(); const snapshot = draft[mode];
     if (!(mode === 'note' ? access.note : access.send) || (!snapshot.trim() && (mode === 'note' || !draft.file && !draft.uploaded))) return;
+    if (mode === 'reply' && (draft.file || draft.uploaded) && !mediaAllowed(thread)) { setNotice('thread-notice', 'Este canal no admite archivos. Quitá el adjunto para responder con texto.', 'critico'); return; }
     const invalidCaption = mode === 'note' ? '' : captionError(draft.uploaded?.mime || (draft.file ? attachmentType(draft.file) : ''), snapshot);
     if (invalidCaption) { setNotice('thread-notice', invalidCaption, 'critico'); return; }
     setNotice('thread-notice', '');
@@ -482,7 +509,7 @@ function start() {
       transfer: ['Transferir conversación', 'La persona elegida será responsable de continuar la atención. La IA permanece pausada.', 'Transferir'],
       release: ['Liberar conversación', 'La conversación quedará sin responsable. La IA seguirá pausada hasta que alguien elija Reanudar IA.', 'Liberar'],
       close: ['Cerrar conversación', 'Quedará en Cerradas. Si el cliente vuelve a escribir, la conversación se abrirá nuevamente.', 'Cerrar conversación'],
-      resume: ['Reanudar IA', 'La conversación quedará sin responsable y se quitará su pausa de IA. Se mantienen los controles globales y del número: la IA responderá solo si están habilitados y el número está conectado. Esta acción no habilita el control global ni envía un mensaje ahora.', 'Reanudar IA']
+      resume: ['Reanudar IA', threadChannel(state.thread) === 'web' ? 'La conversación quedará sin responsable y se quitará su pausa de IA. Se mantienen los controles globales y del chat web: la IA responderá solo si están habilitados y el canal está disponible. Esta acción no habilita el control global ni envía un mensaje ahora.' : 'La conversación quedará sin responsable y se quitará su pausa de IA. Se mantienen los controles globales y del número: la IA responderá solo si están habilitados y el número está conectado. Esta acción no habilita el control global ni envía un mensaje ahora.', 'Reanudar IA']
     };
     const [title, description, button] = descriptions[action]; state.dialogAction = { action, key: state.selected, revision: state.thread.revision };
     $('dialog-title').textContent = title; $('dialog-description').textContent = description; $('dialog-confirm').textContent = button; $('dialog-error').hidden = true; $('transfer-field').hidden = action !== 'transfer'; $('transfer-target').required = action === 'transfer';
@@ -579,7 +606,8 @@ function start() {
   $('refresh').addEventListener('click', () => state.actor ? refresh() : bootstrap());
   let searchTimer;
   $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.search = $('search').value.trim(); resetList(); }, 350); });
-  $('number').addEventListener('change', () => { state.number = $('number').value; resetList(); });
+  $('channel').addEventListener('change', () => { state.channel = $('channel').value; state.number = ''; $('number').value = ''; $('number-field').hidden = state.channel === 'web'; $('number').disabled = state.channel === 'web' || !state.numbers.some(number => number.number_id); resetList(); });
+  $('number').addEventListener('change', () => { state.number = $('number').value; if (state.number) { state.channel = 'whatsapp'; $('channel').value = 'whatsapp'; } resetList(); });
   function resetList() { state.listSeq++; state.listPages = 1; state.threads = []; state.listMore = false; state.lastListError = ''; $('thread-list').replaceChildren(); $('list-state').hidden = false; $('list-state').textContent = 'Buscando conversaciones…'; loadList().catch(() => {}); }
   $('filters').addEventListener('click', event => { const button = event.target.closest('[data-filter]'); if (!button || button.dataset.filter === state.filter) return; state.filter = button.dataset.filter; for (const tab of $('filters').querySelectorAll('button')) tab.setAttribute('aria-pressed', text(tab === button)); resetList(); });
   $('load-list').addEventListener('click', () => loadList({ more: true }).catch(() => {}));
@@ -589,13 +617,13 @@ function start() {
   $('message-input').addEventListener('input', () => { saveText(); renderPermissions(); });
   $('composer').addEventListener('submit', submitMessage);
   $('attach').addEventListener('click', () => $('file-input').click());
-  $('file-input').addEventListener('change', () => { const file = $('file-input').files?.[0]; if (!file) return; const error = attachmentError(file); if (error) { setNotice('thread-notice', error, 'critico'); $('file-input').value = ''; return; } currentDraft().file = file; currentDraft().uploaded = null; setNotice('thread-notice', ''); renderPermissions(); });
+  $('file-input').addEventListener('change', () => { const file = $('file-input').files?.[0]; if (!file || !mediaAllowed(state.thread) || !permissions(state.actor, state.thread).send) return; const error = attachmentError(file); if (error) { setNotice('thread-notice', error, 'critico'); $('file-input').value = ''; return; } currentDraft().file = file; currentDraft().uploaded = null; setNotice('thread-notice', ''); renderPermissions(); });
   $('remove-file').addEventListener('click', () => { currentDraft().file = null; currentDraft().uploaded = null; $('file-input').value = ''; renderPermissions(); });
   for (const action of ['take', 'transfer', 'release', 'close', 'reopen', 'pause', 'resume']) $(action).addEventListener('click', () => openAction(action));
   $('dialog-cancel').addEventListener('click', () => $('action-dialog').close());
   $('action-form').addEventListener('submit', event => { event.preventDefault(); const context = state.dialogAction; if (!context) return; const target = context.action === 'transfer' ? state.agents.find(agent => String(agent.id) === $('transfer-target').value) : null; if (context.action === 'transfer' && !target) return; $('action-dialog').close(); issueCommand(context.action, target, context); });
   $('presence').addEventListener('change', async () => { const value = $('presence').value; const previous = $('presence').dataset.confirmed || 'offline'; state.presenceSeq++; state.presencePosting = true; state.presencePostAt = Date.now(); $('presence').disabled = true; try { await sendPresence(value); $('presence').dataset.confirmed = value; announce(`Disponibilidad: ${PRESENCE[value]}`); } catch (error) { $('presence').value = previous; setNotice('global-notice', error.message, 'critico'); } finally { state.presencePosting = false; $('presence').disabled = false; } });
-  $('copy-phone').addEventListener('click', async () => { if (!state.thread?.phone) return; try { await navigator.clipboard.writeText(text(state.thread.phone)); announce('Número copiado.'); setNotice('thread-notice', 'Número de WhatsApp copiado.', 'ok'); } catch { setNotice('thread-notice', `Copiá el número desde la ficha: ${state.thread.phone}`, 'info'); } });
+  $('copy-phone').addEventListener('click', async () => { if (!state.thread?.phone) return; try { await navigator.clipboard.writeText(text(state.thread.phone)); announce('Teléfono copiado.'); setNotice('thread-notice', 'Teléfono de contacto copiado.', 'ok'); } catch { setNotice('thread-notice', `Copiá el teléfono desde la ficha: ${state.thread.phone}`, 'info'); } });
   $('team').addEventListener('click', openTeam); $('team-close').addEventListener('click', () => $('team-dialog').close());
   document.addEventListener('visibilitychange', () => { if (document.hidden) { clearTimeout(state.pollTimer); saveText(); } else if (state.actor) refresh(); });
   window.addEventListener('online', () => { if (state.actor) refresh(); });
