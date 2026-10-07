@@ -52,8 +52,9 @@ Una publicación **sin decisión** se vincula sola si cumple todo esto:
 - ninguna otra publicación sin decisión de la misma corrida trae ese SKU;
 - no hay contradicción por SKU distinto.
 
-El GTIN **no veta**, por R2. Es la regla actual de `autoVincularPorSellerSku`, menos el veto por GTIN que trae
-`contradiccionDeClave`.
+El GTIN **no veta**, por R2. Es la regla actual de `autoVincularPorSellerSku`, que ya no mira el GTIN. Se mantiene su
+veto por contradicción de título o atributos (`contradiccionDeClave`: color, talle, rodado), porque para vincular sin
+una persona conviene ser conservador. Una publicación vetada así abre un caso `sin_vinculo` (R4).
 
 ### R4. Publicación nueva no vinculable: stock 0 + caso (decisión de José del 2026-10-06)
 
@@ -78,8 +79,8 @@ clave `omitir` no retiene (links de pago).
      clave.
 2. **Claves sin decisión (R4).** Hoy el sync no las ve. Se agrega una rama en `_syncWcToMl` que les manda 0, solo a
    las que tienen caso `sin_vinculo` abierto.
-3. **`lib/mlMapeo.js` `autoVincularPorSellerSku`.** Se ignora la contradicción por GTIN y se mantiene la de SKU. Las
-   que no se vinculan abren el caso `sin_vinculo` (R4).
+3. **`lib/mlMapeo.js` `autoVincularPorSellerSku`.** Mantiene sus reglas. Las publicaciones activas sin decisión que no
+   vincula abren el caso `sin_vinculo` (R4).
 4. **`lib/identidadProductos.js`.** Se agrega la clasificación `sin_vinculo` y se baja la severidad según R2.
 5. **Guardia.**
    - Se apagan el escaneo (`routes/matcher.js:101`) y el worker (`server.js:925`).
@@ -109,7 +110,7 @@ clave `omitir` no retiene (links de pago).
   - `intervencion` manda 0;
   - `omitir` se ignora.
 - **Tests (autovínculo y casos nuevos):**
-  - el autovínculo ya no lo veta el GTIN;
+  - con SKU exacto y único, el autovínculo vincula aunque el GTIN de ML no coincida;
   - SKU ambiguo en la corrida no vincula y abre `sin_vinculo`;
   - la publicación nueva sin SKU abre caso y manda 0.
 - **Tests (retención):** un pedido de una clave `omitir` no se retiene; uno sin vínculo sí.
