@@ -22,6 +22,7 @@ import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
+import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
 import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
@@ -245,7 +246,7 @@ export function bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAn
 // red de seguridad barata para esa clase de bug (o para un refresh interrumpido a mitad de
 // camino): si igual aparece un SKU repetido, se elige el MENOR stock entre las filas — opción
 // fail-closed, como mucho se pierde una venta, nunca se sobrevende en ML.
-const COMPUTED_STOCK_CTE = `
+const COMPUTED_STOCK_CTE_ACTUAL = `
   WITH catalogo_dedup AS (
     SELECT sku, stock,
       ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
@@ -269,6 +270,41 @@ const COMPUTED_STOCK_CTE = `
       WHERE d.accion IN ('asignar','confirmar') AND gm.id IS NULL
       AND d.sku IS NOT NULL AND d.sku <> ''
   )`;
+
+// Fase C (spec 2026-10-07-fase-c-una-proteccion.md, R2): una sola protección. En modo `activo` la CTE ya no mira
+// Guardia: las claves que frena Identidad (`sqlFrenaIdentidad`) no se excluyen, se mandan con stock 0 (el sync
+// pone available_quantity=0, no pausa) y vuelven solas con el stock de Woo cuando el caso se resuelve. En `sombra`
+// y `apagado` la CTE es exactamente la de hoy (COMPUTED_STOCK_CTE_ACTUAL): lo que se manda a ML no cambia.
+const COMPUTED_STOCK_CTE_ACTIVO = `
+  WITH catalogo_dedup AS (
+    SELECT sku, stock,
+      ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+    FROM catalogo_cache
+    WHERE sku IS NOT NULL AND sku <> ''
+  ),
+  computed AS (
+    SELECT d.clave, d.sku, c.stock AS stock_wc,
+      cfg.modo, COALESCE(cfg.reserva, 0) AS reserva,
+      CASE
+        WHEN ${sqlFrenaIdentidad('d.clave', 'd.sku')} THEN 0
+        WHEN cfg.modo = 'solo_local' THEN 0
+        WHEN cfg.modo = 'reserva' THEN MAX(c.stock - COALESCE(cfg.reserva, 0), 0)
+        ELSE MAX(c.stock, 0)
+      END AS stock_disponible_ml,
+      e.cantidad_ml, e.actualizado_en AS ml_stock_actualizado_en,
+      CASE WHEN ${sqlFrenaIdentidad('d.clave', 'd.sku')} THEN 1 ELSE 0 END AS frena_identidad
+    FROM sku_matcher_decisiones d
+    JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
+    LEFT JOIN ml_stock_estado e ON e.clave = d.clave
+      LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
+      WHERE d.accion IN ('asignar','confirmar')
+      AND d.sku IS NOT NULL AND d.sku <> ''
+  )`;
+
+/** La CTE de stock según el modo de protección (IDENTIDAD_PROTECCION). Se evalúa en cada uso: pm2 restart la cambia. */
+export function computedStockCte(env = process.env) {
+  return modoProteccion(env) === 'activo' ? COMPUTED_STOCK_CTE_ACTIVO : COMPUTED_STOCK_CTE_ACTUAL;
+}
 
 // ─── syncMlToWc ──────────────────────────────────────────────────────────────
 
@@ -1219,7 +1255,7 @@ export async function syncSkuPuntual(db, cfg, sku) {
   }
 
   const diffs = db.prepare(`
-    ${COMPUTED_STOCK_CTE}
+    ${computedStockCte()}
     SELECT * FROM computed
     WHERE sku = ?
       AND (cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml)
@@ -1304,7 +1340,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
   // registrado— primero) se mantiene: sigue siendo útil para que ese corte rote entre corridas
   // y no favorezca siempre a las mismas claves cuando el backlog excede el tope de llamadas.
   const diffs = db.prepare(`
-    ${COMPUTED_STOCK_CTE}
+    ${computedStockCte()}
     SELECT * FROM computed
     WHERE cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml
     ORDER BY ml_stock_actualizado_en IS NOT NULL, ml_stock_actualizado_en ASC
@@ -1964,7 +2000,7 @@ export async function procesarReintentos(db, cfg) {
  * (El agrupado por publicación lo hace el router para el display.)
  */
 export function reabrirAvisosSinStock(db) {
-  const rows = db.prepare(`${COMPUTED_STOCK_CTE}
+  const rows = db.prepare(`${computedStockCte()}
     SELECT c.id FROM ml_publicacion_cambios c JOIN computed x ON x.clave=c.clave
     WHERE c.bloquea_reactivador=1 AND c.revisado_en IS NOT NULL AND x.stock_disponible_ml > 0`).all();
   const upd = db.prepare("UPDATE ml_publicacion_cambios SET revisado_en=NULL, revisado_por=NULL, bloquea_reactivador=0, pausa_error=COALESCE(pausa_error,'') || ' | reabierto: volvió el stock' WHERE id=?");
@@ -1983,7 +2019,7 @@ export function getReactivablesRows(db, itemIds = null, { incluirPausasManuales 
       AND p.sub_status LIKE '%out_of_stock%'
       AND p.sub_status NOT LIKE '%paused_by_seller%'`;
   let sql = `
-    ${COMPUTED_STOCK_CTE}
+    ${computedStockCte()}
     SELECT cm.clave, cm.sku, cm.stock_disponible_ml,
            p.item_id, p.variation_id, p.titulo, p.variations_texto, p.thumbnail
     FROM computed cm
@@ -2834,7 +2870,7 @@ async function diagnosticarErrores(db, mlCfg, rows) {
   // Stock web disponible por clave (distingue reactivable vs sin_stock real).
   const stockMap = new Map();
   try {
-    for (const r of db.prepare(`${COMPUTED_STOCK_CTE} SELECT clave, stock_disponible_ml FROM computed`).all()) {
+    for (const r of db.prepare(`${computedStockCte()} SELECT clave, stock_disponible_ml FROM computed`).all()) {
       stockMap.set(r.clave, r.stock_disponible_ml);
     }
   } catch (_) { /* sin catálogo/mapeo todavía */ }
@@ -3083,7 +3119,7 @@ export function syncRouter(db, cfg) {
     ).all();
 
     // CTE de stock disponible (compartido con syncWcToMl y reactivables)
-    const computedCte = COMPUTED_STOCK_CTE;
+    const computedCte = computedStockCte();
 
     const sincronizadas = db.prepare('SELECT COUNT(*) n FROM ml_stock_estado').get().n;
     const pendientes = db.prepare(
@@ -3602,7 +3638,7 @@ export function syncRouter(db, cfg) {
     const { clave } = req.body || {};
     if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
 
-    const row = db.prepare(`${COMPUTED_STOCK_CTE} SELECT * FROM computed WHERE clave = ?`).get(clave);
+    const row = db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
     if (!row) return res.json({ ok: false, error: 'La clave no tiene mapeo activo o SKU en el catálogo.' });
 
     const pub = db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
