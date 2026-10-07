@@ -158,6 +158,8 @@ Spec `docs/superpowers/specs/2026-10-07-fase-c-una-proteccion.md`. Variable `IDE
 - `claveBloqueadaGuardia` y la guarda de escritura de `lib/matcherPush.js` NO se tocan: delegarlas en Identidad bloquearía la saga de Identidad.
 - **Guardia en activo:** no corren el escaneo ni el worker de operaciones (sí la liberación de ventas retenidas), las escrituras de `/api/guardia-ml` responden 409 y la página muestra el aviso. Tablas en solo lectura 30 días.
 - **Reporte de sombra:** `GET /api/sync/fase-c/sombra` (admin, solo lectura): stock hoy vs activo por clave, regla, autovínculos simulados y R4 por clasificación.
+- **Frenos R4 (revisión PR #12):** los frenos van primero en la cola del sync (el tope de llamadas no los deja sin ejecutar); R4 no aplica con catálogo vacío ni con audit no confiable (>6 h); si hay más de `R4_MAX_POR_CORRIDA` (20) claves no se aplica ninguna y se abre incidente crítico `mercadolibre/fase_c_r4`. Se reenvía el 0 si el cache de ML es más nuevo que nuestro último 0.
+- **Antes de pasar a `activo`, José revisa `a_cero_por_r4.total` del reporte de sombra** (si supera el tope, R4 no se aplicaría).
 - **Despliegue:** backup, migración 120 con `sombra`, leer el reporte, OK de José, `activo` + `pm2 restart`. Vuelta atrás: `sombra` + restart.
 
 ## Pausas con sentido (Fase A, 2026-10-05)

@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { requireAdmin } from '../lib/auth.js';
+import { abrirOActualizarIncidente } from '../lib/incidentes.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
@@ -23,7 +24,7 @@ import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, esOmitir, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
-import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar, CLASIFICACIONES_SIN_VINCULO } from '../lib/proteccionIdentidad.js';
+import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar, CLASIFICACIONES_SIN_VINCULO, planR4, R4_MAX_POR_CORRIDA } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
 import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
@@ -341,7 +342,7 @@ export function reporteSombraFaseC(db) {
     sin_cambio: sinCambio,
     cambian,
     se_vincularian: seVincularian,
-    a_cero_por_r4: { total: r4.length, por_clasificacion: porClasif(r4), claves: r4.map((x) => ({ clave: x.clave, clasificacion: x.clasificacion, cantidad_ml: x.cantidad_ml })) },
+    a_cero_por_r4: { total: r4.length, se_aplicaria: planR4(db).omitido ? false : true, omitido: planR4(db).omitido, tope: R4_MAX_POR_CORRIDA, por_clasificacion: porClasif(r4), claves: r4.map((x) => ({ clave: x.clave, clasificacion: x.clasificacion, cantidad_ml: x.cantidad_ml })) },
     sin_decision_sin_frenar: { total: resto.length, por_clasificacion: porClasif(resto) },
   };
 }
@@ -1398,13 +1399,28 @@ async function _syncWcToMl(db, cfg, opts = {}) {
   // marque `omitir`. Es la misma escritura y el mismo log que el resto; no pausa. `ml_stock_estado` recuerda el 0 ya
   // enviado (sku '' porque no hay vínculo), así no se repite el PUT mientras el cache de ML se refresca.
   if (modoProteccion() === 'activo') {
+    const plan = planR4(db);
+    if (plan.omitido) {
+      console.error(`[fase-c] R4 no aplicada (${plan.omitido}): ${plan.total} clave(s) sin vínculo`);
+      if (plan.omitido === 'tope') {
+        abrirOActualizarIncidente(db, {
+          integracion: 'mercadolibre', proceso: 'fase_c_r4', tipoError: 'tope_r4', severidad: 'critico',
+          mensajeTecnico: `R4 supera el tope de ${R4_MAX_POR_CORRIDA} claves por corrida: ${plan.total}`,
+          mensajeHumano: `Identidad quiere poner en stock 0 ${plan.total} publicaciones sin vincular, más del tope de ${R4_MAX_POR_CORRIDA}. No se aplicó ninguna: revisá si el catálogo o la auditoría de Identidad fallaron.`,
+          contexto: { total: plan.total, tope: R4_MAX_POR_CORRIDA },
+        });
+      }
+    }
     const estadoStock = db.prepare('SELECT cantidad_ml, actualizado_en FROM ml_stock_estado WHERE clave=?');
-    for (const r of clavesSinVinculoAFrenar(db)) {
+    for (const r of plan.aplicar) {
       const e = estadoStock.get(r.clave);
-      if (e && e.cantidad_ml === 0) continue;
-      diffs.push({ clave: r.clave, sku: '', stock_disponible_ml: 0, cantidad_ml: e?.cantidad_ml ?? r.cantidad_ml,
+      // ml_stock_estado.sku es NOT NULL: sin vínculo se guarda el seller_sku de ML (o la clave).
+      diffs.push({ clave: r.clave, sku: String(r.seller_sku ?? '').trim() || r.clave, stock_disponible_ml: 0, cantidad_ml: e?.cantidad_ml ?? r.cantidad_ml,
         ml_stock_actualizado_en: e?.actualizado_en ?? null, sin_vinculo: r.clasificacion });
     }
+    // Los frenos (R4 y R2 con stock 0) van primero: el tope de llamadas por corrida no puede dejarlos sin ejecutar.
+    const esFreno = (d) => d.sin_vinculo || (d.frena_identidad && d.stock_disponible_ml === 0);
+    diffs.sort((x, y) => Number(!!esFreno(y)) - Number(!!esFreno(x)));
   }
 
   // Cache de estado de publicación por itemId (una consulta por item por corrida).
@@ -3520,13 +3536,13 @@ export function syncRouter(db, cfg) {
     }
   });
 
-  // Publicaciones que la reactivación automática frenó por precio (neto por debajo del contado).
   // Fase C: reporte de sombra para José (solo admin). Solo lectura.
   router.get('/fase-c/sombra', requireAdmin, (_req, res) => {
     try { res.json({ ok: true, data: reporteSombraFaseC(db) }); }
     catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 
+  // Publicaciones que la reactivación automática frenó por precio (neto por debajo del contado).
   router.get('/frenadas', (req, res) => {
     const data = db.prepare(`
       SELECT f.clave, f.sku, f.motivo, f.neto, f.precio_contado, f.deficit_pct, f.detectado_en,

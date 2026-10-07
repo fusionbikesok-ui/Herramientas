@@ -13,12 +13,14 @@ const TS = '2026-10-07T12:00:00.000Z';
 describe('Fase C: R4 en el sync (publicación nueva sin vínculo → stock 0)', () => {
   let db;
   const env0 = process.env.IDENTIDAD_PROTECCION;
-  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); vi.useFakeTimers(); mlFetch.mockResolvedValue({ status: 200, data: {} }); });
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); vi.useFakeTimers(); mlFetch.mockResolvedValue({ status: 200, data: {} }); auditConfiable(); catalogoNoVacio(); });
   afterEach(() => {
     vi.useRealTimers(); db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
     if (env0 === undefined) delete process.env.IDENTIDAD_PROTECCION; else process.env.IDENTIDAD_PROTECCION = env0;
   });
 
+  const auditConfiable = (en = new Date().toISOString()) => db.prepare('UPDATE identidad_config SET ultimo_scan_confiable_en=? WHERE id=1').run(en);
+  const catalogoNoVacio = () => db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (999,'P','FB-X','simple',1,?)").run(TS);
   const pub = (n, { vid = '', sku = null, qty = 5, status = 'active' } = {}) => {
     const clave = `MLA${n}|${vid}`;
     db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,seller_sku,available_quantity,actualizado_en)
@@ -73,5 +75,59 @@ describe('Fase C: R4 en el sync (publicación nueva sin vínculo → stock 0)', 
     const c = pub(1, { sku: 'FB-1' }); caso(c, 'gtin_contradictorio');
     await correr();
     expect(puts()).toHaveLength(0);
+  });
+
+  it('MEDIO 1: con backlog > tope, la clave R4 se envía en la primera corrida', async () => {
+    process.env.IDENTIDAD_PROTECCION = 'activo';
+    for (let i = 1; i <= 5; i++) {
+      const sku = `FB-${i}`;
+      db.prepare("INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (?,?,?,'simple',3,?)").run(100 + i, sku, sku, TS);
+      const c = pub(100 + i, { sku, qty: 9 });
+      db.prepare("INSERT INTO sku_matcher_decisiones (clave,sku,accion,actualizado_en) VALUES (?,?,'confirmar',?)").run(c, sku, TS);
+    }
+    const r4 = pub(1); caso(r4);
+    const p = syncWcToMl(db, CFG, { maxLlamadas: 2 }); await vi.runAllTimersAsync(); await p;
+    expect(puts().some((c) => c[3] === '/items/MLA1')).toBe(true);
+  });
+
+  it('MEDIO 2a: catálogo vacío o audit no confiable → R4 no aplica', async () => {
+    process.env.IDENTIDAD_PROTECCION = 'activo';
+    const c = pub(1); caso(c);
+    db.prepare('DELETE FROM catalogo_cache').run();
+    await correr(); expect(puts()).toHaveLength(0);
+    catalogoNoVacio(); auditConfiable(null);
+    await correr(); expect(puts()).toHaveLength(0);
+    auditConfiable(new Date(Date.now() - 7 * 3600e3).toISOString());
+    await correr(); expect(puts()).toHaveLength(0);
+    auditConfiable();
+    await correr(); expect(puts()).toHaveLength(1);
+  });
+
+  it('MEDIO 2b: más de 20 claves R4 en una corrida → no se aplica ninguna y se abre incidente crítico', async () => {
+    process.env.IDENTIDAD_PROTECCION = 'activo';
+    for (let i = 1; i <= 21; i++) caso(pub(i));
+    await correr();
+    expect(puts()).toHaveLength(0);
+    const inc = db.prepare("SELECT severidad, estado, mensaje_humano FROM incidentes_operativos WHERE integracion='mercadolibre' AND proceso='fase_c_r4'").get();
+    expect(inc).toMatchObject({ severidad: 'critico', estado: 'activo' });
+    expect(inc.mensaje_humano).toContain('21');
+  });
+
+  it('BAJO 3: si alguien subió stock a mano (cache más nuevo que nuestro 0) se reenvía el 0', async () => {
+    process.env.IDENTIDAD_PROTECCION = 'activo';
+    const c = pub(1); caso(c);
+    db.prepare("INSERT INTO ml_stock_estado (clave,sku,cantidad_ml,actualizado_en) VALUES (?,?,0,'2020-01-01T00:00:00.000Z')").run(c, 'x');
+    await correr();
+    expect(puts()).toHaveLength(1);
+  });
+
+  it('BAJO 4: no guarda sku vacío en ml_stock_estado', async () => {
+    process.env.IDENTIDAD_PROTECCION = 'activo';
+    const c = pub(1, { sku: 'ABC' }); caso(c, 'sku_inexistente');
+    await correr();
+    expect(db.prepare('SELECT sku FROM ml_stock_estado WHERE clave=?').get(c).sku).toBe('ABC');
+    const d = pub(2); caso(d);
+    await correr();
+    expect(db.prepare('SELECT sku FROM ml_stock_estado WHERE clave=?').get(d).sku).not.toBe('');
   });
 });
