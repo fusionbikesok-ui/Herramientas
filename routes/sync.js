@@ -10,7 +10,8 @@
 import { Router } from 'express';
 import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
-import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
+import { requireAdmin } from '../lib/auth.js';
+import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
@@ -22,7 +23,7 @@ import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, esOmitir, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
-import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar } from '../lib/proteccionIdentidad.js';
+import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar, CLASIFICACIONES_SIN_VINCULO } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
 import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
@@ -300,6 +301,50 @@ const COMPUTED_STOCK_CTE_ACTIVO = `
       WHERE d.accion IN ('asignar','confirmar')
       AND d.sku IS NOT NULL AND d.sku <> ''
   )`;
+
+
+/**
+ * Fase C, paso 5: reporte de sombra. Compara lo que el sync manda hoy (CTE actual) con lo que mandaría en `activo`,
+ * sin escribir nada: el autovínculo se simula dentro de un SAVEPOINT que se revierte.
+ */
+export function reporteSombraFaseC(db) {
+  const leer = (cte) => new Map(db.prepare(`${cte} SELECT clave, sku, stock_disponible_ml AS s, cantidad_ml FROM computed`).all().map((r) => [r.clave, r]));
+  const actual = leer(COMPUTED_STOCK_CTE_ACTUAL);
+  const activo = leer(COMPUTED_STOCK_CTE_ACTIVO);
+  const cambian = [];
+  let sinCambio = 0;
+  for (const [clave, r] of activo) {
+    const antes = actual.has(clave) ? actual.get(clave).s : null;
+    if (antes === r.s) { sinCambio++; continue; }
+    const f = frenaIdentidad(db, clave);
+    cambian.push({ clave, sku: r.sku, antes, despues: r.s, regla: f.frena ? f.motivo : (antes === null ? 'guardia_deja_de_bloquear' : 'otra') });
+  }
+  const antesDecisiones = new Set(db.prepare('SELECT clave FROM sku_matcher_decisiones').all().map((r) => r.clave));
+  db.exec('SAVEPOINT fase_c_sombra');
+  let seVincularian = [];
+  try {
+    autoVincularPorSellerSku(db);
+    seVincularian = db.prepare("SELECT clave, sku FROM sku_matcher_decisiones WHERE origen='auto_seller_sku'").all().filter((r) => !antesDecisiones.has(r.clave));
+  } finally {
+    db.exec('ROLLBACK TO fase_c_sombra; RELEASE fase_c_sombra');
+  }
+  const vinculables = new Set(seVincularian.map((x) => x.clave));
+  const r4 = clavesSinVinculoAFrenar(db).filter((x) => !vinculables.has(x.clave));
+  const porClasif = (filas) => filas.reduce((a, x) => { a[x.clasificacion] = (a[x.clasificacion] || 0) + 1; return a; }, {});
+  const resto = db.prepare(`SELECT p.clave, ic.clasificacion FROM ml_publicaciones_cache p
+    JOIN identidad_casos ic ON ic.direccion='ml_fusion' AND ic.ml_key=p.clave AND ic.estado IN ('urgente','tomado','pendiente','intervencion')
+    WHERE p.status='active' AND COALESCE(p.available_quantity,0)>0
+      AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave=p.clave)`).all()
+    .filter((x) => !CLASIFICACIONES_SIN_VINCULO.includes(x.clasificacion));
+  return {
+    modo: modoProteccion(),
+    sin_cambio: sinCambio,
+    cambian,
+    se_vincularian: seVincularian,
+    a_cero_por_r4: { total: r4.length, por_clasificacion: porClasif(r4), claves: r4.map((x) => ({ clave: x.clave, clasificacion: x.clasificacion, cantidad_ml: x.cantidad_ml })) },
+    sin_decision_sin_frenar: { total: resto.length, por_clasificacion: porClasif(resto) },
+  };
+}
 
 /** La CTE de stock según el modo de protección (IDENTIDAD_PROTECCION). Se evalúa en cada uso: pm2 restart la cambia. */
 export function computedStockCte(env = process.env) {
@@ -3476,6 +3521,12 @@ export function syncRouter(db, cfg) {
   });
 
   // Publicaciones que la reactivación automática frenó por precio (neto por debajo del contado).
+  // Fase C: reporte de sombra para José (solo admin). Solo lectura.
+  router.get('/fase-c/sombra', requireAdmin, (_req, res) => {
+    try { res.json({ ok: true, data: reporteSombraFaseC(db) }); }
+    catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
   router.get('/frenadas', (req, res) => {
     const data = db.prepare(`
       SELECT f.clave, f.sku, f.motivo, f.neto, f.precio_contado, f.deficit_pct, f.detectado_en,
