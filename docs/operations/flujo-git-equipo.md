@@ -69,7 +69,10 @@ El 2026-10-05 eso trabó un despliegue y borró de producción una tarjeta del i
 1. ~~Subir `conteo-confiable` a GitHub.~~ Hecho.
 2. ~~Llevar `master` a lo que corre producción.~~ Hecho el 2026-10-06 (PR #1, merge `1891af6e`; la nota obsoleta de `master` del 26/08 se integró con `-s ours`). Falta:
    - archivar `conteo-confiable`;
-   - cambiar el checkout de producción a `master`.
+   - cambiar el checkout de producción a `master`. **En pausa desde el 2026-10-07** (decisión de José): Astra sigue
+     editando Mensajería directo en producción. `master` tiene Mensajería al 07/10 (PRs #5 y #6); el PR #7 (canal Web)
+     quedó en borrador. Cuando Astra termine, se rehace el PR desde producción y recién después se pasa el checkout,
+     repitiendo antes `git status` y el diff contra el `master` de ese momento.
 3. Proteger `master` en GitHub.
 4. Darle a Astra un usuario SSH propio con clave, en lugar de `root` con contraseña. También:
    - crear su worktree;
