@@ -1346,6 +1346,20 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     ORDER BY ml_stock_actualizado_en IS NOT NULL, ml_stock_actualizado_en ASC
   `).all();
 
+  // Fase C, R4 (sólo en modo `activo`): una publicación activa SIN decisión a la que el audit de Identidad no pudo
+  // vincular (sin SKU, SKU inexistente o ambiguo, contradicción) queda en stock 0 hasta que alguien la vincule o la
+  // marque `omitir`. Es la misma escritura y el mismo log que el resto; no pausa. `ml_stock_estado` recuerda el 0 ya
+  // enviado (sku '' porque no hay vínculo), así no se repite el PUT mientras el cache de ML se refresca.
+  if (modoProteccion() === 'activo') {
+    const estadoStock = db.prepare('SELECT cantidad_ml, actualizado_en FROM ml_stock_estado WHERE clave=?');
+    for (const r of clavesSinVinculoAFrenar(db)) {
+      const e = estadoStock.get(r.clave);
+      if (e && e.cantidad_ml === 0) continue;
+      diffs.push({ clave: r.clave, sku: '', stock_disponible_ml: 0, cantidad_ml: e?.cantidad_ml ?? r.cantidad_ml,
+        ml_stock_actualizado_en: e?.actualizado_en ?? null, sin_vinculo: r.clasificacion });
+    }
+  }
+
   // Cache de estado de publicación por itemId (una consulta por item por corrida).
   // ML rechaza con HTTP 400 cualquier update de stock sobre publicaciones que no
   // estén activas (paused, closed, under_review). Se saltan silenciosamente para
