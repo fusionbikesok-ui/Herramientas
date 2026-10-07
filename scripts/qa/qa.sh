@@ -67,6 +67,7 @@ generar_env() {
     echo "WOO_CK=ck_qa_$(openssl rand -hex 12)"
     echo "WOO_CS=cs_qa_$(openssl rand -hex 12)"
     echo "APP_URL=http://127.0.0.1:3101"
+    echo "INBOX_PUBLIC_ORIGIN=http://127.0.0.1:3101"
     echo "SOMBRA_PLATAFORMA_URL=http://qa-plataforma:3300"
     echo "SOMBRA_KEYRING_FILE=/run/qa/keyring.json"
   } > "$f"
