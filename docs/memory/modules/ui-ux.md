@@ -120,3 +120,11 @@ Detectada en el E2E de Fase B; no es de esa rama. Controles por debajo de 44 px 
 ## Facturador VPS en producción — 2026-10-05
 
 /herramientas/gestion-vps/?fm_module=facturador muestra emisión manual activa punto15. Selección de variante y precio contado local, series de bicicletas, carga de pedido, borradores con revisión y PDF privado. Configuración sólo consulta, pruebas WSFE/Padrón operativas; botones ML/bulk/mensajería permanecen bloqueados y explican pendiente. Home de Gestión actualizado. Sesión/admin/Origin/CSRF verificadas y cuerpos fiscales firmados; sin parámetros de mutación por query. Formularios privados con campos en español; ninguna factura real durante QA.
+
+## Mensajería (2026-10-07)
+
+- Home agrega Atención al cliente → Mensajería, visible según permiso también para no administradores. UI con tokens compartidos, controles táctiles de 44 px y bandeja/detalle adaptable a 390/768/1440 px.
+- Sesión identifica al agente; filtros sin asignar/mías/cerradas, notas privadas, transferencia y pausa/retorno explícito IA. Matías consulta sin compositor habilitado. Teléfono con copiar y contexto de chat web conservado.
+- Historial cronológico por fecha+ID, paginación y reinicio de página tras desconexión sin solapamiento; borrador se conserva. IA se informa según estado local y habilitación/conexión efectiva del número.
+
+- Los números pendientes se muestran en el panel de estado; el filtro de conversaciones sólo habilita IDs configurados y se deshabilita si no hay ninguno.

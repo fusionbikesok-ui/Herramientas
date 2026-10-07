@@ -614,6 +614,9 @@ fetch('/api/auth/me').then(function(r) {
      Se muestran sólo a admin y con el estado a la vista — esconderlas es cómo llegamos a tener
      cuatro pantallas construidas que nadie podía alcanzar. */
   var GRUPOS = [
+    { titulo: 'Atención al cliente', color: 'control', tools: [
+      { tool: 'mensajeria', href: 'mensajeria', t: 'Mensajería', d: 'Atendé WhatsApp con el equipo, asigná conversaciones y consultá el historial junto con Fabri IA.', tag: 'WhatsApp · Equipo · Atención' },
+    ]},
     { titulo: 'Ventas, informes y etiquetas', color: 'control', adminOnly: true, tools: [
       { tool: 'gestion-vps', href: 'gestion-vps/pos-web', t: 'Punto de venta · web', d: 'Abrí el POS original para vender, consultar cuotas y cobrar con los pedidos de la tienda.', tag: 'Ventas · Cuotas · Cobros' },
       { tool: 'gestion-vps', href: 'gestion-vps/facturador-web', t: 'Facturador ARCA · web', d: 'Facturá pedidos y ventas de Mercado Libre desde la web. Historial, correo y WhatsApp.', tag: 'ARCA · Web · Mercado Libre' },

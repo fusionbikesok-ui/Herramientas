@@ -1273,3 +1273,6 @@ Fuente: `docs/superpowers/specs/2026-10-03-consolidacion-herramientas.md` (hecho
 - **~4.800 mensajes `pending` en `integrations.inbox_messages`** sin consumidor desde el 17–18/09 (corrientes en sombra); José decide en E1 si se consumen o se deja de guardarlos.
 - Bandeja E3 (`fix/integracion-0028`): despliegue en pausa; con la decisión de no llevar su UX al legado se replantea (posiblemente sólo la migración 0028 y correcciones de catálogo).
 
+## Atención WhatsApp (2026-10-07)
+
+Bandeja preparada en `/herramientas/mensajeria/`; contrato operativo en `integrations/mensajeria/README.md`. José supervisa, Santi/Miguel/Fabri atienden y Matías consulta. El chat web continúa. Coexistencia con teléfonos y publicación Meta pendientes; sin números reales habilitados para envío.

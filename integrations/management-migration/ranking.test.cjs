@@ -1,6 +1,13 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {groups,share,periodRange,monthRange}=require('./assets/metrics.js');
+// Browser UMD asset: evaluate its CommonJS branch despite the parent ESM package.
+const {readFileSync}=require('node:fs');
+const {join}=require('node:path');
+const {runInThisContext}=require('node:vm');
+const asset=join(__dirname,'assets/metrics.js');
+const common={exports:{}};
+runInThisContext('(function(module){'+readFileSync(asset,'utf8')+'\n})',{filename:asset})(common);
+const {groups,share,periodRange,monthRange}=common.exports;
 
 test('Un modelo agrupa sus variantes sin sumar dos veces el mismo pedido',()=>{
  const rows=[{modelKey:'p:1',brand:'ZION',quantity:2,amount:50,order:10},{modelKey:'p:1',brand:'ZION',quantity:1,amount:25,order:10},{modelKey:'p:1',brand:'ZION',quantity:1,amount:25,order:11}];
