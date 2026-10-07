@@ -1,6 +1,7 @@
 import express from 'express';
 import { escanearGuardiaMl, estadoGuardiaMl, listarGuardiaMl, registrarEventoGuardia, encolarOperacionGuardia, liberarPedidoRetenido, cerrarAvisoVentaRetenida } from '../lib/guardiaMl.js';
 import { requireAdmin } from '../lib/auth.js';
+import { modoProteccion } from '../lib/proteccionIdentidad.js';
 import { perfilPublicacionMl } from '../lib/guardiaMlAprendizaje.js';
 import { decidirCasoIdentidad } from '../lib/identidadProductos.js';
 import { detectarContradiccion, contradiccionDeClave } from '../lib/contradiccionTitulo.js';
@@ -15,7 +16,14 @@ function motivoValido(m) { return ['sin_sku_woo','producto_inexistente','vinculo
 
 export function guardiaMlRouter(db, _cfg) {
   const router = express.Router();
-  router.get('/estado', (_req, res) => res.json({ ok:true, data:estadoGuardiaMl(db) }));
+  // Fase C: en modo `activo` Guardia se retira y sus tablas quedan en solo lectura (30 días). La protección vive en Identidad.
+  router.use((req, res, next) => {
+    if (modoProteccion() === 'activo' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      return res.status(409).json({ ok: false, error: 'Guardia se retiró: la protección vive en Identidad (solo lectura).' });
+    }
+    next();
+  });
+  router.get('/estado', (_req, res) => res.json({ ok:true, data:{ ...estadoGuardiaMl(db), retirada: modoProteccion() === 'activo' } }));
   router.get('/casos', (req, res) => res.json({ ok:true, modo:estadoGuardiaMl(db).modo, data:listarGuardiaMl(db, { soloUrgentes:req.query.urgentes==='1' }) }));
   router.get('/casos/:id/opciones', (req, res) => {
     const caso = db.prepare(`SELECT g.id,g.clave,p.item_id,p.variation_id,p.titulo,p.variations_texto,p.seller_sku,

@@ -1277,3 +1277,4 @@ Fuente: `docs/superpowers/specs/2026-10-03-consolidacion-herramientas.md` (hecho
 
 Bandeja preparada en `/herramientas/mensajeria/`; contrato operativo en `integrations/mensajeria/README.md`. José supervisa, Santi/Miguel/Fabri atienden y Matías consulta. El chat web continúa. Coexistencia con teléfonos y publicación Meta pendientes; sin números reales habilitados para envío.
 - 2026-10-07: `npm test` vuelve a ser solo `vitest run` (para correr archivos sueltos); los tests node de `integrations/management-migration` van en `npm run test:migration` y ambos en `npm run test:all`. QA define `INBOX_PUBLIC_ORIGIN` para que Mensajería acepte escrituras.
+- 2026-10-07: Fase C (una sola protección, Identidad) implementada en `feat/fase-c-proteccion`; modo `IDENTIDAD_PROTECCION` (default sombra), reporte `GET /api/sync/fase-c/sombra`. Detalle en `modules/integrations-ml-woo.md`.

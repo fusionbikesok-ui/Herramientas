@@ -11,6 +11,7 @@ import {
 import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { escanearGuardiaMl } from '../lib/guardiaMl.js';
+import { modoProteccion } from '../lib/proteccionIdentidad.js';
 import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl, marcarClaveNoSincroniza } from '../lib/identidadProductos.js';
 import { detectarCambios } from '../lib/vigiaFormato.js';
 import { procesarCambios } from '../lib/vigiaPausado.js';
@@ -98,7 +99,8 @@ export function dispararRefrescoMl(db, cfg, scope = 'all') {
       _refresco.actualizado_en = now();
       // UM1: solo genera/actualiza casos locales; nunca escribe seller_sku, stock ni estados
       // remotos. Si el refresco fue completo, la lectura de Guardia tiene una base confiable.
-      escanearGuardiaMl(db, 'sistema', { lecturaMlConfirmada: true });
+      // Fase C: en activo Guardia está retirada; la protección es Identidad (auditarIdentidadProductos, abajo).
+      if (modoProteccion() !== 'activo') escanearGuardiaMl(db, 'sistema', { lecturaMlConfirmada: true });
       // Los GTIN que sólo conoce ML se incorporan como identificadores acá porque acá es
       // donde `ml_publicaciones_cache` acaba de quedar fresca. Sólo con lectura confiable:
       // es idempotente y aditiva, pero registrar un conflicto pone trabajo en la bandeja de

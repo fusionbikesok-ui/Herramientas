@@ -31,6 +31,7 @@ import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { guardiaMlRouter } from './routes/guardiaMl.js';
 import { procesarOperacionesGuardia, liberarRetenidasResueltas } from './lib/guardiaMl.js';
+import { modoProteccion } from './lib/proteccionIdentidad.js';
 import { procesarOperacionesIdentidad } from './lib/identidadProductos.js';
 import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
@@ -922,7 +923,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         if (!r.ok && !r.running) console.error('Guardia ML: no se pudo iniciar lectura:', r.error);
       });
       cron.schedule('*/5 * * * *', () => {
-        procesarOperacionesGuardia(app._db, syncCfg)
+        // Fase C: en activo Guardia no ejecuta operaciones; la liberación de ventas retenidas sigue.
+        (modoProteccion() === 'activo' ? Promise.resolve() : procesarOperacionesGuardia(app._db, syncCfg))
           .catch(err => console.error('Guardia ML operaciones:', err.message))
           // A continuación: un vincular confirmado en esta misma corrida ya libera la venta.
           .finally(() => {

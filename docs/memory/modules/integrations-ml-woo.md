@@ -146,6 +146,22 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   sagas de Guardia/Identidad. La saga revalida contradicción antes de restaurar stock o activar una
   identidad; en conflicto deja el caso abierto y registra historial.
 
+## Una sola protección: Identidad (Fase C, 2026-10-07)
+
+Spec `docs/superpowers/specs/2026-10-07-fase-c-una-proteccion.md`. Variable `IDENTIDAD_PROTECCION` = `apagado` | `sombra` (default; valor inválido = sombra) | `activo`. En `sombra`/`apagado` todo se comporta como antes; el código nuevo vive en `lib/proteccionIdentidad.js`.
+
+- **R1** `omitir` (links de pago) queda fuera de todo; la migración 120 cierra los casos `sin_cobertura` de Guardia de esas claves (evento `cerrado_omitida_link_pago`).
+- **R2** el SKU manda: publicación vinculada con caso abierto → stock 0 (sin pausar ni tocar precio) solo si el caso está en `intervencion` o hay contradicción (`gtin_contradictorio`/`contradiccion_titulo`) con `seller_sku` ausente o distinto del vinculado. Con SKU igual la severidad baja a `normal` y el sync sigue. `computedStockCte()` en `routes/sync.js` elige la CTE por modo.
+- **R3** autovínculo por SKU exacto y único (`autoVincularPorSellerSku`); el GTIN no veta.
+- **R4** publicación activa sin decisión con caso abierto `sku_ausente`/`sku_vacio`/`sku_inexistente`/`sku_no_unico`/`contradiccion_titulo` → stock 0 en activo (no hay clase `sin_vinculo` nueva). `stock_no_verificado` no frena.
+- **R5** retención de ventas ML: cobertura = decisión asignar/confirmar y sin freno R2; `omitir` nunca retiene (`claveCubiertaParaVenta`, `claveFrenadaParaVenta`, `esOmitir` en `lib/guardiaMl.js`).
+- `claveBloqueadaGuardia` y la guarda de escritura de `lib/matcherPush.js` NO se tocan: delegarlas en Identidad bloquearía la saga de Identidad.
+- **Guardia en activo:** no corren el escaneo ni el worker de operaciones (sí la liberación de ventas retenidas), las escrituras de `/api/guardia-ml` responden 409 y la página muestra el aviso. Tablas en solo lectura 30 días.
+- **Reporte de sombra:** `GET /api/sync/fase-c/sombra` (admin, solo lectura): stock hoy vs activo por clave, regla, autovínculos simulados y R4 por clasificación.
+- **Frenos R4 (revisión PR #12):** los frenos van primero en la cola del sync (el tope de llamadas no los deja sin ejecutar); R4 no aplica con catálogo vacío ni con audit no confiable (>6 h); si hay más de `R4_MAX_POR_CORRIDA` (20) claves no se aplica ninguna y se abre incidente crítico `mercadolibre/fase_c_r4`. Se reenvía el 0 si el cache de ML es más nuevo que nuestro último 0.
+- **Antes de pasar a `activo`, José revisa `a_cero_por_r4.total` del reporte de sombra** (si supera el tope, R4 no se aplicaría).
+- **Despliegue:** backup, migración 120 con `sombra`, leer el reporte, OK de José, `activo` + `pm2 restart`. Vuelta atrás: `sombra` + restart.
+
 ## Pausas con sentido (Fase A, 2026-10-05)
 
 - **Vigía de formato** (`lib/vigiaPausado.js`): sólo pausa cambios reales. **Vacío → producto no pausa**: casi siempre es ML asignando catálogo; queda como aviso abierto (`aviso_catalogo`, `solo_aviso=1`) para que una persona lo mire y **no bloquea al reactivador**. Tampoco pausan `desaparece`, `oscila`, `alta_reciente` ni `migracion` (migración de ML). El texto informativo de un aviso sin pausa va en `ml_publicacion_cambios.nota`; `pausada=1` sólo si el vigía pausó de verdad.

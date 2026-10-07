@@ -10,7 +10,9 @@
 import { Router } from 'express';
 import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
-import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta } from '../lib/mlMapeo.js';
+import { requireAdmin } from '../lib/auth.js';
+import { abrirOActualizarIncidente } from '../lib/incidentes.js';
+import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
@@ -21,7 +23,8 @@ import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVe
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { retenerPedidoMl, pedidoMlRetenido, claveBloqueadaGuardia, esClaveCubierta, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
+import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, esOmitir, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
+import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar, CLASIFICACIONES_SIN_VINCULO, planR4, R4_MAX_POR_CORRIDA } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
 import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
@@ -245,7 +248,7 @@ export function bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAn
 // red de seguridad barata para esa clase de bug (o para un refresh interrumpido a mitad de
 // camino): si igual aparece un SKU repetido, se elige el MENOR stock entre las filas — opción
 // fail-closed, como mucho se pierde una venta, nunca se sobrevende en ML.
-const COMPUTED_STOCK_CTE = `
+const COMPUTED_STOCK_CTE_ACTUAL = `
   WITH catalogo_dedup AS (
     SELECT sku, stock,
       ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
@@ -269,6 +272,85 @@ const COMPUTED_STOCK_CTE = `
       WHERE d.accion IN ('asignar','confirmar') AND gm.id IS NULL
       AND d.sku IS NOT NULL AND d.sku <> ''
   )`;
+
+// Fase C (spec 2026-10-07-fase-c-una-proteccion.md, R2): una sola protección. En modo `activo` la CTE ya no mira
+// Guardia: las claves que frena Identidad (`sqlFrenaIdentidad`) no se excluyen, se mandan con stock 0 (el sync
+// pone available_quantity=0, no pausa) y vuelven solas con el stock de Woo cuando el caso se resuelve. En `sombra`
+// y `apagado` la CTE es exactamente la de hoy (COMPUTED_STOCK_CTE_ACTUAL): lo que se manda a ML no cambia.
+const COMPUTED_STOCK_CTE_ACTIVO = `
+  WITH catalogo_dedup AS (
+    SELECT sku, stock,
+      ROW_NUMBER() OVER (PARTITION BY sku ORDER BY stock ASC, id_woo ASC) AS rn
+    FROM catalogo_cache
+    WHERE sku IS NOT NULL AND sku <> ''
+  ),
+  computed AS (
+    SELECT d.clave, d.sku, c.stock AS stock_wc,
+      cfg.modo, COALESCE(cfg.reserva, 0) AS reserva,
+      CASE
+        WHEN ${sqlFrenaIdentidad('d.clave', 'd.sku')} THEN 0
+        WHEN cfg.modo = 'solo_local' THEN 0
+        WHEN cfg.modo = 'reserva' THEN MAX(c.stock - COALESCE(cfg.reserva, 0), 0)
+        ELSE MAX(c.stock, 0)
+      END AS stock_disponible_ml,
+      e.cantidad_ml, e.actualizado_en AS ml_stock_actualizado_en,
+      CASE WHEN ${sqlFrenaIdentidad('d.clave', 'd.sku')} THEN 1 ELSE 0 END AS frena_identidad
+    FROM sku_matcher_decisiones d
+    JOIN catalogo_dedup c ON c.sku = d.sku AND c.rn = 1
+    LEFT JOIN ml_stock_estado e ON e.clave = d.clave
+      LEFT JOIN skus_config_ml cfg ON cfg.sku = d.sku
+      WHERE d.accion IN ('asignar','confirmar')
+      AND d.sku IS NOT NULL AND d.sku <> ''
+  )`;
+
+
+/**
+ * Fase C, paso 5: reporte de sombra. Compara lo que el sync manda hoy (CTE actual) con lo que mandaría en `activo`,
+ * sin escribir nada: el autovínculo se simula dentro de un SAVEPOINT que se revierte.
+ */
+export function reporteSombraFaseC(db) {
+  const leer = (cte) => new Map(db.prepare(`${cte} SELECT clave, sku, stock_disponible_ml AS s, cantidad_ml FROM computed`).all().map((r) => [r.clave, r]));
+  const actual = leer(COMPUTED_STOCK_CTE_ACTUAL);
+  const activo = leer(COMPUTED_STOCK_CTE_ACTIVO);
+  const cambian = [];
+  let sinCambio = 0;
+  for (const [clave, r] of activo) {
+    const antes = actual.has(clave) ? actual.get(clave).s : null;
+    if (antes === r.s) { sinCambio++; continue; }
+    const f = frenaIdentidad(db, clave);
+    cambian.push({ clave, sku: r.sku, antes, despues: r.s, regla: f.frena ? f.motivo : (antes === null ? 'guardia_deja_de_bloquear' : 'otra') });
+  }
+  const antesDecisiones = new Set(db.prepare('SELECT clave FROM sku_matcher_decisiones').all().map((r) => r.clave));
+  db.exec('SAVEPOINT fase_c_sombra');
+  let seVincularian = [];
+  try {
+    autoVincularPorSellerSku(db);
+    seVincularian = db.prepare("SELECT clave, sku FROM sku_matcher_decisiones WHERE origen='auto_seller_sku'").all().filter((r) => !antesDecisiones.has(r.clave));
+  } finally {
+    db.exec('ROLLBACK TO fase_c_sombra; RELEASE fase_c_sombra');
+  }
+  const vinculables = new Set(seVincularian.map((x) => x.clave));
+  const r4 = clavesSinVinculoAFrenar(db).filter((x) => !vinculables.has(x.clave));
+  const porClasif = (filas) => filas.reduce((a, x) => { a[x.clasificacion] = (a[x.clasificacion] || 0) + 1; return a; }, {});
+  const resto = db.prepare(`SELECT p.clave, ic.clasificacion FROM ml_publicaciones_cache p
+    JOIN identidad_casos ic ON ic.direccion='ml_fusion' AND ic.ml_key=p.clave AND ic.estado IN ('urgente','tomado','pendiente','intervencion')
+    WHERE p.status='active' AND COALESCE(p.available_quantity,0)>0
+      AND NOT EXISTS (SELECT 1 FROM sku_matcher_decisiones d WHERE d.clave=p.clave)`).all()
+    .filter((x) => !CLASIFICACIONES_SIN_VINCULO.includes(x.clasificacion));
+  return {
+    modo: modoProteccion(),
+    sin_cambio: sinCambio,
+    cambian,
+    se_vincularian: seVincularian,
+    a_cero_por_r4: { total: r4.length, se_aplicaria: planR4(db).omitido ? false : true, omitido: planR4(db).omitido, tope: R4_MAX_POR_CORRIDA, por_clasificacion: porClasif(r4), claves: r4.map((x) => ({ clave: x.clave, clasificacion: x.clasificacion, cantidad_ml: x.cantidad_ml })) },
+    sin_decision_sin_frenar: { total: resto.length, por_clasificacion: porClasif(resto) },
+  };
+}
+
+/** La CTE de stock según el modo de protección (IDENTIDAD_PROTECCION). Se evalúa en cada uso: pm2 restart la cambia. */
+export function computedStockCte(env = process.env) {
+  return modoProteccion(env) === 'activo' ? COMPUTED_STOCK_CTE_ACTIVO : COMPUTED_STOCK_CTE_ACTUAL;
+}
 
 // ─── syncMlToWc ──────────────────────────────────────────────────────────────
 
@@ -699,8 +781,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const clavesSinCobertura = [];
   const clavesBloqueadas = [];
   for (const item of ov.items) {
+    // Fase C R5: en activo, un link de pago (`omitir`) no se sincroniza ni retiene la venta.
+    if (modoProteccion() === 'activo' && esOmitir(db, item.clave)) continue;
     const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
-    const cubiertaPorVinculo = !!skuVinculado && !!buscarEnCache(db, skuVinculado) && esClaveCubierta(db, item.clave);
+    const cubiertaPorVinculo = !!skuVinculado && !!buscarEnCache(db, skuVinculado) && claveCubiertaParaVenta(db, item.clave);
     // Decisión del usuario (2026-09-05). Esta guarda y el fallback anti-sobreventa de más
     // abajo (~línea 700) venían del commit base conflictivo y se contradecían: la guarda
     // retenía la orden entera antes de que el fallback pudiera usar el `seller_sku` que trae
@@ -719,13 +803,13 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     // GUARDIA: verificar también si la clave está bloqueada (seller_sku divergente o sin
     // resolver). Esto NO lo levanta la cobertura por seller_sku: una clave que Guardia marcó
     // como divergente se retiene igual, porque ahí el seller_sku es justamente el dato en duda.
-    if (claveBloqueadaGuardia(db, item.clave)) clavesBloqueadas.push(item.clave);
+    if (claveFrenadaParaVenta(db, item.clave)) clavesBloqueadas.push(item.clave);
   }
   if (clavesSinCobertura.length || clavesBloqueadas.length) {
     retenerPedidoMl(db, { orderId, items, claves: [...new Set([...clavesSinCobertura, ...clavesBloqueadas])] });
     const motivos = [];
     if (clavesSinCobertura.length) motivos.push(`sin vínculo exacto (${clavesSinCobertura.join(', ')})`);
-    if (clavesBloqueadas.length) motivos.push(`bloqueada por Guardia (${clavesBloqueadas.join(', ')})`);
+    if (clavesBloqueadas.length) motivos.push(`${modoProteccion() === 'activo' ? 'frenada por Identidad' : 'bloqueada por Guardia'} (${clavesBloqueadas.join(', ')})`);
     logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'retenido_guardia_ml', error: motivos.join('; ') });
     return;
   }
@@ -1219,7 +1303,7 @@ export async function syncSkuPuntual(db, cfg, sku) {
   }
 
   const diffs = db.prepare(`
-    ${COMPUTED_STOCK_CTE}
+    ${computedStockCte()}
     SELECT * FROM computed
     WHERE sku = ?
       AND (cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml)
@@ -1304,11 +1388,40 @@ async function _syncWcToMl(db, cfg, opts = {}) {
   // registrado— primero) se mantiene: sigue siendo útil para que ese corte rote entre corridas
   // y no favorezca siempre a las mismas claves cuando el backlog excede el tope de llamadas.
   const diffs = db.prepare(`
-    ${COMPUTED_STOCK_CTE}
+    ${computedStockCte()}
     SELECT * FROM computed
     WHERE cantidad_ml IS NULL OR cantidad_ml <> stock_disponible_ml
     ORDER BY ml_stock_actualizado_en IS NOT NULL, ml_stock_actualizado_en ASC
   `).all();
+
+  // Fase C, R4 (sólo en modo `activo`): una publicación activa SIN decisión a la que el audit de Identidad no pudo
+  // vincular (sin SKU, SKU inexistente o ambiguo, contradicción) queda en stock 0 hasta que alguien la vincule o la
+  // marque `omitir`. Es la misma escritura y el mismo log que el resto; no pausa. `ml_stock_estado` recuerda el 0 ya
+  // enviado (sku '' porque no hay vínculo), así no se repite el PUT mientras el cache de ML se refresca.
+  if (modoProteccion() === 'activo') {
+    const plan = planR4(db);
+    if (plan.omitido) {
+      console.error(`[fase-c] R4 no aplicada (${plan.omitido}): ${plan.total} clave(s) sin vínculo`);
+      if (plan.omitido === 'tope') {
+        abrirOActualizarIncidente(db, {
+          integracion: 'mercadolibre', proceso: 'fase_c_r4', tipoError: 'tope_r4', severidad: 'critico',
+          mensajeTecnico: `R4 supera el tope de ${R4_MAX_POR_CORRIDA} claves por corrida: ${plan.total}`,
+          mensajeHumano: `Identidad quiere poner en stock 0 ${plan.total} publicaciones sin vincular, más del tope de ${R4_MAX_POR_CORRIDA}. No se aplicó ninguna: revisá si el catálogo o la auditoría de Identidad fallaron.`,
+          contexto: { total: plan.total, tope: R4_MAX_POR_CORRIDA },
+        });
+      }
+    }
+    const estadoStock = db.prepare('SELECT cantidad_ml, actualizado_en FROM ml_stock_estado WHERE clave=?');
+    for (const r of plan.aplicar) {
+      const e = estadoStock.get(r.clave);
+      // ml_stock_estado.sku es NOT NULL: sin vínculo se guarda el seller_sku de ML (o la clave).
+      diffs.push({ clave: r.clave, sku: String(r.seller_sku ?? '').trim() || r.clave, stock_disponible_ml: 0, cantidad_ml: e?.cantidad_ml ?? r.cantidad_ml,
+        ml_stock_actualizado_en: e?.actualizado_en ?? null, sin_vinculo: r.clasificacion });
+    }
+    // Los frenos (R4 y R2 con stock 0) van primero: el tope de llamadas por corrida no puede dejarlos sin ejecutar.
+    const esFreno = (d) => d.sin_vinculo || (d.frena_identidad && d.stock_disponible_ml === 0);
+    diffs.sort((x, y) => Number(!!esFreno(y)) - Number(!!esFreno(x)));
+  }
 
   // Cache de estado de publicación por itemId (una consulta por item por corrida).
   // ML rechaza con HTTP 400 cualquier update de stock sobre publicaciones que no
@@ -1964,7 +2077,7 @@ export async function procesarReintentos(db, cfg) {
  * (El agrupado por publicación lo hace el router para el display.)
  */
 export function reabrirAvisosSinStock(db) {
-  const rows = db.prepare(`${COMPUTED_STOCK_CTE}
+  const rows = db.prepare(`${computedStockCte()}
     SELECT c.id FROM ml_publicacion_cambios c JOIN computed x ON x.clave=c.clave
     WHERE c.bloquea_reactivador=1 AND c.revisado_en IS NOT NULL AND x.stock_disponible_ml > 0`).all();
   const upd = db.prepare("UPDATE ml_publicacion_cambios SET revisado_en=NULL, revisado_por=NULL, bloquea_reactivador=0, pausa_error=COALESCE(pausa_error,'') || ' | reabierto: volvió el stock' WHERE id=?");
@@ -1983,7 +2096,7 @@ export function getReactivablesRows(db, itemIds = null, { incluirPausasManuales 
       AND p.sub_status LIKE '%out_of_stock%'
       AND p.sub_status NOT LIKE '%paused_by_seller%'`;
   let sql = `
-    ${COMPUTED_STOCK_CTE}
+    ${computedStockCte()}
     SELECT cm.clave, cm.sku, cm.stock_disponible_ml,
            p.item_id, p.variation_id, p.titulo, p.variations_texto, p.thumbnail
     FROM computed cm
@@ -2834,7 +2947,7 @@ async function diagnosticarErrores(db, mlCfg, rows) {
   // Stock web disponible por clave (distingue reactivable vs sin_stock real).
   const stockMap = new Map();
   try {
-    for (const r of db.prepare(`${COMPUTED_STOCK_CTE} SELECT clave, stock_disponible_ml FROM computed`).all()) {
+    for (const r of db.prepare(`${computedStockCte()} SELECT clave, stock_disponible_ml FROM computed`).all()) {
       stockMap.set(r.clave, r.stock_disponible_ml);
     }
   } catch (_) { /* sin catálogo/mapeo todavía */ }
@@ -3083,7 +3196,7 @@ export function syncRouter(db, cfg) {
     ).all();
 
     // CTE de stock disponible (compartido con syncWcToMl y reactivables)
-    const computedCte = COMPUTED_STOCK_CTE;
+    const computedCte = computedStockCte();
 
     const sincronizadas = db.prepare('SELECT COUNT(*) n FROM ml_stock_estado').get().n;
     const pendientes = db.prepare(
@@ -3423,6 +3536,12 @@ export function syncRouter(db, cfg) {
     }
   });
 
+  // Fase C: reporte de sombra para José (solo admin). Solo lectura.
+  router.get('/fase-c/sombra', requireAdmin, (_req, res) => {
+    try { res.json({ ok: true, data: reporteSombraFaseC(db) }); }
+    catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
   // Publicaciones que la reactivación automática frenó por precio (neto por debajo del contado).
   router.get('/frenadas', (req, res) => {
     const data = db.prepare(`
@@ -3602,7 +3721,7 @@ export function syncRouter(db, cfg) {
     const { clave } = req.body || {};
     if (!clave || typeof clave !== 'string') return res.status(400).json({ ok: false, error: 'clave requerida' });
 
-    const row = db.prepare(`${COMPUTED_STOCK_CTE} SELECT * FROM computed WHERE clave = ?`).get(clave);
+    const row = db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
     if (!row) return res.json({ ok: false, error: 'La clave no tiene mapeo activo o SKU en el catálogo.' });
 
     const pub = db.prepare('SELECT status FROM ml_publicaciones_cache WHERE clave = ?').get(clave);
