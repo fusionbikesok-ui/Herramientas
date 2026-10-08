@@ -819,6 +819,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('fase_c_identidad_120')").run();
     })();
   }
+  const mlPubUserProductMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_pub_user_product_idx_121'").get();
+  if (!mlPubUserProductMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '121_ml_pub_user_product_idx.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_pub_user_product_idx_121')").run();
+    })();
+  }
   const chatEventsMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='chat_events_inbox_093'").get();
   if (!chatEventsMigration) {
     db.transaction(() => {
