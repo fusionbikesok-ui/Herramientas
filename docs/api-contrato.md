@@ -54,13 +54,11 @@ próximo ciclo), con dos excepciones fail-open explícitas dentro del mismo POST
 
 - **Precio de línea (2026-08-03, decisión del usuario):** el pedido WC **nunca** lleva el
   precio de venta de ML (`unit_price`) como precio de línea. El precio de cada línea es el
-  **precio de contado de la web propia** (`precioContado()` de `lib/mlPrecios.js`, 2/3 sobre
-  `catalogo_cache.regular_price`, el precio de LISTA — **nunca** sobre `catalogo_cache.precio`,
-  que es el VIGENTE y puede ser un `sale_price` de oferta; usar `precio` ahí "acumularía" el
-  descuento de oferta con el de contado). Mientras `regular_price` esté NULL (catálogo sin
-  refrescar todavía tras este despliegue — **hace falta un refresco de catálogo antes de que
-  el precio de contado sea exacto para productos en oferta**) se usa `precio` como fallback
-  transitorio. Si el SKU del caché no tiene ningún precio, la línea se crea igual
+  **precio web (contado)**: `catalogo_cache.regular_price` tal cual (desde 2026-10-08 no hay
+  "precio de lista" ni descuento 2/3: el precio de Woo ya es el de contado; `precioContado(x)`
+  devuelve `x` y `totalContado(x, n)` = `x*n` redondeado una vez). **Nunca** sale de
+  `catalogo_cache.precio` (VIGENTE, puede ser un `sale_price` de oferta), y sin fallback: si
+  `regular_price` es NULL la línea cae en el fail-open de abajo. Si el SKU del caché no tiene ningún precio, la línea se crea igual
   (`product_id`/`variation_id` + `quantity`, sin `subtotal`/`total`) y Woo aplica el precio
   que tenga cargado — **fail-open**: no perder la venta por un dato de precio faltante. Se
   deja un `sync_log` de aviso (`estado='error'`, no marca la orden como `parcial`).
@@ -382,7 +380,7 @@ con `accion` en `asignar`/`confirmar`).
   "senales": [{ "senal", "peso", "detalle", "valor" }] }] }`.
   `senales` ya viene filtrada de las que el usuario descartó con el mismo valor concreto
   (ver `POST /vinculos/revisado`). `precio_lista` y `precio_contado` salen ambos de
-  `catalogo_cache.regular_price` (precio de LISTA), nunca de `precio` (VIGENTE) — ver el
+  `catalogo_cache.regular_price` (precio web, contado), nunca de `precio` (VIGENTE) — ver el
   porqué en el comentario de `precioWebClave()` en `lib/mlPrecios.js`. Ambos son `null` si
   `regular_price` es NULL.
 - Response 400: `{ "ok": false, "error": "sku requerido" }`.

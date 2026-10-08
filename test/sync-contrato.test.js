@@ -56,14 +56,14 @@ function seedMatcher(db) {
 
 function seedCatalogo(db) {
   const now = new Date().toISOString();
-  // El precio de línea usa precioContado() sobre regular_price (LISTA), no sobre precio
+  // El precio de línea sale de regular_price (ya es el de contado), no de precio
   // (vigente) — se cargan iguales acá porque no es un producto en oferta.
   db.prepare(
     'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, 300, 300, now); // contado 200
+  ).run(100, 'Bicicleta Simple', 'BIKE-001', 'simple', null, 5, 300, 300, now);
   db.prepare(
     'INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(221, 'Casco Talla L', 'CASCO-L', 'variation', 220, 3, 45000, 45000, now); // contado 30000
+  ).run(221, 'Casco Talla L', 'CASCO-L', 'variation', 220, 3, 45000, 45000, now);
 }
 
 describe('_procesarOrden — payload exacto de POST /orders', () => {
@@ -128,8 +128,8 @@ describe('_procesarOrden — payload exacto de POST /orders', () => {
       first_name: 'Ana', last_name: 'Gomez', email: 'ana@mail.com', phone: '3511234567',
     });
     expect(payload.line_items).toEqual([
-      { quantity: 2, subtotal: '400.00', total: '400.00', product_id: 100 },
-      { quantity: 1, subtotal: '30000.00', total: '30000.00', product_id: 220, variation_id: 221 },
+      { quantity: 2, subtotal: '600.00', total: '600.00', product_id: 100 },
+      { quantity: 1, subtotal: '45000.00', total: '45000.00', product_id: 220, variation_id: 221 },
     ]);
 
     const vinculo = db.prepare('SELECT * FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get('ORD-CONTRATO-1');

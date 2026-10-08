@@ -23,8 +23,7 @@ export function pareceEan(codigo) {
 
 /**
  * Fila de catalogo_cache → objeto liviano para la card de resultado.
- * `precio` es el precio de CONTADO/Transferencia (2/3 del de lista, ver precioContado),
- * no el precio de lista guardado en catalogo_cache. Se mantiene el nombre `precio`
+ * `precio` es el precio web (contado) vigente de catalogo_cache. Se mantiene el nombre `precio`
  * (en vez de `precio_web` como en routes/precios.js) para no tocar el frontend, que
  * ya lo consume como `p.precio` en varios lugares. La card lo rotula "Contado/Transf.".
  *

@@ -49,8 +49,8 @@ describe('GET /api/consulta-precios/buscar', () => {
     expect(res.body.tipo).toBe('sku');
     expect(res.body.producto).toMatchObject({
       sku: 'FB-40', nombre: 'Cinta SUPACAZ Bling', marca: 'SUPACAZ',
-      // precio de CONTADO = 2/3 del de lista (15000) → 10000, no el precio de lista.
-      categorias: ['CINTAS Y PUÑOS'], precio: 10000, stock: 3, img: 'https://x/a.jpg',
+      // el precio web ya es el de contado: sin descuento.
+      categorias: ['CINTAS Y PUÑOS'], precio: 15000, stock: 3, img: 'https://x/a.jpg',
     });
     db.close();
   });

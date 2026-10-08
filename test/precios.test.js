@@ -58,28 +58,28 @@ function mockMl({ saleFee = 100, envio = 50, itemPrice = 1000, freeShipping = tr
   });
 }
 
-// totalContado (fix del tester, 2026-08-03): totalContado(precioLista, qty) tiene que dar el
-// mismo resultado que precioContado(precioLista)*qty SOLO cuando ese producto no divide con
-// resto en centavos; en el caso general (2/3 no exacto) tiene que dar el total EXACTO, sin el
-// centavo de diferencia que arrastra multiplicar el unitario ya redondeado por la cantidad.
+// Desde 2026-10-08 no hay descuento de contado: el precio web ya ES el de contado.
+// precioContado(x) = x y totalContado(x, n) = x*n redondeado UNA sola vez.
 describe('mlPrecios — totalContado (evita el doble redondeo)', () => {
   it('null si no hay precio de lista (mismo criterio fail-open que precioContado)', () => {
     expect(totalContado(null, 3)).toBeNull();
   });
 
-  it('qty=1: coincide con precioContado (redondear una vez o dos da lo mismo con una sola unidad)', () => {
+  it('precioContado devuelve el precio sin descuento (null si no hay)', () => {
+    expect(precioContado(1000)).toBe(1000);
+    expect(precioContado(1234.56)).toBe(1234.56);
+    expect(precioContado(0)).toBe(0);
+    expect(precioContado(null)).toBeNull();
+  });
+
+  it('qty=1: coincide con precioContado', () => {
     expect(totalContado(1000, 1)).toBe(precioContado(1000));
   });
 
-  it('regular_price=1000, qty=3: total EXACTO 2000.00, no 2000.01 (doble redondeo del unitario 666.67×3)', () => {
-    expect(precioContado(1000)).toBe(666.67); // unitario ya redondeado
-    expect(666.67 * 3).toBeCloseTo(2000.01, 2); // lo que daría el doble redondeo
-    expect(totalContado(1000, 3)).toBe(2000);
-  });
-
-  it('regular_price=100, qty=7: total EXACTO 466.67, no 466.69 (doble redondeo del unitario 66.67×7)', () => {
-    expect(precioContado(100)).toBe(66.67);
-    expect(totalContado(100, 7)).toBe(466.67);
+  it('total = precio × cantidad, redondeado una sola vez', () => {
+    expect(totalContado(1000, 3)).toBe(3000);
+    expect(totalContado(99.99, 3)).toBe(299.97);
+    expect(totalContado(0.1, 3)).toBe(0.3); // 0.1*3 = 0.30000000000000004
   });
 });
 
@@ -127,19 +127,19 @@ describe('mlPrecios — netoMl + precioWebClave', () => {
   });
 
 
-  it('precioWebClave lee el precio de LISTA del SKU mapeado y devuelve el de CONTADO (2/3)', () => {
+  it('precioWebClave lee el precio de LISTA del SKU mapeado y devuelve tal cual (ya es contado)', () => {
     seedCatalogo(db, { idWoo: 10, sku: 'FB-1', precio: 1234 });
     seedDecision(db, 'MLA1|v1', 'FB-1');
-    expect(precioWebClave(db, 'MLA1|v1')).toBe(822.67);
+    expect(precioWebClave(db, 'MLA1|v1')).toBe(1234);
     expect(precioWebClave(db, 'MLA9|v9')).toBe(null);
   });
 
   it('producto en oferta: usa regular_price (LISTA), no precio (vigente) — no acumula descuentos', () => {
     // regular_price 1000 (lista), precio 800 (vigente, en oferta). El contado de
-    // referencia es 666.67 (2/3 de 1000), NO 533.33 (2/3 de 800, descuento sobre descuento).
+    // referencia es 1000 (regular_price), NO 800 (el vigente en oferta).
     seedCatalogo(db, { idWoo: 11, sku: 'FB-OFERTA', precio: 800, regularPrice: 1000 });
     seedDecision(db, 'MLA2|v1', 'FB-OFERTA');
-    expect(precioWebClave(db, 'MLA2|v1')).toBe(666.67);
+    expect(precioWebClave(db, 'MLA2|v1')).toBe(1000);
   });
 
   it('regular_price NULL: fail-closed, precioWebClave devuelve null sin fallback a precio', () => {
@@ -151,8 +151,8 @@ describe('mlPrecios — netoMl + precioWebClave', () => {
   it('regular_price NULL con precio con valor real (caso peligroso del fallback): sigue dando null', () => {
     // Este es el caso que un `regular_price ?? precio` reintroducido dejaría pasar en
     // silencio: acá precio SÍ tiene un valor sustancioso (2500), y aun así el resultado
-    // tiene que ser null porque regular_price es NULL. Si algún día devuelve 1666.67
-    // (2/3 de 2500) en vez de null, es la señal de que el fallback volvió.
+    // tiene que ser null porque regular_price es NULL. Si algún día devuelve 2500
+    // (el vigente) en vez de null, es la señal de que el fallback volvió.
     seedCatalogo(db, { idWoo: 13, sku: 'FB-PELIGRO', precio: 2500, regularPrice: null });
     seedDecision(db, 'MLA4|v1', 'FB-PELIGRO');
     expect(precioWebClave(db, 'MLA4|v1')).toBe(null);
@@ -169,10 +169,10 @@ describe('mlPrecios — netoMl + precioWebClave', () => {
   });
 
   it('oferta con números que redondean feo (regular_price=1, precio=0.5): sigue sobre la lista', () => {
-    // 2/3 de 1 = 0.666...67 → 0.67. Si usara precio (vigente=0.5) daría 0.33.
+    // Si usara precio (vigente=0.5) daría 0.5.
     seedCatalogo(db, { idWoo: 15, sku: 'FB-CENT', precio: 0.5, regularPrice: 1 });
     seedDecision(db, 'MLA6|v1', 'FB-CENT');
-    expect(precioWebClave(db, 'MLA6|v1')).toBe(0.67);
+    expect(precioWebClave(db, 'MLA6|v1')).toBe(1);
   });
 });
 
@@ -186,11 +186,11 @@ describe('auditarPrecios + router', () => {
   afterEach(() => { db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
 
   it('audita una publicación activa y clasifica bajo/ok/sin_precio', async () => {
-    // bajo: neto 850 vs contado 1000 (precio de lista 1500 × 2/3, >5% debajo)
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    // bajo: neto 850 vs contado 1000 (>5% debajo)
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
-    // ok: neto 850 vs contado 870 (precio de lista 1305 × 2/3)
-    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 1305 });
+    // ok: neto 850 vs contado 870
+    seedCatalogo(db, { idWoo: 2, sku: 'FB-O', precio: 870 });
     seedDecision(db, 'MLO|v1', 'FB-O'); seedPub(db, { clave: 'MLO|v1', itemId: 'MLO', varId: 'v1' });
     // sin_precio: sin precio web
     seedCatalogo(db, { idWoo: 3, sku: 'FB-S', precio: null });
@@ -207,18 +207,16 @@ describe('auditarPrecios + router', () => {
   });
 
   it('auditarPrecios: producto en oferta usa regular_price (LISTA), no precio (vigente) — call site real', async () => {
-    // regular_price 1500 (lista) → contado 1000; precio vigente 1000 (30% off). Si el query
-    // de auditarPrecios usara `c.precio AS precio_lista` (el bug que se corrigió), el
-    // contado de referencia caería a 666.67 y esta publicación pasaría a "ok" cuando en
-    // realidad tiene que seguir "bajo" contra la lista real.
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-OFERTA-AUD', precio: 1000, regularPrice: 1500 });
+    // regular_price 1000 → precio web 1000; precio vigente 700 (oferta). Si el query usara
+    // `c.precio` (el bug que se corrigió), la referencia caería a 700 y pasaría a "ok".
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-OFERTA-AUD', precio: 700, regularPrice: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-OFERTA-AUD'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 }); // neto = 850
 
     await auditarPrecios(db, ML_CFG);
 
     const fila = db.prepare('SELECT estado, neto, precio_web FROM ml_precio_auditoria WHERE clave=?').get('MLB|v1');
-    expect(fila.precio_web).toBe(1000); // 2/3 de 1500, no de 1000
+    expect(fila.precio_web).toBe(1000); // regular_price, no el vigente 700
     expect(fila.estado).toBe('bajo'); // 850 vs 1000 → >5% debajo
   });
 
@@ -238,7 +236,7 @@ describe('auditarPrecios + router', () => {
   });
 
   it('GET /api/precios?estado=bajo filtra por estado', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
@@ -255,7 +253,7 @@ describe('auditarPrecios + router', () => {
   // nuevo, así que dejaba el neto corto. La pantalla ya no muestra ese número: el precio
   // objetivo se pide a `POST /objetivo`, que lo calcula contra ML.
   it('GET /api/precios ya NO devuelve precio_sugerido (la fórmula cerrada quedó obsoleta)', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
@@ -267,7 +265,7 @@ describe('auditarPrecios + router', () => {
   });
 
   it('POST /api/precios/objetivo: el precio propuesto deja el neto igual al contado y trae el desglose', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 }); // lista 1500 → contado 1000
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 }); // contado 1000
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
 
@@ -293,12 +291,12 @@ describe('auditarPrecios + router', () => {
     // Mismo bug que ya se había corregido en auditarPrecios y que `/objetivo` reintrodujo:
     // con `c.precio` (vigente, ya con el sale_price) el contado caía de 1000 a 666.67 y el
     // objetivo quedaba ~333 por debajo del precio que la tienda cobra de verdad.
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-OFERTA', precio: 1000, regularPrice: 1500 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-OFERTA', precio: 700, regularPrice: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-OFERTA'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
 
     const res = await request(app).post('/api/precios/objetivo').send({ claves: ['MLB|v1'] });
-    expect(res.body.resultados[0].contado).toBe(1000); // 2/3 de 1500, no de 1000
+    expect(res.body.resultados[0].contado).toBe(1000); // regular_price, no el vigente 700
   });
 
   it('POST /api/precios/objetivo: sin precio de lista no inventa un objetivo', async () => {
@@ -334,7 +332,7 @@ describe('auditarPrecios + router', () => {
   });
 
   it('GET /api/precios: sin truncar, total coincide con la cantidad de filas devueltas', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
@@ -345,7 +343,7 @@ describe('auditarPrecios + router', () => {
   });
 
   it('POST /api/precios/actualizar-precio corrige el precio en ML y refresca la fila', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 }); // lista 1500 → contado 1000
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 }); // contado 1000
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     mockMl({ saleFee: 100, envio: 50, itemPrice: 1000 });
     await auditarPrecios(db, ML_CFG);
@@ -379,7 +377,7 @@ describe('auditarPrecios + router', () => {
   // mode me1"). Cambiarlas de a una tampoco sirve: al cambiar la primera, las demás quedan distintas y ML
   // rechaza. Hay que mandar todas las variaciones, con el mismo precio, en un solo PUT al ítem.
   it('POST /api/precios/actualizar-precio-item pone el mismo precio a TODAS las variaciones en un solo pedido', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     seedDecision(db, 'MLB|v2', 'FB-B'); seedPub(db, { clave: 'MLB|v2', itemId: 'MLB', varId: 'v2' });
     const puts = [];
@@ -441,7 +439,7 @@ describe('auditarPrecios + router', () => {
   // donde el sistema SABE que el precio de ML cambió — debe borrar la frenada de esa clave y
   // refrescar ml_publicaciones_cache.precio, para que necesitaRecheck no la lea como "no cambió".
   it('POST /api/precios/actualizar-precio borra la frenada existente y refresca el precio local tras el PUT 200', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en, precio_ml_evaluado, precio_web_evaluado)
       VALUES ('MLB|v1', 'FB-B', 'bajo', 100, 1000, 0.5, ?, 900, 1000)`).run(ahora());
@@ -462,7 +460,7 @@ describe('auditarPrecios + router', () => {
   });
 
   it('POST /api/precios/actualizar-precio: si el PUT falla, NO toca ml_publicaciones_cache ni borra la frenada', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     db.prepare("UPDATE ml_publicaciones_cache SET precio = 900 WHERE clave='MLB|v1'").run();
     db.prepare(`INSERT INTO ml_reactivacion_frenada (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en, precio_ml_evaluado, precio_web_evaluado)
@@ -476,7 +474,7 @@ describe('auditarPrecios + router', () => {
   });
 
   it('POST /api/precios/actualizar-precio: fail-open — un error al refrescar el caché local NO hace fallar la respuesta (queda log)', async () => {
-    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1500 });
+    seedCatalogo(db, { idWoo: 1, sku: 'FB-B', precio: 1000 });
     seedDecision(db, 'MLB|v1', 'FB-B'); seedPub(db, { clave: 'MLB|v1', itemId: 'MLB', varId: 'v1' });
     axios.request.mockImplementation((cfg) => {
       const url = cfg.url || '';

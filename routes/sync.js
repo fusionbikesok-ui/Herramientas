@@ -868,34 +868,18 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     }
 
     // Decisión del usuario (2026-08-03): el pedido WC NO lleva el precio de venta de ML
-    // (item.unit_price) como precio de línea — quiere el precio de CONTADO de la propia
-    // web. `catalogo_cache.regular_price` es el precio de LISTA; precioContado() calcula el 2/3
-    // real de contado/transferencia (ver lib/mlPrecios.js). Si se dejara que Woo pusiera
-    // el precio solo con product_id/quantity, Woo aplicaría el de LISTA, no el de contado
-    // — por eso hay que fijar subtotal/total a mano.
-    // Fail-open a propósito (decisión explícita, no perder la venta por un dato de precio):
-    // si el producto del caché no tiene precio, la línea se crea igual con product_id/
-    // variation_id + quantity y SIN subtotal/total, para que Woo aplique el precio que
-    // tiene registrado (de lista, no de contado) — mejor una línea con precio de lista que
-    // ninguna venta registrada. NUNCA se cae al unit_price de ML en este camino.
+    // (item.unit_price) como precio de línea — lleva el precio de la propia web.
+    // Desde 2026-10-08 ya no existe "precio de lista": `catalogo_cache.regular_price` ES el
+    // precio de contado, y va tal cual (sin descuento). Se fija subtotal/total a mano.
+    // Fail-open a propósito (no perder la venta por un dato de precio): si el producto del
+    // caché no tiene precio, la línea se crea igual con product_id/variation_id + quantity y
+    // SIN subtotal/total, para que Woo aplique el precio que tiene registrado. NUNCA se cae al
+    // unit_price de ML en este camino.
     //
-    // El contado SIEMPRE se calcula sobre el precio de LISTA (`regular_price`), NUNCA sobre
-    // el vigente (`precio`): si el producto está en oferta, `precio` ya es el sale_price, y
-    // aplicarle otro descuento de contado encima "acumularía" ambos. Hallazgo de la 2da
-    // pasada del revisor (2026-08-03): el fallback `regular_price ?? precio` que hubo acá
-    // violaba esa regla EN SILENCIO durante toda la ventana de transición entre el refresco
-    // de catálogo (15min) y el de ventas (3min) — exactamente el caso real que la regla
-    // existe para evitar, sin una sola línea en sync_log. Se sacó: si `regular_price` es
-    // null (catálogo sin refrescar todavía, o directamente sin precio de lista cargado), la
-    // línea cae en la MISMA rama fail-open que "sin precio en catalogo_cache" de abajo — sin
-    // subtotal/total, para que Woo aplique el precio de lista que tiene cargado. Nunca
-    // aplica un descuento sobre otro, nunca pierde la venta, reusa un camino ya testeado.
-    // Doble redondeo (hallazgo del tester, 2026-08-03): precioContado() ya redondea el
-    // UNITARIO a 2 decimales; multiplicarlo por qty y volver a redondear el total puede
-    // desviarse hasta un centavo por unidad extra (regular_price=1000, qty=3 → unitario
-    // redondeado 666.67 × 3 = 2000.01, cuando el total exacto es 2000.00). totalContado()
-    // calcula el total sobre el precio de lista sin pasar por el unitario ya redondeado, y
-    // redondea UNA sola vez, al final — ver JSDoc en lib/mlPrecios.js.
+    // Se lee SIEMPRE `regular_price`, NUNCA el vigente (`precio`): con oferta, `precio` ya es
+    // el sale_price. Prohibido el fallback `regular_price ?? precio` (bug de la 2da pasada del
+    // revisor, 2026-08-03): si `regular_price` es null cae en la rama fail-open de abajo.
+    // El total se redondea UNA sola vez (totalContado), no unitario × qty.
     const contado = precioContado(prod.regular_price); // solo para el chequeo de "hay precio"
     const total = totalContado(prod.regular_price, qty);
 

@@ -103,7 +103,7 @@ function seedObservacionMl(db, clave, itemId, variationId, sellerSku) {
 
 // Por default, regularPrice = precio (sin oferta: LISTA y vigente coinciden), salvo que un
 // test pase explícitamente otro valor (u null) para simular oferta o catálogo sin refrescar.
-function seedCatalogo(db, { precio = 300, regularPrice } = {}) {
+function seedCatalogo(db, { precio = 200, regularPrice } = {}) {
   const now = new Date().toISOString();
   const rp = regularPrice !== undefined ? regularPrice : precio;
   db.prepare(
@@ -137,7 +137,7 @@ describe('syncMlToWc', () => {
   });
 
   it('happy path: orden pagada → crea pedido en WC con el precio de CONTADO del catálogo propio (no el de ML) y marca procesada', async () => {
-    seedCatalogo(db, { precio: 300 }); // BIKE-001 → id_woo 100, precio de LISTA 300 → contado 200
+    seedCatalogo(db, { precio: 200 }); // BIKE-001 → id_woo 100, precio de LISTA 300 → precio web (contado) 200
     const orden = {
       id: 'ORD-001',
       date_created: new Date().toISOString(),
@@ -153,7 +153,7 @@ describe('syncMlToWc', () => {
     await vi.runAllTimersAsync();
     await p;
 
-    // El precio de línea es el de CONTADO del catálogo propio (200 = 2/3 de 300 de lista),
+    // El precio de línea es el precio web (contado) del catálogo propio (200),
     // no el unit_price de ML (150) ni el catálogo Woo devuelto por el mock (999.99).
     const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
     expect(orderCall).toBeTruthy();
@@ -184,7 +184,7 @@ describe('syncMlToWc', () => {
   // del catálogo propio, ignorando tanto el unit_price de ML como el catálogo Woo devuelto
   // por wooFetch en otras rutas (mock genérico) — la única fuente válida es catalogo_cache.
   it('bug1: usa precioContado(catalogo_cache.precio), ignora el unit_price de ML', async () => {
-    seedCatalogo(db, { precio: 3352500 }); // precio de lista propio → contado 2235000
+    seedCatalogo(db, { precio: 2235000 }); // precio web propio (contado)
     const orden = {
       id: '2000017564338280',
       date_created: new Date().toISOString(),
@@ -246,7 +246,7 @@ describe('syncMlToWc', () => {
   // sobre regular_price (LISTA), no sobre precio, o el descuento de contado se "acumularía"
   // con el de la oferta.
   it('producto en oferta: usa precioContado(regular_price), no precioContado(precio de oferta)', async () => {
-    // Lista $1.000.000, en oferta a $800.000 → contado correcto sobre LISTA: 666666.67 (no 533333.33)
+    // regular_price $1.000.000, en oferta a $800.000 → la línea lleva regular_price (no 800000)
     seedCatalogo(db, { precio: 800000, regularPrice: 1000000 });
     const orden = {
       id: 'ORD-OFERTA',
@@ -265,7 +265,7 @@ describe('syncMlToWc', () => {
 
     const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
     expect(orderCall[3].line_items).toEqual([
-      { quantity: 1, subtotal: '666666.67', total: '666666.67', product_id: 100 },
+      { quantity: 1, subtotal: '1000000.00', total: '1000000.00', product_id: 100 },
     ]);
   });
 
@@ -545,7 +545,7 @@ describe('syncMlToWc — envío/destinatario (fail-open) y meta informativa de l
   beforeEach(() => {
     db = openDb(TEST_DB);
     seedMatcher(db, { conObservacionMl: true });
-    seedCatalogo(db, { precio: 300 }); // contado 200
+    seedCatalogo(db, { precio: 200 }); // precio web (contado) 200
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
@@ -1151,7 +1151,7 @@ describe('syncMlToWc — casos borde de cobertura (tester, 2026-08-03)', () => {
   // entero. Es a propósito — un pedido WC con la mitad de las líneas descuenta stock de una
   // venta que todavía no sabemos servir completa, y el pedido no se modifica después.
   it('orden multi-ítem: si un ítem no mapea, se retiene la orden entera y no se crea el pedido', async () => {
-    seedCatalogo(db, { precio: 300 }); // BIKE-001 (MLA100) → contado 200
+    seedCatalogo(db, { precio: 200 }); // BIKE-001 (MLA100) → precio web (contado) 200
     const orden = {
       id: 'ORD-MIXTA',
       date_created: new Date().toISOString(),
@@ -1203,19 +1203,13 @@ describe('syncMlToWc — casos borde de cobertura (tester, 2026-08-03)', () => {
     expect(pedido).toBeUndefined();
   });
 
-  // Regresión de redondeo único (fix del tester, 2026-08-03): precioContado() redondea el
-  // UNITARIO a 2 decimales (666.67 = round(1000×2/3)); multiplicar ESE valor ya redondeado
-  // por la cantidad y volver a aplicar toFixed(2) es un DOBLE redondeo que arrastra hasta un
-  // centavo de diferencia frente al cálculo exacto (3 × 666.6666... = 2000.00, pero
-  // 3 × 666.67 = 2000.01). El código ahora usa totalContado() (lib/mlPrecios.js), que
-  // calcula sobre el precio de lista sin pasar por el unitario redondeado y redondea una
-  // sola vez, al final — el total tiene que ser el exacto (2000.00), no 2000.01.
-  it('cantidad=3 con precio de contado no exacto en centavos → el total es el EXACTO (2000.00), sin doble redondeo', async () => {
-    seedCatalogo(db, { precio: 1000 }); // contado unitario 666.67 (ya redondeado) — total exacto: 2000.00
+  // Redondeo único: el total de la línea es precio × cantidad redondeado UNA vez.
+  it('cantidad=3 con precio 99.99 → total 299.97', async () => {
+    seedCatalogo(db, { precio: 99.99 });
     const orden = {
       id: 'ORD-QTY3',
       date_created: new Date().toISOString(),
-      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 3, unit_price: 700 }],
+      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 3, unit_price: 70 }],
     };
     mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
     wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
@@ -1229,36 +1223,7 @@ describe('syncMlToWc — casos borde de cobertura (tester, 2026-08-03)', () => {
 
     const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
     expect(orderCall[3].line_items).toEqual([
-      { quantity: 3, subtotal: '2000.00', total: '2000.00', product_id: 100 },
-    ]);
-  });
-
-  // Segundo caso de doble redondeo (pedido del tester): cantidad alta con un precio de
-  // lista que tampoco divide exacto en centavos al aplicar el 2/3. 7 × (999.99×2/3 exacto
-  // 666.66) = 4666.62 exacto; con doble redondeo (unitario 666.66 redondeado × 7) daría el
-  // mismo valor por casualidad en este caso puntual, así que se usa un precio donde el
-  // redondeo del unitario SÍ desvía el total: regular_price=100 → unitario exacto
-  // 66.6666... redondeado a 66.67; × 7 con doble redondeo = 466.69, exacto = 466.6666... → 466.67.
-  it('cantidad=7 con regular_price=100 (2/3 no exacto) → el total es el exacto (466.67), no el de doble redondeo (466.69)', async () => {
-    seedCatalogo(db, { precio: 100 });
-    const orden = {
-      id: 'ORD-QTY7',
-      date_created: new Date().toISOString(),
-      order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 7, unit_price: 90 }],
-    };
-    mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
-    wooFetch.mockImplementation(async (cfg, path, method = 'get') => {
-      if (path === '/orders' && method === 'post') return { data: { id: 8004 } };
-      return { data: {} };
-    });
-
-    const p = syncMlToWc(db, CFG);
-    await vi.runAllTimersAsync();
-    await p;
-
-    const orderCall = wooFetch.mock.calls.find(c => c[1] === '/orders' && c[2] === 'post');
-    expect(orderCall[3].line_items).toEqual([
-      { quantity: 7, subtotal: '466.67', total: '466.67', product_id: 100 },
+      { quantity: 3, subtotal: '299.97', total: '299.97', product_id: 100 },
     ]);
   });
 

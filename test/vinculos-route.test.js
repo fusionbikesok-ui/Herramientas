@@ -221,17 +221,16 @@ describe('Rutas de vínculos WC↔ML (detalle, sospechosos, revisado, reasignar)
     });
   });
 
-  it('precio_lista y precio_contado se calculan sobre regular_price (LISTA), no sobre precio (vigente, en oferta)', async () => {
+  it('precio_lista y precio_contado salen de regular_price, no de precio (vigente, en oferta)', async () => {
     // regular_price 1000 (lista), precio 800 (vigente, en oferta): precio_lista tiene que
     // mostrar la lista real (1000, no 800 — sería contradictorio con "Contado" calculado
-    // sobre la lista) y el contado de referencia es 666.67 (2/3 de 1000), NO 533.33 (2/3 de
-    // 800, descuento sobre descuento). Corregido a pedido del coordinador (2026-08-03): antes
+    // sobre la lista) y el contado de referencia es 1000 (regular_price tal cual), NO 800. Corregido a pedido del coordinador (2026-08-03): antes
     // este endpoint mostraba precio_lista=precio (vigente) junto a precio_contado=sobre lista,
     // contradictorio a simple vista.
     sembrarVinculo({ precioWc: 800, regularPrice: 1000 });
     const res = await request(app).get('/api/cobertura/vinculos/FB-6411');
     expect(res.body.producto.precio_lista).toBe(1000);
-    expect(res.body.producto.precio_contado).toBe(666.67);
+    expect(res.body.producto.precio_contado).toBe(1000);
   });
 
   it('precio_lista y precio_contado son null si regular_price es NULL (catálogo sin refrescar ese campo)', async () => {

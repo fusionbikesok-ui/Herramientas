@@ -295,6 +295,7 @@ E2 conserva pendientes externos de revisión independiente y piloto/jornada obse
   altura a todas las fichas en todos los anchos. Al mirar CSS de esa pantalla, ojo también con el
   **orden**: los bloques `@media` van DESPUÉS de las reglas base o la base gana por orden de
   aparición — pasó tres veces.
+- **2026-10-08: ya no hay "precio de lista" ni descuento 2/3** (decisión de José): el precio web (`catalogo_cache.regular_price`) ES el contado; `precioContado(x)=x`, `totalContado(x,n)=x*n` redondeado una vez. Todo lo de abajo que habla de 2/3 o "lista" se lee como "precio web (contado)".
 - **El contado de referencia sale SIEMPRE de `catalogo_cache.regular_price`, nunca de `precio`**
   (regresión reintroducida y corregida el 2026-09-11 en `POST /api/precios/objetivo`). `precio` es
   el VIGENTE y ya trae el `sale_price`: usarlo descuenta dos veces. El SKU de una publicación sale

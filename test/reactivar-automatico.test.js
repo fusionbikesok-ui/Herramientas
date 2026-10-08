@@ -302,9 +302,8 @@ describe('reactivarAutomatico', () => {
     function now() { return new Date().toISOString(); }
 
     it('sin cambios: 0 llamadas a ML, la frenada sigue vigente', async () => {
-      // precioContado(300000) sería el resultado esperado si el sku tuviera regular_price=300000,
-      // pero acá seedeamos directamente los valores evaluados para que coincidan con el estado actual.
-      sembrarReactivable({ precioWc: 300000 }); // precio de contado real hoy: precioContado(300000)
+      // El precio web (contado) es regular_price tal cual: 200000.
+      sembrarReactivable({ precioWc: 200000 });
       // Precio ML conocido e IGUAL en ambos lados (columna local y frenada evaluada): caso
       // realista de "nada cambió". Antes este test sembraba precioMlEvaluado:null sin tocar
       // ml_publicaciones_cache.precio (también NULL), así que pasaba por `null === null` —
@@ -313,7 +312,7 @@ describe('reactivarAutomatico', () => {
       // verdad "no cambió" se prueba sin depender de esa comparación rota.
       db.prepare("UPDATE ml_publicaciones_cache SET precio = 400000 WHERE clave = 'MLA1|'").run();
       // Insumos evaluados = exactamente lo que hoy calcularía precioWebClave/ml_publicaciones_cache.precio.
-      const contadoActual = 200000; // 300000 * 2/3
+      const contadoActual = 200000; // regular_price tal cual
       sembrarFrenadaConInsumos({ precioMlEvaluado: 400000, precioWebEvaluado: contadoActual });
 
       const r = await reactivarAutomatico(db, CFG);
@@ -505,7 +504,7 @@ describe('reactivarAutomatico', () => {
   // produjo la frenada original, y la red de seguridad no serviría para nada.
   describe('red de seguridad de 2h: screening en vivo, no releer ml_precios_cache (IMPORTANTE)', () => {
     it('una frenada que entra por la ventana de 2h consulta ML en vivo en el screening aunque ml_precios_cache tenga fila fresca', async () => {
-      sembrarReactivable({ precioWc: 300000 }); // contado = 200000 (2/3 de 300000)
+      sembrarReactivable({ precioWc: 200000 }); // contado = 200000
       const hace3h = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
       db.prepare(`INSERT INTO ml_reactivacion_frenada
           (clave, sku, motivo, neto, precio_contado, deficit_pct, detectado_en, precio_ml_evaluado, precio_web_evaluado)
