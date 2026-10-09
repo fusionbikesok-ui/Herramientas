@@ -69,6 +69,18 @@ describe('encolar corrección de identidad: validación y deduplicación', () =>
     expect(db.prepare("SELECT COUNT(*) n FROM identidad_operaciones WHERE ml_key='MLA903|'").get().n).toBe(0);
   });
 
+  it('ML ya tiene el SKU pero el vínculo local es viejo: alinea el vínculo y cierra el caso, sin operación (también pausada)', () => {
+    const c = caso(db, { id: 907, clave: 'MLA907|' });
+    db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='FB-907',seller_sku_presente=1,status='paused',available_quantity=0 WHERE clave='MLA907|'").run();
+    db.prepare("INSERT OR REPLACE INTO sku_matcher_decisiones (clave,sku,accion,actualizado_en) VALUES ('MLA907|','FB-VIEJO','confirmar',?)").run(ISO);
+    const r = vincular(db, c, 'op-alinea');
+    expect(r).toMatchObject({ ok: true, vinculo_actualizado: true });
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA907|'").get().sku).toBe('FB-907');
+    expect(c.fila().estado).toBe('resuelto');
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_operaciones WHERE ml_key='MLA907|'").get().n).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento='vinculo_alineado_sin_operacion'").get().n).toBe(1);
+  });
+
   it('tolera espacios al comparar los SKU', () => {
     const c = caso(db, { id: 904, clave: 'MLA904|' });
     db.prepare("UPDATE ml_publicaciones_cache SET seller_sku=' FB-904 ',seller_sku_presente=1 WHERE clave='MLA904|'").run();
