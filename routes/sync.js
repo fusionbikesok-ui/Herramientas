@@ -23,7 +23,7 @@ import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVe
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, esOmitir, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
+import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, ignoraVentas, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar, CLASIFICACIONES_SIN_VINCULO, planR4, R4_MAX_POR_CORRIDA } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
@@ -782,7 +782,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const clavesBloqueadas = [];
   for (const item of ov.items) {
     // Fase C R5: en activo, un link de pago (`omitir`) no se sincroniza ni retiene la venta.
-    if (modoProteccion() === 'activo' && esOmitir(db, item.clave)) continue;
+    if (modoProteccion() === 'activo' && ignoraVentas(db, item.clave)) continue;
     const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
     const cubiertaPorVinculo = !!skuVinculado && !!buscarEnCache(db, skuVinculado) && claveCubiertaParaVenta(db, item.clave);
     // Decisión del usuario (2026-09-05). Esta guarda y el fallback anti-sobreventa de más
