@@ -782,6 +782,9 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   const clavesBloqueadas = [];
   for (const item of ov.items) {
     // Fase C R5: en activo, un link de pago (`omitir`) no se sincroniza ni retiene la venta.
+    // OJO: este `continue` depende de que `ignoraVentas` EXCLUYA los `omitir` con origen `no_sincronizar_*`
+    // (Fase D): esas ventas se retienen siempre. Si cambia `ignoraVentas`, revisar el test
+    // sync-no-sincronizar-retiene.test.js.
     if (modoProteccion() === 'activo' && ignoraVentas(db, item.clave)) continue;
     const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
     // "No sincronizar" (Fase D): la venta se retiene siempre; no vale el vínculo ni el fallback por seller_sku.

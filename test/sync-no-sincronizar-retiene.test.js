@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { syncMlToWc } from '../routes/sync.js';
+import { liberarRetenidasResueltas } from '../lib/guardiaMl.js';
 
 vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn(), bootstrapToken: vi.fn(), getAccessToken: vi.fn() }));
 vi.mock('../routes/woo.js', () => ({ wooFetch: vi.fn() }));
@@ -50,6 +51,9 @@ describe('_procesarOrden con "no sincronizar"', () => {
       await p;
 
       expect(wooFetch).not.toHaveBeenCalled();
+      expect(db.prepare("SELECT estado FROM guardia_ml_pedidos_retenidos WHERE ml_order_id=?").get(orden.id)?.estado).toBe('retenido');
+      // y el cron de Guardia no la libera sola, aunque el seller_sku resuelva a un único producto
+      expect(liberarRetenidasResueltas(db).liberadas).toBe(0);
       expect(db.prepare("SELECT estado FROM guardia_ml_pedidos_retenidos WHERE ml_order_id=?").get(orden.id)?.estado).toBe('retenido');
     });
   }

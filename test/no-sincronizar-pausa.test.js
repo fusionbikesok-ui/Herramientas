@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { marcarNoSincronizar, deshacerNoSincronizar } from '../lib/noSincronizar.js';
-import { solicitarNoSincronizarPausa, procesarPausasIdentidad } from '../lib/pausasIdentidad.js';
+import { solicitarNoSincronizarPausa, procesarPausasIdentidad, listarPausasIdentidad } from '../lib/pausasIdentidad.js';
 
 const FILE = './test/tmp-no-sincronizar-pausa.sqlite';
 const now = () => new Date().toISOString();
@@ -93,6 +93,9 @@ describe('no sincronizar (b): pausa durable', () => {
       await procesarPausasIdentidad(db, a);
     }
     expect(pausa(db, 'MLA7|').estado).toBe('fallida');
+    expect(listarPausasIdentidad(db)[0]).toMatchObject({ riesgo: 'puede_estar_pausada_en_ml' });
+    const inc = db.prepare("SELECT severidad,estado FROM incidentes_operativos WHERE proceso='identidad_pausa'").get();
+    expect(inc).toMatchObject({ estado: 'activo' });
   });
 
   it('respeta el canario', async () => {
