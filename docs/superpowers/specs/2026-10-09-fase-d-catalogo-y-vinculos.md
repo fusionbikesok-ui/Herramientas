@@ -89,6 +89,7 @@ Una pantalla, 4 pestañas.
 - El estado nunca se indica solo con color: siempre va con ícono y texto ("Difiere", "Falta", "Coincide").
 - SKU igual con GTIN o título contradictorio se rotula "leve: sigue vendiendo" (R2 de la Fase C).
 - Candidatos sin preselección. Elegir uno (1/2/3) recalcula la matriz.
+- **Decisión (2026-10-09, coordinador):** un GTIN distinto es ámbar "Difiere" con la marca `leve` en la respuesta; no es veto, porque el rojo sale solo de `contradiccionDeClave`, que no compara GTIN.
 
 ### R3. Acciones
 
