@@ -87,6 +87,39 @@ describe('API de Catálogo y vínculos', () => {
       expect((await request(app(operador)).get(`${BASE}/cola`)).body.data).toHaveLength(1);
     });
 
+    it('saltear es idempotente y rechaza casos cerrados', async () => {
+      const a = caso(2006);
+      const body = { expected_version: a.f.expected_version };
+      expect((await request(app(operador)).post(`${BASE}/casos/${a.f.id}/saltear`).send(body)).body.repetido).toBeUndefined();
+      const otra = await request(app(operador)).post(`${BASE}/casos/${a.f.id}/saltear`).send(body);
+      expect(otra.status).toBe(200);
+      expect(otra.body).toMatchObject({ repetido: true, salteado_por: 'ana' });
+      expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento='caso_salteado'").get().n).toBe(1);
+      db.prepare("UPDATE identidad_casos SET estado='resuelto' WHERE id=?").run(a.f.id);
+      const cerrado = await request(app(operador)).post(`${BASE}/casos/${a.f.id}/saltear`).send(body);
+      expect(cerrado.status).toBe(409);
+      expect(cerrado.body.code).toBe('INVALID_STATE');
+    });
+
+    it('cola: pagina con limit/offset y filtra con q antes de armar las filas', async () => {
+      for (let i = 0; i < 5; i += 1) caso(2300 + i);
+      db.prepare("UPDATE ml_publicaciones_cache SET titulo='Casco especial' WHERE clave='MLA2303|'").run();
+      const pag = await request(app(lector)).get(`${BASE}/cola?limit=2&offset=1`);
+      expect(pag.body).toMatchObject({ total: 5, limit: 2, offset: 1 });
+      expect(pag.body.data).toHaveLength(2);
+      const q = await request(app(lector)).get(`${BASE}/cola?q=casco`);
+      expect(q.body.data.map((f) => f.ml_key)).toEqual(['MLA2303|']);
+      expect(q.body.total).toBe(1);
+    });
+
+    it('cola: cuenta hermanas activas del ítem sin contar la propia', async () => {
+      caso(2310);
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en)
+        VALUES ('MLA2310|5','MLA2310','5','H','active',?),('MLA2310|6','MLA2310','6','H2','paused',?)`).run(ISO, ISO);
+      const r = await request(app(lector)).get(`${BASE}/cola`);
+      expect(r.body.data.find((f) => f.ml_key === 'MLA2310|').chips.hermanas).toBe(1);
+    });
+
     it('saltear con versión vieja: 409', async () => {
       const a = caso(2004);
       const r = await request(app(operador)).post(`${BASE}/casos/${a.f.id}/saltear`).send({ expected_version: 99 });
@@ -120,6 +153,21 @@ describe('API de Catálogo y vínculos', () => {
       const r = await request(app(operador)).post(`${BASE}/casos/${c.f.id}/decisiones`).send(cuerpo(c, {}));
       expect(r.status).toBe(201);
       expect(r.body.operacion).toMatchObject({ sku_objetivo: 'FB-2101' });
+    });
+
+    it('operación duplicada y sin cambio de SKU responden 409 con su código', async () => {
+      const c = caso(2110);
+      expect((await request(app(operador)).post(`${BASE}/casos/${c.f.id}/decisiones`).send(cuerpo(c, {}))).status).toBe(201);
+      const f = db.prepare('SELECT * FROM identidad_casos WHERE id=?').get(c.f.id);
+      const dup = await request(app(operador)).post(`${BASE}/casos/${c.f.id}/decisiones`)
+        .send({ ...cuerpo(c, {}), operation_id: 'otra', expected_version: f.expected_version, evidence_fingerprint: f.evidencia_fingerprint });
+      expect(dup.status).toBe(409);
+      expect(dup.body).toMatchObject({ code: 'OPERACION_DUPLICADA', operacion_id: expect.any(Number) });
+      const s = caso(2111);
+      db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='FB-2111',seller_sku_presente=1 WHERE clave='MLA2111|'").run();
+      const sin = await request(app(operador)).post(`${BASE}/casos/${s.f.id}/decisiones`).send(cuerpo(s, {}));
+      expect(sin.status).toBe(409);
+      expect(sin.body.code).toBe('SIN_CAMBIO_SKU');
     });
 
     it('un lector (matcher:read) no puede decidir', async () => {

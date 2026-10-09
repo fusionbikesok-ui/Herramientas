@@ -152,11 +152,11 @@ errores quedan fijos hasta resolverse; no son toasts.
 | `INVALID_INPUT` | Falta completar un dato (por ejemplo, el motivo). Revisá lo marcado. |
 | `omitir_requiere_override` | Esta publicación está en "no sincronizar". Quitalo antes de vincular. |
 | `VERSION_CONFLICT` / `EVIDENCE_CONFLICT` | Alguien cambió este caso. Se vuelve a cargar con los datos nuevos antes de ofrecer "Aplicar mi decisión". |
-| `INVALID_STATE` | Este caso no admite esa acción en su estado actual. |
+| `INVALID_STATE` (409) | Este caso no admite esa acción en su estado actual. |
 | `contradiccion_titulo` | No se puede vincular: difiere {campos}. Lo confirma José. |
 | `SIBLING_IMPACT_CONFIRMATION_REQUIRED` | Esto cambia también {n} publicaciones hermanas. ¿Seguimos? |
-| `SIN_CAMBIO_SKU` | Activa: ML ya tiene este SKU, no hay nada que cambiar. Pausada: Vínculo actualizado, ML ya tenía este SKU. |
-| `OPERACION_DUPLICADA` (400) | Ya se mandó este cambio. Mirá su estado en Ejecución. |
+| `SIN_CAMBIO_SKU` (409) | Activa: ML ya tiene este SKU, no hay nada que cambiar. Pausada: Vínculo actualizado, ML ya tenía este SKU. |
+| `OPERACION_DUPLICADA` (409, con `operacion_id`) | Ya se mandó este cambio. Mirá su estado en Ejecución. |
 | 403 | Esto lo hace José. |
 | Red | Sin conexión. No se guardó nada. |
 | Operación encolada / aplicada / fallida / frenada | En cola para ML / Aplicada en ML / ML la rechazó: {motivo}. Reintenta José. / Frenada: {regla}. Stock en 0 hasta resolver. |

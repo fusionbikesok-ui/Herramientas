@@ -6,7 +6,7 @@ import {
 import { liberarPedidoRetenido } from '../lib/guardiaMl.js';
 import { marcarNoSincronizar, marcarLinkDePago, deshacerNoSincronizar } from '../lib/noSincronizar.js';
 import { solicitarNoSincronizarPausa } from '../lib/pausasIdentidad.js';
-import { colaCasos, detalleCaso, ejecucion, estadoSalud, retenidas } from '../lib/catalogoVinculos.js';
+import { colaCasos, detalleCaso, ejecucion, estadoSalud, retenidas, salteoVigente } from '../lib/catalogoVinculos.js';
 
 /**
  * API de la pantalla "Catálogo y vínculos" (Fase D). Las lecturas arman vistas sobre Identidad; las escrituras
@@ -28,7 +28,9 @@ function exigir(nivel = 'read', admin = false) {
 
 const ESTADOS = { NOT_FOUND: 404, VERSION_CONFLICT: 409, EVIDENCE_CONFLICT: 409, CLAIM_CONFLICT: 409,
   SIBLING_IMPACT_CONFIRMATION_REQUIRED: 409, ALREADY_EXISTS: 409, INVALID_STATE: 409, INVALID_INPUT: 422,
-  FORBIDDEN: 403, contradiccion_titulo: 409, omitir_requiere_override: 409 };
+  FORBIDDEN: 403, contradiccion_titulo: 409, omitir_requiere_override: 409,
+  // Distinto de la API de Identidad (400): acá un reintento o una corrección sin efecto es un conflicto de estado.
+  OPERACION_DUPLICADA: 409, SIN_CAMBIO_SKU: 409 };
 
 function responder(res, r, creado = false) {
   if (!r?.ok) return res.status(r?.status || ESTADOS[r?.code || r?.error] || 400).json(r);
@@ -39,7 +41,8 @@ export function catalogoVinculosRouter(db) {
   const router = express.Router();
 
   // ── Lecturas ──
-  router.get('/cola', exigir(), (req, res) => responder(res, colaCasos(db, { filtro: req.query.filtro || 'abiertos', q: req.query.q || '' })));
+  router.get('/cola', exigir(), (req, res) => responder(res, colaCasos(db, { filtro: req.query.filtro || 'abiertos', q: req.query.q || '',
+    limit: req.query.limit, offset: req.query.offset })));
   router.get('/casos/:id', exigir(), (req, res) => {
     const data = detalleCaso(db, req.params.id, { sku: req.query.sku || null });
     return data ? res.json({ ok: true, data }) : res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'caso no encontrado' });
@@ -68,9 +71,14 @@ export function catalogoVinculosRouter(db) {
   router.post('/casos/:id/saltear', exigir('write'), (req, res) => {
     const caso = db.prepare('SELECT * FROM identidad_casos WHERE id=?').get(Number(req.params.id));
     if (!caso) return res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'caso no encontrado' });
+    if (['resuelto', 'verificado', 'exceptuado'].includes(caso.estado)) {
+      return res.status(409).json({ ok: false, code: 'INVALID_STATE', error: 'el caso ya está cerrado; no se puede saltear' });
+    }
     if (Number(req.body?.expected_version) !== caso.expected_version) {
       return res.status(409).json({ ok: false, code: 'VERSION_CONFLICT', error: 'El caso cambió; refrescá antes de saltear' });
     }
+    const previo = salteoVigente(db, caso);
+    if (previo) return res.json({ ok: true, repetido: true, salteado_por: previo });
     db.prepare(`INSERT INTO identidad_historial (entidad_tipo,entidad_id,evento,actor,detalle_json,creado_en)
       VALUES ('caso',?,'caso_salteado',?,?,?)`).run(caso.id, actor(req), JSON.stringify({ expected_version: caso.expected_version }), new Date().toISOString());
     return res.json({ ok: true, salteado_por: actor(req) });
