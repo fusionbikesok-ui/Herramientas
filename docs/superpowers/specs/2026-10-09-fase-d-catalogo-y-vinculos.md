@@ -99,6 +99,11 @@ Una pantalla, 4 pestañas.
 | Confirmar igual | Solo José | Vincula pese al veto, con motivo. **Contrato nuevo:** hoy `decidirCasoIdentidad` rechaza toda contradicción y la saga la vuelve a vetar antes de restaurar stock (`lib/identidadProductos.js:1521-1529,1861-1864`). Se agrega una decisión de admin con `override` y motivo, guardada en `identidad_decisiones`, que la saga respeta para esa clave y ese SKU. La protección de la Fase C deja de frenar solo cuando el caso queda cerrado por esa decisión. |
 | No sincronizar | Operador y José | Pide motivo y una de 3 variantes: **(a)** solo marcar: el sistema deja de tocarle el stock y cualquiera lo revierte; **(b)** marcar y pausar en ML; **(c)** solo marcar, y revertir queda solo para admin. En las tres, **las ventas de esa publicación se retienen** (decisión de José, para no perder ventas). |
 | Link de pago | Solo José | Marca distinta de "no sincronizar": ignora stock y ventas, como hoy hace `omitir` (R1 de la Fase C). |
+**Decisión de contrato (2026-10-09, coordinador): modelo de "no sincronizar".** Marca separada de `omitir`, que no se toca; las ventas quedan siempre retenidas.
+- Se guarda como decisión `no_sincronizar` en `identidad_decisiones`, con la variante (a/b/c) y el motivo en `detalle_json`.
+- La operación durable `pausar` existe solo en la variante **(b)**: alcance de item completo, exige confirmar el impacto en las hermanas.
+- Las variantes **(a)** y **(c)** son solo la marca. Su deshacer es una decisión compensatoria; en (c) es solo admin, validado en servidor (403).
+- En **(b)**, el deshacer solo vale con la op pendiente o en shadow; si no, `INVALID_STATE`.
 | Saltear | Operador y José | R1. |
 | Destrabar | Solo José | **Contrato nuevo:** hoy no hay forma de sacar un caso de intervención sin reintentar una operación (`lib/identidadProductos.js:1688-1713`). Se agrega la transición `intervencion → pendiente`, con motivo y evento en el historial. Al pasar a pendiente, el caso se reevalúa con las reglas de la Fase C: si sigue habiendo contradicción, la protección sigue frenando. |
 | Reintentar / confirmar impacto | Solo José | Pestaña Ejecución. |
