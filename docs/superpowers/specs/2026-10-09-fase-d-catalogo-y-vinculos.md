@@ -196,7 +196,7 @@ inventario como checklist: cada acción vieja tiene su equivalente o está desca
 11. Las pantallas viejas redirigen y ninguna acción del inventario queda sin equivalente.
 12. Recorrido E2E de teclado (con operador y con admin): foco en el primer caso → `2` → `d` → `f` → `h`/Esc →
     Enter (encolada) → `z` → `s` → `n` sin motivo da error y con motivo guarda → caso rojo: Enter no hace nada y
-    como admin "Confirmar igual" exige motivo → `/` y `?` → hermanas: modal, Tab, Esc → Retenidas: liberar →
+    como admin "Confirmar igual" exige motivo → `/` y `?` → hermanas: confirmación en la tarjeta, Tab, Esc (vuelve) → Retenidas: liberar →
     sin red: banner y acciones bloqueadas → 360 px.
 
 ## Fuera de alcance
