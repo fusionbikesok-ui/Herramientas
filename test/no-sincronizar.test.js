@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { liberarRetenidasResueltas, pedidoMlRetenido, ignoraVentas, retenerPedidoMl } from '../lib/guardiaMl.js';
+import { esNoSincronizar } from '../lib/guardiaMl.js';
 import { marcarNoSincronizar, marcarLinkDePago, deshacerNoSincronizar } from '../lib/noSincronizar.js';
 
 const FILE = './test/tmp-no-sincronizar.sqlite';
@@ -12,9 +13,9 @@ function cache(db, clave, sku = null) {
   db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,seller_sku,available_quantity,actualizado_en)
     VALUES (?,?,?,?,?,?,?,?)`).run(clave, item, variacion, 'Pub', 'active', sku, 1, now());
 }
-function retener(db, orderId, clave) {
+function retener(db, orderId, clave, sellerSku = null) {
   const [item, variacion] = clave.split('|');
-  const items = [{ item: { id: item, variation_id: variacion || null, seller_sku: null, title: 'X' }, quantity: 1 }];
+  const items = [{ item: { id: item, variation_id: variacion || null, seller_sku: sellerSku, title: 'X' }, quantity: 1 }];
   db.prepare('INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en) VALUES (?, 0, NULL, ?)').run(orderId, now());
   db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'retenido', ?)").run(orderId, now(), now());
   retenerPedidoMl(db, { orderId, items, claves: [clave] });
@@ -95,5 +96,21 @@ describe('no sincronizar vs link de pago', () => {
     marcarLinkDePago(db, { clave: 'MLA9|', motivo: 'm', actor: 'jose', esAdmin: true, expectedSku: null });
     expect(deshacerNoSincronizar(db, { clave: 'MLA9|', motivo: 'x', actor: 'jose', esAdmin: true }))
       .toMatchObject({ ok: false, code: 'INVALID_STATE' });
+  });
+
+  it('una venta de "no sincronizar" con seller_sku único en el catálogo sigue retenida (sin fallback)', () => {
+    db.prepare("INSERT INTO catalogo_cache(id_woo,nombre,sku,tipo,stock,actualizado_en) VALUES (777,'Producto','FB-UNICO','simple',2,?)").run(now());
+    cache(db, 'MLA20|');
+    marcarNoSincronizar(db, { clave: 'MLA20|', variante: 'a', motivo: 'm', actor: 'ana', expectedSku: null });
+    expect(esNoSincronizar(db, 'MLA20|')).toBe(true);
+    retener(db, 'ORD-20', 'MLA20|', 'FB-UNICO');
+    expect(liberarRetenidasResueltas(db).liberadas).toBe(0);
+    expect(pedidoMlRetenido(db, 'ORD-20')).toBeTruthy();
+  });
+
+  it('esNoSincronizar no se activa con un link de pago ni con un omitir previo', () => {
+    cache(db, 'MLA21|');
+    marcarLinkDePago(db, { clave: 'MLA21|', motivo: 'm', actor: 'jose', esAdmin: true, expectedSku: null });
+    expect(esNoSincronizar(db, 'MLA21|')).toBe(false);
   });
 });

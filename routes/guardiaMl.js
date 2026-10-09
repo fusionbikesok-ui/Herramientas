@@ -17,6 +17,13 @@ function motivoValido(m) { return ['sin_sku_woo','producto_inexistente','vinculo
 export function guardiaMlRouter(db, _cfg) {
   const router = express.Router();
   // Fase C: en modo `activo` Guardia se retira y sus tablas quedan en solo lectura (30 días). La protección vive en Identidad.
+  // Saltear un `omitir` (link de pago o "no sincronizar") es solo de administración, en cualquier ruta de este router.
+  router.use((req, res, next) => {
+    if (req.method === 'POST' && req.body?.override_omitir === true && !req.user?.is_admin) {
+      return res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Acceso no autorizado' });
+    }
+    next();
+  });
   router.use((req, res, next) => {
     if (modoProteccion() === 'activo' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       return res.status(409).json({ ok: false, error: 'Guardia se retiró: la protección vive en Identidad (solo lectura).' });

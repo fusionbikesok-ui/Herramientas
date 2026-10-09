@@ -23,7 +23,7 @@ import { normalizarOrdenMl, billingWcDesdeOrdenMl } from '../lib/modelos/ordenVe
 import { mapConLimite } from '../lib/concurrencia.js';
 import { armarLike } from '../lib/busqueda.js';
 import { parseCategorias } from '../lib/modelos/producto.js';
-import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, ignoraVentas, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
+import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, ignoraVentas, esNoSincronizar, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar, CLASIFICACIONES_SIN_VINCULO, planR4, R4_MAX_POR_CORRIDA } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
@@ -784,7 +784,9 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     // Fase C R5: en activo, un link de pago (`omitir`) no se sincroniza ni retiene la venta.
     if (modoProteccion() === 'activo' && ignoraVentas(db, item.clave)) continue;
     const skuVinculado = skuDesdeMl(db, item.item_id_ml, item.variation_id_ml);
-    const cubiertaPorVinculo = !!skuVinculado && !!buscarEnCache(db, skuVinculado) && claveCubiertaParaVenta(db, item.clave);
+    // "No sincronizar" (Fase D): la venta se retiene siempre; no vale el vínculo ni el fallback por seller_sku.
+    const noSincroniza = esNoSincronizar(db, item.clave);
+    const cubiertaPorVinculo = !noSincroniza && !!skuVinculado && !!buscarEnCache(db, skuVinculado) && claveCubiertaParaVenta(db, item.clave);
     // Decisión del usuario (2026-09-05). Esta guarda y el fallback anti-sobreventa de más
     // abajo (~línea 700) venían del commit base conflictivo y se contradecían: la guarda
     // retenía la orden entera antes de que el fallback pudiera usar el `seller_sku` que trae
@@ -798,7 +800,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     // descontar; con dos o más, `buscarEnCache` desempata por menor stock —bien para elegir
     // entre hermanas ya vinculadas, pero no para decidir una identidad que nadie verificó.
     // En ambos casos se retiene, que es lo que ya hacía.
-    const cubiertaPorSellerSku = !cubiertaPorVinculo && skuUnicoEnCatalogo(db, item.seller_sku);
+    const cubiertaPorSellerSku = !noSincroniza && !cubiertaPorVinculo && skuUnicoEnCatalogo(db, item.seller_sku);
     if (!cubiertaPorVinculo && !cubiertaPorSellerSku) clavesSinCobertura.push(item.clave);
     // GUARDIA: verificar también si la clave está bloqueada (seller_sku divergente o sin
     // resolver). Esto NO lo levanta la cobertura por seller_sku: una clave que Guardia marcó

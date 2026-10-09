@@ -33,6 +33,7 @@ import { guardiaMlRouter } from './routes/guardiaMl.js';
 import { procesarOperacionesGuardia, liberarRetenidasResueltas } from './lib/guardiaMl.js';
 import { modoProteccion } from './lib/proteccionIdentidad.js';
 import { procesarOperacionesIdentidad } from './lib/identidadProductos.js';
+import { procesarPausasIdentidad } from './lib/pausasIdentidad.js';
 import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { preciosRouter } from './routes/precios.js';
@@ -949,6 +950,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             if (r?.procesadas) console.log(`identidad: ${r.procesadas} operación(es)${r.canario ? ` [canario ${r.canario}]` : ''}`);
           })
           .catch(err => console.error('identidad operaciones:', err.message));
+      });
+      // "No sincronizar" (b): pausas durables en ML, con los mismos frenos que la saga.
+      cron.schedule('* * * * *', () => {
+        procesarPausasIdentidad(app._db, adaptadorMlIdentidad(app._db, syncCfg.ml))
+          .then((r) => { if (r?.procesadas) console.log(`identidad pausas: ${r.procesadas}`); })
+          .catch(err => console.error('identidad pausas:', err.message));
       });
 
       cron.schedule('2-59/10 * * * *', () => {          // ML
