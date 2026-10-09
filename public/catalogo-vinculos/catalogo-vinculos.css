@@ -311,3 +311,11 @@
 @media (min-width: 1024px) {
   .cv-body:not(.cv-atajos-off) .cv-kbd-accion { display: inline-flex; }
 }
+
+/* Vínculos: selector de modo, historial y tarjetas del panel de vínculo */
+.cv-modo { border: 0; padding: 0; margin: 0 0 var(--cv-gap, .5rem); display: flex; gap: 1rem; flex-wrap: wrap; }
+.cv-modo legend { padding: 0; margin-bottom: .25rem; }
+.cv-hist { margin: .5rem 0; }
+.cv-hist__lista { margin: .5rem 0; padding-left: 1.25rem; }
+.cv-hist__lista li { margin-bottom: .35rem; }
+.cv-vinc-card { display: grid; gap: .5rem; }

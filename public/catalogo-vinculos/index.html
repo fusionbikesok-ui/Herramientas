@@ -37,6 +37,7 @@
     <!-- ── Casos ── -->
     <section role="tabpanel" id="panel-casos" aria-labelledby="tab-casos" class="cv-panel">
       <div id="cv-estado" class="cv-franja" aria-busy="true" aria-label="Estado de la identidad de productos"></div>
+      <div id="cv-franja-lista"></div>
       <div id="cv-filtros" class="cv-filtros" role="group" aria-label="Filtrar casos"></div>
       <div class="cv-layout">
         <div class="cv-cola-wrap">
@@ -52,13 +53,20 @@
     <!-- ── Vínculos ── -->
     <section role="tabpanel" id="panel-vinculos" aria-labelledby="tab-vinculos" class="cv-panel" hidden>
       <form id="vinc-form" class="cv-buscador" role="search">
-        <label class="ui-label" for="vinc-q">Buscar producto Woo o publicación ML <span class="cv-kbd-hint">(tecla <kbd>/</kbd>)</span></label>
+        <fieldset class="cv-modo">
+          <legend class="ui-label">Buscar en</legend>
+          <label><input type="radio" name="vinc-modo" value="producto" checked> Producto Woo</label>
+          <label><input type="radio" name="vinc-modo" value="ml"> Publicación ML</label>
+        </fieldset>
+        <label class="ui-label" for="vinc-q">Nombre, SKU o GTIN <span class="cv-kbd-hint">(tecla <kbd>/</kbd>)</span></label>
         <div class="cv-buscador__fila">
           <input id="vinc-q" class="ui-input" type="search" autocomplete="off" placeholder="Nombre, SKU o GTIN">
           <button type="submit" class="ui-btn">Buscar</button>
         </div>
+        <div id="vinc-filtros" class="cv-chips" role="group" aria-label="Filtros del Matcher" hidden></div>
       </form>
       <div id="vinc-resultados" aria-live="polite" aria-busy="false"></div>
+      <div id="vinc-vinculo" aria-live="polite"></div>
 
       <details id="conflictos" class="cv-conflictos ui-card" open>
         <summary class="cv-conflictos__sum">Códigos en conflicto <span id="cnt-conflictos"></span></summary>

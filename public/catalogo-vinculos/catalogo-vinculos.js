@@ -21,7 +21,8 @@
     INVALID_INPUT: 'Falta completar un dato (por ejemplo, el motivo). Revisá lo marcado.',
     omitir_requiere_override: 'Esta publicación está en "no sincronizar". Quitalo antes de vincular.',
     INVALID_STATE: 'Este caso no admite esa acción en su estado actual.',
-    OPERACION_DUPLICADA: 'Ya se mandó este cambio. Mirá su estado en Ejecución.'
+    OPERACION_DUPLICADA: 'Ya se mandó este cambio. Mirá su estado en Ejecución.',
+    vista_vieja: 'El vínculo cambió. Se recarga el caso.'
   };
   var MSG_ERROR_SIN_RED = 'Sin conexión. No se guardó nada.';
 
@@ -126,24 +127,82 @@
       cont.setAttribute('aria-busy', 'false');
       if (!r.ok) { cont.innerHTML = cajaError(mensajeDe(r), 'cargarEstado'); return; }
       var e = r.data.data || {};
+      S.estadoRaw = e;
       var salud = e.salud || {};
       var conc = e.conciliacion || {};
       var bolsa = cuentaLista(e.conflictos_bolsa);
       var sinRespaldo = cuentaLista(e.sin_respaldo_woo);
       var protec = cuentaLista(e.esperando_proteccion);
       var chips = [
-        { txt: salud.sano ? 'Lectura sana' : (salud.degradado ? 'Lectura degradada' : 'Lectura con observación'),
-          clase: salud.sano ? '' : 'alerta', icono: salud.sano ? '' : '⚠ ', lbl: 'Salud de lectura', filtro: 'abiertos' },
-        { txt: conc.exacta ? 'Exacta' : 'Sin conciliar', clase: conc.exacta ? '' : 'alerta', icono: conc.exacta ? '' : '⚠ ', lbl: 'Conciliación', filtro: 'abiertos' },
-        { txt: String(bolsa), clase: bolsa > 0 ? 'alerta' : '', icono: bolsa > 0 ? '⚠ ' : '', lbl: 'Conflictos de bolsa compartida', filtro: 'abiertos' },
-        { txt: String(sinRespaldo), clase: sinRespaldo > 0 ? 'critico' : '', icono: sinRespaldo > 0 ? '✗ ' : '', lbl: 'Vendiendo sin respaldo en Woo', filtro: 'abiertos' },
-        { txt: String(protec), clase: protec > 0 ? 'alerta' : '', icono: protec > 0 ? '⚠ ' : '', lbl: 'Protección pendiente', filtro: 'abiertos' }
+        { lbl: 'Salud de lectura', txt: salud.sano ? 'Sana' : (salud.degradado ? 'Degradada' : 'Con observación'), alerta: !salud.sano, accion: 'ir-ejecucion' },
+        { lbl: 'Conciliación', txt: conc.exacta ? 'Exacta' : 'Sin conciliar', alerta: !conc.exacta, accion: 'ir-ejecucion' },
+        { lbl: 'Conflictos de bolsa compartida', txt: String(bolsa), alerta: bolsa > 0, accion: 'franja-lista', lista: 'bolsa' },
+        { lbl: 'Vendiendo sin respaldo en Woo', txt: String(sinRespaldo), critico: sinRespaldo > 0, accion: 'franja-lista', lista: 'sinrespaldo' },
+        { lbl: 'Protección pendiente', txt: String(protec), alerta: protec > 0, accion: 'franja-lista', lista: 'proteccion' }
       ];
       cont.innerHTML = chips.map(function (c) {
-        return '<a href="#cv-cola" class="cv-chip-salud' + (c.clase ? ' cv-chip-salud--' + c.clase : '') + '" data-accion="ir-filtro" data-filtro="' + c.filtro + '">'
-          + '<span>' + esc(c.lbl) + ':</span> <b>' + c.icono + esc(c.txt) + '</b></a>';
+        var clase = c.critico ? ' cv-chip-salud--critico' : (c.alerta ? ' cv-chip-salud--alerta' : '');
+        var icono = c.critico ? '✗ ' : (c.alerta ? '⚠ ' : '');
+        return '<button type="button" class="cv-chip-salud' + clase + '" data-accion="' + c.accion + '"'
+          + (c.lista ? ' data-lista="' + c.lista + '" aria-expanded="' + (S.franjaLista === c.lista) + '"' : '')
+          + '><span>' + esc(c.lbl) + ':</span> <b>' + icono + esc(c.txt) + '</b></button>';
       }).join('');
+      renderFranjaLista();
     });
+  }
+
+  // Listas de la franja: se resuelven con GET estado; cada caso se abre en Casos (abrirPorClave).
+  function renderFranjaLista() {
+    var box = $('#cv-franja-lista');
+    var e = S.estadoRaw || {};
+    var l = S.franjaLista;
+    if (!l) { box.innerHTML = ''; return; }
+    var items = [];
+    if (l === 'bolsa') items = (e.conflictos_bolsa || []).map(function (x) {
+      return { clave: String(x.claves || '').split(',')[0], texto: (x.skus || '') + ' comparten ' + (x.user_product_id || '') + ' · ' + (x.claves || '') };
+    });
+    if (l === 'sinrespaldo') items = (e.sin_respaldo_woo || []).map(function (x) {
+      return { clave: x.clave, texto: (x.titulo || x.clave) + ' · SKU ' + (x.seller_sku || 'sin SKU') + ' · ML ' + (x.available_quantity == null ? 'sin dato' : x.available_quantity) };
+    });
+    if (l === 'proteccion') items = (e.esperando_proteccion || []).map(function (x) {
+      return { clave: x.ml_key, texto: (x.titulo || x.ml_key) + ' · ' + (x.clasificacion || '') };
+    });
+    var titulo = { bolsa: 'Conflictos de bolsa compartida', sinrespaldo: 'Vendiendo sin respaldo en Woo', proteccion: 'Protección pendiente' }[l];
+    box.innerHTML = '<section class="ui-aviso ui-aviso--atencion cv-bloque" aria-label="' + esc(titulo) + '"><h3 class="cv-h2">' + esc(titulo) + '</h3>'
+      + (items.length
+        ? '<ul class="cv-lista-hermanas">' + items.map(function (it) {
+            return '<li>' + esc(it.texto) + (it.clave ? ' <button type="button" class="ui-btn" data-accion="abrir-clave" data-clave="' + esc(it.clave) + '">Abrir caso</button>' : '') + '</li>';
+          }).join('') + '</ul>'
+        : '<p class="ui-resumen">No hay casos en esta lista.</p>')
+      + '</section>';
+  }
+
+  // Busca el caso abierto de una publicación probando las 4 colas (q filtra por clave en la API).
+  function buscarCasoPorClave(clave) {
+    var fs = ['abiertos', 'salteados', 'intervencion', 'pausadas'];
+    var paso = function (i) {
+      if (i >= fs.length) return Promise.resolve(null);
+      return api('GET', '/cola?filtro=' + fs[i] + '&limit=200&q=' + enc(clave)).then(function (r) {
+        var f = r.ok && (r.data.data || []).find(function (x) { return normClave(x.ml_key) === normClave(clave); });
+        return f ? { id: f.caso_id, filtro: fs[i] } : paso(i + 1);
+      });
+    };
+    return paso(0);
+  }
+
+  function abrirPorClave(clave) {
+    return buscarCasoPorClave(clave).then(function (m) {
+      if (!m) { anunciar('No hay un caso abierto para esa publicación.', 'alerta'); return; }
+      S.filtro = m.filtro; S.colaCargada = false; S.guardado = null;
+      var prep = S.tab !== 'casos' ? (activarTab('casos'), Promise.resolve()) : cargarCola({ seleccionar: false });
+      return prep.then(function () { return abrirCaso(m.id, { foco: true }); });
+    });
+  }
+
+  function irACaso(id, conHistorial) {
+    S.histOpen = !!conHistorial; S.guardado = null;
+    if (S.tab !== 'casos') activarTab('casos');
+    return cargarCola({ seleccionar: false }).then(function () { return abrirCaso(id, { foco: true }); });
   }
 
   function renderFiltros() {
@@ -424,11 +483,13 @@
       + (S.candidatos && !soloLectura ? '' : '')
       + '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>'
       + (soloLectura ? '' : accionesHtml())
+      + historialHtml()
       + (S.accionError ? '<div class="ui-aviso ui-aviso--critico cv-aviso-fijo cv-aviso-rojo" role="alert" tabindex="-1" id="err-accion"><span class="cv-icono" aria-hidden="true">✗</span><span>' + esc(S.accionError) + '</span></div>' : '');
     d.innerHTML = html;
     aplicarBloqueo();
     if (S.focoPendiente) { var f = $(S.focoPendiente); if (f) f.focus(); S.focoPendiente = null; }
     var q = $('#det-q'); if (q && S.queryCand) q.value = S.queryCand;
+    var nt = $('#nota-txt'); if (nt) nt.value = S.notaTxt || '';
   }
 
   function barraGuardado() {
@@ -470,17 +531,17 @@
         + (veto ? '<button type="button" class="ui-btn ui-btn--peligro" data-accion="admin" data-admin="confirmar">Confirmar igual</button>' : '')
         + '<button type="button" class="ui-btn" data-accion="admin" data-admin="link">Link de pago</button>'
         + '</div>'
-        + (S.adminForm ? adminFormHtml() : '') + '</div>';
+        + (S.adminForm && S.adminForm !== 'relevar' ? adminFormHtml() : '') + '</div>';
     }
     var deshacer = '';
-    return '<div class="cv-acciones" role="group" aria-label="Acciones del caso">'
+    return '<div class="cv-acciones" role="group" aria-label="Acciones del caso">' + tomaHtml()
       + '<div class="cv-acciones__fila">' + vinc + '</div>' + razonHtml
       + acciones + deshacer + admin + '</div>';
   }
 
   function adminFormHtml() {
     var tipo = S.adminForm;
-    var titulo = { confirmar: 'Confirmar igual · vincula pese a la contradicción', link: 'Link de pago · ignora stock y ventas', destrabar: 'Destrabar · vuelve a pendiente' }[tipo] || '';
+    var titulo = { relevar: 'Relevar · el caso pasa a vos. Motivo obligatorio.', confirmar: 'Confirmar igual · vincula pese a la contradicción', link: 'Link de pago · ignora stock y ventas', destrabar: 'Destrabar · vuelve a pendiente' }[tipo] || '';
     return '<form class="cv-cuadro-motivo" data-accion="admin-enviar" data-admin="' + tipo + '" novalidate>'
       + '<p class="ui-label">' + esc(titulo) + '</p>'
       + '<label class="ui-label" for="adm-motivo">Motivo <span>(obligatorio)</span></label>'
@@ -494,6 +555,7 @@
     var n = S.hermanas.n;
     return '<div class="ui-aviso ui-aviso--atencion cv-foco-bloque" role="alert" tabindex="-1" id="bloque-hermanas">'
       + '<p><span aria-hidden="true">⚠</span> Esto cambia también ' + n + ' publicaciones hermanas. ¿Seguimos?</p>'
+      + listaHermanas(0)
       + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="hermanas-si">Vincular las ' + n + '</button>'
       + '<button type="button" class="ui-btn" data-accion="hermanas-no">Volver</button></div></div>';
   }
@@ -656,7 +718,7 @@
     err.hidden = true; $('#ns-motivo').removeAttribute('aria-invalid');
     var v = radio.value;
     var pub = c.publicacion || {};
-    var body = { variante: v, motivo: motivo, expected_sku: pub.seller_sku || null };
+    var body = { variante: v, motivo: motivo, expected_sku: vinculoSku() };
     if (v === 'b') {
       S.nsOpId = S.nsOpId || uuid();
       body.operation_id = S.nsOpId;
@@ -680,6 +742,7 @@
         return mostrarAlcance(r.data.sibling_count);
       }
       S.nsOpId = null;
+      if (r.data && r.data.code === 'vista_vieja') abrirCaso(c.id, { foco: false });
       estado.textContent = mensajeDe(r); estado.hidden = false;
     });
   }
@@ -687,7 +750,7 @@
   function mostrarAlcance(n) {
     var al = $('#ns-alcance');
     al.hidden = false;
-    al.innerHTML = '<div class="ui-aviso ui-aviso--atencion cv-alcance"><p><span aria-hidden="true">⚠</span> La pausa es de la publicación entera. Pausa también estas ' + n + ' variaciones.</p>'
+    al.innerHTML = '<div class="ui-aviso ui-aviso--atencion cv-alcance"><p><span aria-hidden="true">⚠</span> La pausa es de la publicación entera. Pausa también estas ' + n + ' variaciones.</p>' + listaHermanas(6)
       + '<label class="cv-switch"><input type="checkbox" id="ns-conf"> <span>Entiendo, pausar las ' + n + '</span></label>'
       + '<p id="ns-conf-razon" class="cv-acciones__razon">Marcá la confirmación para pausar las ' + n + ' variaciones.</p></div>';
     var cb = $('#ns-conf');
@@ -748,6 +811,8 @@
       else if (ev.key === 'Tab') atraparTab(ev);
       return;
     }
+    var hist = $('#det-hist');
+    if (ev.key === 'Escape' && hist && hist.open) { ev.preventDefault(); hist.open = false; S.histOpen = false; hist.querySelector('summary').focus(); return; }
     if (ev.key === 'Escape' && S.hermanas) { ev.preventDefault(); S.hermanas = null; renderDetalle(); return; }
     if (ev.key === 'Escape' && S.conflictoVersion) { ev.preventDefault(); S.conflictoVersion = null; renderDetalle(); return; }
     if (ev.ctrlKey || ev.metaKey || ev.altKey || !atajosActivos()) return;
@@ -768,6 +833,7 @@
       case 'd': if (enCaso) { ev.preventDefault(); S.soloDif = !S.soloDif; renderDetalle(); } break;
       case 'f': if (enCaso) { ev.preventDefault(); S.fotoGrande = !S.fotoGrande; renderDetalle(); } break;
       case '/': ev.preventDefault(); if (S.tab === 'casos' && enCaso) { $('#det-q') && $('#det-q').focus(); } else { activarTab('vinculos'); $('#vinc-q').focus(); } break;
+      case 'h': if (enCaso) { ev.preventDefault(); var hd = $('#det-hist'); if (hd) { hd.open = true; S.histOpen = true; hd.querySelector('summary').focus(); } } break;
       case '?': ev.preventDefault(); abrirDialogo($('#dlg-atajos'), $('#cv-btn-ayuda'), $('#dlg-atajos-on')); break;
       default: break;
     }
@@ -871,7 +937,10 @@
   }
 
   // ── Retenidas ─────────────────────────────────────────────────────────────────────────────────
-  function causaDe(f) { return String(f.motivo || 'causa en revisión').replace(/_/g, ' '); }
+  function causaDe(f) {
+    var c = f.motivo ? String(f.motivo).replace(/_/g, ' ') : 'Sin cobertura';
+    return c + ((f.claves && f.claves.length) ? ' · ' + f.claves.join(', ') : '');
+  }
 
   function cargarRetenidas() {
     var cont = $('#ret-cuerpo');
@@ -939,20 +1008,160 @@
   }
 
   // ── Vínculos ──────────────────────────────────────────────────────────────────────────────────
+  var VINC_FILTROS = [['all', 'Todos'], ['asignar', 'Asignar SKU'], ['verificar', 'Verificar'], ['conf-baja', 'Confianza baja'], ['color-talle', 'Color y talle correcto']];
+  function modoVinc() { var r = document.querySelector('input[name="vinc-modo"]:checked'); return r ? r.value : 'producto'; }
+
+  function renderVincFiltros() {
+    var box = $('#vinc-filtros');
+    box.hidden = modoVinc() !== 'ml';
+    box.innerHTML = VINC_FILTROS.map(function (f) {
+      return '<button type="button" class="ui-chip" data-accion="vinc-filtro" data-filtro="' + f[0] + '" aria-pressed="' + (S.vincFiltro === f[0]) + '">' + esc(f[1]) + '</button>';
+    }).join('');
+  }
+
+  // El Matcher trae `clave` (item|variación, sin pipe final si no hay variación). Se compara sin el pipe final.
+  function claveDeMl(it) { return it.clave || (it.ml_item_id + (it.ml_variation_id ? '|' + it.ml_variation_id : '')); }
+  function normClave(k) { return String(k || '').replace(/\|$/, ''); }
+
+  function filtroMatcher(it) {
+    var f = S.vincFiltro;
+    if (f === 'all') return true;
+    if (f === 'asignar') return it.modo === 'asignar';
+    if (f === 'verificar') return it.modo === 'verificar';
+    if (f === 'conf-baja') return it.modo === 'verificar' && it.score_confianza < 0.7;
+    return !!(it.candidatos && it.candidatos[0] && it.candidatos[0].color_ok && it.candidatos[0].talle_ok);
+  }
+
+  // Buscador: producto Woo (identidad) o publicación ML (candidatos del Matcher, solo lectura).
   function buscarVinculos(q) {
     var cont = $('#vinc-resultados');
+    var modo = modoVinc();
+    S.vincQ = q || '';
+    if (!S.vincFiltro) S.vincFiltro = 'all';
+    renderVincFiltros();
     cont.setAttribute('aria-busy', 'true');
-    S.vincQ = q;
-    return identidad('/productos/buscar?q=' + enc(q.trim())).then(function (r) {
+    var pr = modo === 'producto'
+      ? identidad('/productos/buscar?q=' + enc(S.vincQ.trim())).then(function (r) { return { r: r, lista: r.ok ? (r.data.data || []) : [], modo: modo }; })
+      : llamar('GET', '/api/matcher/candidatos?scope=all').then(function (r) {
+          var txt = S.vincQ.trim().toLowerCase();
+          var lista = (r.ok && !r.data.computing ? (r.data.data || []) : []).filter(function (it) {
+            return filtroMatcher(it) && (!txt || (String(it.ml_title || '') + ' ' + claveDeMl(it)).toLowerCase().indexOf(txt) !== -1);
+          });
+          return { r: r, lista: lista, modo: modo, computing: !!(r.ok && r.data.computing) };
+        });
+    return pr.then(function (x) {
       cont.setAttribute('aria-busy', 'false');
-      if (!r.ok) { cont.innerHTML = cajaError(mensajeDe(r), 'buscarVinculos'); return; }
-      var lista = r.data.data || [];
-      if (!lista.length) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin productos para “' + esc(q) + '”.</p></div>'; return; }
-      cont.innerHTML = '<p class="ui-resumen" role="status">' + lista.length + ' resultado' + (lista.length === 1 ? '' : 's') + '</p>' + lista.map(function (p) {
-        return '<article class="cv-tarjeta-vinc"><strong>' + esc(p.nombre_canonico || '—') + '</strong>'
-          + '<p class="ui-resumen">SKU Fusion <span class="ui-id">' + esc(p.fusion_sku || '—') + '</span> · SKU Woo <span class="ui-id">' + esc(p.sku_woo || '—') + '</span></p>'
-          + '<p class="ui-resumen">Stock Woo ' + esc(p.stock_woo == null ? 'sin dato' : p.stock_woo) + ' · publicaciones ML activas ' + esc(p.identidades_ml_activas || 0) + '</p></article>';
+      if (!x.r.ok) { cont.innerHTML = cajaError(mensajeDe(x.r), 'buscarVinculos'); return; }
+      if (x.computing) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>El Matcher está calculando. Probá en un rato.</p></div>'; return; }
+      if (!x.lista.length) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin resultados para “' + esc(S.vincQ) + '”.</p></div>'; return; }
+      cont.innerHTML = '<p class="ui-resumen" role="status">' + x.lista.length + ' resultados</p>' + x.lista.map(function (it) {
+        return x.modo === 'producto' ? tarjetaProducto(it) : tarjetaML(it);
       }).join('');
+    });
+  }
+
+  function tarjetaProducto(p) {
+    return '<article class="cv-tarjeta-vinc"><strong>' + esc(p.nombre_canonico || '—') + '</strong>'
+      + '<p class="ui-resumen">SKU Fusion <span class="ui-id">' + esc(p.fusion_sku || '—') + '</span> · SKU Woo <span class="ui-id">' + esc(p.sku_woo || '—') + '</span></p>'
+      + '<p class="ui-resumen">Stock Woo ' + esc(p.stock_woo == null ? 'sin dato' : p.stock_woo) + ' · publicaciones ML activas ' + esc(p.identidades_ml_activas || 0) + '</p></article>';
+  }
+
+  function tarjetaML(it) {
+    var clave = claveDeMl(it);
+    var conf = it.score_confianza < 0.7 ? 'Confianza baja' : 'Confianza alta';
+    return '<article class="cv-tarjeta-vinc"><strong>' + esc(it.ml_title || clave) + '</strong>'
+      + '<p class="ui-resumen"><span class="ui-id">' + esc(clave) + '</span> · ' + esc(it.modo || '') + ' · ' + conf + '</p>'
+      + '<button type="button" class="ui-btn" data-accion="vinc-ml" data-clave="' + esc(clave) + '">Ver vínculo</button></article>';
+  }
+
+  // Panel de vínculo: vínculo vigente, hermanas por SKU y GTIN, marca, orden de identificadores y notas.
+  function abrirVinculoML(clave) {
+    var p = $('#vinc-vinculo');
+    p.innerHTML = '<p class="ui-resumen">Buscando el vínculo…</p>';
+    S.vincPanel = null;
+    return buscarCasoPorClave(clave).then(function (m) {
+      if (!m) { S.vincPanel = { clave: clave, sinCaso: true }; return renderVincPanel(); }
+      return Promise.all([api('GET', '/casos/' + m.id), identidad('/casos/' + m.id)]).then(function (rs) {
+        if (!rs[0].ok) { p.innerHTML = cajaError(mensajeDe(rs[0]), 'cargarCola'); return; }
+        S.vincPanel = { clave: clave, casoId: m.id, detalle: rs[0].data.data, ident: rs[1].ok ? rs[1].data.data : null };
+        renderVincPanel();
+      });
+    });
+  }
+
+  function listaItems(arr) {
+    return arr.map(function (h) {
+      return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '') + ' <span class="ui-label">' + esc(h.motivo || '') + '</span></li>';
+    }).join('');
+  }
+
+  function renderVincPanel() {
+    var p = $('#vinc-vinculo');
+    var v = S.vincPanel;
+    if (!v) { p.innerHTML = ''; return; }
+    if (v.sinCaso) { p.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Esta publicación no tiene un caso abierto: no hay vínculo para revisar acá.</p></div>'; return; }
+    var d = v.detalle; var id = v.ident || {};
+    var pub = (d.caso && d.caso.publicacion) || {};
+    var vig = d.vinculo_vigente; var marca = d.marca;
+    var hSku = id.hermanas_ml || []; var hGtin = id.ml_por_gtin_producto || [];
+    var ids = id.producto && Array.isArray(id.producto.identificadores) ? id.producto.identificadores : null;
+    var idsHtml = ids
+      ? '<ol class="cv-hist__lista">' + ids.map(function (x, i) {
+          return '<li><span class="ui-id">' + esc(x.valor_normalizado) + '</span> <button type="button" class="ui-btn" data-accion="ident-mover" data-idx="' + i + '" data-dir="-1" aria-label="Subir ' + esc(x.valor_normalizado) + '">↑</button> <button type="button" class="ui-btn" data-accion="ident-mover" data-idx="' + i + '" data-dir="1" aria-label="Bajar ' + esc(x.valor_normalizado) + '">↓</button></li>';
+        }).join('') + '</ol><button type="button" class="ui-btn ui-btn--primario" data-accion="ident-guardar">Guardar orden</button>'
+      : '<p class="ui-resumen">Orden de identificadores: no disponible en esta vista.</p>';
+    var marcaTxt = !marca ? 'Sin marca.'
+      : (marca.tipo === 'link_de_pago' ? 'Link de pago.' : 'No sincronizar (variante ' + (marca.variante || '—') + ') · por ' + (marca.por || '—') + '.');
+    var revertir = '';
+    if (marca && marca.tipo === 'no_sincronizar') {
+      revertir = (marca.variante === 'c' && !S.isAdmin)
+        ? '<p class="cv-lock">Lo revierte José.</p>'
+        : '<form data-accion="vinc-revertir" class="cv-cuadro-motivo" novalidate><label class="ui-label" for="rev-motivo">Motivo <span>(obligatorio)</span></label>'
+          + '<textarea id="rev-motivo" class="ui-input" rows="2"></textarea><p class="cv-error" hidden></p>'
+          + '<div class="cv-acciones__fila"><button type="submit" class="ui-btn">Revertir no sincronizar</button></div></form>';
+    }
+    p.innerHTML = '<article class="ui-card cv-vinc-card"><h2 class="cv-h2">' + esc(pub.titulo || v.clave) + '</h2>'
+      + '<p class="ui-resumen">Publicación <span class="ui-id">' + esc(v.clave) + '</span></p>'
+      + '<p>Vínculo vigente: ' + (vig ? '<span class="ui-id">' + esc(vig.sku) + '</span> <span class="ui-label">' + esc(vig.accion) + ' · desde ' + esc(fecha(vig.desde)) + '</span>' : 'Sin vínculo activo.') + '</p>'
+      + '<p>Marca: ' + esc(marcaTxt) + '</p>' + revertir
+      + '<h3 class="ui-label">Hermanas por SKU</h3>' + (hSku.length ? '<ul class="cv-lista-hermanas">' + listaItems(hSku) + '</ul>' : '<p class="ui-resumen">Ninguna.</p>')
+      + '<h3 class="ui-label">Hermanas por GTIN</h3>' + (hGtin.length ? '<ul class="cv-lista-hermanas">' + listaItems(hGtin) + '</ul>' : '<p class="ui-resumen">Ninguna.</p>')
+      + '<h3 class="ui-label">Orden de identificadores</h3>' + idsHtml
+      + '<h3 class="ui-label">Notas</h3>' + ((d.notas || []).length
+        ? '<ol class="cv-hist__lista">' + d.notas.map(function (h) { return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(h.evento) + '</li>'; }).join('') + '</ol>'
+        : '<p class="ui-resumen">Sin notas.</p>')
+      + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="vinc-revincular" data-caso="' + v.casoId + '">Revincular</button>'
+      + '<button type="button" class="ui-btn" data-accion="vinc-historial" data-caso="' + v.casoId + '">Ver historial</button></div></article>';
+  }
+
+  function revertirNS(f) {
+    var v = S.vincPanel;
+    var ta = f.querySelector('textarea');
+    var err = f.querySelector('.cv-error');
+    var motivo = (ta.value || '').trim();
+    if (!motivo) { err.textContent = 'Falta el motivo. Es obligatorio.'; err.hidden = false; ta.focus(); return; }
+    api('POST', '/claves/no-sincronizar/deshacer', { clave: v.clave, motivo: motivo }).then(function (r) {
+      if (!r.ok) { err.textContent = mensajeDe(r); err.hidden = false; return; }
+      anunciar('No sincronizar revertido.', 'estado');
+      abrirVinculoML(v.clave);
+    });
+  }
+
+  function identMover(idx, dir) {
+    var arr = S.vincPanel && S.vincPanel.ident && S.vincPanel.ident.producto && S.vincPanel.ident.producto.identificadores;
+    if (!arr) return;
+    var j = idx + dir;
+    if (j < 0 || j >= arr.length) return;
+    var t = arr[idx]; arr[idx] = arr[j]; arr[j] = t;
+    renderVincPanel();
+  }
+
+  function identGuardar() {
+    var prod = S.vincPanel && S.vincPanel.ident && S.vincPanel.ident.producto;
+    if (!prod) return;
+    var valores = prod.identificadores.map(function (x) { return x.valor_normalizado; });
+    llamar('PUT', IDENT + '/productos/' + prod.id + '/identificadores/orden', { valores: valores }).then(function (r) {
+      anunciar(r.ok ? 'Orden de identificadores guardado.' : mensajeDe(r), r.ok ? 'estado' : 'alerta');
     });
   }
 
@@ -1174,6 +1383,22 @@
             cargarConflictos().then(function () { enfocarPorSelector('#conf-motivo'); });
           });
           break;
+        case 'tomar': accionCaso('/casos/' + caso().id + '/tomar', { operation_id: opIdPara('tomar:' + caso().id), expected_version: caso().expected_version, evidence_fingerprint: caso().evidencia_fingerprint }, 'Caso tomado por vos.', 'tomar:' + caso().id); break;
+        case 'relevar-abrir': S.adminForm = 'relevar'; renderDetalle(); enfocarPorSelector('#adm-motivo'); break;
+        case 'nota-enviar': enviarNota(); break;
+        case 'franja-lista':
+          var lst = el.getAttribute('data-lista');
+          S.franjaLista = S.franjaLista === lst ? null : lst;
+          $$('[data-lista]').forEach(function (b) { b.setAttribute('aria-expanded', String(b.getAttribute('data-lista') === S.franjaLista)); });
+          renderFranjaLista(); break;
+        case 'ir-ejecucion': activarTab('ejecucion'); break;
+        case 'abrir-clave': abrirPorClave(el.getAttribute('data-clave')); break;
+        case 'vinc-ml': abrirVinculoML(el.getAttribute('data-clave')); break;
+        case 'vinc-revincular': irACaso(Number(el.getAttribute('data-caso')), false); break;
+        case 'vinc-historial': irACaso(Number(el.getAttribute('data-caso')), true); break;
+        case 'vinc-filtro': S.vincFiltro = el.getAttribute('data-filtro'); buscarVinculos($('#vinc-q').value); break;
+        case 'ident-mover': identMover(Number(el.getAttribute('data-idx')), Number(el.getAttribute('data-dir'))); break;
+        case 'ident-guardar': identGuardar(); break;
         case 'resolver': case 'incorrecto': resolverConflicto(el); break;
         default: break;
       }
@@ -1193,6 +1418,9 @@
       } else if (f.getAttribute('data-accion') === 'liberar-enviar') {
         ev.preventDefault();
         liberarRetenida(f);
+      } else if (f.getAttribute('data-accion') === 'vinc-revertir') {
+        ev.preventDefault();
+        revertirNS(f);
       } else if (f.id === 'vinc-form') {
         ev.preventDefault();
         var v = $('#vinc-q').value.trim();
@@ -1210,6 +1438,11 @@
       if (ev.target.id === 'adm-motivo' && ev.target.value.trim()) { $('#adm-err').hidden = true; }
     });
 
+    $('#cv-detalle').addEventListener('toggle', function (e) { if (e.target.id === 'det-hist') S.histOpen = e.target.open; }, true);
+    document.body.addEventListener('input', function (ev) { if (ev.target.id === 'nota-txt') S.notaTxt = ev.target.value; });
+    document.body.addEventListener('change', function (ev) {
+      if (ev.target.name === 'vinc-modo') { S.vincFiltro = 'all'; buscarVinculos($('#vinc-q').value); }
+    });
     window.addEventListener('online', function () { setOffline(false); cargarCola({ seleccionar: false }); });
     window.addEventListener('resize', aplicarBloqueo);
   }
@@ -1225,6 +1458,7 @@
     var err = $('#adm-err');
     if (!motivo) { err.textContent = 'Falta el motivo. Es obligatorio.'; err.hidden = false; $('#adm-motivo').setAttribute('aria-invalid', 'true'); $('#adm-motivo').focus(); return; }
     var c = caso(); var pub = c.publicacion || {};
+    if (tipo === 'relevar') return accionCaso('/casos/' + c.id + '/relevar', { operation_id: opIdPara('relevar:' + c.id), expected_version: c.expected_version, evidence_fingerprint: c.evidencia_fingerprint, motivo: motivo }, 'Relevado: el caso pasó a vos.', 'relevar:' + c.id);
     var body; var ruta; var clave = null;
     if (tipo === 'confirmar') {
       if (!S.elegido) { err.textContent = 'Elegí un candidato antes de confirmar.'; err.hidden = false; return; }
@@ -1239,7 +1473,7 @@
       return;
     }
     if (tipo === 'link') {
-      body = { clave: c.ml_key, motivo: motivo, expected_sku: pub.seller_sku || null };
+      body = { clave: c.ml_key, motivo: motivo, expected_sku: vinculoSku() };
       ruta = '/claves/link-de-pago';
     } else {
       // Destrabar: la operación en intervención es la que se destraba.
@@ -1260,6 +1494,70 @@
       anunciar(S.guardado.texto, 'estado');
       siguienteCaso();
     });
+  }
+
+  // expected_sku del servidor: el SKU del vínculo vigente (o null si no hay). Si no coincide, responde 409 vista_vieja.
+  function vinculoSku() { return S.detalle && S.detalle.vinculo_vigente ? S.detalle.vinculo_vigente.sku : null; }
+
+  // ── Toma, relevo, notas e historial ────────────────────────────────────────────────────────────
+  function tomaHtml() {
+    var c = caso(); var resp = c.responsable;
+    var out;
+    if (!resp) out = '<button type="button" class="ui-btn" data-accion="tomar">Tomar caso</button>';
+    else if (resp !== S.usuario) out = '<span class="ui-label">Lo tiene ' + esc(resp) + '.</span> <button type="button" class="ui-btn" data-accion="relevar-abrir">Relevar</button>';
+    else out = '<span class="ui-label">Lo tenés vos.</span>';
+    if (S.adminForm === 'relevar') out += adminFormHtml();
+    return '<div class="cv-acciones__fila">' + out + '</div>';
+  }
+
+  function historialHtml() {
+    var notas = (S.detalle && S.detalle.notas) || [];
+    var filas = notas.map(function (h) {
+      return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(h.evento) + '</li>';
+    }).join('');
+    return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial · tecla <kbd aria-hidden="true">h</kbd></summary>'
+      + '<ol class="cv-hist__lista">' + (filas || '<li class="ui-resumen">Sin movimientos.</li>') + '</ol>'
+      + '<div class="cv-campo"><label class="ui-label" for="nota-txt">Agregar nota</label>'
+      + '<textarea id="nota-txt" class="ui-input" rows="2"></textarea>'
+      + (S.notaError ? '<p class="cv-error">' + esc(S.notaError) + '</p>' : '')
+      + '<div class="cv-acciones__fila"><button type="button" class="ui-btn" data-accion="nota-enviar">Guardar nota</button></div></div></details>';
+  }
+
+  function listaHermanas(max) {
+    var l = (S.detalle && S.detalle.hermanas_item) || [];
+    if (!l.length) return '';
+    var vis = max ? l.slice(0, max) : l;
+    var resto = l.slice(vis.length);
+    var li = function (h) {
+      return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '') + ' <span class="ui-label">' + esc(h.status || '') + ' · '
+        + esc(h.available_quantity == null ? 'sin stock' : h.available_quantity + ' en stock') + '</span></li>';
+    };
+    return '<ul class="cv-lista-hermanas">' + vis.map(li).join('') + '</ul>'
+      + (resto.length ? '<details class="ui-mas"><summary>y ' + resto.length + ' más</summary><ul class="cv-lista-hermanas">' + resto.map(li).join('') + '</ul></details>' : '');
+  }
+
+  // Acción sobre el caso con operation_id: "Guardado" solo tras la respuesta exitosa.
+  function accionCaso(ruta, body, texto, clave) {
+    var c = caso(); if (!c || S.busy || S.offline) return Promise.resolve();
+    S.busy = 'accion'; S.accionError = null; renderDetalle();
+    return api('POST', ruta, body).then(function (r) {
+      S.busy = null;
+      if (r.red) { S.accionError = MSG_ERROR_SIN_RED; return renderDetalle(); }
+      if (clave) soltarOpId(clave);
+      if (r.ok) { S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; return abrirCaso(c.id, { foco: false }); }
+      if (r.status === 409 && (r.data.code === 'VERSION_CONFLICT' || r.data.code === 'EVIDENCE_CONFLICT')) {
+        return abrirCaso(c.id, { foco: false }).then(function () { S.accionError = mensajeDe(r); renderDetalle(); });
+      }
+      S.accionError = mensajeDe(r); renderDetalle();
+    });
+  }
+
+  function enviarNota() {
+    var c = caso(); if (!c) return;
+    var txt = (S.notaTxt || '').trim();
+    if (!txt) { S.notaError = 'Falta el texto de la nota.'; return renderDetalle(); }
+    S.notaError = null;
+    return accionCaso('/casos/' + c.id + '/notas', { operation_id: opIdPara('nota:' + c.id), nota: txt, expected_version: c.expected_version, evidence_fingerprint: c.evidencia_fingerprint }, 'Nota guardada.', 'nota:' + c.id);
   }
 
   // ── Arranque ────────────────────────────────────────────────────────────────────────────────
@@ -1288,6 +1586,7 @@
       Api.installAuth();
       Api.guardBfcache();
       S.isAdmin = !!d.is_admin || (d.scopes && d.scopes.indexOf('all') !== -1);
+      S.usuario = d.user || null;
       S.canWrite = S.isAdmin || (d.permisos || []).some(function (p) { return p.herramienta === 'matcher' && p.nivel === 'write'; });
       document.body.classList.toggle('cv-admin', S.isAdmin);
       actualizarContadoresIniciales();
