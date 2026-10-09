@@ -134,6 +134,13 @@ describe('API de Catálogo y vínculos', () => {
       expect(r.body.data.regla).toMatchObject({ frena: expect.any(Boolean), motivo: expect.anything() === undefined ? null : expect.anything() });
       expect(r.body.data.matriz).toMatchObject({ veto: false, filas: expect.any(Array) });
       expect(r.body.data.marca).toBeNull();
+      expect(r.body.data).toMatchObject({ vinculo_vigente: null, hermanas_item: [], notas: expect.any(Array) });
+      db.prepare("INSERT INTO sku_matcher_decisiones(clave,sku,accion,actualizado_en) VALUES ('MLA2005|','FB-2005','confirmar',?)").run(ISO);
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en)
+        VALUES ('MLA2005|7','MLA2005','7','Hermana','active',?)`).run(ISO);
+      const r2 = await request(app(lector)).get(`${BASE}/casos/${a.f.id}`);
+      expect(r2.body.data.vinculo_vigente).toMatchObject({ sku: 'FB-2005', accion: 'confirmar' });
+      expect(r2.body.data.hermanas_item).toMatchObject([{ clave: 'MLA2005|7', status: 'active' }]);
       expect((await request(app(lector)).get(`${BASE}/casos/9999`)).status).toBe(404);
     });
 

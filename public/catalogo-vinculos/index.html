@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Catálogo y vínculos — Fusion Bikes</title>
+  <link rel="stylesheet" href="../lib/theme.css">
+  <link rel="stylesheet" href="../lib/components.css">
+  <link rel="stylesheet" href="catalogo-vinculos.css">
+</head>
+<body class="cv-body">
+  <a class="cv-saltar" href="#cv-main">Ir al contenido</a>
+
+  <div id="cv-offline" class="cv-offline" role="alert" hidden>
+    <span aria-hidden="true">✗</span> <strong>Sin conexión.</strong> No se guardó nada.
+  </div>
+
+  <header class="cv-top">
+    <h1 class="cv-titulo">Catálogo y vínculos</h1>
+    <div class="cv-top__acciones">
+      <button type="button" id="cv-btn-ayuda" class="ui-btn cv-solo-pc" hidden>Atajos <span aria-hidden="true">?</span></button>
+      <label class="cv-switch cv-solo-pc" hidden id="cv-switch-wrap">
+        <input type="checkbox" id="cv-atajos-on" role="switch" aria-describedby="cv-atajos-estado">
+        <span id="cv-atajos-estado">Atajos activados</span>
+      </label>
+    </div>
+  </header>
+
+  <main id="cv-main" class="cv-main">
+    <div class="ui-tabs cv-tabs" role="tablist" aria-label="Secciones de Catálogo y vínculos">
+      <button type="button" role="tab" id="tab-casos" class="ui-btn" aria-selected="true" aria-controls="panel-casos" tabindex="0" data-tab="casos">Casos <span id="cnt-casos"></span></button>
+      <button type="button" role="tab" id="tab-vinculos" class="ui-btn" aria-selected="false" aria-controls="panel-vinculos" tabindex="-1" data-tab="vinculos">Vínculos</button>
+      <button type="button" role="tab" id="tab-ejecucion" class="ui-btn" aria-selected="false" aria-controls="panel-ejecucion" tabindex="-1" data-tab="ejecucion">Ejecución <span id="cnt-ejecucion"></span></button>
+      <button type="button" role="tab" id="tab-retenidas" class="ui-btn" aria-selected="false" aria-controls="panel-retenidas" tabindex="-1" data-tab="retenidas">Retenidas <span id="cnt-retenidas"></span></button>
+    </div>
+
+    <!-- ── Casos ── -->
+    <section role="tabpanel" id="panel-casos" aria-labelledby="tab-casos" class="cv-panel">
+      <div id="cv-estado" class="cv-franja" aria-busy="true" aria-label="Estado de la identidad de productos"></div>
+      <div id="cv-filtros" class="cv-filtros" role="group" aria-label="Filtrar casos"></div>
+      <div class="cv-layout">
+        <div class="cv-cola-wrap">
+          <h2 class="cv-h2" id="cola-titulo">Cola</h2>
+          <div id="cv-cola" class="cv-cola" role="listbox" aria-labelledby="cola-titulo" aria-busy="true"></div>
+        </div>
+        <article id="cv-detalle" class="cv-detalle ui-card" aria-labelledby="det-titulo" aria-busy="false" tabindex="-1">
+          <p class="cv-vacio-det">Elegí un caso de la cola.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ── Vínculos ── -->
+    <section role="tabpanel" id="panel-vinculos" aria-labelledby="tab-vinculos" class="cv-panel" hidden>
+      <form id="vinc-form" class="cv-buscador" role="search">
+        <label class="ui-label" for="vinc-q">Buscar producto Woo o publicación ML <span class="cv-kbd-hint">(tecla <kbd>/</kbd>)</span></label>
+        <div class="cv-buscador__fila">
+          <input id="vinc-q" class="ui-input" type="search" autocomplete="off" placeholder="Nombre, SKU o GTIN">
+          <button type="submit" class="ui-btn">Buscar</button>
+        </div>
+      </form>
+      <div id="vinc-resultados" aria-live="polite" aria-busy="false"></div>
+
+      <details id="conflictos" class="cv-conflictos ui-card" open>
+        <summary class="cv-conflictos__sum">Códigos en conflicto <span id="cnt-conflictos"></span></summary>
+        <div id="conflictos-cuerpo"></div>
+      </details>
+    </section>
+
+    <!-- ── Ejecución ── -->
+    <section role="tabpanel" id="panel-ejecucion" aria-labelledby="tab-ejecucion" class="cv-panel" hidden>
+      <div id="ejec-cabecera" aria-busy="true"></div>
+      <div id="ejec-cuerpo"></div>
+    </section>
+
+    <!-- ── Retenidas ── -->
+    <section role="tabpanel" id="panel-retenidas" aria-labelledby="tab-retenidas" class="cv-panel" hidden>
+      <div id="ret-cuerpo" aria-busy="true"></div>
+    </section>
+  </main>
+
+  <!-- Diálogo: No sincronizar -->
+  <div id="dlg-ns" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-ns-titulo">
+      <h2 id="dlg-ns-titulo" class="cv-h2">No sincronizar</h2>
+      <form id="ns-form" novalidate>
+        <fieldset class="cv-fieldset">
+          <legend class="ui-label">Qué hacemos con esta publicación</legend>
+          <div id="ns-variantes"></div>
+        </fieldset>
+        <p class="ui-resumen">En las tres, las ventas de esta publicación se retienen.</p>
+        <div class="cv-campo">
+          <label for="ns-motivo" class="ui-label">Motivo <span>(obligatorio)</span></label>
+          <textarea id="ns-motivo" class="ui-input" rows="3" aria-describedby="ns-motivo-err"></textarea>
+          <p id="ns-motivo-err" class="cv-error" hidden></p>
+        </div>
+        <div id="ns-alcance" hidden></div>
+        <p id="ns-estado" class="cv-error" role="alert" hidden></p>
+        <div class="cv-dialogo__pie">
+          <button type="button" class="ui-btn" id="ns-volver">Volver</button>
+          <button type="submit" class="ui-btn ui-btn--primario" id="ns-enviar">Marcar no sincronizar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Diálogo: atajos (solo PC) -->
+  <div id="dlg-atajos" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-atajos-titulo">
+      <h2 id="dlg-atajos-titulo" class="cv-h2">Atajos de teclado</h2>
+      <label class="cv-switch"><input type="checkbox" id="dlg-atajos-on" role="switch"> <span id="dlg-atajos-txt">Activados</span></label>
+      <table class="ui-table cv-hoja-atajos">
+        <caption class="sr-only">Teclas disponibles</caption>
+        <thead><tr><th scope="col">Tecla</th><th scope="col">Acción</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>Elegir candidato</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Vincular</td></tr>
+          <tr><td><kbd>s</kbd></td><td>Saltear</td></tr>
+          <tr><td><kbd>n</kbd></td><td>No sincronizar</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Buscar otra variante</td></tr>
+          <tr><td><kbd>z</kbd></td><td>Deshacer (10 s)</td></tr>
+          <tr><td><kbd>d</kbd></td><td>Solo diferencias</td></tr>
+          <tr><td><kbd>f</kbd></td><td>Agrandar foto</td></tr>
+          <tr><td><kbd>h</kbd></td><td>Historial</td></tr>
+          <tr><td><kbd>?</kbd></td><td>Esta ayuda</td></tr>
+        </tbody>
+      </table>
+      <div class="cv-dialogo__pie">
+        <button type="button" class="ui-btn" id="dlg-atajos-cerrar">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../lib/api.js"></script>
+  <script src="../lib/format.js"></script>
+  <script src="catalogo-vinculos.js"></script>
+</body>
+</html>
