@@ -949,6 +949,14 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedido_items_ml_key_122')").run();
     })();
   }
+  const identidadOverrideContradiccionMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_override_contradiccion_123'").get();
+  if (!identidadOverrideContradiccionMigration) {
+    db.transaction(() => {
+      const columnas = db.prepare('PRAGMA table_info(identidad_decisiones)').all().map((c) => c.name);
+      if (columnas.length && !columnas.includes('override_contradiccion')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '123_identidad_override_contradiccion.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_override_contradiccion_123')").run();
+    })();
+  }
   const devolucionesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_devoluciones_102'").get();
   if (!devolucionesMigration) {
     db.transaction(() => {
