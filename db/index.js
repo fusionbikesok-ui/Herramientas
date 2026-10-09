@@ -957,6 +957,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_override_contradiccion_123')").run();
     })();
   }
+  const identidadPausasMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_pausas_124'").get();
+  if (!identidadPausasMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '124_identidad_pausas.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_pausas_124')").run();
+    })();
+  }
   const devolucionesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_devoluciones_102'").get();
   if (!devolucionesMigration) {
     db.transaction(() => {
