@@ -125,6 +125,8 @@
   font-size: var(--fs-dato); font-weight: 600; overflow-wrap: anywhere;
 }
 .cv-caso__motivo { color: var(--muted); font-size: var(--fs-meta); margin-top: .15rem; }
+.cv-caso__cierre { display: block; font-size: var(--fs-meta); margin-top: .15rem; overflow-wrap: anywhere; }
+.cv-reabrir { margin: var(--sp-2) 0; }
 .cv-caso__pie { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-1); margin-top: .35rem; flex-wrap: wrap; }
 .cv-plata { font-weight: 700; font-variant-numeric: tabular-nums; font-size: var(--fs-cuerpo); }
 .cv-plata--cero { color: var(--muted); font-weight: 500; }

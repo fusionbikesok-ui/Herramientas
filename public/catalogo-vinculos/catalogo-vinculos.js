@@ -10,7 +10,7 @@
   var API = '/api/catalogo-vinculos';
   var IDENT = '/api/identidad-productos';
   var LIMITE_COLA = 50;
-  var FILTROS = [['abiertos', 'Abiertos'], ['salteados', 'Salteados'], ['intervencion', 'En intervención'], ['pausadas', 'Pausadas']];
+  var FILTROS = [['abiertos', 'Abiertos'], ['salteados', 'Salteados'], ['intervencion', 'En intervención'], ['pausadas', 'Pausadas'], ['cerrados', 'Cerrados']];
   var CAMPO_TXT = { titulo: 'el título', sku: 'el SKU', gtin: 'el GTIN', color: 'el color', talle: 'el talle',
     rodado: 'el rodado', transmision: 'la transmisión', velocidades: 'las velocidades' };
   var ICONO = { rojo: '✗', ambar: '⚠', verde: '✓', gris: '–' };
@@ -446,6 +446,16 @@
     return out;
   }
 
+  // Cierre de un caso (filtro Cerrados): tipo en palabras, motivo, quién y cuándo. `cierre` viene de GET /cola.
+  function cierreTxt(c) {
+    var tipo = c.tipo === 'excepcion'
+      ? 'Excepción solo ML' + (c.vence_en ? ' hasta ' + fechaArgTxt(c.vence_en) : '')
+      : 'Ninguno sirve';
+    var motivo = c.tipo === 'excepcion' ? (c.motivo || '') : (MOTIVO_NINGUNO_TXT[c.motivo] || motivoTxt(c.motivo || ''));
+    var quien = (c.por ? ' · por ' + c.por : '') + (c.desde ? ' · desde ' + fechaArgTxt(c.desde) : '');
+    return tipo + (motivo ? ' · ' + motivo : '') + quien;
+  }
+
   function renderCola() {
     var cont = $('#cv-cola');
     cont.setAttribute('aria-busy', 'false');
@@ -456,7 +466,7 @@
     var hayMas = S.colaTotal > S.cola.length;
     var salteados = S.conteos.salteados > 0;
     if (!S.cola.length) {
-      cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>' + ({ salteados: 'No hay casos salteados.', intervencion: 'No hay casos en intervención.', pausadas: 'No hay casos pausados.' }[S.filtro] || 'No hay casos abiertos') + '</p>'
+      cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>' + ({ salteados: 'No hay casos salteados.', intervencion: 'No hay casos en intervención.', pausadas: 'No hay casos pausados.', cerrados: 'No hay casos cerrados' }[S.filtro] || 'No hay casos abiertos') + '</p>'
         + (S.filtro === 'abiertos' && salteados ? '<button type="button" class="ui-btn" data-accion="filtro" data-filtro="salteados">Ver salteados</button>' : '')
         + '</div>';
       $('#cv-cola-mas').innerHTML = '';
@@ -481,6 +491,7 @@
         + ' aria-selected="' + sel + '" tabindex="' + (i === foco ? '0' : '-1') + '">'
         + '<span class="cv-caso__titulo">' + esc(f.titulo || f.ml_key) + '</span>'
         + '<span class="cv-caso__motivo">' + esc(motivoTxt(f.motivo)) + (f.salteado_por ? ' <span class="cv-salteado">· ↷ Salteado por ' + esc(f.salteado_por) + '</span>' : '') + '</span>'
+        + (f.cierre ? '<span class="cv-caso__cierre">' + esc(cierreTxt(f.cierre)) + '</span>' : '')
         + '<span class="cv-caso__pie">' + plata + '<span class="cv-chips">' + chipsCaso(f) + '</span></span>'
         + '</button>';
     }).join('');
@@ -833,6 +844,7 @@
       + tarjetaOperacion()
       + (soloLectura ? '' : marcaNingunoHtml())
       + marcaExcepcionHtml()
+      + (soloLectura ? '' : reabrirHtml())
       + datosHtml()
       + candidatosHtml(soloLectura)
       + (soloLectura ? '' : '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>')
@@ -1208,6 +1220,12 @@
       + ' · motivo: ' + esc(x.motivo || '') + ' · por ' + esc(x.creada_por || '') + '</span></div>';
   }
 
+  // Botón Reabrir: solo si el detalle trae un cierre vigente (excepción o "ninguno sirve"). Lo decide el servidor al mandar.
+  function reabrirHtml() {
+    if (!S.detalle || !(S.detalle.excepcion || S.detalle.ninguno_sirve)) return '';
+    return '<div class="cv-reabrir"><button type="button" class="ui-btn" data-accion="reabrir" aria-disabled="' + !!S.busy + '">Reabrir</button></div>';
+  }
+
   // Aviso de link de pago (solo admin, en el formulario de Link de pago, antes de confirmar).
   function avisoSinMarketplaceHtml() {
     return '<div class="ui-aviso ui-aviso--atencion cv-sin-mkt" role="note"><span class="cv-icono" aria-hidden="true">⚠</span>'
@@ -1499,6 +1517,55 @@
         return recargarRevertir(R, mensajeDe(r));
       }
       est.textContent = mensajeDe(r); est.hidden = false;
+    });
+  }
+
+  // ── Reabrir un caso cerrado (H2): motivo obligatorio; POST /casos/:id/reabrir ─────────────────
+  function abrirReabrir(disparador) {
+    var c = caso(); if (!c || !puedeEscribir() || S.busy || S.offline) return;
+    $('#reab-motivo').value = '';
+    limpiarError($('#reab-motivo'), $('#reab-motivo-err'));
+    $('#reab-estado').hidden = true;
+    $('#dlg-reab-titulo').textContent = 'Reabrir caso · ' + (c.publicacion && c.publicacion.titulo || c.ml_key);
+    abrirDialogo($('#dlg-reabrir'), disparador, $('#reab-motivo'));
+  }
+
+  // Textos de error de reabrir. 409 INVALID_STATE: no está cerrado, o es una marca de no sincronizar / link de pago.
+  function textoReabrirError(r) {
+    var code = r.data && r.data.code;
+    if (r.status === 409 && code === 'INVALID_STATE') return 'No se puede reabrir: el caso ya no está cerrado, o el cierre es una marca de no sincronizar o de link de pago. Esas se deshacen en su propia acción.';
+    if (r.status === 422) return 'No se pudo reabrir: falta el motivo o un dato del caso. Revisá el motivo y reintentá.';
+    return mensajeDe(r);
+  }
+
+  function reabrirEnviar(ev) {
+    ev.preventDefault();
+    var c = caso(); if (!c || S.busy) return;
+    var campo = $('#reab-motivo'), err = $('#reab-motivo-err'), est = $('#reab-estado');
+    limpiarError(campo, err); est.hidden = true;
+    var motivo = campo.value.trim();
+    if (!motivo) return marcarError(campo, err, 'Falta el motivo. Es obligatorio.');
+    var clave = 'reabrir:' + c.id;
+    var body = cuerpoMutacion(clave, { motivo: motivo });
+    var btn = $('#reab-enviar');
+    S.busy = 'reabrir'; aplicarBloqueo(); btn.textContent = 'Reabriendo…';
+    api('POST', '/casos/' + c.id + '/reabrir', body).then(function (r) {
+      S.busy = null; aplicarBloqueo(); btn.textContent = 'Reabrir';
+      if (r.red) { est.textContent = MSG_ERROR_SIN_RED; est.hidden = false; return; }
+      if (r.ok) {
+        soltarOpId(clave); cerrarDialogo(true);
+        return finDeshacer(c.id, 'Caso reabierto. Vuelve a la cola abierta.');
+      }
+      var code = r.data && r.data.code;
+      if (r.status === 409 && ['VERSION_CONFLICT', 'EVIDENCE_CONFLICT', 'INVALID_STATE'].indexOf(code) !== -1) {
+        // El caso cambió o ya no está cerrado: se cierra el diálogo y se recarga cola y detalle con el aviso.
+        soltarOpId(clave); cerrarDialogo(true);
+        return recargarCaso(c.id, textoReabrirError(r)).then(function () { return cargarCola({ seleccionar: false }); });
+      }
+      if (r.status === 422) return marcarError(campo, err, textoReabrirError(r));
+      // 403 y otros: el aviso queda dentro del diálogo y el foco va a Volver (no hay nada que corregir en el motivo).
+      est.textContent = textoReabrirError(r); est.hidden = false;
+      $('#reab-volver').focus();
     });
   }
 
@@ -2520,6 +2587,7 @@
     $('#exc-volver').addEventListener('click', function () { cerrarDialogo(); });
     $('#ning-volver').addEventListener('click', function () { cerrarDialogo(); });
     $('#rev-volver').addEventListener('click', function () { S.rev = null; cerrarDialogo(); });
+    $('#reab-volver').addEventListener('click', function () { cerrarDialogo(); });
     $('#dlg-foto-cerrar').addEventListener('click', function () { cerrarDialogo(); });
     $('#dlg-imp-cuerpo').addEventListener('click', function (e) {
       var b = e.target.closest && e.target.closest('[data-accion="dlg-imp-reintentar"]');
@@ -2626,6 +2694,7 @@
         case 'deshacer-ninguno': deshacerNinguno(Number(el.getAttribute('data-caso'))); break;
         case 'excepcion': abrirExcepcion(el); break;
         case 'ninguno': abrirNinguno(el); break;
+        case 'reabrir': abrirReabrir(el); break;
         case 'revertir-caso': abrirRevertirCaso(Number(el.getAttribute('data-op')), Number(el.getAttribute('data-caso')), el); break;
         case 'revertir-abrir': abrirRevertirEjec(Number(el.getAttribute('data-op')), el); break;
         case 'solo-dif': S.soloDif = !S.soloDif; renderDetalle(); break;
@@ -2743,6 +2812,8 @@
         ningunoEnviar(ev);
       } else if (f.id === 'rev-form') {
         revertirEnviar(ev);
+      } else if (f.id === 'reab-form') {
+        reabrirEnviar(ev);
       } else if (f.id === 'vinc-form') {
         ev.preventDefault();
         var v = $('#vinc-q').value.trim();

@@ -232,6 +232,26 @@
     </div>
   </div>
 
+  <!-- Diálogo: reabrir un caso cerrado (motivo obligatorio). POST /casos/:id/reabrir; sin operación en ML. -->
+  <div id="dlg-reabrir" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-reab-titulo">
+      <h2 id="dlg-reab-titulo" class="cv-h2">Reabrir caso</h2>
+      <p class="ui-resumen">El caso vuelve a la cola abierta. Se levanta la excepción solo ML o el "ninguno sirve" vigente. No se escribe nada en ML.</p>
+      <form id="reab-form" novalidate>
+        <div class="cv-campo">
+          <label for="reab-motivo" class="ui-label">Motivo <span>(obligatorio)</span></label>
+          <textarea id="reab-motivo" class="ui-input" rows="2" aria-describedby="reab-motivo-err"></textarea>
+          <p id="reab-motivo-err" class="cv-error" hidden></p>
+        </div>
+        <p id="reab-estado" class="cv-error" role="alert" hidden></p>
+        <div class="cv-dialogo__pie">
+          <button type="button" class="ui-btn" id="reab-volver">Volver</button>
+          <button type="submit" class="ui-btn ui-btn--primario" id="reab-enviar">Reabrir</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Diálogo: atajos (solo PC) -->
   <div id="dlg-atajos" class="cv-dialogo-fondo" hidden>
     <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-atajos-titulo">
