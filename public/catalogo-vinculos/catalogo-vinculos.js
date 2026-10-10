@@ -1339,6 +1339,15 @@
   function pausasVisibles(e) {
     return (e.pausas || []).filter(function (p) { return !esCancelada(p) && !PAUSA_TERMINAL[p.estado]; });
   }
+  // Variaciones de una pausa: título si viene, si no la clave. Pasa de 5, se pliega con "y N más".
+  function pausaVariacionesHtml(vars) {
+    var li = function (v) {
+      return '<li><span class="ui-id">' + esc(v.clave || '') + '</span> ' + esc(v.titulo || '') + (v.status ? ' <span class="ui-label">' + esc(estadoMlTxt(v.status)) + '</span>' : '') + '</li>';
+    };
+    var vis = vars.slice(0, 5); var resto = vars.slice(5);
+    return '<ul class="cv-lista-hermanas">' + vis.map(li).join('') + '</ul>'
+      + (resto.length ? '<details class="ui-mas"><summary>y ' + resto.length + ' más</summary><ul class="cv-lista-hermanas">' + resto.map(li).join('') + '</ul></details>' : '');
+  }
   function pausaEstadoTxt(p) { return p.estado === 'fallida' ? 'Pausa en ML fallida' : 'Pausa en ML pendiente'; }
 
   function renderEjecucion() {
@@ -1362,9 +1371,11 @@
         + pausas.map(function (p) {
           var clave = String(p.ml_key || '').replace(/\|.*$/, '');
           var titulo = p.titulo || p.nombre_canonico || '';
+          var vars = Array.isArray(p.variaciones) ? p.variaciones : [];
           return '<p class="ui-resumen">' + (titulo ? '<strong>' + esc(titulo) + '</strong> · <span class="ui-id">' + esc(clave) + '</span>' : esc(clave))
             + ' · ' + esc(pausaEstadoTxt(p)) + ' · ' + esc(motivoTxt(p.motivo))
-            + (p.impacto_hermanas > 0 ? ' · afecta ' + cuenta(p.impacto_hermanas, 'variación', 'variaciones') : '') + '</p>';
+            + (p.impacto_hermanas > 0 ? ' · afecta ' + cuenta(p.impacto_hermanas, 'variación', 'variaciones') : '') + '</p>'
+            + (vars.length ? pausaVariacionesHtml(vars) : '');
         }).join('') + '</section>'
       : '';
     var filas = ops.map(filaEjecHtml).join('');
@@ -2288,8 +2299,13 @@
   function historialHtml() {
     var notas = (S.detalle && S.detalle.notas) || [];
     var filas = notas.map(function (h) {
-      var det = null; try { det = h.detalle_json ? JSON.parse(h.detalle_json) : null; } catch (e) { det = null; }
-      var texto = h.nota || (det && (det.nota || det.texto)) || '';
+      // Contrato: {evento, actor, creado_en, detalle}; en 'nota_agregada' trae nota_texto (string|null).
+      // Si nota_texto es null, cae al texto que venga en el detalle. Todo sale escapado.
+      var det = h.detalle;
+      if (typeof det === 'string') { try { det = JSON.parse(det); } catch (e) { det = { texto: det }; } }
+      det = det && typeof det === 'object' ? det : {};
+      var texto = typeof h.nota_texto === 'string' && h.nota_texto ? h.nota_texto
+        : (typeof det.nota_texto === 'string' && det.nota_texto ? det.nota_texto : (det.nota || det.texto || ''));
       return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(eventoTxt(h.evento))
         + (texto ? '<p class="cv-hist__nota">' + esc(texto) + '</p>' : '') + '</li>';
     }).join('');
@@ -2298,7 +2314,7 @@
       + (puedeEscribir()
         ? '<div class="cv-campo"><label class="ui-label" for="nota-txt">Agregar nota</label>'
           + '<textarea id="nota-txt" class="ui-input" rows="2"></textarea>'
-          + (S.notaError ? '<p class="cv-error">' + esc(S.notaError) + '</p>' : '')
+          + (S.notaError ? '<p class="cv-error" role="alert">' + esc(S.notaError) + '</p>' : '')
           + '<div class="cv-acciones__fila"><button type="button" class="ui-btn" data-accion="nota-enviar" aria-disabled="' + !!S.busy + '">Guardar nota</button></div></div>'
         : '')
       + '</details>';
@@ -2328,6 +2344,10 @@
       if (r.ok) { S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; S.focoPendiente = S.dispSel || '#det-titulo'; S.dispSel = null; cargarConteos(); return abrirCaso(c.id, { foco: false }); }
       if (r.status === 409 && (r.data.code === 'VERSION_CONFLICT' || r.data.code === 'EVIDENCE_CONFLICT')) {
         return abrirCaso(c.id, { foco: false }).then(function () { setErrorAccion(mensajeDe(r)); renderDetalle(); });
+      }
+      // Nota sin matcher:write (llegó igual el 403): el error va junto al campo de la nota.
+      if (r.status === 403 && clave && clave.indexOf('nota:') === 0) {
+        S.notaError = MSG_SIN_PERMISO; S.accionError = null; S.focoPendiente = '#nota-txt'; return renderDetalle();
       }
       setErrorAccion(mensajeDe(r)); renderDetalle();
     });
