@@ -871,7 +871,7 @@
     }
     // Operación ya iniciada en ML: no se deshace, se ofrece revertir (operación nueva, con motivo).
     if (g.revertirOp) cuenta += ' <button type="button" class="ui-btn" data-accion="revertir-caso" data-op="' + g.revertirOp + '" data-caso="' + g.caso + '">Revertir</button>';
-    return '<div class="ui-aviso ui-aviso--ok cv-guardado" role="status" aria-live="polite">'
+    return '<div class="ui-aviso ui-aviso--' + (g.tono || 'ok') + ' cv-guardado" role="status" aria-live="polite">'
       + '<span>' + esc(g.texto) + '</span>' + cuenta + '</div>';
   }
 
@@ -928,7 +928,7 @@
     var titulo = { relevar: 'Relevar · el caso pasa a vos. Motivo obligatorio.', confirmar: 'Confirmar igual · vincula pese a la contradicción', link: 'Link de pago · ignora stock y ventas', destrabar: 'Destrabar · vuelve a pendiente' }[tipo] || '';
     return '<form class="cv-cuadro-motivo" data-accion="admin-enviar" data-admin="' + tipo + '" novalidate>'
       + '<p class="ui-label">' + esc(titulo) + '</p>'
-      + (tipo === 'link' && caso() && caso().link_de_pago_sin_marketplace ? avisoSinMarketplaceHtml() : '')
+      + (tipo === 'link' && S.detalle && S.detalle.link_de_pago_sin_marketplace ? avisoSinMarketplaceHtml() : '')
       + '<label class="ui-label" for="adm-motivo">Motivo <span>(obligatorio)</span></label>'
       + '<textarea id="adm-motivo" class="ui-input" rows="2" aria-describedby="adm-err"></textarea>'
       + '<p id="adm-err" class="cv-error" hidden></p>'
@@ -1125,8 +1125,8 @@
             limpiarDeshacer(); S.busy = null; aplicarBloqueo();
             var txt = textoNoDeshacible(est);
             S.guardado = est === 'completada'
-              ? { caso: d.caso, texto: MSG.OPERACION_YA_INICIADA, revertirOp: d.opId }
-              : { caso: d.caso, texto: MSG.OPERACION_YA_INICIADA + ' ' + txt };
+              ? { caso: d.caso, texto: MSG.OPERACION_YA_INICIADA, tono: 'atencion', revertirOp: d.opId }
+              : { caso: d.caso, texto: MSG.OPERACION_YA_INICIADA + ' ' + txt, tono: 'atencion' };
             S.focoPendiente = est === 'completada' ? '[data-accion="revertir-caso"]' : '#det-titulo';
             anunciar(S.guardado.texto, 'alerta');
             return renderDetalle();
@@ -1187,7 +1187,7 @@
 
   // Marca "Ninguno sirve" en el detalle del caso (vigente solo con la evidencia actual). Deshacer solo si puede escribir.
   function marcaNingunoHtml() {
-    var n = caso() && caso().ninguno_sirve; if (!n) return '';
+    var n = S.detalle && S.detalle.ninguno_sirve; if (!n) return '';
     var m = MOTIVO_NINGUNO_TXT[n.motivo] || motivoTxt(n.motivo);
     return '<div class="ui-aviso ui-aviso--info cv-marca-ninguno" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>Ninguno sirve (' + esc(m) + ')</strong> · reaparece si cambia la evidencia.'
       + (n.nota ? ' Nota: ' + esc(n.nota) : '') + '</span>'
@@ -1203,7 +1203,7 @@
     return new Intl.DateTimeFormat('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
   }
   function marcaExcepcionHtml() {
-    var x = caso() && caso().excepcion; if (!x) return '';
+    var x = S.detalle && S.detalle.excepcion; if (!x) return '';
     return '<div class="ui-aviso ui-aviso--info cv-marca-excepcion" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>Excepción solo ML hasta ' + esc(fechaArgTxt(x.vence_en)) + '</strong>'
       + ' · motivo: ' + esc(x.motivo || '') + ' · por ' + esc(x.creada_por || '') + '</span></div>';
   }
@@ -1267,7 +1267,8 @@
     $('#ns-estado').hidden = true;
     $('#ns-alcance').hidden = true; $('#ns-alcance').innerHTML = '';
     $('#dlg-ns-titulo').textContent = 'No sincronizar · ' + (c.publicacion && c.publicacion.titulo || c.ml_key);
-    abrirDialogo($('#dlg-ns'), disparador, $('#ns-variantes input'));
+    // Al cerrar se busca el botón por selector estable: el detalle pudo re-renderizarse con el diálogo abierto.
+    abrirDialogo($('#dlg-ns'), function () { return $('[data-accion="no-sincronizar"]') || disparador; }, $('#ns-variantes input'));
   }
 
   function nsEnviar(ev) {
@@ -1502,6 +1503,8 @@
   }
 
   // ── Diálogos (foco atrapado, Esc, foco vuelve al disparador) ──────────────────────────────────
+  // El disparador puede ser un nodo o una función que lo busca al cerrar (el nodo viejo puede haber sido re-renderizado).
+  function resolverDisparador(x) { return typeof x === 'function' ? x() : x; }
   function abrirDialogo(el, disparador, enfocar) {
     S.dlgDisparador = disparador || null;
     S.dlgActivo = el;
@@ -1511,7 +1514,7 @@
   function cerrarDialogo(exito) {
     if (!S.dlgActivo) return;
     S.dlgActivo.hidden = true;
-    var d = S.dlgDisparador;
+    var d = resolverDisparador(S.dlgDisparador);
     S.dlgActivo = null; S.dlgDisparador = null;
     if (exito) return; // tras un éxito el foco lo toma el siguiente caso (S.focoPendiente)
     if (d && document.contains(d)) d.focus();
@@ -1532,12 +1535,12 @@
     $('#dlg-conf-ok').textContent = o.ok || 'Confirmar';
     $('#dlg-conf-ok').className = 'ui-btn ' + (o.peligro ? 'ui-btn--peligro' : 'ui-btn--primario');
     $('#dlg-conf-ok').setAttribute('aria-disabled', 'false');
-    abrirDialogo(dlg, S.confDisp, $('#dlg-conf-volver'));
+    abrirDialogo(dlg, resolverDisparador(S.confDisp), $('#dlg-conf-volver'));
   }
   // ok=true ejecuta onOk; ok=false ejecuta onCancel. Antes de ejecutar, el foco vuelve al disparador (o al diálogo previo).
   function cerrarConfirmacion(ok) {
     if (!S.confOnOk) return;
-    var cb = ok ? S.confOnOk : S.confOnCancel; var prev = S.confPrev; var disp = S.confDisp;
+    var cb = ok ? S.confOnOk : S.confOnCancel; var prev = S.confPrev; var disp = resolverDisparador(S.confDisp);
     S.confOnOk = null; S.confOnCancel = null; S.confPrev = null; S.confDisp = null;
     $('#dlg-confirmar').hidden = true;
     S.dlgActivo = null; S.dlgDisparador = null;
@@ -2444,7 +2447,12 @@
       return llamar('POST', IDENT + ruta, Object.assign({}, body, extra || {})).then(function (r) {
         S.busy = null; aplicarBloqueo();
         if (!r.ok && spec.accion === 'incorrecto' && !extra && r.data && r.data.requiere_confirmacion === 'permitir_unico') {
+          // Volver devuelve el foco al "No le corresponde" del mismo producto, buscado al cerrar (no el nodo viejo ni body).
+          var botonIncorrecto = function () {
+            return $$('[data-accion="incorrecto"]').filter(function (b) { return b.getAttribute('data-producto') === String(spec.producto) && b.getAttribute('data-valor') === valor; })[0] || null;
+          };
           pedirConfirmacion({ titulo: 'Es el único código del producto', texto: 'Va a quedar sin GTIN; ¿confirmás igual?', ok: 'Confirmar igual', peligro: true,
+            disparador: botonIncorrecto,
             onCancel: function () { anunciar('No se marcó el código.', 'estado'); },
             onOk: function () { enviar({ permitir_unico: true }); } });
           return;
