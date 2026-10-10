@@ -5,7 +5,7 @@ import request from 'supertest';
 import { openDb } from '../db/index.js';
 import { auditarIdentidadProductos } from '../lib/identidadProductos.js';
 import { catalogoVinculosRouter } from '../routes/catalogoVinculos.js';
-import { ningunoVigente } from '../lib/catalogoVinculos.js';
+import { ningunoVigente, observacionIncompletaSalud } from '../lib/catalogoVinculos.js';
 
 // Fase D (H1-H5): excepción solo_ml, "ninguno sirve", deshacer/revertir Vincular, deshacer Saltear y franja Estado.
 const FILE = './test/tmp-catalogo-vinculos-acciones.sqlite';
@@ -303,6 +303,35 @@ describe('Catálogo y vínculos: acciones de la Fase D', () => {
       const r = await request(app(lector)).get(`${BASE}/casos/${c.id}`);
       expect(r.body.data.link_de_pago_sin_marketplace).toBe(true);
       expect(r.body.data.publicacion ?? r.body.data.caso.publicacion).toMatchObject({ es_marketplace: false });
+    });
+  });
+
+  describe('Franja Estado: observacion_incompleta (booleano, fail-closed)', () => {
+    it('con todas las claves activas con stock observadas: false y sin detalle', async () => {
+      caso(3101);
+      db.prepare("UPDATE ml_publicaciones_cache SET atributos_json='[]' WHERE clave='MLA3101|'").run();
+      const r = await request(app(lector)).get(`${BASE}/estado`);
+      expect(r.status).toBe(200);
+      expect(r.body.data.salud).toMatchObject({ observacion_incompleta: false, observacion_incompleta_detalle: null, observacion_incompleta_cantidad: 0 });
+    });
+
+    it('con una clave activa con stock sin atributos: true con detalle y cantidad', async () => {
+      caso(3102);
+      db.prepare("UPDATE ml_publicaciones_cache SET atributos_json=NULL WHERE clave='MLA3102|'").run();
+      const r = await request(app(lector)).get(`${BASE}/estado`);
+      expect(r.body.data.salud.observacion_incompleta).toBe(true);
+      expect(r.body.data.salud.observacion_incompleta_cantidad).toBe(1);
+      expect(r.body.data.salud.observacion_incompleta_detalle).toMatch(/1 claves/);
+      expect(r.body.data.salud.sano).toBe(false);
+    });
+
+    it('si no se puede determinar: true (fail-closed), sin detalle numérico', () => {
+      const roto = { prepare() { throw new Error('esquema ilegible'); } };
+      expect(observacionIncompletaSalud(roto)).toEqual({
+        observacion_incompleta: true,
+        observacion_incompleta_detalle: 'no se pudo determinar la observación',
+        observacion_incompleta_cantidad: null,
+      });
     });
   });
 });

@@ -71,7 +71,7 @@ export function catalogoVinculosRouter(db) {
   router.post('/casos/:id/tomar', exigir('write'), (req, res) => responder(res,
     asignarCasoIdentidad(db, req.params.id, { ...req.body, responsable: actor(req) }, actor(req))));
   router.post('/casos/:id/relevar', exigir('write'), (req, res) => responder(res,
-    asignarCasoIdentidad(db, req.params.id, req.body || {}, actor(req), { relevo: true })));
+    asignarCasoIdentidad(db, req.params.id, { ...(req.body || {}), responsable: actor(req) }, actor(req), { relevo: true })));
   // Una nota es una escritura (matcher:write): el lector recibe 403 FORBIDDEN y no se inserta nada.
   router.post('/casos/:id/notas', exigir('write'), (req, res) => responder(res,
     agregarNotaIdentidad(db, req.params.id, req.body || {}, actor(req)), true));
