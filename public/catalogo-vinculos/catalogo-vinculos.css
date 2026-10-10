@@ -162,7 +162,6 @@
 .cv-cand[aria-pressed="true"] { border-color: var(--sel-bd); background: var(--sel-bg); }
 .cv-cand__num { font-size: var(--fs-titulo); font-weight: 700; text-align: center; }
 .cv-cand__img { width: 40px; height: 40px; object-fit: contain; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
-.cv-cand--grande .cv-cand__img { width: 56px; height: 56px; }
 .cv-cand__img--vacia { display: grid; place-items: center; color: var(--muted); }
 .cv-cand__img--vacia svg { width: 55%; height: 55%; }
 .cv-cand__precio { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -233,6 +232,14 @@
   background: var(--sheet-bg); border: 1px solid var(--sheet-bd); border-radius: var(--radius) var(--radius) 0 0;
   width: 100%; max-height: 94vh; overflow-y: auto; padding: var(--sp-3); padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom));
 }
+/* Diálogo de fotos (tecla f): centrado, dos fotos lado a lado; apiladas en pantallas angostas. */
+.cv-dialogo-fondo--centro { align-items: center; padding: var(--sp-2); }
+.cv-dialogo--foto { border-radius: var(--radius); max-width: 1000px; }
+.cv-fotos { display: flex; flex-direction: column; gap: var(--sp-3); align-items: center; min-width: 0; }
+.cv-foto { margin: 0; width: 100%; max-width: 480px; display: grid; gap: var(--sp-1); justify-items: center; min-width: 0; }
+.cv-foto__img { display: block; width: 100%; max-width: 480px; height: auto; max-height: 480px; object-fit: contain; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+.cv-foto figcaption { font-size: var(--fs-meta); color: var(--muted); }
+@media (min-width: 640px) { .cv-fotos { flex-direction: row; align-items: flex-start; justify-content: center; } .cv-foto { flex: 1 1 0; } }
 .cv-dialogo__pie { display: flex; justify-content: space-between; gap: var(--sp-2); margin-top: 1rem; flex-wrap: wrap; }
 .cv-variante {
   display: grid; grid-template-columns: auto 1fr; gap: var(--sp-1) var(--sp-2); align-items: start; width: 100%;

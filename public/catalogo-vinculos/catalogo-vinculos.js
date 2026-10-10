@@ -192,7 +192,7 @@
     filtro: 'abiertos', conteos: {}, cola: [], colaTotal: 0, colaError: null, colaCargada: false,
     casoId: null, detalle: null, detalleError: null, ejec: null,
     candidatos: null, candidatosError: null, elegido: null, elegidoIdx: null, matrizError: null,
-    queryCand: '', soloDif: false, fotoGrande: false,
+    queryCand: '', soloDif: false,
     guardado: null, conflictoVersion: null, hermanas: null, accionError: null, accionInfo: null, focoPendiente: null,
     nsOpId: null, nsVariante: null, nsConfirm: false, nsEnviando: false,
     deshacer: null, deshacerTimer: null,
@@ -681,7 +681,7 @@
     var lista = S.candCargando ? [] : (S.candidatos || []);
     var filas = lista.map(function (p, i) {
       var sel = S.elegido && S.elegido.id === p.id;
-      return '<button type="button" class="cv-cand' + (S.fotoGrande ? ' cv-cand--grande' : '') + '" data-accion="elegir" data-idx="' + i + '" aria-pressed="' + !!sel + '">'
+      return '<button type="button" class="cv-cand" data-accion="elegir" data-idx="' + i + '" aria-pressed="' + !!sel + '">'
         + '<span class="cv-cand__num" aria-hidden="true">' + (i + 1) + '</span>'
         + (p.img ? '<img class="cv-cand__img" src="' + esc(p.img) + '" alt="" loading="lazy">'
           : '<span class="cv-cand__img cv-cand__img--vacia" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6"/></svg></span>')
@@ -1134,6 +1134,29 @@
     else { var f = $('#cv-cola [aria-selected="true"]') || $('#cv-detalle'); if (f) f.focus(); }
   }
 
+  // Tecla f: fotos del candidato (ML y Woo) en un diálogo. Foto Woo = candidato del disparador o el elegido;
+  // foto ML = caso.publicacion.thumbnail (GET /casos/:id, ya saneada en el backend).
+  function abrirFotos(t) {
+    var cand = null, disp = null;
+    if (t && t.dataset && t.dataset.accion === 'elegir' && t.dataset.idx != null) {
+      cand = (S.candidatos || [])[Number(t.dataset.idx)] || null; disp = t;
+    } else if (S.elegido) {
+      cand = S.elegido; disp = $('[data-accion="elegir"][aria-pressed="true"]');
+    }
+    if (!disp && t && t !== document.body) disp = t;
+    var pub = (caso() && caso().publicacion) || {};
+    var fotos = [];
+    if (pub.thumbnail) fotos.push({ src: pub.thumbnail, alt: 'Publicación ML', leyenda: 'Publicación ML' });
+    if (cand && cand.img) fotos.push({ src: cand.img, alt: 'Producto Woo: ' + (cand.nombre_canonico || cand.nombre_woo || 'producto'), leyenda: 'Producto Woo' });
+    var cuerpo = $('#dlg-foto-cuerpo');
+    cuerpo.innerHTML = fotos.length
+      ? '<div class="cv-fotos">' + fotos.map(function (f) {
+          return '<figure class="cv-foto"><img class="cv-foto__img" src="' + esc(f.src) + '" alt="' + esc(f.alt) + '" loading="lazy"><figcaption>' + esc(f.leyenda) + '</figcaption></figure>';
+        }).join('') + '</div>'
+      : '<p class="ui-resumen">Sin foto</p>';
+    abrirDialogo($('#dlg-foto'), disp, $('#dlg-foto-cerrar'));
+  }
+
   // Esc o clic afuera: si hay un motivo escrito en No sincronizar, pide confirmación antes de descartarlo.
   function intentarCerrarDialogo() {
     if (S.dlgActivo === $('#dlg-ns') && $('#ns-motivo').value.trim() && S.nsEnviando === false) {
@@ -1174,6 +1197,7 @@
   function teclado(ev) {
     if (S.dlgActivo) {
       if (ev.key === 'Escape') { ev.preventDefault(); intentarCerrarDialogo(); }
+      else if (ev.key === 'f' && S.dlgActivo === $('#dlg-foto') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) { ev.preventDefault(); cerrarDialogo(); }
       else if (ev.key === 'Tab') atraparTab(ev);
       return;
     }
@@ -1212,7 +1236,7 @@
       case 'n': if (enCaso && !soloLecturaActual()) { ev.preventDefault(); abrirNS($('[data-accion="no-sincronizar"]')); } break;
       case 'z': if (deshacerVisible()) { ev.preventDefault(); deshacerNS(); } break;
       case 'd': if (enCaso) { ev.preventDefault(); S.soloDif = !S.soloDif; renderDetalle(); } break;
-      case 'f': if (enCaso) { ev.preventDefault(); S.fotoGrande = !S.fotoGrande; if (!(hdEnDetalle(t))) S.focoPendiente = '[data-accion="elegir"][aria-pressed="true"]'; renderDetalle(); } break;
+      case 'f': if (enCaso) { ev.preventDefault(); abrirFotos(t); } break;
       case '/': ev.preventDefault(); if (S.tab === 'casos' && enCaso) { $('#det-q') && $('#det-q').focus(); } else { activarTab('vinculos'); $('#vinc-q').focus(); } break;
       case 'h': if (enCaso) { ev.preventDefault(); var hd = $('#det-hist'); if (hd) { hd.open = !hd.open; S.histOpen = hd.open; hd.querySelector('summary').focus(); } } break;
       case '?': ev.preventDefault(); abrirDialogo($('#dlg-atajos'), $('#cv-btn-ayuda'), $('#dlg-atajos-on')); break;
@@ -1220,7 +1244,6 @@
     }
   }
   // Si el foco ya está dentro del detalle, renderDetalle lo restaura solo; si no (p. ej. body), se pide foco explícito.
-  function hdEnDetalle(t) { var det = $('#cv-detalle'); return !!(det && t && det.contains(t) && t !== det); }
   function soloLecturaActual() {
     return soloLecturaDetalle();
   }
@@ -2031,6 +2054,7 @@
     $('#dlg-atajos-cerrar').addEventListener('click', function () { cerrarDialogo(); });
     $('#ns-volver').addEventListener('click', intentarCerrarDialogo);
     $('#dlg-imp-volver').addEventListener('click', function () { cerrarDialogo(); });
+    $('#dlg-foto-cerrar').addEventListener('click', function () { cerrarDialogo(); });
     $('#dlg-imp-cuerpo').addEventListener('click', function (e) {
       var b = e.target.closest && e.target.closest('[data-accion="dlg-imp-reintentar"]');
       if (b) reintentarListaImpacto(Number(b.getAttribute('data-op')));
