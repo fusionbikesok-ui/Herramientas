@@ -456,9 +456,17 @@
     return tipo + (motivo ? ' · ' + motivo : '') + quien;
   }
 
+  // role=listbox solo con opciones adentro (axe aria-required-children): sin ítems, la lista no lleva rol.
+  function rolCola(conItems) {
+    var cont = $('#cv-cola');
+    if (conItems) { cont.setAttribute('role', 'listbox'); cont.setAttribute('aria-labelledby', 'cola-titulo'); }
+    else { cont.removeAttribute('role'); cont.removeAttribute('aria-labelledby'); }
+  }
+
   function renderCola() {
     var cont = $('#cv-cola');
     cont.setAttribute('aria-busy', 'false');
+    rolCola(false);
     if (S.colaError) {
       cont.innerHTML = cajaError(S.colaError, 'cargarCola');
       return;
@@ -466,6 +474,8 @@
     var hayMas = S.colaTotal > S.cola.length;
     var salteados = S.conteos.salteados > 0;
     if (!S.cola.length) {
+      var tituloVacio = $('#cola-titulo');
+      if (tituloVacio) tituloVacio.textContent = 'Cola · ' + cuenta(S.colaTotal || 0, 'caso', 'casos');
       cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>' + ({ salteados: 'No hay casos salteados.', intervencion: 'No hay casos en intervención.', pausadas: 'No hay casos pausados.', cerrados: 'No hay casos cerrados' }[S.filtro] || 'No hay casos abiertos') + '</p>'
         + (S.filtro === 'abiertos' && salteados ? '<button type="button" class="ui-btn" data-accion="filtro" data-filtro="salteados">Ver salteados</button>' : '')
         + '</div>';
@@ -473,6 +483,7 @@
       return;
     }
     cont.classList.toggle('cv-cola--scroll', S.cola.length > 6);
+    rolCola(true);
     var titulo = $('#cola-titulo');
     if (titulo) titulo.textContent = hayMas
       ? 'Cola · ' + S.cola.length + ' de ' + S.colaTotal
@@ -506,7 +517,12 @@
     opts = opts || {};
     var cont = $('#cv-cola');
     cont.setAttribute('aria-busy', 'true');
-    if (!S.colaCargada) cont.innerHTML = '<div class="cv-skeleton"></div><div class="cv-skeleton"></div><div class="cv-skeleton"></div>';
+    if (!S.colaCargada) {
+      // Al cambiar de filtro el título no muestra el conteo del filtro anterior mientras carga.
+      var tit = $('#cola-titulo'); if (tit) tit.textContent = 'Cola';
+      rolCola(false);
+      cont.innerHTML = '<div class="cv-skeleton"></div><div class="cv-skeleton"></div><div class="cv-skeleton"></div>';
+    }
     return api('GET', '/cola?filtro=' + S.filtro + '&limit=' + LIMITE_COLA + '&offset=0').then(function (r) {
       S.colaCargada = true;
       if (!r.ok) { S.colaError = mensajeDe(r); S.cola = []; S.colaTotal = 0; renderCola(); return; }
@@ -836,13 +852,14 @@
     if (!puedeEscribir()) {
       lectura += '<p class="cv-leyenda-pc">' + (window.innerWidth < PUNTO_CORTE_PC ? 'Solo consulta en el celular. Para cambiar, usá la PC.' : 'Solo consulta: tu usuario no tiene permiso para cambiar casos.') + '</p>';
     }
-    var html = guardado
+    var errAccion = S.accionError ? '<div class="ui-aviso ui-aviso--critico cv-aviso-fijo cv-aviso-rojo" role="alert" tabindex="-1" id="err-accion"><span class="cv-icono" aria-hidden="true">✗</span><span>' + esc(S.accionError) + '</span></div>' : '';
+    var html = guardado + errAccion
       + '<button type="button" class="ui-btn cv-volver" data-accion="volver-cola">← Volver a la cola</button>'
       + '<div class="cv-det__cabecera"><h2 id="det-titulo" tabindex="-1">' + esc(pub.titulo || c.ml_key) + '</h2>'
       + '<div class="cv-det__meta">' + mlaHtml(pub, c.ml_key) + ' ' + chips.join(' ') + '</div>'
       + lectura + '</div>'
       + tarjetaOperacion()
-      + (soloLectura ? '' : marcaNingunoHtml())
+      + marcaNingunoHtml()
       + marcaExcepcionHtml()
       + (soloLectura ? '' : reabrirHtml())
       + datosHtml()
@@ -850,7 +867,6 @@
       + (soloLectura ? '' : '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>')
       + (soloLectura ? '' : accionesHtml())
       + historialHtml()
-      + (S.accionError ? '<div class="ui-aviso ui-aviso--critico cv-aviso-fijo cv-aviso-rojo" role="alert" tabindex="-1" id="err-accion"><span class="cv-icono" aria-hidden="true">✗</span><span>' + esc(S.accionError) + '</span></div>' : '')
       + (S.accionInfo ? '<div class="ui-aviso ui-aviso--info cv-aviso-fijo" role="status" id="info-accion"><span class="cv-icono" aria-hidden="true">ⓘ</span><span>' + esc(S.accionInfo.texto) + '</span>'
         + (S.accionInfo.ejecucion ? ' <button type="button" class="ui-btn" data-accion="ir-ejecucion">Ir a Ejecución</button>' : '') + '</div>' : '');
     d.innerHTML = html;
@@ -883,7 +899,8 @@
     }
     // Operación ya iniciada en ML: no se deshace, se ofrece revertir (operación nueva, con motivo).
     if (g.revertirOp) cuenta += ' <button type="button" class="ui-btn" data-accion="revertir-caso" data-op="' + g.revertirOp + '" data-caso="' + g.caso + '">Revertir</button>';
-    return '<div class="ui-aviso ui-aviso--' + (g.tono || 'ok') + ' cv-guardado" role="status" aria-live="polite">'
+    var rol = g.sinRol ? '' : ' role="status" aria-live="polite"';
+    return '<div class="ui-aviso ui-aviso--' + (g.tono || 'ok') + ' cv-guardado"' + rol + '>'
       + '<span>' + esc(g.texto) + '</span>' + cuenta + '</div>';
   }
 
@@ -1112,11 +1129,11 @@
   }
 
   // Cierre común de un deshacer/revertir. Éxito: vuelve el caso a la cola y se muestra el texto. Error: se avisa y el botón sigue.
-  function finDeshacer(casoId, texto, error) {
+  function finDeshacer(casoId, texto, error, opts) {
     S.busy = null; aplicarBloqueo();
     if (error) { setErrorAccion(error); return renderDetalle(); }
     limpiarDeshacer();
-    S.guardado = { caso: casoId, texto: texto };
+    S.guardado = { caso: casoId, texto: texto, sinRol: !!(opts && opts.sinRol) };
     anunciar(texto, 'estado');
     S.focoPendiente = '#det-titulo';
     return abrirCaso(casoId, { foco: false }).then(function () { return cargarCola({ seleccionar: false }); }).then(cargarConteos);
@@ -1554,7 +1571,8 @@
       if (r.red) { est.textContent = MSG_ERROR_SIN_RED; est.hidden = false; return; }
       if (r.ok) {
         soltarOpId(clave); cerrarDialogo(true);
-        return finDeshacer(c.id, 'Caso reabierto. Vuelve a la cola abierta.');
+        // La barra va sin role: el anuncio único lo da #cv-live (anunciar).
+        return finDeshacer(c.id, 'Caso reabierto. Vuelve a la cola abierta.', null, { sinRol: true });
       }
       var code = r.data && r.data.code;
       if (r.status === 409 && ['VERSION_CONFLICT', 'EVIDENCE_CONFLICT', 'INVALID_STATE'].indexOf(code) !== -1) {
