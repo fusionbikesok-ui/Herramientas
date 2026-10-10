@@ -113,6 +113,16 @@ describe('API de Catálogo y vínculos', () => {
       expect(q.body.total).toBe(1);
     });
 
+    it('cola q multi-palabra: AND por token, sin orden, con acento y con espacios extra', async () => {
+      caso(2400);
+      db.prepare("UPDATE ml_publicaciones_cache SET titulo='Maza Shimano Slx' WHERE clave='MLA2400|'").run();
+      const ids = async (q) => (await request(app(lector)).get(`${BASE}/cola?q=${encodeURIComponent(q)}`)).body.data.map((f) => f.ml_key);
+      expect(await ids('shimano maza')).toEqual(['MLA2400|']);
+      expect(await ids(' Maza   SHIMANO ')).toEqual(['MLA2400|']);
+      expect(await ids('maza falsa')).toEqual([]);
+      expect(await ids('   ')).toContain('MLA2400|');
+    });
+
     it('cola: cuenta hermanas activas del ítem sin contar la propia', async () => {
       caso(2310);
       db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en)
@@ -484,6 +494,29 @@ describe('API de Catálogo y vínculos', () => {
       expect(titulo.body.data.completadas.total).toBe(0);
       // Contadores globales: no dependen de q.
       expect(titulo.body.data.canceladas_total).toBe(3);
+    });
+
+    it('q multi-palabra: cada token debe aparecer (AND) en SKU, clave o título, sin importar orden, acento ni espacios extra', async () => {
+      await sembrarOperaciones();
+      db.prepare("UPDATE ml_publicaciones_cache SET titulo='Maza Shimano Slx 110mm' WHERE clave='MLA8888|'").run();
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en)
+        VALUES ('MLA53|','MLA53','','Maza Shimano Slx 110mm','active',?)`).run(ISO);
+      const claves = async (q) => (await request(app(lector)).get(`${BASE}/ejecucion?q=${encodeURIComponent(q)}`)).body.data.completadas.items.map((o) => o.ml_key);
+
+      expect(await claves('maza shimano')).toEqual(['MLA53|']);
+      expect(await claves('shimano maza')).toEqual(['MLA53|']);
+      expect(await claves('  MAZA    shimano  ')).toEqual(['MLA53|']);
+      expect(await claves('maza   slx')).toEqual(['MLA53|']);
+      expect(await claves('maza shimano pedal')).toEqual([]);
+      // AND entre campos: un token en título y otro en SKU/clave también cuenta.
+      expect(await claves('shimano MLA53')).toEqual(['MLA53|']);
+      // Acentos: 'ergonomico' encuentra 'Ergonómico' y viceversa.
+      db.prepare("UPDATE ml_publicaciones_cache SET titulo='Pedal Ergonómico' WHERE clave='MLA53|'").run();
+      expect(await claves('ergonomico')).toEqual(['MLA53|']);
+      expect(await claves('ERGONÓMICO pedal')).toEqual(['MLA53|']);
+      // Solo espacios = sin filtro.
+      const vacio = await request(app(lector)).get(`${BASE}/ejecucion?q=${encodeURIComponent('   ')}`);
+      expect(vacio.body.data.completadas.total).toBe(60);
     });
 
     it('limite: default 50, máximo 200 y valores inválidos al default', async () => {
