@@ -15,8 +15,7 @@
     rodado: 'el rodado', transmision: 'la transmisión', velocidades: 'las velocidades' };
   var ICONO = { rojo: '✗', ambar: '⚠', verde: '✓', gris: '–' };
   var ESTADO_OP = { shadow: 'encolada', pendiente: 'encolada', procesando: 'encolada', verificando: 'encolada',
-    completada: 'aplicada', fallida: 'fallida', intervencion: 'frenada', bloqueada_impacto: 'frenada' };
-  var MSG = {
+    completada: 'aplicada', fallida: 'fallida', intervencion: 'frenada', bloqueada_impacto: 'espera' };  var MSG = {
     NOT_FOUND: 'Este caso ya no existe. Se resolvió o lo sacaron.',
     INVALID_INPUT: 'Falta completar un dato (por ejemplo, el motivo). Revisá lo marcado.',
     omitir_requiere_override: 'Esta publicación está en "no sincronizar". Quitalo antes de vincular.',
@@ -25,6 +24,8 @@
     vista_vieja: 'El vínculo cambió. Se recarga el caso.'
   };
   var MSG_ERROR_SIN_RED = 'Sin conexión. No se guardó nada.';
+  var MSG_SIN_PERMISO = 'No tenés permiso para esto.';
+  var PUNTO_CORTE_PC = 768;
 
   var esc = (window.Fmt && window.Fmt.esc) || function (s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
@@ -47,16 +48,19 @@
   var S = {
     isAdmin: false, canWrite: false,
     tab: 'casos', offline: false, busy: null,
-    filtro: 'abiertos', conteos: {}, cola: [], colaError: null, colaCargada: false,
+    filtro: 'abiertos', conteos: {}, cola: [], colaTotal: 0, colaError: null, colaCargada: false,
     casoId: null, detalle: null, detalleError: null, ejec: null,
-    candidatos: null, candidatosError: null, elegido: null, queryCand: '', soloDif: false, fotoGrande: false,
-    guardado: null, conflictoVersion: null, hermanas: null, accionError: null,
+    candidatos: null, candidatosError: null, elegido: null, elegidoIdx: null, matrizError: null,
+    queryCand: '', soloDif: false, fotoGrande: false,
+    guardado: null, conflictoVersion: null, hermanas: null, accionError: null, accionInfo: null, focoPendiente: null,
     nsOpId: null, nsVariante: null, nsConfirm: false, nsEnviando: false,
     deshacer: null, deshacerTimer: null,
     opIds: {}, dlgActivo: null, dlgDisparador: null,
-    ejecEstados: null, ejecPoll: null, ejecError: null,
+    ejecEstados: null, ejecPoll: null, ejecError: null, ejecMsgs: {}, busyOp: null,
     retenidas: null, retError: null, retAbierta: null, retAviso: {},
-    vincResultados: null, vincQ: '', conflictos: null, conflictosError: null, conflictoAbierto: null, conflictoDetalle: null
+    vincResultados: null, vincQ: '', vincPanel: null, identMsg: null,
+    conflictos: null, conflictosError: null, conflictoAbierto: null, conflictoDetalle: null, confResolver: null,
+    estadoRaw: null, adminForm: null, notaTxt: '', notaError: null, histOpen: false, franjaLista: null
   };
 
   // ── Red ───────────────────────────────────────────────────────────────────────────────────────
@@ -78,11 +82,22 @@
   function api(metodo, ruta, body) { return llamar(metodo, API + ruta, body); }
   function identidad(ruta) { return llamar('GET', IDENT + ruta); }
 
+  // Copy del veto: para José se le ofrece confirmar; para el operador, la razón es que lo confirma José.
+  function textoVeto(motivos) {
+    return 'No se puede vincular: difiere ' + cuentaCampos(motivos) + '. '
+      + (S.isAdmin ? 'Podés confirmar igual (solo admin).' : 'Lo confirma José.');
+  }
+
+  // Escrituras solo en PC (>=768 px) y con permiso matcher:write. En celular la pantalla solo consulta (decisión de José).
+  function puedeEscribir() {
+    return !!S.canWrite && window.innerWidth >= PUNTO_CORTE_PC;
+  }
+
   function mensajeDe(res) {
     if (res.red) return MSG_ERROR_SIN_RED;
-    if (res.status === 403) return 'Esto lo hace José.';
+    if (res.status === 403) return MSG_SIN_PERMISO;
     var d = res.data || {};
-    if (d.code === 'contradiccion_titulo') return 'No se puede vincular: difiere ' + cuentaCampos(d.motivos) + '. Lo confirma José.';
+    if (d.code === 'contradiccion_titulo') return textoVeto(d.motivos);
     if (d.code === 'SIN_CAMBIO_SKU') {
       var pausada = S.detalle && S.detalle.caso && S.detalle.caso.publicacion && S.detalle.caso.publicacion.status === 'paused';
       return pausada ? 'Vínculo actualizado, ML ya tenía este SKU.' : 'Activa: ML ya tiene este SKU, no hay nada que cambiar.';
@@ -230,15 +245,23 @@
       cont.innerHTML = cajaError(S.colaError, 'cargarCola');
       return;
     }
+    var hayMas = S.colaTotal > S.cola.length;
+    var salteados = S.conteos.salteados > 0;
     if (!S.cola.length) {
-      cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>No hay casos abiertos</p>'
-        + (S.filtro === 'abiertos' ? '<button type="button" class="ui-btn" data-accion="filtro" data-filtro="salteados">Ver salteados</button>' : '')
+      cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>' + (S.filtro === 'salteados' ? 'No hay casos salteados.' : 'No hay casos abiertos') + '</p>'
+        + (S.filtro === 'abiertos' && salteados ? '<button type="button" class="ui-btn" data-accion="filtro" data-filtro="salteados">Ver salteados</button>' : '')
         + '</div>';
+      $('#cv-cola-mas').innerHTML = '';
       return;
     }
     cont.classList.toggle('cv-cola--scroll', S.cola.length > 6);
     var titulo = $('#cola-titulo');
-    if (titulo) titulo.textContent = 'Cola · ' + S.cola.length + (S.cola.length > 6 ? ' casos' : (S.cola.length === 1 ? ' caso' : ' casos'));
+    if (titulo) titulo.textContent = hayMas
+      ? 'Cola · ' + S.cola.length + ' de ' + S.colaTotal
+      : 'Cola · ' + S.cola.length + (S.cola.length === 1 ? ' caso' : ' casos');
+    $('#cv-cola-mas').innerHTML = hayMas
+      ? '<button type="button" class="ui-btn" data-accion="ver-mas" aria-disabled="' + !!S.busy + '">Ver más (quedan ' + (S.colaTotal - S.cola.length) + ')</button>'
+      : '';
     var idx = S.cola.findIndex(function (f) { return f.caso_id === S.casoId; });
     var foco = idx >= 0 ? idx : 0;
     cont.innerHTML = S.cola.map(function (f, i) {
@@ -266,12 +289,13 @@
     var cont = $('#cv-cola');
     cont.setAttribute('aria-busy', 'true');
     if (!S.colaCargada) cont.innerHTML = '<div class="cv-skeleton"></div><div class="cv-skeleton"></div><div class="cv-skeleton"></div>';
-    return api('GET', '/cola?filtro=' + S.filtro + '&limit=' + LIMITE_COLA).then(function (r) {
+    return api('GET', '/cola?filtro=' + S.filtro + '&limit=' + LIMITE_COLA + '&offset=0').then(function (r) {
       S.colaCargada = true;
-      if (!r.ok) { S.colaError = mensajeDe(r); S.cola = []; renderCola(); return; }
+      if (!r.ok) { S.colaError = mensajeDe(r); S.cola = []; S.colaTotal = 0; renderCola(); return; }
       S.colaError = null;
       S.cola = r.data.data || [];
-      $('#cnt-casos').textContent = '· ' + (r.data.total != null ? r.data.total : S.cola.length);
+      S.colaTotal = r.data.total != null ? r.data.total : S.cola.length;
+      $('#cnt-casos').textContent = '· ' + S.colaTotal;
       renderFiltros();
       renderCola();
       if (opts.seleccionar !== false) {
@@ -279,6 +303,23 @@
         if (!sigue && S.cola.length) abrirCaso(S.cola[0].caso_id, { foco: false });
         else if (!S.cola.length) { S.casoId = null; S.detalle = null; renderDetalleVacio(); }
       }
+    });
+  }
+
+  // "Ver más": pide la página siguiente (offset = casos ya cargados) y la agrega al final de la cola.
+  function verMasCola() {
+    if (S.busy || S.cola.length >= S.colaTotal) return Promise.resolve();
+    var desde = S.cola.length;
+    S.busy = 'ver-mas';
+    return api('GET', '/cola?filtro=' + S.filtro + '&limit=' + LIMITE_COLA + '&offset=' + desde).then(function (r) {
+      S.busy = null;
+      if (!r.ok) { anunciar(mensajeDe(r), 'alerta'); aplicarBloqueo(); return; }
+      var nuevos = r.data.data || [];
+      S.cola = S.cola.concat(nuevos);
+      if (r.data.total != null) S.colaTotal = r.data.total;
+      renderCola();
+      var primero = $('#cv-cola [data-caso="' + (nuevos[0] && nuevos[0].caso_id) + '"]');
+      if (primero) primero.focus();
     });
   }
 
@@ -300,14 +341,13 @@
   function abrirCaso(id, opts) {
     opts = opts || {};
     S.casoId = id;
-    S.candidatos = null; S.candidatosError = null; S.elegido = null; S.hermanas = null;
-    S.accionError = null; S.conflictoVersion = null; S.retAbierta = null;
+    S.candidatos = null; S.candidatosError = null; S.elegido = null; S.elegidoIdx = null; S.matrizError = null;
+    S.hermanas = null; S.accionError = null; S.accionInfo = null; S.conflictoVersion = null; S.retAbierta = null;
     var d = $('#cv-detalle');
     d.setAttribute('aria-busy', 'true');
     d.innerHTML = '<div class="cv-skeleton cv-skeleton--det"></div>';
     marcarSeleccionEnCola();
-    return Promise.all([api('GET', '/casos/' + id), api('GET', '/ejecucion')]).then(function (rs) {
-      var r = rs[0];
+    return api('GET', '/casos/' + id).then(function (r) {
       if (S.casoId !== id) return; // el usuario ya eligió otro caso
       if (r.status === 404) {
         S.detalle = null; S.detalleError = mensajeDe(r);
@@ -318,11 +358,16 @@
       if (!r.ok) { S.detalle = null; S.detalleError = mensajeDe(r); return renderDetalle(); }
       S.detalleError = null;
       S.detalle = r.data.data;
-      if (rs[1].ok) S.ejec = rs[1].data.data;
-      var pub = S.detalle.caso.publicacion || {};
-      return buscarCandidatos(S.queryCand || S.detalle.caso.publicacion?.titulo || '').then(function () {
-        renderDetalle();
-        if (opts.foco) enfocarDetalle();
+      // /ejecucion completo solo si el caso lo necesita (intervención, o hay fallidas que mirar); si no, sirve la copia cacheada.
+      var necesitaEjec = !S.ejec || S.ejec.fallidas > 0 || S.detalle.caso.estado === 'intervencion';
+      var ej = necesitaEjec ? api('GET', '/ejecucion') : Promise.resolve(null);
+      return ej.then(function (re) {
+        if (re && re.ok) S.ejec = re.data.data;
+        if (S.casoId !== id) return;
+        return buscarCandidatos(S.queryCand || S.detalle.caso.publicacion?.titulo || '').then(function () {
+          renderDetalle();
+          if (opts.foco) enfocarDetalle();
+        });
       });
     });
   }
@@ -356,12 +401,28 @@
   function elegirCandidato(idx) {
     var c = (S.candidatos || [])[idx];
     if (!c || !S.detalle) return Promise.resolve();
-    S.elegido = c;
-    S.accionError = null;
+    S.elegido = c; S.elegidoIdx = idx;
+    S.accionError = null; S.accionInfo = null;
+    S.focoPendiente = '[data-accion="elegir"][data-idx="' + idx + '"]';
+    return cargarMatriz(c);
+  }
+
+  // Matriz contra un candidato. Si falla, Vincular queda bloqueado hasta reintentar (no se decide a ciegas).
+  function cargarMatriz(c) {
+    S.matrizError = null;
     return api('GET', '/casos/' + S.casoId + '?sku=' + enc(c.sku_woo || '')).then(function (r) {
-      if (r.ok && S.elegido === c) S.detalle.matriz = r.data.data.matriz;
+      if (S.elegido !== c) return;
+      if (r.ok) { S.detalle.matriz = r.data.data.matriz; }
+      else { S.detalle.matriz = null; S.matrizError = 'No pudimos comparar; reintentá.'; S.focoPendiente = '#err-matriz'; }
       renderDetalle();
     });
+  }
+
+  function skuDe(c) { return (c && (c.sku_woo || c.fusion_sku)) || ''; }
+
+  function setErrorAccion(texto) {
+    S.accionError = texto; S.accionInfo = null;
+    S.focoPendiente = '#err-accion';
   }
 
   function opIdPara(clave) {
@@ -382,10 +443,12 @@
     var o = operacionDelCaso();
     if (!o) return '';
     var esFallida = o.estado === 'fallida';
-    var titulo = esFallida ? '✗ ML la rechazó' : '⏸ Frenada';
+    var esEspera = o.estado === 'bloqueada_impacto';
+    var titulo = esFallida ? '✗ ML la rechazó' : (esEspera ? '⏳ Espera tu confirmación' : '⏸ Frenada');
     var motivo = o.ultimo_error || (esFallida ? 'sin detalle' : 'regla de protección');
     var accion = esFallida ? 'Reintenta José.' : 'Stock en 0 hasta resolver.';
-    var texto = esFallida ? 'ML la rechazó: ' + motivo + '. ' + accion : 'Frenada: ' + motivo + '. ' + accion;
+    var texto = esFallida ? 'ML la rechazó: ' + motivo + '. ' + accion
+      : (esEspera ? 'La pausa de otras variaciones necesita confirmación de José.' : 'Frenada: ' + motivo + '. ' + accion);
     return '<section class="cv-tarjeta-op" role="region" aria-label="Operación con problema" tabindex="-1">'
       + '<h3>' + titulo + '</h3><p>' + esc(texto) + '</p>'
       + '<p><a href="#cv-ejec" data-accion="ir-ejecucion">Ver en Ejecución</a>'
@@ -401,7 +464,11 @@
 
   function matrizHtml() {
     var m = caso() && S.detalle.matriz;
-    if (!S.elegido) return '<p class="ui-resumen cv-matriz-vacia">Elegí un candidato para ver la comparación de atributos.</p>';
+    if (S.matrizError) {
+      return '<div class="ui-aviso ui-aviso--critico cv-aviso-fijo cv-aviso-rojo" role="alert" tabindex="-1" id="err-matriz"><span class="cv-icono" aria-hidden="true">✗</span>'
+        + '<span>' + esc(S.matrizError) + ' <button type="button" class="ui-btn" data-accion="reintentar-matriz">Reintentar</button></span></div>';
+    }
+    if (!S.elegido) return '<p class="ui-resumen cv-matriz-vacia">' + (soloLecturaDetalle() ? 'No hay candidato para comparar.' : 'Elegí un candidato para ver la comparación de atributos.') + '</p>';
     if (!m || !m.filas || !m.filas.length) return '<p class="ui-resumen">Sin datos para comparar.</p>';
     var filas = m.filas.map(function (f) {
       var ocultar = S.soloDif && (f.semaforo === 'verde' || f.semaforo === 'gris');
@@ -463,7 +530,7 @@
     if (!S.detalle) return renderDetalleVacio();
     var c = caso(); var pub = c.publicacion || {};
     var enIntervencion = c.estado === 'intervencion';
-    var soloLectura = enIntervencion && !S.isAdmin;
+    var soloLectura = soloLecturaDetalle();
     var en = casoEnCola();
     var chips = [];
     if (pub.status === 'paused') chips.push('<span class="ui-chip">⏸ PAUSADA</span>');
@@ -472,6 +539,9 @@
     var guardado = S.guardado ? barraGuardado() : '';
     var lectura = enIntervencion
       ? '<p class="cv-lock">En intervención. ' + (S.isAdmin ? 'Lo destrabás vos.' : 'Lo destraba José.') + '</p>' : '';
+    if (!puedeEscribir()) {
+      lectura += '<p class="cv-leyenda-pc">' + (window.innerWidth < PUNTO_CORTE_PC ? 'Solo consulta en el celular. Para cambiar, usá la PC.' : 'Solo consulta: tu usuario no tiene permiso para cambiar casos.') + '</p>';
+    }
     var html = guardado
       + '<button type="button" class="ui-btn cv-volver" data-accion="volver-cola">← Volver a la cola</button>'
       + '<div class="cv-det__cabecera"><h2 id="det-titulo" tabindex="-1">' + esc(pub.titulo || c.ml_key) + '</h2>'
@@ -481,10 +551,12 @@
       + datosHtml()
       + candidatosHtml(soloLectura)
       + (S.candidatos && !soloLectura ? '' : '')
-      + '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>'
+      + '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>'
       + (soloLectura ? '' : accionesHtml())
       + historialHtml()
-      + (S.accionError ? '<div class="ui-aviso ui-aviso--critico cv-aviso-fijo cv-aviso-rojo" role="alert" tabindex="-1" id="err-accion"><span class="cv-icono" aria-hidden="true">✗</span><span>' + esc(S.accionError) + '</span></div>' : '');
+      + (S.accionError ? '<div class="ui-aviso ui-aviso--critico cv-aviso-fijo cv-aviso-rojo" role="alert" tabindex="-1" id="err-accion"><span class="cv-icono" aria-hidden="true">✗</span><span>' + esc(S.accionError) + '</span></div>' : '')
+      + (S.accionInfo ? '<div class="ui-aviso ui-aviso--info cv-aviso-fijo" role="status" id="info-accion"><span class="cv-icono" aria-hidden="true">ⓘ</span><span>' + esc(S.accionInfo.texto) + '</span>'
+        + (S.accionInfo.ejecucion ? ' <button type="button" class="ui-btn" data-accion="ir-ejecucion">Ir a Ejecución</button>' : '') + '</div>' : '');
     d.innerHTML = html;
     aplicarBloqueo();
     if (S.focoPendiente) { var f = $(S.focoPendiente); if (f) f.focus(); S.focoPendiente = null; }
@@ -512,31 +584,42 @@
     var m = S.detalle.matriz || {};
     var veto = !!(S.elegido && m.veto);
     var razon = '';
+    var razonVeto = false;
     if (S.offline) razon = MSG_ERROR_SIN_RED;
     else if (!S.elegido) razon = 'Elegí un candidato para vincular.';
-    else if (veto) razon = 'No se puede vincular: difiere ' + cuentaCampos(m.motivos) + '. Lo confirma José.';
-    var bloqueado = !!(S.offline || !S.elegido || veto || S.busy);
+    else if (S.matrizError) razon = 'No pudimos comparar; reintentá.';
+    else if (veto) { razon = textoVeto(m.motivos); razonVeto = true; }
+    var bloqueado = !!(S.offline || !S.elegido || veto || S.matrizError || S.busy);
+    var enviando = S.busy === 'vincular';
     var vinc = '<button type="button" class="ui-btn ui-btn--primario cv-btn-primario-movil" data-accion="vincular" aria-disabled="' + bloqueado + '"'
       + (razon ? ' aria-describedby="razon-vincular"' : '') + '>'
-      + (S.busy === 'vincular' ? '<span class="cv-girando" aria-hidden="true">↻</span> Guardando…' : 'Vincular' + atajoTxt('Enter'))
+      + (enviando ? '<span class="cv-girando" aria-hidden="true">↻</span> Enviando…' : 'Vincular' + atajoTxt('Enter'))
       + '</button>';
-    var razonHtml = razon ? '<p id="razon-vincular" class="cv-acciones__razon' + (veto || S.offline ? '' : ' cv-acciones__razon--neutra') + '">' + esc(razon) + '</p>' : '';
+    var razonHtml = razon ? '<p id="razon-vincular" class="cv-acciones__razon' + (razonVeto || S.offline || S.matrizError ? '' : ' cv-acciones__razon--neutra') + '">' + esc(razon) + '</p>' : '';
     var acciones = '<div class="cv-acciones__grid">'
       + '<button type="button" class="ui-btn" data-accion="saltear" aria-disabled="' + !!S.busy + '">Saltear' + atajoTxt('s') + '</button>'
       + '<button type="button" class="ui-btn" data-accion="no-sincronizar" aria-disabled="' + !!S.busy + '">No sincronizar' + atajoTxt('n') + '</button>'
       + '</div>';
     var admin = '';
     if (S.isAdmin) {
+      var destrabar = c.estado === 'intervencion'
+        ? '<button type="button" class="ui-btn" data-accion="admin" data-admin="destrabar">Destrabar</button>' : '';
       admin = '<div class="cv-grupo-solo-jose"><p class="ui-label cv-lock">Solo José</p><div class="cv-acciones__fila">'
         + (veto ? '<button type="button" class="ui-btn ui-btn--peligro" data-accion="admin" data-admin="confirmar">Confirmar igual</button>' : '')
+        + destrabar
         + '<button type="button" class="ui-btn" data-accion="admin" data-admin="link">Link de pago</button>'
         + '</div>'
         + (S.adminForm && S.adminForm !== 'relevar' ? adminFormHtml() : '') + '</div>';
     }
-    var deshacer = '';
     return '<div class="cv-acciones" role="group" aria-label="Acciones del caso">' + tomaHtml()
       + '<div class="cv-acciones__fila">' + vinc + '</div>' + razonHtml
-      + acciones + deshacer + admin + '</div>';
+      + acciones + admin + '</div>';
+  }
+
+  // Solo lectura del detalle: sin permiso de escritura, en celular, o caso en intervención para el operador.
+  function soloLecturaDetalle() {
+    var enIntervencion = !!(S.detalle && S.detalle.caso && S.detalle.caso.estado === 'intervencion');
+    return !puedeEscribir() || (enIntervencion && !S.isAdmin);
   }
 
   function adminFormHtml() {
@@ -556,7 +639,7 @@
     return '<div class="ui-aviso ui-aviso--atencion cv-foco-bloque" role="alert" tabindex="-1" id="bloque-hermanas">'
       + '<p><span aria-hidden="true">⚠</span> Esto cambia también ' + n + ' publicaciones hermanas. ¿Seguimos?</p>'
       + listaHermanas(0)
-      + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="hermanas-si">Vincular las ' + n + '</button>'
+      + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="hermanas-si">Vincular esta y las ' + n + ' hermanas al SKU ' + esc(S.hermanas.sku || '—') + '</button>'
       + '<button type="button" class="ui-btn" data-accion="hermanas-no">Volver</button></div></div>';
   }
 
@@ -576,31 +659,72 @@
   }
 
   function vincular(extra) {
-    if (!S.elegido || !caso() || S.busy || S.offline) return;
+    if (!puedeEscribir() || !S.elegido || !caso() || S.busy || S.offline || S.matrizError) return;
     var m = S.detalle.matriz || {};
     if (m.veto && !(extra && extra.override_contradiccion)) return; // Enter no hace nada con rojo
-    var c = caso();
+    var c = caso(); var cand = S.elegido;
     var body = cuerpoVincular(extra);
-    S.busy = 'vincular'; S.accionError = null; S.hermanas = null;
+    S.busy = 'vincular'; S.accionError = null; S.accionInfo = null; S.hermanas = null;
+    S.focoPendiente = '[data-accion="vincular"]';
     renderDetalle();
     api('POST', '/casos/' + c.id + '/decisiones', body).then(function (r) {
       S.busy = null;
-      if (r.red) { S.accionError = MSG_ERROR_SIN_RED; return renderDetalle(); }
-      if (r.ok) { soltarOpId('vincular:' + c.id + ':' + S.elegido.id); return guardadoOk(c, 'Guardado · En cola para ML', 'vincular'); }
-      if (r.status === 409 && r.data.code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED') {
-        S.hermanas = { n: r.data.sibling_count, body: body };
-        return renderDetalle();
-      }
-      if (r.status === 409 && (r.data.code === 'VERSION_CONFLICT' || r.data.code === 'EVIDENCE_CONFLICT')) {
-        soltarOpId('vincular:' + c.id + ':' + S.elegido.id);
-        S.conflictoVersion = { body: body, diff: 'Cambió la versión del caso.' };
-        return abrirCaso(c.id).then(function () { S.conflictoVersion = { body: body, diff: 'Cambió la versión del caso.' }; renderDetalle(); });
-      }
-      soltarOpId('vincular:' + c.id + ':' + S.elegido.id);
-      S.accionError = mensajeDe(r);
-      renderDetalle();
-      refrescarEjecucion();
+      resultadoVincular(c, cand.id, body, r, null, cand);
     });
+  }
+
+  // Une las respuestas de cualquier decisión de vínculo (Vincular, hermanas, confirmar igual, reaplicar tras conflicto).
+  // `cand` es el candidato con el que se vinculó (para el SKU que se muestra); se usa solo si viene.
+  function resultadoVincular(c, productoId, body, r, textoOk, cand) {
+    var clave = 'vincular:' + c.id + ':' + productoId;
+    if (r.red) { setErrorAccion(MSG_ERROR_SIN_RED); return renderDetalle(); }
+    if (r.ok) { soltarOpId(clave); return guardadoOk(c, textoOk || 'Guardado · En cola para ML', 'vincular'); }
+    var code = r.data && r.data.code;
+    if (r.status === 409 && code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED') {
+      S.hermanas = { n: r.data.sibling_count, body: body, sku: skuDe(cand || S.elegido) };
+      S.focoPendiente = '#bloque-hermanas';
+      return renderDetalle();
+    }
+    if (r.status === 409 && (code === 'VERSION_CONFLICT' || code === 'EVIDENCE_CONFLICT')) {
+      soltarOpId(clave);
+      return recargarPorConflicto(c, productoId, body, cand || S.elegido);
+    }
+    soltarOpId(clave);
+    // SIN_CAMBIO_SKU es un éxito informativo: ML ya tenía ese SKU. Pasa al siguiente caso con su texto.
+    if (code === 'SIN_CAMBIO_SKU') return guardadoOk(c, mensajeDe(r), 'vincular');
+    if (code === 'OPERACION_DUPLICADA') {
+      S.accionInfo = { texto: mensajeDe(r), ejecucion: true };
+      S.focoPendiente = '#info-accion';
+      renderDetalle();
+      return refrescarEjecucion();
+    }
+    setErrorAccion(mensajeDe(r));
+    renderDetalle();
+    refrescarEjecucion();
+  }
+
+  // Versión cambiada por otro: se recarga el caso, se avisa qué cambió y la decisión queda para reaplicar o descartar.
+  function recargarPorConflicto(c, productoId, body, cand) {
+    var viejo = { sku: skuVigente(S.detalle), estado: c.estado, responsable: c.responsable };
+    return abrirCaso(c.id, { foco: false }).then(function () {
+      if (S.casoId !== c.id || !S.detalle) return renderDetalle();
+      var nuevo = { sku: skuVigente(S.detalle), estado: S.detalle.caso.estado, responsable: S.detalle.caso.responsable };
+      S.elegido = cand || null;
+      S.conflictoVersion = { body: body, cand: cand || null, diff: textoDiff(viejo, nuevo) };
+      S.focoPendiente = '#bloque-conflicto';
+      if (!cand) return renderDetalle();
+      return cargarMatriz(cand);
+    });
+  }
+
+  function skuVigente(det) { return det && det.vinculo_vigente ? det.vinculo_vigente.sku : null; }
+
+  function textoDiff(viejo, nuevo) {
+    var partes = [];
+    if (viejo.sku !== nuevo.sku) partes.push('El SKU vigente pasó de ' + (viejo.sku || 'ninguno') + ' a ' + (nuevo.sku || 'ninguno') + '.');
+    if (viejo.estado !== nuevo.estado) partes.push('El estado pasó de ' + viejo.estado + ' a ' + nuevo.estado + '.');
+    if (viejo.responsable !== nuevo.responsable) partes.push('El responsable pasó de ' + (viejo.responsable || 'nadie') + ' a ' + (nuevo.responsable || 'nadie') + '.');
+    return partes.length ? partes.join(' ') : 'Cambió la versión del caso.';
   }
 
   function guardadoOk(c, texto, accion) {
@@ -622,17 +746,20 @@
       var id = quedan.some(function (f) { return f.caso_id === siguiente; }) ? siguiente : (quedan[0] && quedan[0].caso_id);
       if (id) return abrirCaso(id, { foco: false });
       S.detalle = null; renderDetalleVacio();
+      var vacio = $('#cv-detalle'); if (vacio) vacio.focus();
     }).then(cargarEstado).then(cargarConteos);
   }
 
   function saltear() {
-    var c = caso(); if (!c || S.busy || S.offline) return;
+    var c = caso(); if (!puedeEscribir() || !c || S.busy || S.offline) return;
     S.busy = 'saltear';
+    S.focoPendiente = '[data-accion="saltear"]';
+    renderDetalle();
     api('POST', '/casos/' + c.id + '/saltear', { expected_version: c.expected_version }).then(function (r) {
       S.busy = null;
-      if (r.ok) { S.guardado = { caso: c.id, texto: 'Salteado. Pasa al final de la cola.' }; return siguienteCaso(); }
-      if (r.status === 409 && r.data.code === 'VERSION_CONFLICT') return abrirCaso(c.id, { foco: false }).then(function () { S.accionError = mensajeDe(r); renderDetalle(); });
-      S.accionError = mensajeDe(r); renderDetalle();
+      if (r.ok) { S.guardado = { caso: c.id, texto: 'Salteado. Pasa al final de la cola.' }; S.focoPendiente = '#det-titulo'; return siguienteCaso(); }
+      if (r.status === 409 && r.data.code === 'VERSION_CONFLICT') return abrirCaso(c.id, { foco: false }).then(function () { setErrorAccion(mensajeDe(r)); renderDetalle(); });
+      setErrorAccion(mensajeDe(r)); renderDetalle();
     });
   }
 
@@ -643,8 +770,13 @@
       S.busy = null; limpiarDeshacer();
       if (r.ok) { S.guardado = { caso: d.caso, texto: 'Deshecho. La publicación vuelve a la cola.' }; anunciar('Deshecho.', 'estado'); return abrirCaso(d.caso, { foco: false }).then(cargarCola); }
       if (r.status === 409) { S.guardado = { caso: d.caso, texto: 'Ya se mandó a ML; mirá Ejecución' }; return renderDetalle(); }
-      S.accionError = mensajeDe(r); renderDetalle();
+      setErrorAccion(mensajeDe(r)); renderDetalle();
     });
+  }
+
+  // Deshacer visible = el botón se renderiza (misma condición que barraGuardado). El atajo z solo actúa si se ve.
+  function deshacerVisible() {
+    return !!(S.guardado && S.deshacer && !S.deshacer.vencido && S.deshacer.caso === S.guardado.caso);
   }
 
   function limpiarDeshacer() {
@@ -678,14 +810,15 @@
   }
 
   // ── No sincronizar (diálogo) ───────────────────────────────────────────────────────────────────
+  // Los identificadores (a)/(b)/(c) son de la spec; en pantalla cada variante tiene su nombre.
   var VARIANTES = [
-    { v: 'a', t: '(a) Solo marcar', l: 'Dejamos de tocarle el stock. Cualquiera lo revierte.' },
-    { v: 'b', t: '(b) Marcar y pausar en ML', l: 'Además se pausa la publicación en ML.' },
-    { v: 'c', t: '(c) Solo marcar, revierte José', l: 'Un operador no puede revertirlo.', lock: true }
+    { v: 'a', t: 'Solo marcar', l: 'Dejamos de tocarle el stock. Cualquiera lo revierte.', nombre: 'solo marcar' },
+    { v: 'b', t: 'Marcar y pausar en ML', l: 'Además se pausa la publicación en ML.', nombre: 'marcar y pausar en ML' },
+    { v: 'c', t: 'Marcar (solo admin revierte)', l: 'Un operador no puede revertirlo.', lock: true, nombre: 'marcar (solo admin revierte)' }
   ];
 
   function abrirNS(disparador) {
-    var c = caso(); if (!c || S.busy || S.offline) return;
+    var c = caso(); if (!c || !puedeEscribir() || S.busy || S.offline) return;
     S.nsOpId = null; S.nsVariante = null; S.nsConfirm = false;
     $('#ns-variantes').innerHTML = VARIANTES.map(function (x) {
       return '<label class="cv-variante"><input type="radio" name="ns-variante" value="' + x.v + '">'
@@ -732,10 +865,13 @@
       if (r.red) { estado.textContent = MSG_ERROR_SIN_RED; estado.hidden = false; return; }
       if (r.ok) {
         S.nsOpId = null;
-        cerrarDialogo();
-        var txt = v === 'b' ? 'En cola para ML · mirá Ejecución' : 'Guardado · No sincronizar (variante ' + v + ')';
+        cerrarDialogo(true);
+        var nombre = VARIANTES.find(function (x) { return x.v === v; }).nombre;
+        var txt = v === 'b' ? 'En cola para ML · mirá Ejecución' : 'Guardado · No sincronizar: ' + nombre;
         S.guardado = { caso: c.id, texto: txt, titulo: pub.titulo };
-        if (v !== 'b') iniciarDeshacer({ caso: c.id, clave: c.ml_key, motivo: motivo, expira: Date.now() + 10000 });
+        // Deshacer: (a) cualquier operador; (c) solo admin (la spec la trata como decisión compensatoria). (b) no tiene deshacer acá.
+        if (v === 'a' || (v === 'c' && S.isAdmin)) iniciarDeshacer({ caso: c.id, clave: c.ml_key, motivo: motivo, expira: Date.now() + 10000 });
+        S.focoPendiente = '#det-titulo';
         return siguienteCaso();
       }
       if (v === 'b' && r.status === 409 && r.data.code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED') {
@@ -767,13 +903,22 @@
     el.hidden = false;
     setTimeout(function () { (enfocar || focusables(el)[0] || el).focus(); }, 0);
   }
-  function cerrarDialogo() {
+  function cerrarDialogo(exito) {
     if (!S.dlgActivo) return;
     S.dlgActivo.hidden = true;
     var d = S.dlgDisparador;
     S.dlgActivo = null; S.dlgDisparador = null;
+    if (exito) return; // tras un éxito el foco lo toma el siguiente caso (S.focoPendiente)
     if (d && document.contains(d)) d.focus();
-    else { var nuevo = $('[data-accion="no-sincronizar"]'); if (nuevo && S.dlgActivo === null) nuevo.focus(); }
+    else { var f = $('#cv-cola [aria-selected="true"]') || $('#cv-detalle'); if (f) f.focus(); }
+  }
+
+  // Esc o clic afuera: si hay un motivo escrito en No sincronizar, pide confirmación antes de descartarlo.
+  function intentarCerrarDialogo() {
+    if (S.dlgActivo === $('#dlg-ns') && $('#ns-motivo').value.trim() && S.nsEnviando === false) {
+      if (!window.confirm('Tenés un motivo escrito. ¿Descartarlo y cerrar?')) return;
+    }
+    cerrarDialogo();
   }
   function focusables(root) {
     return $$('button:not([disabled]), [href], input:not([disabled]), textarea, select, [tabindex]:not([tabindex="-1"])', root)
@@ -807,7 +952,7 @@
 
   function teclado(ev) {
     if (S.dlgActivo) {
-      if (ev.key === 'Escape') { ev.preventDefault(); cerrarDialogo(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); intentarCerrarDialogo(); }
       else if (ev.key === 'Tab') atraparTab(ev);
       return;
     }
@@ -829,7 +974,7 @@
         break;
       case 's': if (enCaso && !soloLecturaActual()) { ev.preventDefault(); saltear(); } break;
       case 'n': if (enCaso && !soloLecturaActual()) { ev.preventDefault(); abrirNS($('[data-accion="no-sincronizar"]')); } break;
-      case 'z': if (S.deshacer && !S.deshacer.vencido) { ev.preventDefault(); deshacerNS(); } break;
+      case 'z': if (deshacerVisible()) { ev.preventDefault(); deshacerNS(); } break;
       case 'd': if (enCaso) { ev.preventDefault(); S.soloDif = !S.soloDif; renderDetalle(); } break;
       case 'f': if (enCaso) { ev.preventDefault(); S.fotoGrande = !S.fotoGrande; renderDetalle(); } break;
       case '/': ev.preventDefault(); if (S.tab === 'casos' && enCaso) { $('#det-q') && $('#det-q').focus(); } else { activarTab('vinculos'); $('#vinc-q').focus(); } break;
@@ -839,7 +984,7 @@
     }
   }
   function soloLecturaActual() {
-    return !!(S.detalle && S.detalle.caso.estado === 'intervencion' && !S.isAdmin);
+    return soloLecturaDetalle();
   }
 
   // ── Ejecución ──────────────────────────────────────────────────────────────────────────────────
@@ -849,7 +994,8 @@
       encolada: ['cv-chip-estado', '↻', 'En cola para ML'],
       aplicada: ['cv-chip-estado cv-chip-estado--aplicada', '✓', 'Aplicada en ML'],
       fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', 'ML la rechazó: ' + (o.ultimo_error || 'sin detalle') + '. Reintenta José.'],
-      frenada: ['cv-chip-estado cv-chip-estado--frenada', '⏸', 'Frenada: ' + (o.ultimo_error || 'regla de protección') + '. Stock en 0 hasta resolver.']
+      frenada: ['cv-chip-estado cv-chip-estado--frenada', '⏸', 'Frenada: ' + (o.ultimo_error || 'regla de protección') + '. Stock en 0 hasta resolver.'],
+      espera: ['cv-chip-estado cv-chip-estado--espera', '⏳', 'Espera tu confirmación']
     }[k];
     if (!m) return '<span class="cv-chip-estado">' + esc(estado) + '</span>';
     return '<span class="' + m[0] + '"><span aria-hidden="true">' + m[1] + '</span> ' + esc(m[2]) + '</span>';
@@ -890,7 +1036,8 @@
       + (fall > 0
         ? '<span class="cv-contador cv-contador--critico"><span aria-hidden="true">✗</span> ' + fall + ' fallidas</span> <span class="ui-resumen">ML rechazó ' + fall + '</span>'
         : '<span class="cv-contador cv-contador--ok"><span aria-hidden="true">✓</span> Sin fallidas</span>')
-      + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + frenadas + ' frenadas</span> · ↻ ' + encoladas + ' en cola</span></div>';
+      + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + frenadas + ' frenadas</span> · ↻ ' + encoladas + ' en cola</span></div>'
+      + saludHtml();
     var riesgo = (e.pausas || []).filter(function (p) { return p.impacto_hermanas > 0 && p.estado !== 'completada' && p.estado !== 'cancelada'; });
     var bloqueRiesgo = riesgo.length
       ? '<section class="ui-aviso ui-aviso--atencion cv-bloque" aria-labelledby="riesgo-h"><h3 id="riesgo-h" class="cv-h2"><span aria-hidden="true">⚠</span> Pausas con riesgo</h3>'
@@ -902,13 +1049,21 @@
       var est = ESTADO_OP[o.estado] || o.estado;
       var fallida = est === 'fallida';
       var acciones = '';
-      if (S.isAdmin && fallida) acciones += '<button type="button" class="ui-btn" data-accion="reintentar" data-op="' + o.id + '">Reintentar</button> ';
-      if (S.isAdmin && o.estado === 'bloqueada_impacto') acciones += '<button type="button" class="ui-btn" data-accion="confirmar-impacto" data-op="' + o.id + '">Confirmar impacto</button>';
+      var enviandoEsta = S.busyOp === o.id;
+      var dis = 'aria-disabled="' + !!S.busy + '"';
+      if (S.isAdmin && puedeEscribir() && fallida) acciones += '<button type="button" class="ui-btn" data-accion="reintentar" data-op="' + o.id + '" ' + dis + '>'
+        + (enviandoEsta && S.busy === 'reintentar' ? 'Enviando…' : 'Reintentar') + '</button> ';
+      if (S.isAdmin && puedeEscribir() && o.estado === 'bloqueada_impacto') acciones += '<button type="button" class="ui-btn" data-accion="confirmar-impacto" data-op="' + o.id + '" ' + dis + '>'
+        + (enviandoEsta && S.busy === 'confirmar-impacto' ? 'Enviando…' : 'Confirmar impacto') + '</button>';
+      var msg = S.ejecMsgs[o.id];
+      var msgHtml = msg ? '<p class="ui-resumen cv-ejec-msg' + (msg.error ? ' cv-ejec-msg--error' : '') + '" role="' + (msg.error ? 'alert' : 'status') + '">'
+        + (msg.error ? '✗ ' : '') + esc(msg.error || msg.texto) + '</p>' : '';
       return '<article class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + '" data-op="' + o.id + '">'
         + '<div class="cv-ejec-fila__cab"><strong>' + esc(o.nombre_canonico || o.ml_key) + '</strong>' + chipEstado(o.estado, o) + '</div>'
         + '<p class="ui-resumen"><span class="ui-id">' + esc(o.sku_objetivo || '') + '</span> · ' + esc(fecha(o.actualizada_en || o.iniciada_en)) + '</p>'
         + (fallida && !S.isAdmin ? '<p class="ui-resumen">Reintenta José.</p>' : '')
         + (acciones ? '<div class="cv-ejec-acciones">' + acciones + '</div>' : '')
+        + msgHtml
         + '</article>';
     }).join('');
     $('#ejec-cuerpo').innerHTML = bloqueRiesgo + (filas || '<p class="ui-resumen">No hay operaciones en ML.</p>');
@@ -922,23 +1077,59 @@
       : '<span class="ui-resumen">0 fallidas</span>';
   }
 
+  // Estado de la pantalla Ejecución: salud de lectura y conciliación (lo que muestran las pastillas de Casos).
+  function saludHtml() {
+    var e = S.estadoRaw || {};
+    var salud = e.salud || {};
+    var conc = e.conciliacion || {};
+    var txtSalud = salud.sano ? 'Sana' : (salud.degradado ? 'Degradada' : 'Con observación');
+    var txtConc = conc.exacta ? 'Exacta' : 'Sin conciliar';
+    if (!S.estadoRaw) return '<p class="ui-resumen">Salud y conciliación: sin dato todavía.</p>';
+    return '<section class="ui-panel cv-salud-bloque" aria-label="Salud de la identidad"><h2 class="cv-h2">Salud y conciliación</h2>'
+      + '<p>Salud de lectura: <strong>' + esc(txtSalud) + '</strong></p>'
+      + '<p>Conciliación: <strong>' + esc(txtConc) + '</strong></p></section>';
+  }
+
+  // Confirmar impacto (admin): la pausa de hermanas se confirma en un diálogo antes de encolarse.
+  // La lista de variaciones solo se conoce si el caso está abierto; si no, se muestra la cantidad.
+  function abrirConfirmarImpacto(id) {
+    var o = ((S.ejec && S.ejec.operaciones) || []).find(function (x) { return x.id === id; });
+    if (!o) return;
+    var n = Number(o.impacto_hermanas) || 0;
+    var lista = (S.detalle && S.detalle.caso && S.detalle.caso.id === o.caso_id && S.detalle.hermanas_item) || [];
+    var cuerpo = '<p>Esto pausa ' + n + ' variaciones en ML' + (lista.length ? ':' : '.') + '</p>'
+      + (lista.length ? '<ul class="cv-impacto-lista">' + lista.slice(0, 10).map(function (h) {
+          return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '') + '</li>';
+        }).join('') + '</ul>' : '')
+      + '<p class="ui-resumen">La pausa va como operación en la cola de Identidad. Su resultado aparece en Ejecución.</p>';
+    $('#dlg-imp-cuerpo').innerHTML = cuerpo;
+    var ok = $('#dlg-imp-ok');
+    ok.textContent = 'Pausar las ' + n;
+    ok.setAttribute('data-op', String(id));
+    abrirDialogo($('#dlg-impacto'), $('[data-accion="confirmar-impacto"][data-op="' + id + '"]'), $('#dlg-imp-volver'));
+  }
+
   function reintentarOp(id, accion) {
     var clave = accion + ':' + id;
-    if (S.busy) return;
-    S.busy = accion;
+    if (S.busy || !puedeEscribir()) return;
+    S.busy = accion; S.busyOp = id; S.ejecMsgs[id] = { texto: 'Enviando…' };
+    renderEjecucion();
     api('POST', '/operaciones/' + id + '/' + (accion === 'reintentar' ? 'reintentar' : 'confirmar-impacto'), { operation_id: opIdPara(clave) }).then(function (r) {
-      S.busy = null;
+      S.busy = null; S.busyOp = null;
       if (r.ok || (!r.red && r.status !== 409 && r.status !== 0)) soltarOpId(clave);
-      if (r.red) { anunciar(MSG_ERROR_SIN_RED, 'alerta'); return; }
-      if (!r.ok) { anunciar(mensajeDe(r), 'alerta'); return; }
+      if (r.red) { S.ejecMsgs[id] = { error: MSG_ERROR_SIN_RED }; anunciar(MSG_ERROR_SIN_RED, 'alerta'); return renderEjecucion(); }
+      if (!r.ok) { S.ejecMsgs[id] = { error: mensajeDe(r) }; anunciar(mensajeDe(r), 'alerta'); return renderEjecucion(); }
+      S.ejecMsgs[id] = { texto: 'Enviado · En cola para ML. Se actualiza solo.' };
       anunciar('Enviado. Mirá el estado en Ejecución.', 'estado');
       cargarEjecucion();
     });
   }
 
   // ── Retenidas ─────────────────────────────────────────────────────────────────────────────────
+  // Motivo en lenguaje humano (sin snake_case): "sin_cobertura_woo" -> "Sin cobertura woo".
   function causaDe(f) {
-    var c = f.motivo ? String(f.motivo).replace(/_/g, ' ') : 'Sin cobertura';
+    var raw = f.motivo ? String(f.motivo).replace(/_/g, ' ').trim() : 'sin cobertura';
+    var c = raw.charAt(0).toUpperCase() + raw.slice(1);
     return c + ((f.claves && f.claves.length) ? ' · ' + f.claves.join(', ') : '');
   }
 
@@ -965,19 +1156,25 @@
       var aviso = S.retAviso[f.ml_order_id]
         ? '<div class="ui-aviso ui-aviso--atencion cv-ret__aviso" role="alert">⚠ Se va a volver a retener.</div> ' : '';
       var liberar = '';
-      if (S.canWrite && !S.retAviso[f.ml_order_id]) {
+      if (puedeEscribir() && !S.retAviso[f.ml_order_id]) {
+        var avisoRecaida = f.se_vuelve_a_retener
+          ? '<div class="ui-aviso ui-aviso--atencion cv-ret__aviso" role="note"><span aria-hidden="true">⚠</span> La causa sigue: al liberar, se crea el pedido en la web y el sistema lo vuelve a retener.</div>' : '';
         liberar = abierta
-          ? '<form class="cv-ret__form" data-accion="liberar-enviar" data-orden="' + esc(f.ml_order_id) + '" novalidate>'
-            + '<label class="ui-label" for="ret-m-' + esc(f.id) + '">Motivo <span>(obligatorio)</span></label>'
-            + '<textarea id="ret-m-' + esc(f.id) + '" class="ui-input" rows="2"></textarea>'
+          ? '<form class="cv-ret__form" data-accion="liberar-enviar" data-orden="' + esc(f.ml_order_id) + '" novalidate>' + avisoRecaida
+            + '<label class="ui-label" for="ret-m-' + esc(f.ml_order_id) + '">Motivo <span>(obligatorio)</span></label>'
+            + '<textarea id="ret-m-' + esc(f.ml_order_id) + '" class="ui-input" rows="2"></textarea>'
             + '<p class="cv-error" hidden></p>'
-            + '<div class="cv-acciones__fila"><button type="submit" class="ui-btn ui-btn--primario">Confirmar liberación</button>'
+            + '<div class="cv-acciones__fila"><button type="submit" class="ui-btn ui-btn--primario" aria-disabled="' + !!S.busy + '">'
+            + (S.busy === 'liberar' ? 'Liberando…' : 'Confirmar liberación') + '</button>'
             + '<button type="button" class="ui-btn" data-accion="liberar-cancelar">Cancelar</button></div></form>'
           : '<button type="button" class="ui-btn" data-accion="liberar-abrir" data-orden="' + esc(f.ml_order_id) + '" aria-expanded="false">Liberar</button>';
       }
+      var titulo = f.titulo ? esc(f.titulo) : 'Sin dato del título';
+      var importe = f.importe != null ? esc(money(f.importe)) : 'sin dato';
       return '<article class="cv-ret">'
-        + '<div class="cv-ret__cab"><span>Pedido <span class="ui-id">' + esc(f.ml_order_id) + '</span> · publicación <span class="ui-id">' + esc((f.claves || [])[0] || '—') + '</span></span>'
+        + '<div class="cv-ret__cab"><span><strong>' + titulo + '</strong> · pedido <span class="ui-id">' + esc(f.ml_order_id) + '</span></span>'
         + '<span class="ui-label">' + esc(fecha(f.creado_en)) + '</span></div>'
+        + '<p class="ui-resumen">Publicación <span class="ui-id">' + esc((f.claves || [])[0] || '—') + '</span> · importe ' + importe + '</p>'
         + '<p class="ui-resumen">Causa: ' + esc(causaDe(f)) + '</p>'
         + aviso + liberar + '</article>';
     }).join('');
@@ -985,6 +1182,7 @@
   }
 
   function liberarRetenida(form) {
+    if (S.busy || !puedeEscribir()) return; // doble envío: se ignora mientras hay una liberación en curso
     var orden = form.getAttribute('data-orden');
     var motivo = form.querySelector('textarea').value.trim();
     var err = form.querySelector('.cv-error');
@@ -997,9 +1195,14 @@
     var fila = (S.retenidas || []).find(function (f) { return f.ml_order_id === orden; });
     var sigueCausa = !!(fila && fila.se_vuelve_a_retener);
     S.busy = 'liberar';
+    var boton = form.querySelector('button[type="submit"]');
+    if (boton) { boton.setAttribute('aria-disabled', 'true'); boton.textContent = 'Liberando…'; }
     api('POST', '/retenidas/' + enc(orden) + '/liberar', { motivo: motivo }).then(function (r) {
       S.busy = null;
-      if (!r.ok) { err.textContent = mensajeDe(r); err.hidden = false; return; }
+      if (!r.ok) {
+        if (boton) { boton.setAttribute('aria-disabled', 'false'); boton.textContent = 'Confirmar liberación'; }
+        err.textContent = mensajeDe(r); err.hidden = false; return;
+      }
       S.retAbierta = null;
       if (sigueCausa) { S.retAviso[orden] = true; renderRetenidas(); anunciar('Liberada, pero se va a volver a retener.', 'alerta'); return; }
       anunciar('Venta liberada.', 'estado');
@@ -1039,6 +1242,14 @@
     S.vincQ = q || '';
     if (!S.vincFiltro) S.vincFiltro = 'all';
     renderVincFiltros();
+    // Sin texto no se busca (no se pide la lista entera): se muestra el estado inicial con instrucciones.
+    if (!S.vincQ.trim()) {
+      cont.setAttribute('aria-busy', 'false');
+      cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>'
+        + (modo === 'producto' ? 'Escribí un nombre, SKU o GTIN del producto Woo para buscarlo.' : 'Escribí un título o una clave de publicación ML para buscarla.')
+        + '</p></div>';
+      return Promise.resolve();
+    }
     cont.setAttribute('aria-busy', 'true');
     var pr = modo === 'producto'
       ? identidad('/productos/buscar?q=' + enc(S.vincQ.trim())).then(function (r) { return { r: r, lista: r.ok ? (r.data.data || []) : [], modo: modo }; })
@@ -1063,7 +1274,27 @@
   function tarjetaProducto(p) {
     return '<article class="cv-tarjeta-vinc"><strong>' + esc(p.nombre_canonico || '—') + '</strong>'
       + '<p class="ui-resumen">SKU Fusion <span class="ui-id">' + esc(p.fusion_sku || '—') + '</span> · SKU Woo <span class="ui-id">' + esc(p.sku_woo || '—') + '</span></p>'
-      + '<p class="ui-resumen">Stock Woo ' + esc(p.stock_woo == null ? 'sin dato' : p.stock_woo) + ' · publicaciones ML activas ' + esc(p.identidades_ml_activas || 0) + '</p></article>';
+      + '<p class="ui-resumen">Stock Woo ' + esc(p.stock_woo == null ? 'sin dato' : p.stock_woo) + ' · publicaciones ML activas ' + esc(p.identidades_ml_activas || 0) + '</p>'
+      + '<button type="button" class="ui-btn" data-accion="vinc-pubs-producto" data-id="' + esc(p.id) + '" aria-expanded="false">Ver publicaciones ML</button>'
+      + '<div class="cv-pubs-producto" data-pubs="' + esc(p.id) + '"></div></article>';
+  }
+
+  // Publicaciones ML de un producto Woo. Endpoint pendiente en el backend: GET /api/catalogo-vinculos/productos/:id/publicaciones.
+  function verPublicacionesProducto(id, boton) {
+    var caja = $('[data-pubs="' + id + '"]');
+    if (!caja) return;
+    caja.innerHTML = '<p class="ui-resumen">Buscando publicaciones…</p>';
+    api('GET', '/productos/' + enc(id) + '/publicaciones').then(function (r) {
+      if (boton) boton.setAttribute('aria-expanded', 'true');
+      if (!r.ok) { caja.innerHTML = '<p class="cv-error">No pudimos listar las publicaciones de este producto.</p>'; return; }
+      var lista = r.data.data || [];
+      caja.innerHTML = lista.length
+        ? '<ul class="cv-lista-hermanas">' + lista.map(function (x) {
+            return '<li><span class="ui-id">' + esc(x.clave) + '</span> ' + esc(x.titulo || '') + ' <span class="ui-label">' + esc(x.status || '') + '</span>'
+              + ' <button type="button" class="ui-btn" data-accion="vinc-ml" data-clave="' + esc(x.clave) + '">Ver vínculo</button></li>';
+          }).join('') + '</ul>'
+        : '<p class="ui-resumen">Este producto no tiene publicaciones ML.</p>';
+    });
   }
 
   function tarjetaML(it) {
@@ -1078,9 +1309,15 @@
   function abrirVinculoML(clave) {
     var p = $('#vinc-vinculo');
     p.innerHTML = '<p class="ui-resumen">Buscando el vínculo…</p>';
-    S.vincPanel = null;
+    S.vincPanel = null; S.identMsg = null;
     return buscarCasoPorClave(clave).then(function (m) {
-      if (!m) { S.vincPanel = { clave: clave, sinCaso: true }; return renderVincPanel(); }
+      if (!m) {
+        // Sin caso abierto: consulta por clave (lectura). Endpoint pendiente: GET /api/catalogo-vinculos/claves/:clave.
+        return api('GET', '/claves/' + enc(clave)).then(function (r) {
+          S.vincPanel = { clave: clave, sinCaso: true, detalle: r.ok ? r.data.data : null };
+          renderVincPanel();
+        });
+      }
       return Promise.all([api('GET', '/casos/' + m.id), identidad('/casos/' + m.id)]).then(function (rs) {
         if (!rs[0].ok) { p.innerHTML = cajaError(mensajeDe(rs[0]), 'cargarCola'); return; }
         S.vincPanel = { clave: clave, casoId: m.id, detalle: rs[0].data.data, ident: rs[1].ok ? rs[1].data.data : null };
@@ -1099,27 +1336,42 @@
     var p = $('#vinc-vinculo');
     var v = S.vincPanel;
     if (!v) { p.innerHTML = ''; return; }
-    if (v.sinCaso) { p.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Esta publicación no tiene un caso abierto: no hay vínculo para revisar acá.</p></div>'; return; }
+    // Sin caso y sin consulta por clave disponible: degradación explícita (no se inventa el vínculo).
+    if (v.sinCaso && !v.detalle) {
+      p.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Esta publicación no tiene un caso abierto, y todavía no podemos mostrar su vínculo desde acá.</p></div>';
+      return;
+    }
     var d = v.detalle; var id = v.ident || {};
+    var escribe = puedeEscribir();
     var pub = (d.caso && d.caso.publicacion) || {};
     var vig = d.vinculo_vigente; var marca = d.marca;
     var hSku = id.hermanas_ml || []; var hGtin = id.ml_por_gtin_producto || [];
     var ids = id.producto && Array.isArray(id.producto.identificadores) ? id.producto.identificadores : null;
     var idsHtml = ids
       ? '<ol class="cv-hist__lista">' + ids.map(function (x, i) {
-          return '<li><span class="ui-id">' + esc(x.valor_normalizado) + '</span> <button type="button" class="ui-btn" data-accion="ident-mover" data-idx="' + i + '" data-dir="-1" aria-label="Subir ' + esc(x.valor_normalizado) + '">↑</button> <button type="button" class="ui-btn" data-accion="ident-mover" data-idx="' + i + '" data-dir="1" aria-label="Bajar ' + esc(x.valor_normalizado) + '">↓</button></li>';
-        }).join('') + '</ol><button type="button" class="ui-btn ui-btn--primario" data-accion="ident-guardar">Guardar orden</button>'
+          var mover = escribe
+            ? ' <button type="button" class="ui-btn" data-accion="ident-mover" data-idx="' + i + '" data-dir="-1" aria-label="Subir ' + esc(x.valor_normalizado) + '">↑</button> <button type="button" class="ui-btn" data-accion="ident-mover" data-idx="' + i + '" data-dir="1" aria-label="Bajar ' + esc(x.valor_normalizado) + '">↓</button>'
+            : '';
+          return '<li><span class="ui-id">' + esc(x.valor_normalizado) + '</span>' + mover + '</li>';
+        }).join('') + '</ol>'
+        + (escribe ? '<button type="button" class="ui-btn ui-btn--primario" data-accion="ident-guardar">Guardar orden</button>' : '')
+        + (S.identMsg ? '<p class="ui-resumen" role="' + (S.identMsg.error ? 'alert' : 'status') + '">' + (S.identMsg.error ? '✗ ' : '') + esc(S.identMsg.texto) + '</p>' : '')
       : '<p class="ui-resumen">Orden de identificadores: no disponible en esta vista.</p>';
     var marcaTxt = !marca ? 'Sin marca.'
-      : (marca.tipo === 'link_de_pago' ? 'Link de pago.' : 'No sincronizar (variante ' + (marca.variante || '—') + ') · por ' + (marca.por || '—') + '.');
+      : (marca.tipo === 'link_de_pago' ? 'Link de pago.' : 'No sincronizar (' + nombreVariante(marca.variante) + ') · por ' + (marca.por || '—') + '.');
     var revertir = '';
     if (marca && marca.tipo === 'no_sincronizar') {
-      revertir = (marca.variante === 'c' && !S.isAdmin)
+      if (!escribe) revertir = '<p class="cv-leyenda-pc">Para revertir, usá la PC.</p>';
+      else revertir = (marca.variante === 'c' && !S.isAdmin)
         ? '<p class="cv-lock">Lo revierte José.</p>'
         : '<form data-accion="vinc-revertir" class="cv-cuadro-motivo" novalidate><label class="ui-label" for="rev-motivo">Motivo <span>(obligatorio)</span></label>'
           + '<textarea id="rev-motivo" class="ui-input" rows="2"></textarea><p class="cv-error" hidden></p>'
           + '<div class="cv-acciones__fila"><button type="submit" class="ui-btn">Revertir no sincronizar</button></div></form>';
     }
+    var acciones = v.casoId
+      ? '<div class="cv-acciones__fila">' + (escribe ? '<button type="button" class="ui-btn ui-btn--primario" data-accion="vinc-revincular" data-caso="' + v.casoId + '">Revincular</button>' : '')
+        + '<button type="button" class="ui-btn" data-accion="vinc-historial" data-caso="' + v.casoId + '">Ver historial</button></div>'
+      : '';
     p.innerHTML = '<article class="ui-card cv-vinc-card"><h2 class="cv-h2">' + esc(pub.titulo || v.clave) + '</h2>'
       + '<p class="ui-resumen">Publicación <span class="ui-id">' + esc(v.clave) + '</span></p>'
       + '<p>Vínculo vigente: ' + (vig ? '<span class="ui-id">' + esc(vig.sku) + '</span> <span class="ui-label">' + esc(vig.accion) + ' · desde ' + esc(fecha(vig.desde)) + '</span>' : 'Sin vínculo activo.') + '</p>'
@@ -1130,8 +1382,12 @@
       + '<h3 class="ui-label">Notas</h3>' + ((d.notas || []).length
         ? '<ol class="cv-hist__lista">' + d.notas.map(function (h) { return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(h.evento) + '</li>'; }).join('') + '</ol>'
         : '<p class="ui-resumen">Sin notas.</p>')
-      + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="vinc-revincular" data-caso="' + v.casoId + '">Revincular</button>'
-      + '<button type="button" class="ui-btn" data-accion="vinc-historial" data-caso="' + v.casoId + '">Ver historial</button></div></article>';
+      + acciones + '</article>';
+  }
+
+  function nombreVariante(v) {
+    var f = VARIANTES.find(function (x) { return x.v === v; });
+    return f ? f.nombre : 'variante ' + (v || '—');
   }
 
   function revertirNS(f) {
@@ -1158,10 +1414,14 @@
 
   function identGuardar() {
     var prod = S.vincPanel && S.vincPanel.ident && S.vincPanel.ident.producto;
-    if (!prod) return;
+    if (!prod || !puedeEscribir()) return;
     var valores = prod.identificadores.map(function (x) { return x.valor_normalizado; });
+    S.identMsg = { texto: 'Guardando…' };
+    renderVincPanel();
     llamar('PUT', IDENT + '/productos/' + prod.id + '/identificadores/orden', { valores: valores }).then(function (r) {
-      anunciar(r.ok ? 'Orden de identificadores guardado.' : mensajeDe(r), r.ok ? 'estado' : 'alerta');
+      S.identMsg = r.ok ? { texto: 'Orden guardado.' } : { texto: mensajeDe(r), error: true };
+      anunciar(S.identMsg.texto, r.ok ? 'estado' : 'alerta');
+      renderVincPanel();
     });
   }
 
@@ -1186,34 +1446,58 @@
   function conflictoDetalleHtml() {
     var d = S.conflictoDetalle;
     if (!d) return '<p class="ui-resumen">Cargando…</p>';
+    var escribe = puedeEscribir();
     var filas = (d.productos || []).map(function (p) {
+      var botones = escribe
+        ? '<span class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="resolver" data-ganador="' + p.id + '" data-valor="' + esc(d.valor_normalizado) + '">Es de este</button>'
+          + '<button type="button" class="ui-btn ui-btn--peligro" data-accion="incorrecto" data-producto="' + p.id + '" data-valor="' + esc(d.valor_normalizado) + '">No le corresponde</button></span>'
+        : '';
       return '<div class="cv-prod-conf__fila"><span><strong>' + esc(p.fusion_sku) + '</strong> ' + esc((p.nombre_canonico || '').slice(0, 70))
         + '<br><span class="ui-label">Stock Woo ' + esc(p.stock_woo == null ? '—' : p.stock_woo) + ' · Stock ML ' + esc(p.stock_ml) + '</span></span>'
-        + '<span class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="resolver" data-ganador="' + p.id + '" data-valor="' + esc(d.valor_normalizado) + '">Es de este</button>'
-        + '<button type="button" class="ui-btn ui-btn--peligro" data-accion="incorrecto" data-producto="' + p.id + '" data-valor="' + esc(d.valor_normalizado) + '">No le corresponde</button></span></div>';
+        + botones + '</div>';
     }).join('');
+    // "Es de este" marca a todos los demás como incorrectos: pide confirmación con la cantidad antes de enviar.
+    var cr = S.confResolver;
+    var confirmar = (cr && cr.valor === d.valor_normalizado)
+      ? '<div class="ui-aviso ui-aviso--atencion cv-foco-bloque" role="alert" tabindex="-1" id="bloque-conf-resolver"><p>¿Marcar ' + cr.n + ' productos como incorrectos? El código queda en «' + esc(cr.nombre) + '».</p>'
+        + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="resolver-ok">Sí, marcar ' + cr.n + '</button>'
+        + '<button type="button" class="ui-btn" data-accion="resolver-cancelar">Cancelar</button></div></div>'
+      : '';
     return '<div class="cv-prod-conf">'
       + '<p class="ui-resumen">«Es de este» le deja el código a ese producto y marca a todos los demás como incorrectos. «No le corresponde» descarta sólo a ese.</p>'
-      + '<div class="cv-campo"><label class="ui-label" for="conf-motivo">Motivo <span>(obligatorio)</span></label>'
-      + '<input id="conf-motivo" class="ui-input" type="text" autocomplete="off"><p id="conf-err" class="cv-error" hidden></p></div>'
+      + (escribe ? '<div class="cv-campo"><label class="ui-label" for="conf-motivo">Motivo <span>(obligatorio)</span></label>'
+      + '<input id="conf-motivo" class="ui-input" type="text" autocomplete="off" value="' + esc(cr && cr.valor === d.valor_normalizado ? cr.motivo : '') + '"><p id="conf-err" class="cv-error" hidden></p></div>' : '<p class="cv-leyenda-pc">Para resolver conflictos, usá la PC.</p>')
+      + confirmar
       + filas + (d.truncado ? '<p class="ui-resumen">Se muestran los ' + esc((d.productos || []).length) + ' con más stock, de ' + esc(d.total_productos) + '.</p>' : '')
       + '</div>';
   }
 
-  function resolverConflicto(el) {
-    var motivo = ($('#conf-motivo') || {}).value || '';
-    motivo = motivo.trim();
+  // "Es de este": primero pide confirmación con la cantidad de productos que se marcan como incorrectos.
+  function pedirConfirmacionResolver(el) {
+    var motivo = (($('#conf-motivo') || {}).value || '').trim();
     if (!motivo) { var e = $('#conf-err'); e.textContent = 'Falta el motivo. Es obligatorio.'; e.hidden = false; $('#conf-motivo').focus(); return; }
-    var valor = el.getAttribute('data-valor');
+    var d = S.conflictoDetalle || {};
+    var total = Number(d.total_productos) || (d.productos || []).length;
+    S.confResolver = { valor: el.getAttribute('data-valor'), ganador: el.getAttribute('data-ganador'), n: Math.max(total - 1, 0), nombre: el.getAttribute('data-valor'), motivo: motivo };
+    cargarConflictos().then(function () { enfocarPorSelector('#bloque-conf-resolver'); });
+  }
+
+  // spec: { accion: 'resolver' | 'incorrecto', valor, producto }
+  function resolverConflicto(spec) {
+    var motivo = (($('#conf-motivo') || {}).value || '').trim();
+    if (!motivo) { var e = $('#conf-err'); e.textContent = 'Falta el motivo. Es obligatorio.'; e.hidden = false; $('#conf-motivo').focus(); return; }
+    var valor = spec.valor;
     var ruta; var body;
-    if (el.getAttribute('data-accion') === 'resolver') {
-      ruta = '/identificadores/conflictos/resolver'; body = { valor_normalizado: valor, producto_id: Number(el.getAttribute('data-ganador')), motivo: motivo };
+    if (spec.accion === 'resolver') {
+      ruta = '/identificadores/conflictos/resolver'; body = { valor_normalizado: valor, producto_id: Number(spec.producto), motivo: motivo };
     } else {
-      ruta = '/identificadores/incorrecto'; body = { valor_normalizado: valor, producto_id: Number(el.getAttribute('data-producto')), motivo: motivo };
+      ruta = '/identificadores/incorrecto'; body = { valor_normalizado: valor, producto_id: Number(spec.producto), motivo: motivo };
     }
+    S.busy = 'conflicto';
     llamar('POST', IDENT + ruta, body).then(function (r) {
+      S.busy = null;
       if (!r.ok) { var e2 = $('#conf-err'); if (e2) { e2.textContent = mensajeDe(r); e2.hidden = false; } return; }
-      S.conflictoAbierto = null; S.conflictoDetalle = null;
+      S.conflictoAbierto = null; S.conflictoDetalle = null; S.confResolver = null;
       anunciar('Código resuelto: ' + valor, 'estado');
       cargarConflictos();
     });
@@ -1234,6 +1518,7 @@
     clearInterval(S.ejecPoll); S.ejecPoll = null;
     if (nombre === 'casos' && !S.colaCargada) { cargarEstado(); cargarConteos(); cargarCola(); }
     if (nombre === 'vinculos' && S.conflictos === null) cargarConflictos();
+    if (nombre === 'vinculos' && !$('#vinc-resultados').innerHTML) buscarVinculos($('#vinc-q').value);
     if (nombre === 'ejecucion') {
       cargarEjecucion();
       S.ejecPoll = setInterval(function () { if (!document.hidden) cargarEjecucion(); }, 20000);
@@ -1255,7 +1540,13 @@
     $('#dlg-atajos-on').addEventListener('change', function (e) { guardarAtajos(e.target.checked); });
     $('#cv-btn-ayuda').addEventListener('click', function (e) { abrirDialogo($('#dlg-atajos'), e.currentTarget, $('#dlg-atajos-on')); });
     $('#dlg-atajos-cerrar').addEventListener('click', cerrarDialogo);
-    $('#ns-volver').addEventListener('click', cerrarDialogo);
+    $('#ns-volver').addEventListener('click', intentarCerrarDialogo);
+    $('#dlg-imp-volver').addEventListener('click', cerrarDialogo);
+    $('#dlg-imp-ok').addEventListener('click', function () {
+      var id = Number(this.getAttribute('data-op'));
+      cerrarDialogo();
+      reintentarOp(id, 'confirmar-impacto');
+    });
     $('#ns-form').addEventListener('submit', nsEnviar);
     $('#ns-form').addEventListener('change', function (e) {
       if (e.target.name === 'ns-variante') {
@@ -1335,28 +1626,32 @@
         case 'deshacer': deshacerNS(); break;
         case 'solo-dif': S.soloDif = !S.soloDif; renderDetalle(); break;
         case 'hermanas-si':
-          if (!S.hermanas) break;
-          var b = S.hermanas.body; S.hermanas = null;
-          S.busy = 'vincular'; renderDetalle();
-          api('POST', '/casos/' + caso().id + '/decisiones', Object.assign({}, b, { confirm_sibling_impact: true })).then(function (r) {
+          if (!S.hermanas || !caso() || !puedeEscribir()) break;
+          var h = S.hermanas; S.hermanas = null;
+          var cH = caso(); var bodyH = Object.assign({}, h.body, { confirm_sibling_impact: true });
+          S.busy = 'vincular'; S.focoPendiente = '[data-accion="vincular"]'; renderDetalle();
+          api('POST', '/casos/' + cH.id + '/decisiones', bodyH).then(function (r) {
             S.busy = null;
-            if (r.ok) return guardadoOk(caso(), 'Guardado · En cola para ML', 'vincular');
-            S.accionError = mensajeDe(r); renderDetalle();
+            resultadoVincular(cH, bodyH.product_id, bodyH, r, null, null);
           });
           break;
-        case 'hermanas-no': S.hermanas = null; renderDetalle(); enfocarPorSelector('[data-accion="vincular"]'); break;
+        case 'hermanas-no': S.hermanas = null; S.focoPendiente = '[data-accion="vincular"]'; renderDetalle(); break;
         case 'conflicto-aplicar':
-          if (!S.conflictoVersion) break;
-          var nuevo = cuerpoVincular({}); S.conflictoVersion = null;
-          var c = caso(); nuevo.operation_id = uuid(); nuevo.expected_version = c.expected_version; nuevo.evidence_fingerprint = c.evidencia_fingerprint;
-          S.busy = 'vincular'; renderDetalle();
-          api('POST', '/casos/' + c.id + '/decisiones', nuevo).then(function (r) {
+          // Reaplica la misma decisión (mismo producto) sobre la versión nueva del caso, con un operation_id nuevo.
+          var cv = S.conflictoVersion; var cA = caso();
+          if (!cv || !cA || !puedeEscribir() || S.busy) break;
+          var nuevo = Object.assign({}, cv.body, { operation_id: uuid(), expected_version: cA.expected_version, evidence_fingerprint: cA.evidencia_fingerprint });
+          S.conflictoVersion = null;
+          S.busy = 'vincular'; S.focoPendiente = '[data-accion="vincular"]'; renderDetalle();
+          api('POST', '/casos/' + cA.id + '/decisiones', nuevo).then(function (r) {
             S.busy = null;
-            if (r.ok) return guardadoOk(c, 'Guardado · En cola para ML', 'vincular');
-            S.accionError = mensajeDe(r); renderDetalle();
+            resultadoVincular(cA, nuevo.product_id, nuevo, r, null, cv.cand);
           });
           break;
-        case 'conflicto-descartar': S.conflictoVersion = null; renderDetalle(); break;
+        case 'conflicto-descartar': S.conflictoVersion = null; S.focoPendiente = '[data-accion="vincular"]'; renderDetalle(); break;
+        case 'reintentar-matriz': if (S.elegido) { S.matrizError = null; cargarMatriz(S.elegido); } break;
+        case 'ver-mas': verMasCola(); break;
+        case 'vinc-pubs-producto': verPublicacionesProducto(el.getAttribute('data-id'), el); break;
         case 'admin': S.adminForm = el.getAttribute('data-admin'); renderDetalle(); enfocarPorSelector('#adm-motivo'); break;
         case 'admin-cancelar': S.adminForm = null; renderDetalle(); break;
         case 'reintentar-carga':
@@ -1369,7 +1664,7 @@
           else if (rc === 'reabrirCaso' && S.casoId) abrirCaso(S.casoId);
           break;
         case 'reintentar': reintentarOp(Number(el.getAttribute('data-op')), 'reintentar'); break;
-        case 'confirmar-impacto': reintentarOp(Number(el.getAttribute('data-op')), 'confirmar-impacto'); break;
+        case 'confirmar-impacto': abrirConfirmarImpacto(Number(el.getAttribute('data-op'))); break;
         case 'liberar-abrir': S.retAbierta = el.getAttribute('data-orden'); renderRetenidas(); enfocarPorSelector('#ret-cuerpo textarea'); break;
         case 'liberar-cancelar': S.retAbierta = null; renderRetenidas(); break;
         case 'ver-conflicto':
@@ -1399,7 +1694,10 @@
         case 'vinc-filtro': S.vincFiltro = el.getAttribute('data-filtro'); buscarVinculos($('#vinc-q').value); break;
         case 'ident-mover': identMover(Number(el.getAttribute('data-idx')), Number(el.getAttribute('data-dir'))); break;
         case 'ident-guardar': identGuardar(); break;
-        case 'resolver': case 'incorrecto': resolverConflicto(el); break;
+        case 'resolver': pedirConfirmacionResolver(el); break;
+        case 'resolver-ok': if (S.confResolver) resolverConflicto({ accion: 'resolver', valor: S.confResolver.valor, producto: S.confResolver.ganador }); break;
+        case 'resolver-cancelar': S.confResolver = null; cargarConflictos(); break;
+        case 'incorrecto': resolverConflicto({ accion: 'incorrecto', valor: el.getAttribute('data-valor'), producto: el.getAttribute('data-producto') }); break;
         default: break;
       }
     });
@@ -1430,7 +1728,7 @@
 
     // Diálogo: clic fuera cierra (solo en el fondo).
     $$('.cv-dialogo-fondo').forEach(function (fondo) {
-      fondo.addEventListener('click', function (ev) { if (ev.target === fondo) cerrarDialogo(); });
+      fondo.addEventListener('click', function (ev) { if (ev.target === fondo) intentarCerrarDialogo(); });
     });
 
     // Campo de motivo de admin: marca error al escribir.
@@ -1444,7 +1742,20 @@
       if (ev.target.name === 'vinc-modo') { S.vincFiltro = 'all'; buscarVinculos($('#vinc-q').value); }
     });
     window.addEventListener('online', function () { setOffline(false); cargarCola({ seleccionar: false }); });
-    window.addEventListener('resize', aplicarBloqueo);
+    window.addEventListener('resize', function () { aplicarBloqueo(); aplicarModoLectura(); });
+  }
+
+  // Modo de escritura según ancho y permiso. Si cambia (p. ej. girar el celular), se vuelve a pintar lo que tiene acciones.
+  function aplicarModoLectura() {
+    $('#cv-leyenda-pc').hidden = window.innerWidth >= PUNTO_CORTE_PC;
+    var ahora = puedeEscribir();
+    if (S.modoEscribe === ahora) return;
+    S.modoEscribe = ahora;
+    if (S.detalle) renderDetalle();
+    if (S.retenidas) renderRetenidas();
+    if (S.ejec) renderEjecucion();
+    if (S.vincPanel) renderVincPanel();
+    if (S.conflictos) cargarConflictos();
   }
 
   function enfocarPorSelector(sel) {
@@ -1464,11 +1775,12 @@
       if (!S.elegido) { err.textContent = 'Elegí un candidato antes de confirmar.'; err.hidden = false; return; }
       body = cuerpoVincular({ override_contradiccion: true, motivo: motivo });
       ruta = '/casos/' + c.id + '/decisiones';
-      S.busy = 'vincular'; renderDetalle();
+      S.busy = 'vincular'; S.focoPendiente = '[data-accion="vincular"]'; renderDetalle();
+      var candC = S.elegido;
       api('POST', ruta, body).then(function (r) {
         S.busy = null;
-        if (r.ok) { S.adminForm = null; return guardadoOk(c, 'Guardado · Vinculado pese a la contradicción', 'vincular'); }
-        S.accionError = mensajeDe(r); S.adminForm = null; renderDetalle();
+        if (r.ok) S.adminForm = null;
+        resultadoVincular(c, candC.id, body, r, 'Guardado · Vinculado pese a la contradicción', candC);
       });
       return;
     }
@@ -1515,12 +1827,15 @@
     var filas = notas.map(function (h) {
       return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(h.evento) + '</li>';
     }).join('');
-    return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial · tecla <kbd aria-hidden="true">h</kbd></summary>'
+    return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial<span class="cv-kbd-pc"> · tecla <kbd aria-hidden="true">h</kbd></span></summary>'
       + '<ol class="cv-hist__lista">' + (filas || '<li class="ui-resumen">Sin movimientos.</li>') + '</ol>'
-      + '<div class="cv-campo"><label class="ui-label" for="nota-txt">Agregar nota</label>'
-      + '<textarea id="nota-txt" class="ui-input" rows="2"></textarea>'
-      + (S.notaError ? '<p class="cv-error">' + esc(S.notaError) + '</p>' : '')
-      + '<div class="cv-acciones__fila"><button type="button" class="ui-btn" data-accion="nota-enviar">Guardar nota</button></div></div></details>';
+      + (puedeEscribir()
+        ? '<div class="cv-campo"><label class="ui-label" for="nota-txt">Agregar nota</label>'
+          + '<textarea id="nota-txt" class="ui-input" rows="2"></textarea>'
+          + (S.notaError ? '<p class="cv-error">' + esc(S.notaError) + '</p>' : '')
+          + '<div class="cv-acciones__fila"><button type="button" class="ui-btn" data-accion="nota-enviar" aria-disabled="' + !!S.busy + '">Guardar nota</button></div></div>'
+        : '')
+      + '</details>';
   }
 
   function listaHermanas(max) {
@@ -1538,17 +1853,17 @@
 
   // Acción sobre el caso con operation_id: "Guardado" solo tras la respuesta exitosa.
   function accionCaso(ruta, body, texto, clave) {
-    var c = caso(); if (!c || S.busy || S.offline) return Promise.resolve();
+    var c = caso(); if (!c || !puedeEscribir() || S.busy || S.offline) return Promise.resolve();
     S.busy = 'accion'; S.accionError = null; renderDetalle();
     return api('POST', ruta, body).then(function (r) {
       S.busy = null;
-      if (r.red) { S.accionError = MSG_ERROR_SIN_RED; return renderDetalle(); }
+      if (r.red) { setErrorAccion(MSG_ERROR_SIN_RED); return renderDetalle(); }
       if (clave) soltarOpId(clave);
       if (r.ok) { S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; return abrirCaso(c.id, { foco: false }); }
       if (r.status === 409 && (r.data.code === 'VERSION_CONFLICT' || r.data.code === 'EVIDENCE_CONFLICT')) {
-        return abrirCaso(c.id, { foco: false }).then(function () { S.accionError = mensajeDe(r); renderDetalle(); });
+        return abrirCaso(c.id, { foco: false }).then(function () { setErrorAccion(mensajeDe(r)); renderDetalle(); });
       }
-      S.accionError = mensajeDe(r); renderDetalle();
+      setErrorAccion(mensajeDe(r)); renderDetalle();
     });
   }
 
@@ -1589,6 +1904,7 @@
       S.usuario = d.user || null;
       S.canWrite = S.isAdmin || (d.permisos || []).some(function (p) { return p.herramienta === 'matcher' && p.nivel === 'write'; });
       document.body.classList.toggle('cv-admin', S.isAdmin);
+      aplicarModoLectura();
       actualizarContadoresIniciales();
       activarTab('casos');
     });

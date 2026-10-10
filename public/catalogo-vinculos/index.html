@@ -27,6 +27,7 @@
   </header>
 
   <main id="cv-main" class="cv-main">
+    <p id="cv-leyenda-pc" class="cv-leyenda-pc" hidden>Solo consulta en el celular. Para cambiar, usá la PC.</p>
     <div class="ui-tabs cv-tabs" role="tablist" aria-label="Secciones de Catálogo y vínculos">
       <button type="button" role="tab" id="tab-casos" class="ui-btn" aria-selected="true" aria-controls="panel-casos" tabindex="0" data-tab="casos">Casos <span id="cnt-casos"></span></button>
       <button type="button" role="tab" id="tab-vinculos" class="ui-btn" aria-selected="false" aria-controls="panel-vinculos" tabindex="-1" data-tab="vinculos">Vínculos</button>
@@ -43,6 +44,7 @@
         <div class="cv-cola-wrap">
           <h2 class="cv-h2" id="cola-titulo">Cola</h2>
           <div id="cv-cola" class="cv-cola" role="listbox" aria-labelledby="cola-titulo" aria-busy="true"></div>
+          <div id="cv-cola-mas" class="cv-cola-mas"></div>
         </div>
         <article id="cv-detalle" class="cv-detalle ui-card" aria-labelledby="det-titulo" aria-busy="false" tabindex="-1">
           <p class="cv-vacio-det">Elegí un caso de la cola.</p>
@@ -58,15 +60,15 @@
           <label><input type="radio" name="vinc-modo" value="producto" checked> Producto Woo</label>
           <label><input type="radio" name="vinc-modo" value="ml"> Publicación ML</label>
         </fieldset>
-        <label class="ui-label" for="vinc-q">Nombre, SKU o GTIN <span class="cv-kbd-hint">(tecla <kbd>/</kbd>)</span></label>
+        <label class="ui-label" for="vinc-q">Nombre, SKU o GTIN <span class="cv-kbd-hint cv-kbd-pc">(tecla <kbd>/</kbd>)</span></label>
         <div class="cv-buscador__fila">
           <input id="vinc-q" class="ui-input" type="search" autocomplete="off" placeholder="Nombre, SKU o GTIN">
           <button type="submit" class="ui-btn">Buscar</button>
         </div>
         <div id="vinc-filtros" class="cv-chips" role="group" aria-label="Filtros del Matcher" hidden></div>
       </form>
-      <div id="vinc-resultados" aria-live="polite" aria-busy="false"></div>
-      <div id="vinc-vinculo" aria-live="polite"></div>
+      <div id="vinc-resultados" aria-busy="false"></div>
+      <div id="vinc-vinculo"></div>
 
       <details id="conflictos" class="cv-conflictos ui-card" open>
         <summary class="cv-conflictos__sum">Códigos en conflicto <span id="cnt-conflictos"></span></summary>
@@ -108,6 +110,18 @@
           <button type="submit" class="ui-btn ui-btn--primario" id="ns-enviar">Marcar no sincronizar</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Diálogo: confirmar impacto de una operación (admin). La pausa va como operación durable en Identidad. -->
+  <div id="dlg-impacto" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-imp-titulo">
+      <h2 id="dlg-imp-titulo" class="cv-h2">Confirmar impacto</h2>
+      <div id="dlg-imp-cuerpo"></div>
+      <div class="cv-dialogo__pie">
+        <button type="button" class="ui-btn" id="dlg-imp-volver">Volver</button>
+        <button type="button" class="ui-btn ui-btn--peligro" id="dlg-imp-ok">Confirmar</button>
+      </div>
     </div>
   </div>
 
