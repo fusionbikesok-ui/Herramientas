@@ -826,6 +826,7 @@
       + lectura + '</div>'
       + tarjetaOperacion()
       + (soloLectura ? '' : marcaNingunoHtml())
+      + marcaExcepcionHtml()
       + datosHtml()
       + candidatosHtml(soloLectura)
       + (soloLectura ? '' : '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>')
@@ -1186,6 +1187,19 @@
       + (n.nota ? ' Nota: ' + esc(n.nota) : '') + '</span>'
       + (puedeEscribir() ? ' <button type="button" class="ui-btn" data-accion="deshacer-ninguno" data-caso="' + caso().id + '">Deshacer' + atajoTxt('z') + '</button>' : '')
       + '</div>';
+  }
+
+  // Marca "Excepción solo ML" vigente (GET /casos/:id → data.excepcion). Solo informa: no tiene acción.
+  function fechaArgTxt(iso) {
+    var s = String(iso || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return ddmm(s) + '/' + s.slice(0, 4);
+    var d = new Date(s); if (isNaN(d.getTime())) return s;
+    return new Intl.DateTimeFormat('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
+  }
+  function marcaExcepcionHtml() {
+    var x = caso() && caso().excepcion; if (!x) return '';
+    return '<div class="ui-aviso ui-aviso--info cv-marca-excepcion" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>Excepción solo ML hasta ' + esc(fechaArgTxt(x.vence_en)) + '</strong>'
+      + ' · motivo: ' + esc(x.motivo || '') + ' · por ' + esc(x.creada_por || '') + '</span></div>';
   }
 
   // Aviso de link de pago (solo admin, en el formulario de Link de pago, antes de confirmar).

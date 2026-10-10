@@ -209,6 +209,7 @@
 .cv-sin-mkt { display: flex; gap: var(--sp-1); align-items: flex-start; margin: 0 0 var(--sp-1); }
 .cv-sin-mkt p { margin: 0; }
 .cv-marca-ninguno { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.cv-marca-excepcion { display: flex; gap: var(--sp-1); align-items: flex-start; overflow-wrap: anywhere; }
 .cv-acciones__grid .ui-btn { min-height: var(--tap-min); width: 100%; }
 .cv-acciones .cv-btn-ancho { width: 100%; min-height: var(--tap-comfort); }
 .cv-kbd-accion { display: none; margin-left: .35rem; }
