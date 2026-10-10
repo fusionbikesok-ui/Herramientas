@@ -57,6 +57,25 @@
     var t = k.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
     return t.charAt(0).toUpperCase() + t.slice(1);
   }
+  // Único mapa de status de publicaciones ML (valores crudos de ML -> texto para la operadora).
+  // Todas las vistas que muestran status de ML pasan por estadoMlTxt().
+  var ESTADO_ML_TXT = {
+    active: 'activa',
+    paused: 'pausada',
+    closed: 'cerrada',
+    under_review: 'en revisión',
+    inactive: 'inactiva',
+    not_yet_active: 'todavía no activa',
+    payment_required: 'pendiente de pago',
+    banned: 'bloqueada'
+  };
+  function estadoMlTxt(code) {
+    if (code == null || code === '') return 'sin dato';
+    var k = String(code).trim();
+    if (ESTADO_ML_TXT[k]) return ESTADO_ML_TXT[k];
+    var t = k.replace(/_/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    return t || 'sin dato';
+  }
   // "Reintenta José" pasa a ser "Lo reintenta un admin"; para un admin, "Reintentalo".
   function reintentaTxt() { return S.isAdmin ? 'Reintentalo.' : 'Lo reintenta un admin.'; }
   // Helper único de plural para toda la pantalla: cuenta(1,'fallida','fallidas') -> "1 fallida"; cuenta(2,…) -> "2 fallidas".
@@ -572,7 +591,7 @@
 
   function datosHtml() {
     var c = caso(); var obs = S.detalle.observado_ml || {}; var regla = S.detalle.regla || {};
-    var estadoML = obs.estado === 'active' ? 'Activa' : (obs.estado === 'paused' ? 'Pausada' : (obs.estado || 'sin dato'));
+    var estadoML = estadoMlTxt(obs.estado);
     var reglaTxt = regla.frena ? 'Stock 0 por ' + (motivoTxt(regla.motivo) || 'protección').toLowerCase() : ('Stock de Woo ' + (regla.stock_esperado != null ? regla.stock_esperado : 'sin dato'));
     var desfase = S.detalle.ml_no_refleja_regla
       ? '<div class="ui-aviso ui-aviso--atencion cv-aviso-desfase cv-aviso-fijo" role="note"><span class="cv-icono" aria-hidden="true">⚠</span><span>ML todavía no refleja la regla.</span></div>' : '';
@@ -1206,7 +1225,7 @@
     var cuerpo = '<p>Esto pausa ' + cuenta(n, 'variación', 'variaciones') + ' en ML' + (lista.length ? ':' : '.') + '</p>'
       + (lista.length ? '<ul class="cv-impacto-lista">' + lista.slice(0, MAX_IMP).map(function (h) {
           return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '')
-            + (h.status ? ' <span class="ui-label">' + esc(h.status) + '</span>' : '') + '</li>';
+            + (h.status ? ' <span class="ui-label">' + esc(estadoMlTxt(h.status)) + '</span>' : '') + '</li>';
         }).join('') + (lista.length > MAX_IMP ? '<li class="ui-resumen">y ' + (lista.length - MAX_IMP) + ' más</li>' : '') + '</ul>' : '')
       + (sinLista ? '<div class="api-estado api-estado--error" role="alert"><p>No pudimos obtener la lista de variaciones.</p>'
         + '<button type="button" class="btn-reintentar cv-btn-44" data-accion="dlg-imp-reintentar" data-op="' + id + '">Reintentar</button></div>' : '')
@@ -1251,9 +1270,9 @@
 
   // ── Retenidas ─────────────────────────────────────────────────────────────────────────────────
   // Motivo en lenguaje humano (sin snake_case): "sin_cobertura_woo" -> "Sin cobertura woo".
+  // Solo el motivo: la clave de la publicación ya se muestra en la línea "Publicación ...".
   function causaDe(f) {
-    var c = f.motivo ? motivoTxt(f.motivo) : 'Sin cobertura';
-    return c + ((f.claves && f.claves.length) ? ' · ' + f.claves.map(normClave).join(', ') : '');
+    return f.motivo ? motivoTxt(f.motivo) : 'Sin cobertura';
   }
 
   function cargarRetenidas() {
@@ -1410,7 +1429,7 @@
     var lista = entrada.lista;
     caja.innerHTML = lista.length
       ? '<ul class="cv-lista-hermanas">' + lista.map(function (x) {
-          return '<li><span class="ui-id">' + esc(x.clave) + '</span> ' + esc(x.titulo || '') + ' <span class="ui-label">' + esc(x.status || '') + '</span>'
+          return '<li><span class="ui-id">' + esc(x.clave) + '</span> ' + esc(x.titulo || '') + ' <span class="ui-label">' + esc(estadoMlTxt(x.status)) + '</span>'
             + ' <button type="button" class="ui-btn" data-accion="vinc-ml" data-clave="' + esc(x.clave) + '">Ver vínculo</button></li>';
         }).join('') + '</ul>'
       : '<p class="ui-resumen">Este producto no tiene publicaciones ML.</p>';
@@ -2007,7 +2026,7 @@
     var vis = max ? l.slice(0, max) : l;
     var resto = l.slice(vis.length);
     var li = function (h) {
-      return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '') + ' <span class="ui-label">' + esc(h.status || '') + ' · '
+      return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '') + ' <span class="ui-label">' + esc(estadoMlTxt(h.status)) + ' · '
         + esc(h.available_quantity == null ? 'sin stock' : h.available_quantity + ' en stock') + '</span></li>';
     };
     return '<ul class="cv-lista-hermanas">' + vis.map(li).join('') + '</ul>'
