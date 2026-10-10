@@ -92,6 +92,43 @@ describe('Catálogo y vínculos: acciones de la Fase D', () => {
     });
   });
 
+  describe('Detalle: campo excepcion (vigente o null)', () => {
+    const detalle = async (id) => (await request(app(lector)).get(`${BASE}/casos/${id}`)).body.data;
+    const sembrarExcepcion = async (c) => {
+      const body = cuerpoCaso(c.id, { motivo: 'Sin marketplace, lo maneja el local', expires_at: FUTURO });
+      expect((await request(app(operador)).post(`${BASE}/casos/${c.id}/excepcion`).send(body)).status).toBe(201);
+    };
+
+    it('caso sin excepción: excepcion es null', async () => {
+      const c = caso(3050);
+      expect((await detalle(c.id)).excepcion).toBeNull();
+    });
+
+    it('excepción recién creada aparece con tipo, motivo, vence_en, creada_por y creada_en', async () => {
+      const c = caso(3051);
+      await sembrarExcepcion(c);
+      const e = (await detalle(c.id)).excepcion;
+      expect(Object.keys(e).sort()).toEqual(['creada_en', 'creada_por', 'motivo', 'tipo', 'vence_en']);
+      expect(e).toEqual({ tipo: 'solo_ml', motivo: 'Sin marketplace, lo maneja el local', vence_en: FUTURO,
+        creada_por: 'ana', creada_en: expect.any(String) });
+    });
+
+    it('desaparece al vencer (vence_en en el pasado, aunque el barrido no haya corrido)', async () => {
+      const c = caso(3052);
+      await sembrarExcepcion(c);
+      db.prepare('UPDATE identidad_excepciones SET vence_en=? WHERE caso_id=?').run('2020-01-01T00:00:00.000Z', c.id);
+      expect((await detalle(c.id)).excepcion).toBeNull();
+    });
+
+    it('desaparece al invalidarse (activa=0 con invalidada_en)', async () => {
+      const c = caso(3053);
+      await sembrarExcepcion(c);
+      db.prepare("UPDATE identidad_excepciones SET activa=0,invalidada_en=?,invalidada_motivo='cambio_identidad' WHERE caso_id=?")
+        .run(ISO, c.id);
+      expect((await detalle(c.id)).excepcion).toBeNull();
+    });
+  });
+
   describe('H4. "Ninguno sirve"', () => {
     it('motivo enumerado y lector 403', async () => {
       const c = caso(3010);
