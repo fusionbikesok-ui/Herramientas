@@ -3666,3 +3666,27 @@ Reactivación manual de publicaciones de la lista anterior. Nunca corre sola.
 - `GET /api/sync/cambios-formato` devuelve además `nota` (texto informativo de un aviso sin pausa) y los avisos con `solo_aviso=1` no bloquean al reactivador.
 - `POST /api/sync/cambios-formato/:id/revisar` con `reactivar:true` verifica antes del PUT: si la publicación sigue pausada y no hay stock en Woo, hay otro aviso trabante, o su causa es `solo_local`/`sin_vinculo`, cierra el aviso sin llamar a ML y responde `pendiente_stock:true` con `motivo_pendiente` (`sin_stock_woo` | `otro_aviso` | `solo_local` | `sin_vinculo` | `ml_sin_stock`). Además puede devolver `oferta_reactivar: { item_id, stock_woo }` cuando se cierra un aviso y hay stock: la pantalla la ofrece en línea («Reactivar ahora» llama al POST de arriba).
 - La pantalla ya no llama a `GET /api/sync/reactivables` ni a `/reactivables/conteo` (siguen existiendo; los cubre Pausadas). Siguen en uso `/frenadas`, `/frenadas/forzar`, `/reactivar`, `/api/precios/objetivo`, `/api/precios/actualizar-precio`, `/ml-wc`, `/wc-ml`, `/ml-cancelaciones` y `/limpiar-variaciones-muertas`.
+
+## Catálogo y vínculos (Fase D, 2026-10-10)
+
+Base: `/api/catalogo-vinculos`. Pantalla: `/catalogo-vinculos`. Permisos: lecturas `matcher:read`; escrituras `matcher:write`; las marcadas **admin** exigen administrador (403 `FORBIDDEN` si no). Errores: `{ ok:false, code, error }`. Códigos de estado: `NOT_FOUND` 404; `VERSION_CONFLICT`, `EVIDENCE_CONFLICT`, `CLAIM_CONFLICT`, `SIBLING_IMPACT_CONFIRMATION_REQUIRED`, `ALREADY_EXISTS`, `INVALID_STATE`, `OPERACION_DUPLICADA`, `SIN_CAMBIO_SKU`, `contradiccion_titulo`, `omitir_requiere_override` 409; `INVALID_INPUT` 422; `FORBIDDEN` 403.
+
+### Lecturas
+- `GET /cola?filtro=&q=&limit=&offset=` → `{ ok, filtro, total, limit, offset, data:[caso] }` (`total` es el de antes de paginar).
+- `GET /casos/:id?sku=` → detalle del caso. Incluye `vinculo_vigente` (`{sku,accion,desde}|null`), `marca` (`{tipo,variante,por,desde}|null`), `hermanas_item` (`[{clave,variation_id,titulo,status,available_quantity}]`) y `notas`. 404 si no existe.
+- `GET /claves/:clave` → `{ ok, data:{ clave, vinculo_vigente, marca, hermanas_item } }` (sin necesidad de caso abierto).
+- `GET /productos/:id/publicaciones` → `{ ok, data:[{clave,titulo,status}] }` ordenado por clave; `[]` sin vínculo; 404 si el producto no existe.
+- `GET /estado` → resumen de salud. `salud.operaciones_pendientes` excluye canceladas; `salud.operaciones_canceladas` es nuevo.
+- `GET /ejecucion` → `data.operaciones[]` (cada una con `estado` derivado, `estado_db`, `motivo_cancelacion`, `impacto_hermanas` numérico y `variaciones:[{clave,titulo,status}]`), `data.pausas[]`, `data.fallidas` (solo fallidas reales, ops y pausas), `data.canceladas` (nuevo), `data.pausas_con_riesgo`. Una operación **cancelada** se guarda como `estado='fallida'` con `ultimo_error` que empieza con `cancelada:` (el CHECK de `identidad_operaciones` no admite `cancelada`); la API la expone como `estado:'cancelada'` y `motivo_cancelacion` (`sin_cambio_sku` si `sku_anterior == sku_objetivo`, si no el texto tras el prefijo).
+- `GET /retenidas` → `data:[{...fila, claves, titulo, importe, se_vuelve_a_retener}]` (sin `items_json`); `titulo` de la caché de publicaciones o del ítem del pedido, `importe` = suma de `unit_price × quantity` o `null`.
+
+### Escrituras (operador)
+- `POST /casos/:id/tomar`, `POST /casos/:id/relevar` (el relevo exige motivo), `POST /casos/:id/notas` (`matcher:read`).
+- `POST /casos/:id/decisiones` — vincular. `override_contradiccion` y `override_omitir` son **admin**.
+- `POST /casos/:id/saltear` — `{ expected_version }`; 409 `VERSION_CONFLICT` si el caso cambió.
+- `POST /casos/:id/no-sincronizar` — `{ variante:'a'|'b'|'c', motivo, expected_sku?, operation_id?, confirm_sibling_impact? }`. La (b) pausa el ítem en ML como operación durable (`identidad_pausas`).
+- `POST /claves/no-sincronizar/deshacer` — `{ clave, motivo }`; deshacer la (c) es solo **admin**.
+- `POST /retenidas/:orderId/liberar` — `{ motivo }`; Ventas, Supervisor o Admin. La venta se reprocesa en la próxima sincronización y, si la causa sigue, se vuelve a retener.
+
+### Escrituras (admin)
+- `POST /claves/link-de-pago`, `POST /operaciones/:id/reintentar`, `POST /operaciones/:id/confirmar-impacto`, `POST /operaciones/:id/destrabar`.
