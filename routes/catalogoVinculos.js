@@ -6,7 +6,7 @@ import {
 import { liberarPedidoRetenido } from '../lib/guardiaMl.js';
 import { marcarNoSincronizar, marcarLinkDePago, deshacerNoSincronizar } from '../lib/noSincronizar.js';
 import { solicitarNoSincronizarPausa } from '../lib/pausasIdentidad.js';
-import { colaCasos, detalleCaso, ejecucion, estadoSalud, retenidas, salteoVigente } from '../lib/catalogoVinculos.js';
+import { colaCasos, detalleCaso, ejecucion, estadoSalud, retenidas, salteoVigente, vinculoVigente, marcaDeClave, hermanasDeItem } from '../lib/catalogoVinculos.js';
 
 /**
  * API de la pantalla "Catálogo y vínculos" (Fase D). Las lecturas arman vistas sobre Identidad; las escrituras
@@ -46,6 +46,12 @@ export function catalogoVinculosRouter(db) {
   router.get('/casos/:id', exigir(), (req, res) => {
     const data = detalleCaso(db, req.params.id, { sku: req.query.sku || null });
     return data ? res.json({ ok: true, data }) : res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'caso no encontrado' });
+  });
+  router.get('/claves/:clave', exigir(), (req, res) => {
+    const clave = req.params.clave;
+    const pub = db.prepare('SELECT item_id FROM ml_publicaciones_cache WHERE clave=?').get(clave);
+    res.json({ ok: true, data: { clave, vinculo_vigente: vinculoVigente(db, clave), marca: marcaDeClave(db, clave),
+      hermanas_item: hermanasDeItem(db, pub?.item_id, clave) } });
   });
   router.get('/estado', exigir(), (_req, res) => res.json({ ok: true, data: estadoSalud(db) }));
   router.get('/ejecucion', exigir(), (_req, res) => res.json({ ok: true, data: ejecucion(db) }));
