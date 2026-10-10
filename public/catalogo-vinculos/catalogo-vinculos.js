@@ -1211,13 +1211,15 @@
       case 'n': if (enCaso && !soloLecturaActual()) { ev.preventDefault(); abrirNS($('[data-accion="no-sincronizar"]')); } break;
       case 'z': if (deshacerVisible()) { ev.preventDefault(); deshacerNS(); } break;
       case 'd': if (enCaso) { ev.preventDefault(); S.soloDif = !S.soloDif; renderDetalle(); } break;
-      case 'f': if (enCaso) { ev.preventDefault(); S.fotoGrande = !S.fotoGrande; renderDetalle(); } break;
+      case 'f': if (enCaso) { ev.preventDefault(); S.fotoGrande = !S.fotoGrande; if (!(hdEnDetalle(t))) S.focoPendiente = '[data-accion="elegir"][aria-pressed="true"]'; renderDetalle(); } break;
       case '/': ev.preventDefault(); if (S.tab === 'casos' && enCaso) { $('#det-q') && $('#det-q').focus(); } else { activarTab('vinculos'); $('#vinc-q').focus(); } break;
-      case 'h': if (enCaso) { ev.preventDefault(); var hd = $('#det-hist'); if (hd) { hd.open = true; S.histOpen = true; hd.querySelector('summary').focus(); } } break;
+      case 'h': if (enCaso) { ev.preventDefault(); var hd = $('#det-hist'); if (hd) { hd.open = !hd.open; S.histOpen = hd.open; hd.querySelector('summary').focus(); } } break;
       case '?': ev.preventDefault(); abrirDialogo($('#dlg-atajos'), $('#cv-btn-ayuda'), $('#dlg-atajos-on')); break;
       default: break;
     }
   }
+  // Si el foco ya está dentro del detalle, renderDetalle lo restaura solo; si no (p. ej. body), se pide foco explícito.
+  function hdEnDetalle(t) { var det = $('#cv-detalle'); return !!(det && t && det.contains(t) && t !== det); }
   function soloLecturaActual() {
     return soloLecturaDetalle();
   }
@@ -1304,7 +1306,7 @@
     var msg = S.ejecMsgs[o.id];
     var msgHtml = msg ? '<p class="ui-resumen cv-ejec-msg' + (msg.error ? ' cv-ejec-msg--error' : '') + '" role="' + (msg.error ? 'alert' : 'status') + '">'
       + (msg.error ? '✗ ' : '') + esc(msg.error || msg.texto) + '</p>' : '';
-    return '<article class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + (cancelada ? ' cv-ejec-fila--cancelada' : '') + '" data-op="' + o.id + '">'
+    return '<article tabindex="-1" class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + (cancelada ? ' cv-ejec-fila--cancelada' : '') + '" data-op="' + o.id + '">'
       + '<div class="cv-ejec-fila__info">'
       + '<div class="cv-ejec-fila__cab"><strong class="cv-ejec-fila__titulo">' + esc(o.nombre_canonico || o.ml_key) + '</strong>' + chipEstado(o.estado, o) + '</div>'
       + '<p class="ui-resumen cv-ejec-fila__meta"><span class="ui-id">' + esc(o.sku_objetivo || '') + '</span> · ' + esc(fecha(o.actualizada_en || o.iniciada_en)) + '</p>'
@@ -1384,6 +1386,12 @@
       : '<p class="ui-resumen cv-ejec-vacio"><span aria-hidden="true">✓</span> Nada pendiente</p>';
     var secciones = nuevo ? seccionEjecHtml('completadas', 'Completadas') + seccionEjecHtml('canceladas', 'Canceladas') : '';
     $('#ejec-cuerpo').innerHTML = bloquePausas + (filas || (pausas.length ? '' : vacio)) + secciones;
+    if (S.focoPendiente) {
+      // Botón de la fila si sigue, si no la fila, si no el encabezado de Ejecución.
+      var fp = S.focoPendiente; S.focoPendiente = null;
+      var fe = $(fp + ' [data-accion="reintentar"]') || $(fp) || $('#ejec-cabecera');
+      if (fe) { if (!fe.hasAttribute('tabindex') && fe.id === 'ejec-cabecera') fe.setAttribute('tabindex', '-1'); fe.focus(); }
+    }
   }
 
   // "Ver más": pide la siguiente página (50) de la sección y acumula sin repetir filas.
@@ -1497,6 +1505,7 @@
     renderEjecucion();
     api('POST', '/operaciones/' + id + '/' + (accion === 'reintentar' ? 'reintentar' : 'confirmar-impacto'), body).then(function (r) {
       S.busy = null; S.busyOp = null;
+      S.focoPendiente = '.cv-ejec-fila[data-op="' + id + '"]';
       if (r.ok || (!r.red && r.status !== 409 && r.status !== 0)) soltarOpId(clave);
       if (r.red) { S.ejecMsgs[id] = { error: MSG_ERROR_SIN_RED }; anunciar(MSG_ERROR_SIN_RED, 'alerta'); return renderEjecucion(); }
       if (r.status === 409) {
@@ -2189,6 +2198,7 @@
     document.body.addEventListener('change', function (ev) {
       if (ev.target.name === 'vinc-modo') { S.vincFiltro = 'all'; buscarVinculos($('#vinc-q').value); }
     });
+    window.addEventListener('offline', function () { setOffline(true); });
     window.addEventListener('online', function () { setOffline(false); cargarCola({ seleccionar: false }); });
     window.addEventListener('resize', function () { aplicarBloqueo(); aplicarModoLectura(); });
   }
