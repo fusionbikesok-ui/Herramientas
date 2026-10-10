@@ -202,7 +202,7 @@
     retenidas: null, retError: null, retAbierta: null, retAviso: {},
     vincResultados: null, vincQ: '', vincPanel: null, identMsg: null,
     conflictos: null, conflictosError: null, conflictoAbierto: null, conflictoDetalle: null, confResolver: null,
-    estadoRaw: null, adminForm: null, notaTxt: '', notaError: null, histOpen: false, franjaLista: null,
+    estadoRaw: null, adminForm: null, dispSel: null, notaTxt: '', notaError: null, histOpen: false, franjaLista: null,
     matrizSeq: 0, pubsCache: {}, confMotivo: null
   };
 
@@ -703,7 +703,39 @@
       + '<div class="cv-cands" role="group" aria-label="Candidatos">' + filas + '</div></section>';
   }
 
+  // Disparador de paneles inline (Destrabar, Relevar, Confirmar igual, Link de pago): al abrir se guarda su selector
+  // y Esc / Cancelar / éxito devuelven el foco ahí (o a #det-titulo si ya no existe).
+  function selDe(el) {
+    if (!el || !el.getAttribute) return '';
+    var out = '';
+    ['data-accion', 'data-admin', 'data-op', 'data-caso', 'data-orden', 'data-idx', 'data-tab', 'data-seccion'].forEach(function (a) {
+      var v = el.getAttribute(a);
+      if (v != null) out += '[' + a + '="' + String(v).replace(/"/g, '\\"') + '"]';
+    });
+    return out;
+  }
+  function recordarDisparador(el) { S.dispSel = selDe(el) || null; }
+  function enfocarDisparador() {
+    setTimeout(function () {
+      var el = S.dispSel && $(S.dispSel);
+      S.dispSel = null;
+      (el || $('#det-titulo') || document.body).focus();
+    }, 0);
+  }
+  // F3: un render del detalle no pisa el foco ni el texto que la persona está escribiendo.
   function renderDetalle() {
+    var det = $('#cv-detalle'); var a = document.activeElement;
+    var dentro = !!(det && a && a !== det && det.contains(a));
+    var id = dentro ? a.id : '';
+    var sel = dentro && !id ? selDe(a) : '';
+    var val = dentro && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT') ? a.value : null;
+    var pendiente = !!S.focoPendiente;
+    renderDetalleBase();
+    if (!dentro || pendiente) return;
+    var n = id ? document.getElementById(id) : (sel ? $(sel) : null);
+    if (n) { if (val !== null && n.value !== val) n.value = val; n.focus(); }
+  }
+  function renderDetalleBase() {
     var d = $('#cv-detalle');
     d.setAttribute('aria-busy', 'false');
     if (S.detalleError && !S.detalle) { d.innerHTML = cajaError(S.detalleError, 'reabrirCaso'); return; }
@@ -739,7 +771,7 @@
         + (S.accionInfo.ejecucion ? ' <button type="button" class="ui-btn" data-accion="ir-ejecucion">Ir a Ejecución</button>' : '') + '</div>' : '');
     d.innerHTML = html;
     aplicarBloqueo();
-    if (S.focoPendiente) { var f = $(S.focoPendiente); if (f) f.focus(); S.focoPendiente = null; }
+    if (S.focoPendiente) { var f = $(S.focoPendiente) || $('#det-titulo'); if (f) f.focus(); S.focoPendiente = null; }
     var q = $('#det-q'); if (q && S.queryCand) q.value = S.queryCand;
     var nt = $('#nota-txt'); if (nt) nt.value = S.notaTxt || '';
   }
@@ -1153,12 +1185,14 @@
       enfocarPorSelector('[data-accion="liberar-abrir"][data-orden="' + ordAb + '"]');
       return;
     }
-    if (ev.key === 'Escape' && S.conflictoVersion) { ev.preventDefault(); S.conflictoVersion = null; renderDetalle(); return; }
+    if (ev.key === 'Escape' && S.conflictoVersion) {
+      ev.preventDefault(); S.conflictoVersion = null; renderDetalle();
+      setTimeout(function () { (($('[data-accion="vincular"]')) || $('#det-titulo') || document.body).focus(); }, 0);
+      return;
+    }
     if (ev.key === 'Escape' && S.adminForm) {
       ev.preventDefault();
-      var previo = S.adminForm; S.adminForm = null; renderDetalle();
-      var disparador = previo === 'destrabar' ? '[data-admin="destrabar"]' : '[data-accion="relevar-abrir"]';
-      enfocarPorSelector(disparador);
+      S.adminForm = null; renderDetalle(); enfocarDisparador();
       return;
     }
     if (ev.ctrlKey || ev.metaKey || ev.altKey || !atajosActivos()) return;
@@ -1326,7 +1360,10 @@
       ? '<section class="ui-aviso ui-aviso--' + (conRiesgo ? 'atencion' : 'info') + ' cv-bloque" aria-labelledby="pausas-h"><h3 id="pausas-h" class="cv-h2">'
         + (conRiesgo ? '<span aria-hidden="true">⚠</span> ' : '') + 'Pausas en ML</h3>'
         + pausas.map(function (p) {
-          return '<p class="ui-resumen">' + esc(p.ml_key) + ' · ' + esc(pausaEstadoTxt(p)) + ' · ' + esc(motivoTxt(p.motivo))
+          var clave = String(p.ml_key || '').replace(/\|.*$/, '');
+          var titulo = p.titulo || p.nombre_canonico || '';
+          return '<p class="ui-resumen">' + (titulo ? '<strong>' + esc(titulo) + '</strong> · <span class="ui-id">' + esc(clave) + '</span>' : esc(clave))
+            + ' · ' + esc(pausaEstadoTxt(p)) + ' · ' + esc(motivoTxt(p.motivo))
             + (p.impacto_hermanas > 0 ? ' · afecta ' + cuenta(p.impacto_hermanas, 'variación', 'variaciones') : '') + '</p>';
         }).join('') + '</section>'
       : '';
@@ -2041,8 +2078,8 @@
         case 'reintentar-matriz': if (S.elegido) { S.matrizError = null; cargarMatriz(S.elegido); } break;
         case 'ver-mas': verMasCola(); break;
         case 'vinc-pubs-producto': verPublicacionesProducto(el.getAttribute('data-id'), el); break;
-        case 'admin': S.adminForm = el.getAttribute('data-admin'); renderDetalle(); enfocarPorSelector('#adm-motivo'); break;
-        case 'admin-cancelar': S.adminForm = null; renderDetalle(); break;
+        case 'admin': recordarDisparador(el); S.adminForm = el.getAttribute('data-admin'); renderDetalle(); enfocarPorSelector('#adm-motivo'); break;
+        case 'admin-cancelar': S.adminForm = null; renderDetalle(); enfocarDisparador(); break;
         case 'reintentar-carga':
           var rc = el.getAttribute('data-reintento');
           if (rc === 'cargarCola') { S.colaCargada = false; cargarCola(); }
@@ -2072,7 +2109,7 @@
           });
           break;
         case 'tomar': accionCaso('/casos/' + caso().id + '/tomar', { operation_id: opIdPara('tomar:' + caso().id), expected_version: caso().expected_version, evidence_fingerprint: caso().evidencia_fingerprint }, 'Caso tomado por vos.', 'tomar:' + caso().id); break;
-        case 'relevar-abrir': S.adminForm = 'relevar'; renderDetalle(); enfocarPorSelector('#adm-motivo'); break;
+        case 'relevar-abrir': recordarDisparador(el); S.adminForm = 'relevar'; renderDetalle(); enfocarPorSelector('#adm-motivo'); break;
         case 'nota-enviar': enviarNota(); break;
         case 'franja-lista':
           var lst = el.getAttribute('data-lista');
@@ -2227,10 +2264,34 @@
     return '<div class="cv-acciones__fila">' + out + '</div>';
   }
 
+  // Eventos de identidad_historial (lib/identidadProductos.js, lib/proteccionIdentidad.js…) en castellano.
+  var EVENTO_TXT = { caso_salteado: 'Caso salteado', tomado: 'Caso tomado', relevado: 'Caso relevado', nota_agregada: 'Nota agregada',
+    confirmar_igual: 'Confirmado igual', operacion_reintentada: 'Operación reintentada', operacion_destrabada: 'Operación destrabada',
+    operacion_confirmada: 'Impacto confirmado', operacion_cancelada_por_omitir: 'Operación cancelada por no sincronizar',
+    operacion_shadow_obsoleta_por_cambio_identidad: 'Operación obsoleta por cambio de identidad',
+    identidad_verificada: 'Identidad verificada', identidad_no_sincronizar: 'Marcada como no sincronizar',
+    identidad_ml_archivada: 'Publicación ML archivada', identidad_contradiccion: 'Contradicción de identidad',
+    reactivada_con_identidad_invalida: 'Reactivada con identidad inválida', desvinculado: 'Desvinculado',
+    vinculado_auto_seller_sku: 'Vinculado automáticamente por SKU', pedido_liberado: 'Pedido liberado',
+    modo_cambiado: 'Modo cambiado', investigacion_iniciada: 'Investigación iniciada', impacto_hermanas_confirmado: 'Impacto en variaciones confirmado',
+    contradiccion_titulo: 'Contradicción de título', gtin_en_conflicto: 'Código en conflicto', conflicto_gtin_resuelto: 'Conflicto de código resuelto',
+    gtin_contradictorio_post_verificacion: 'Código contradictorio tras verificar', conflicto_post_ml: 'Conflicto tras escribir en ML',
+    conflicto_pre_ml: 'Conflicto antes de escribir en ML', woo_baja_protegida: 'Baja en Woo protegida', stock_devuelto_por_contradiccion: 'Stock devuelto por contradicción',
+    stock_no_devuelto_por_contradiccion: 'Stock no devuelto por contradicción', excepcion_vencida: 'Excepción vencida', excepcion_solo_ml: 'Excepción solo ML',
+    reintento_solicitado: 'Reintento solicitado', matcher_push: 'Enviado al Matcher', lease_recuperado: 'Ejecución recuperada', cerrado_fuera_de_universo: 'Cerrado fuera de alcance' };
+  function eventoTxt(e) {
+    if (!e) return 'Movimiento';
+    if (EVENTO_TXT[e]) return EVENTO_TXT[e];
+    var t = String(e).replace(/_/g, ' ').trim();
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
   function historialHtml() {
     var notas = (S.detalle && S.detalle.notas) || [];
     var filas = notas.map(function (h) {
-      return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(h.evento) + '</li>';
+      var det = null; try { det = h.detalle_json ? JSON.parse(h.detalle_json) : null; } catch (e) { det = null; }
+      var texto = h.nota || (det && (det.nota || det.texto)) || '';
+      return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(eventoTxt(h.evento))
+        + (texto ? '<p class="cv-hist__nota">' + esc(texto) + '</p>' : '') + '</li>';
     }).join('');
     return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">h</kbd></summary>'
       + '<ol class="cv-hist__lista">' + (filas || '<li class="ui-resumen">Sin movimientos.</li>') + '</ol>'
@@ -2264,7 +2325,7 @@
       S.busy = null;
       if (r.red) { setErrorAccion(MSG_ERROR_SIN_RED); return renderDetalle(); }
       if (clave) soltarOpId(clave);
-      if (r.ok) { S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; S.focoPendiente = '#det-titulo'; cargarConteos(); return abrirCaso(c.id, { foco: false }); }
+      if (r.ok) { S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; S.focoPendiente = S.dispSel || '#det-titulo'; S.dispSel = null; cargarConteos(); return abrirCaso(c.id, { foco: false }); }
       if (r.status === 409 && (r.data.code === 'VERSION_CONFLICT' || r.data.code === 'EVIDENCE_CONFLICT')) {
         return abrirCaso(c.id, { foco: false }).then(function () { setErrorAccion(mensajeDe(r)); renderDetalle(); });
       }

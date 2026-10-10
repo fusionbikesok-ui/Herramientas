@@ -40,7 +40,7 @@
 
 /* ── Marco ── */
 .cv-offline {
-  position: static; padding: var(--sp-2) var(--sp-2);
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; padding: var(--sp-2) var(--sp-2) calc(var(--sp-2) + env(safe-area-inset-bottom, 0px));
   background: var(--cv-offline-bg); border-bottom: 1px solid var(--cv-offline-bd); color: var(--critical);
 }
 .cv-top {
@@ -382,3 +382,6 @@
 .cv-vinc-card { display: grid; gap: var(--sp-2); }
 .cv-ejec-fila--cancelada .cv-ejec-fila__titulo { color: var(--muted); font-weight: 500; }
 .cv-canceladas { color: var(--muted); }
+
+.cv-matriz th[scope="row"] { white-space: nowrap; }
+.cv-hist__nota { margin: .2rem 0 0; white-space: pre-wrap; }
