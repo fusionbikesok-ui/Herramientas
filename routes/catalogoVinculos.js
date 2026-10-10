@@ -7,7 +7,7 @@ import { liberarPedidoRetenido } from '../lib/guardiaMl.js';
 import { marcarNoSincronizar, marcarLinkDePago, deshacerNoSincronizar } from '../lib/noSincronizar.js';
 import { solicitarNoSincronizarPausa } from '../lib/pausasIdentidad.js';
 import {
-  cancelarVinculo, deshacerNingunoSirve, deshacerSalteo, excepcionSoloMl, ningunoSirve, revertirVinculo,
+  cancelarVinculo, deshacerNingunoSirve, deshacerSalteo, excepcionSoloMl, ningunoSirve, reabrirCaso, revertirVinculo,
 } from '../lib/catalogoVinculosAcciones.js';
 import { colaCasos, detalleCaso, ejecucion, parametrosEjecucion, estadoSalud, publicacionesDeProducto, retenidas, salteoVigente, vinculoVigente, marcaDeClave, hermanasDeItem } from '../lib/catalogoVinculos.js';
 
@@ -110,6 +110,10 @@ export function catalogoVinculosRouter(db) {
     ningunoSirve(db, req.params.id, req.body || {}, actor(req)), true));
   router.post('/casos/:id/ninguno-sirve/deshacer', exigir('write'), (req, res) => responder(res,
     deshacerNingunoSirve(db, req.params.id, req.body || {}, actor(req))));
+
+  // Reabrir un caso cerrado (excepción o "ninguno sirve" vigentes): motivo obligatorio, vuelve a la cola abierta.
+  router.post('/casos/:id/reabrir', exigir('write'), (req, res) => responder(res,
+    reabrirCaso(db, req.params.id, req.body || {}, actor(req))));
 
   // Deshacer un saltear: vuelve el caso a la cola. Sin operación remota.
   router.post('/casos/:id/deshacer-salteo', exigir('write'), (req, res) => responder(res,
