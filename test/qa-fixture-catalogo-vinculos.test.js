@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { openDb } from '../db/index.js';
 import { colaCasos } from '../lib/catalogoVinculos.js';
+import { buscarProductosFusion } from '../lib/identidadProductos.js';
 import {
   sembrar, limpiarSembrado, parsearArgs, validarDestino, MASIVOS_MAX,
 } from '../scripts/qa/fixtures/catalogo-vinculos.mjs';
@@ -38,11 +39,12 @@ describe('scripts/qa/fixtures/catalogo-vinculos --masivos', () => {
     try {
       db.transaction(() => sembrar(db, { masivos: 70 }))();
       const r = colaCasos(db, { filtro: 'abiertos', limit: 50, offset: 0 });
-      // 70 masivos + 5 del fixture visibles en "abiertos" (MLA5 va a intervención). Con la base anonimizada (~24) sube.
-      expect(r.total).toBe(75);
+      // 70 masivos + 6 del fixture visibles en "abiertos" (MLA5 va a intervención; MLA8 es el caso con foto).
+      // Con la base anonimizada (~24) sube.
+      expect(r.total).toBe(76);
       expect(r.data).toHaveLength(50);
       const segunda = colaCasos(db, { filtro: 'abiertos', limit: 50, offset: 50 });
-      expect(segunda.data.length).toBe(25);
+      expect(segunda.data.length).toBe(26);
       const claves = [...r.data, ...segunda.data].map((f) => f.ml_key);
       expect(new Set(claves).size).toBe(r.total);
       expect(claves.filter((k) => /^QAFX-M\d/.test(k)).length).toBe(70);
@@ -78,6 +80,46 @@ describe('scripts/qa/fixtures/catalogo-vinculos --masivos', () => {
     try {
       db.transaction(() => sembrar(db))();
       expect(db.prepare("SELECT COUNT(*) n FROM identidad_casos WHERE ml_key GLOB 'QAFX-M[0-9]*'").get().n).toBe(0);
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('scripts/qa/fixtures/catalogo-vinculos: caso con foto (tecla f)', () => {
+  it('QAFX-MLA8| existe, está abierto y su candidato Woo tiene imagen (catalogo_cache.img), visible en /productos/buscar', () => {
+    const { dir, db } = baseTemporal();
+    try {
+      db.transaction(() => sembrar(db))();
+      const caso = db.prepare("SELECT estado, responsable FROM identidad_casos WHERE ml_key='QAFX-MLA8|'").get();
+      expect(caso).toMatchObject({ estado: 'urgente', responsable: null });
+      expect(colaCasos(db, { filtro: 'abiertos' }).data.map((f) => f.ml_key)).toContain('QAFX-MLA8|');
+      const woo = db.prepare("SELECT img FROM catalogo_cache WHERE sku='QAFX-SKU-8'").get();
+      expect(woo.img).toMatch(/^data:image\/svg\+xml;base64,/);
+      expect(woo.img).not.toMatch(/^https?:/);
+      // La búsqueda inicial del panel usa el título ML: el candidato con foto tiene que venir primero.
+      const r = buscarProductosFusion(db, { q: 'QAFX Mochila hidratacion 2L' });
+      expect(r[0]).toMatchObject({ sku_woo: 'QAFX-SKU-8' });
+      expect(r[0].img).toBe(woo.img);
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('idempotente: sembrar dos veces deja una sola fila con foto para el caso', () => {
+    const { dir, db } = baseTemporal();
+    try {
+      const siembra = db.transaction(() => { limpiarSembrado(db); return sembrar(db); });
+      siembra();
+      siembra();
+      expect(db.prepare("SELECT COUNT(*) n FROM identidad_casos WHERE ml_key='QAFX-MLA8|'").get().n).toBe(1);
+      expect(db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku='QAFX-SKU-8'").get().n).toBe(1);
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('--limpiar quita el caso con foto y su producto', () => {
+    const { dir, db } = baseTemporal();
+    try {
+      db.transaction(() => sembrar(db))();
+      db.transaction(() => limpiarSembrado(db))();
+      expect(db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku='QAFX-SKU-8'").get().n).toBe(0);
+      expect(db.prepare("SELECT COUNT(*) n FROM identidad_casos WHERE ml_key='QAFX-MLA8|'").get().n).toBe(0);
     } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

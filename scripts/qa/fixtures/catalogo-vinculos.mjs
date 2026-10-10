@@ -92,6 +92,12 @@ const WOO = [
   { n: 5, nombre: 'QAFX Guantes ciclismo talle L', stock: 4 },
   { n: 6, nombre: 'QAFX Candado cable 1m', stock: 6 },
   { n: 7, nombre: 'QAFX Pedales plataforma', stock: 1 },
+  // 8: con foto (catalogo_cache.img). Es el único candidato del fixture con imagen: sirve para probar la tecla `f`
+  // (agrandar la foto del candidato elegido). Data URI SVG inline: sin red externa, y /productos/buscar la devuelve tal cual.
+  { n: 8, nombre: 'QAFX Mochila hidratacion 2L', stock: 3, img: 'data:image/svg+xml;base64,' + Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">' +
+    '<rect width="200" height="200" fill="#2b6cb0"/><circle cx="100" cy="90" r="50" fill="#f6ad55"/>' +
+    '<text x="100" y="185" font-size="18" text-anchor="middle" fill="#fff">QAFX foto</text></svg>').toString('base64') },
 ];
 const wooId = (n) => 9900100 + n;
 
@@ -108,6 +114,8 @@ const PUBS = [
   { clave: 'QAFX-MLA5|', item: 'QAFX-MLA5', variation: '', titulo: 'QAFX Guantes ciclismo talle L', color: null, talle: 'L', sku: 'QAFX-SKU-5' },
   { clave: 'QAFX-MLA6|', item: 'QAFX-MLA6', variation: '', titulo: 'QAFX Candado cable 1m', color: null, talle: null, sku: 'QAFX-SKU-6' },
   { clave: 'QAFX-MLA7|', item: 'QAFX-MLA7', variation: '', titulo: 'QAFX Pedales plataforma', color: null, talle: null, sku: 'QAFX-SKU-7' },
+  // Caso con foto: el título coincide con el Woo 8, así que la búsqueda inicial del panel lo trae primero.
+  { clave: 'QAFX-MLA8|', item: 'QAFX-MLA8', variation: '', titulo: 'QAFX Mochila hidratacion 2L', color: null, talle: null, sku: 'QAFX-SKU-8' },
 ];
 
 /** Siembra N casos abiertos (identidad_casos urgente, sin responsable) con su producto Woo y publicación ML.
@@ -150,14 +158,15 @@ function sembrar(db, { masivos = 0 } = {}) {
     .get(wooId(1), wooId(WOO.length), ORIGEN).n;
   if (ajenos) throw new Error(`ABORTA: ${ajenos} producto(s) reales ocupan los primary_woo_id de fixture (${wooId(1)}..${wooId(WOO.length)})`);
   const ahora = new Date().toISOString();
-  const insWoo = db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)');
-  for (const w of WOO) insWoo.run(wooId(w.n), w.nombre, `QAFX-SKU-${w.n}`, 'simple', w.stock, 1000 * w.n, ahora);
+  const insWoo = db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,img,actualizado_en) VALUES (?,?,?,?,?,?,?,?)');
+  for (const w of WOO) insWoo.run(wooId(w.n), w.nombre, `QAFX-SKU-${w.n}`, 'simple', w.stock, 1000 * w.n, w.img ?? null, ahora);
 
   const insProd = db.prepare(`INSERT INTO productos_fusion (nombre_canonico,primary_woo_id,estado,creado_por,creado_en,actualizado_en)
     VALUES (?,?,'activo',?,?,?)
     ON CONFLICT(primary_woo_id) DO UPDATE SET nombre_canonico=excluded.nombre_canonico, estado='activo',
       archivado_en=NULL, actualizado_en=excluded.actualizado_en`);
-  for (const w of WOO) insProd.run(`QAFX Producto ${w.n}`, wooId(w.n), ORIGEN, ahora, ahora);
+  // El producto con foto usa su nombre Woo como canónico: la búsqueda del panel puntúa sobre nombre_canonico.
+  for (const w of WOO) insProd.run(w.img ? w.nombre : `QAFX Producto ${w.n}`, wooId(w.n), ORIGEN, ahora, ahora);
   const productoDe = (n) => db.prepare('SELECT id FROM productos_fusion WHERE primary_woo_id=?').get(wooId(n)).id;
 
   const insPub = db.prepare(`INSERT INTO ml_publicaciones_cache
@@ -183,6 +192,7 @@ function sembrar(db, { masivos = 0 } = {}) {
   crear('QAFX-MLA3|21', 3, 'decision_no_aplicada', 'tomado', 'Matias', 24); // 3: bloqueada_impacto con 2 hermanas
   crear('QAFX-MLA4|', 4, 'sku_inexistente', 'tomado', 'Matias', 20);      // 4: operación fallida
   crear('QAFX-MLA7|', 7, 'sku_inexistente', 'urgente', null, 4);          // 6: candidato único (Enter = Vincular)
+  crear('QAFX-MLA8|', 8, 'sku_inexistente', 'urgente', null, 3);          // 8: candidato con foto (1 = elegir, f = agrandar)
   crear('QAFX-MLA5|', 5, 'sku_inexistente', 'intervencion', 'Matias', 10); // 7: operación en intervención para Destrabar
 
   // Decisiones (la operación exige decision_id NOT NULL).
@@ -218,7 +228,7 @@ function sembrar(db, { masivos = 0 } = {}) {
   db.prepare(`INSERT INTO sku_matcher_decisiones (clave,sku,wc_nombre,accion,actualizado_en,origen,confirmado_por)
     VALUES ('QAFX-MLA6|',NULL,'QAFX Candado cable 1m','omitir',?,'no_sincronizar_a','Matias')`).run(hace(2));
   const extra = sembrarMasivos(db, masivos);
-  return { casos: Object.keys(casos).length + extra, publicaciones: PUBS.length + extra, operaciones: 3, retenidas: 2, masivos: extra };
+  return { casos: Object.keys(casos).length + extra, publicaciones: PUBS.length + extra, operaciones: 3, retenidas: 2, masivos: extra, conFoto: 'QAFX-MLA8|' };
 }
 
 /** Separa flags, la ruta y --masivos (valor con espacio o con '='). Valida el entero aquí, antes de abrir nada. */
