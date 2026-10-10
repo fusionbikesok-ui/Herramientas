@@ -201,6 +201,7 @@
     ejecQ: '', ejecSnap: null, ejecTimer: null, ejecAbiertas: { completadas: false, canceladas: false }, ejecMasBusy: null, ejecMasError: null,
     retenidas: null, retError: null, retAbierta: null, retAviso: {},
     vincResultados: null, vincQ: '', vincPanel: null, identMsg: null,
+    vincItems: [], vincTotal: 0, vincOffset: 0, vincConteos: null, vincCargandoMas: false,
     conflictos: null, conflictosError: null, conflictoAbierto: null, conflictoDetalle: null, confResolver: null,
     estadoRaw: null, adminForm: null, dispSel: null, notaTxt: '', notaError: null, histOpen: false, franjaLista: null,
     matrizSeq: 0, pubsCache: {}, confMotivo: null
@@ -1609,34 +1610,42 @@
   var VINC_FILTROS = [['all', 'Todos'], ['asignar', 'Asignar SKU'], ['verificar', 'Verificar'], ['conf-baja', 'Confianza baja'], ['color-talle', 'Color y talle correcto']];
   function modoVinc() { var r = document.querySelector('input[name="vinc-modo"]:checked'); return r ? r.value : 'producto'; }
 
+  // Chips con los conteos que devuelve el servidor (con q aplicado). Si el chip enfocado se re-pinta, vuelve el foco a él.
   function renderVincFiltros() {
     var box = $('#vinc-filtros');
     box.hidden = modoVinc() !== 'ml';
+    var enFoco = box.contains(document.activeElement) ? document.activeElement.getAttribute('data-filtro') : null;
     box.innerHTML = VINC_FILTROS.map(function (f) {
-      return '<button type="button" class="ui-chip" data-accion="vinc-filtro" data-filtro="' + f[0] + '" aria-pressed="' + (S.vincFiltro === f[0]) + '">' + esc(f[1]) + '</button>';
+      var n = S.vincConteos ? S.vincConteos[f[0]] : null;
+      return '<button type="button" class="ui-chip" data-accion="vinc-filtro" data-filtro="' + f[0] + '" aria-pressed="' + (S.vincFiltro === f[0]) + '">'
+        + esc(f[1]) + (n != null ? ' · ' + n : '') + '</button>';
     }).join('');
+    if (enFoco) { var b = box.querySelector('[data-filtro="' + enFoco + '"]'); if (b) b.focus(); }
+  }
+
+  // Paginado del Matcher: solo se piden q + filtro + limit + offset (nunca scope=all, ~21 MB).
+  var VINC_PAGINA = 50;
+  var VINC_DEBOUNCE_MS = 300;
+  var vincTimer = null;
+  function vincUrl(offset) {
+    return '/api/matcher/candidatos?q=' + enc(S.vincQ.trim()) + '&filtro=' + enc(S.vincFiltro || 'all')
+      + '&limit=' + VINC_PAGINA + '&offset=' + (offset || 0);
   }
 
   // El Matcher trae `clave` (item|variación, sin pipe final si no hay variación). Se compara sin el pipe final.
   function claveDeMl(it) { return it.clave || (it.ml_item_id + (it.ml_variation_id ? '|' + it.ml_variation_id : '')); }
   function normClave(k) { return String(k || '').replace(/\|$/, ''); }
 
-  function filtroMatcher(it) {
-    var f = S.vincFiltro;
-    if (f === 'all') return true;
-    if (f === 'asignar') return it.modo === 'asignar';
-    if (f === 'verificar') return it.modo === 'verificar';
-    if (f === 'conf-baja') return it.modo === 'verificar' && it.score_confianza < 0.7;
-    return !!(it.candidatos && it.candidatos[0] && it.candidatos[0].color_ok && it.candidatos[0].talle_ok);
-  }
-
-  // Buscador: producto Woo (identidad) o publicación ML (candidatos del Matcher, solo lectura).
+  // Buscador: producto Woo (identidad) o publicación ML (candidatos del Matcher, solo lectura, paginado en servidor).
   function buscarVinculos(q) {
     var cont = $('#vinc-resultados');
     var modo = modoVinc();
     S.vincQ = q || '';
-    var req = S.vincReq = (S.vincReq || 0) + 1; // contador de petición: solo vale la última
+    var req = S.vincReq = (S.vincReq || 0) + 1; // contador de petición: solo vale la última (también para "Ver más")
+    clearTimeout(vincTimer);
     if (!S.vincFiltro) S.vincFiltro = 'all';
+    S.vincItems = []; S.vincTotal = 0; S.vincOffset = 0; S.vincCargandoMas = false;
+    if (modo !== 'ml') S.vincConteos = null;
     renderVincFiltros();
     // Sin texto no se busca (no se pide la lista entera): se muestra el estado inicial con instrucciones.
     if (!S.vincQ.trim()) {
@@ -1649,22 +1658,56 @@
     cont.setAttribute('aria-busy', 'true');
     var pr = modo === 'producto'
       ? identidad('/productos/buscar?q=' + enc(S.vincQ.trim())).then(function (r) { return { r: r, lista: r.ok ? (r.data.data || []) : [], modo: modo }; })
-      : llamar('GET', '/api/matcher/candidatos?scope=all').then(function (r) {
-          var txt = S.vincQ.trim().toLowerCase();
-          var lista = (r.ok && !r.data.computing ? (r.data.data || []) : []).filter(function (it) {
-            return filtroMatcher(it) && (!txt || (String(it.ml_title || '') + ' ' + claveDeMl(it)).toLowerCase().indexOf(txt) !== -1);
-          });
-          return { r: r, lista: lista, modo: modo, computing: !!(r.ok && r.data.computing) };
+      : llamar('GET', vincUrl(0)).then(function (r) {
+          return { r: r, lista: r.ok && !r.data.computing ? (r.data.items || []) : [], modo: modo, computing: !!(r.ok && r.data.computing) };
         });
     return pr.then(function (x) {
       if (req !== S.vincReq) return; // respuesta de una búsqueda o modalidad anterior
       cont.setAttribute('aria-busy', 'false');
       if (!x.r.ok) { cont.innerHTML = cajaError(mensajeDe(x.r), 'buscarVinculos'); return; }
       if (x.computing) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>El Matcher está calculando. Probá en un rato.</p></div>'; return; }
+      if (modo === 'ml') {
+        S.vincConteos = x.r.data.conteos || null;
+        S.vincTotal = Number(x.r.data.total) || 0;
+        S.vincItems = x.lista;
+        S.vincOffset = x.lista.length;
+        renderVincFiltros();
+        if (!S.vincTotal) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin resultados para “' + esc(S.vincQ) + '”.</p></div>'; return; }
+        pintarML();
+        return;
+      }
       if (!x.lista.length) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin resultados para “' + esc(S.vincQ) + '”.</p></div>'; return; }
-      cont.innerHTML = '<p class="ui-resumen" role="status">' + cuenta(x.lista.length, 'resultado', 'resultados') + '</p>' + x.lista.map(function (it) {
-        return x.modo === 'producto' ? tarjetaProducto(it) : tarjetaML(it);
-      }).join('');
+      cont.innerHTML = '<p class="ui-resumen" role="status">' + cuenta(x.lista.length, 'resultado', 'resultados') + '</p>' + x.lista.map(tarjetaProducto).join('');
+    });
+  }
+
+  // Pinta los ítems ML acumulados. Si `desde` viene, el foco pasa al primer ítem nuevo (Ver más).
+  function pintarML(desde) {
+    var cont = $('#vinc-resultados');
+    var n = S.vincItems.length, t = S.vincTotal;
+    var html = '<p class="ui-resumen" role="status">Mostrando ' + n + ' de ' + t + ' ' + plural(t, 'resultado', 'resultados') + '</p>'
+      + S.vincItems.map(function (it, i) { return tarjetaML(it, i); }).join('');
+    if (n < t) html += '<p><button type="button" class="ui-btn" data-accion="vinc-ver-mas">Ver más (' + Math.min(VINC_PAGINA, t - n) + ')</button></p>';
+    cont.innerHTML = html;
+    if (desde != null) { var primero = cont.querySelector('[data-idx="' + desde + '"]'); if (primero) primero.focus(); }
+  }
+
+  // "Ver más": pide la página siguiente y concatena. Si el usuario cambió la búsqueda en el medio, la respuesta se descarta.
+  function verMasVinculos() {
+    if (S.vincCargandoMas || S.vincItems.length >= S.vincTotal) return;
+    var req = S.vincReq;
+    var desde = S.vincItems.length;
+    S.vincCargandoMas = true;
+    llamar('GET', vincUrl(S.vincOffset)).then(function (r) {
+      if (req !== S.vincReq) return;
+      S.vincCargandoMas = false;
+      if (!r.ok) { anunciar(mensajeDe(r), 'alerta'); return; }
+      if (r.data.computing) { anunciar('El Matcher está calculando. Probá en un rato.', 'alerta'); return; }
+      var nuevos = r.data.items || [];
+      S.vincItems = S.vincItems.concat(nuevos);
+      S.vincOffset += nuevos.length;
+      S.vincTotal = Number(r.data.total) || S.vincTotal;
+      pintarML(nuevos.length ? desde : null);
     });
   }
 
@@ -1712,10 +1755,10 @@
     });
   }
 
-  function tarjetaML(it) {
+  function tarjetaML(it, idx) {
     var clave = claveDeMl(it);
     var conf = it.score_confianza < 0.7 ? 'Confianza baja' : 'Confianza alta';
-    return '<article class="cv-tarjeta-vinc"><strong>' + esc(it.ml_title || clave) + '</strong>'
+    return '<article class="cv-tarjeta-vinc" tabindex="-1" data-idx="' + idx + '"><strong>' + esc(it.ml_title || clave) + '</strong>'
       + '<p class="ui-resumen"><span class="ui-id">' + esc(clave) + '</span> · ' + esc(it.modo || '') + ' · ' + conf + '</p>'
       + '<button type="button" class="ui-btn" data-accion="vinc-ml" data-clave="' + esc(clave) + '">Ver vínculo</button></article>';
   }
@@ -2144,6 +2187,7 @@
         case 'vinc-revincular': irACaso(Number(el.getAttribute('data-caso')), false); break;
         case 'vinc-historial': irACaso(Number(el.getAttribute('data-caso')), true); break;
         case 'vinc-filtro': S.vincFiltro = el.getAttribute('data-filtro'); buscarVinculos($('#vinc-q').value); break;
+        case 'vinc-ver-mas': verMasVinculos(); break;
         case 'ident-mover': identMover(Number(el.getAttribute('data-idx')), Number(el.getAttribute('data-dir'))); break;
         case 'ident-guardar': identGuardar(); break;
         case 'resolver': pedirConfirmacionResolver(el); break;
@@ -2197,6 +2241,12 @@
     document.body.addEventListener('input', function (ev) { if (ev.target.id === 'nota-txt') S.notaTxt = ev.target.value; });
     document.body.addEventListener('change', function (ev) {
       if (ev.target.name === 'vinc-modo') { S.vincFiltro = 'all'; buscarVinculos($('#vinc-q').value); }
+    });
+    // Modo ML: búsqueda en vivo con debounce (Enter sigue buscando al instante). Producto Woo sigue solo con submit.
+    document.body.addEventListener('input', function (ev) {
+      if (ev.target.id !== 'vinc-q' || modoVinc() !== 'ml') return;
+      clearTimeout(vincTimer);
+      vincTimer = setTimeout(function () { buscarVinculos(ev.target.value.trim()); }, VINC_DEBOUNCE_MS);
     });
     window.addEventListener('offline', function () { setOffline(true); });
     window.addEventListener('online', function () { setOffline(false); cargarCola({ seleccionar: false }); });
