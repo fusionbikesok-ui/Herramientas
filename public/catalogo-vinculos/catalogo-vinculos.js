@@ -59,7 +59,24 @@
   }
   // "Reintenta José" pasa a ser "Lo reintenta un admin"; para un admin, "Reintentalo".
   function reintentaTxt() { return S.isAdmin ? 'Reintentalo.' : 'Lo reintenta un admin.'; }
+  // Helper único de plural para toda la pantalla: cuenta(1,'fallida','fallidas') -> "1 fallida"; cuenta(2,…) -> "2 fallidas".
   function plural(n, uno, varios) { return n === 1 ? uno : varios; }
+  function cuenta(n, uno, varios) { return n + ' ' + plural(n, uno, varios); }
+  // Código de error de ML → texto humano. ultimo_error llega como "ML rechazó la escritura (ruta): <detalle>"
+  // o como el código suelto. Sin mapeo cae a "Error de ML: <código>".
+  var ERR_ML_TXT = {
+    dup: 'SKU duplicado en ML', duplicate: 'SKU duplicado en ML', duplicated: 'SKU duplicado en ML',
+    not_found: 'La publicación ya no existe en ML', forbidden: 'ML no permitió este cambio',
+    unauthorized: 'La sesión con ML venció', rate_limited: 'ML limitó las consultas, reintentá más tarde'
+  };
+  function errMlTxt(raw) {
+    var s = String(raw || '').trim().replace(/^ML rechazó la escritura \([^)]*\):\s*/, '').trim();
+    if (!s || s === 'sin detalle') return 'Error de ML sin detalle';
+    var k = s.toLowerCase();
+    if (ERR_ML_TXT[k]) return ERR_ML_TXT[k];
+    if (/duplicad|duplicate|\bdup\b/.test(k)) return ERR_ML_TXT.dup;
+    return 'Error de ML: ' + s.slice(0, 80);
+  }
   // Permalink de la publicación en ML: el de la API si viene; si no, la URL del artículo por clave (sin variación ni pipe).
   function urlML(pub, clave) {
     if (pub && pub.permalink) return pub.permalink;
@@ -81,7 +98,7 @@
   function uuid() {
     return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2);
   }
-  function atajoTxt(k) { return '<kbd class="cv-kbd-accion" aria-hidden="true">' + k + '</kbd>'; }
+  function atajoTxt(k) { return '<kbd class="cv-kbd cv-kbd-accion" aria-hidden="true">' + k + '</kbd>'; }
   function cuentaCampos(motivos) {
     var campos = (motivos || []).map(function (m) { return CAMPO_TXT[m.campo] || m.etiqueta || m.campo; });
     return campos.length ? campos.join(', ') : 'los atributos marcados';
@@ -129,7 +146,7 @@
   // Copy del veto: para José se le ofrece confirmar; para el operador, la razón es que lo confirma José.
   function textoVeto(motivos) {
     return 'No se puede vincular: difiere ' + cuentaCampos(motivos) + '. '
-      + (S.isAdmin ? 'Podés confirmar igual (solo admin).' : 'Lo confirma José.');
+      + (S.isAdmin ? 'Podés confirmar igual (solo admin).' : 'Lo confirma un admin.');
   }
 
   // Escrituras solo en PC (>=768 px) y con permiso matcher:write. En celular la pantalla solo consulta (decisión de José).
@@ -320,7 +337,7 @@
     var titulo = $('#cola-titulo');
     if (titulo) titulo.textContent = hayMas
       ? 'Cola · ' + S.cola.length + ' de ' + S.colaTotal
-      : 'Cola · ' + S.cola.length + (S.cola.length === 1 ? ' caso' : ' casos');
+      : 'Cola · ' + cuenta(S.cola.length, 'caso', 'casos');
     $('#cv-cola-mas').innerHTML = hayMas
       ? '<button type="button" class="ui-btn" data-accion="ver-mas" aria-disabled="' + !!S.busy + '">Ver más (quedan ' + (S.colaTotal - S.cola.length) + ')</button>'
       : '';
@@ -334,8 +351,7 @@
       return '<button type="button" role="option" class="cv-caso" data-accion="abrir" data-caso="' + f.caso_id + '"'
         + ' aria-selected="' + sel + '" tabindex="' + (i === foco ? '0' : '-1') + '">'
         + '<span class="cv-caso__titulo">' + esc(f.titulo || f.ml_key) + '</span>'
-        + '<span class="cv-caso__motivo">' + esc(motivoTxt(f.motivo)) + '</span>'
-        + (f.salteado_por ? '<span class="cv-salteado">↷ Salteado por ' + esc(f.salteado_por) + '</span>' : '')
+        + '<span class="cv-caso__motivo">' + esc(motivoTxt(f.motivo)) + (f.salteado_por ? ' <span class="cv-salteado">· ↷ Salteado por ' + esc(f.salteado_por) + '</span>' : '') + '</span>'
         + '<span class="cv-caso__pie">' + plata + '<span class="cv-chips">' + chipsCaso(f) + '</span></span>'
         + '</button>';
     }).join('');
@@ -514,8 +530,8 @@
     var titulo = esFallida ? '✗ ML la rechazó' : (esEspera ? '⏳ Espera tu confirmación' : '⏸ Frenada');
     var motivo = o.ultimo_error || (esFallida ? 'sin detalle' : 'regla de protección');
     var accion = esFallida ? reintentaTxt() : 'Stock en 0 hasta resolver.';
-    var texto = esFallida ? 'ML la rechazó: ' + motivo + '. ' + accion
-      : (esEspera ? 'La pausa de otras variaciones necesita confirmación de José.' : 'Frenada: ' + motivo + '. ' + accion);
+    var texto = esFallida ? errMlTxt(o.ultimo_error) + '. ' + accion
+      : (esEspera ? 'La pausa de otras variaciones necesita confirmación de un admin.' : 'Frenada: ' + motivo + '. ' + accion);
     return '<section class="cv-tarjeta-op" role="region" aria-label="Operación con problema" tabindex="-1">'
       + '<h3>' + titulo + '</h3><p>' + esc(texto) + '</p>'
       + '<p><a href="#cv-ejec" data-accion="ir-ejecucion">Ver en Ejecución</a>'
@@ -612,7 +628,7 @@
     var guardado = S.guardado ? barraGuardado() : '';
     S.retenidasDelCaso = (S.retenidas || []).filter(function (f) { return (f.claves || []).indexOf(c.ml_key) !== -1; }).length;
     var lectura = enIntervencion
-      ? '<p class="cv-lock">En intervención. ' + (S.isAdmin ? 'Lo destrabás vos.' : 'Lo destraba José.') + '</p>' : '';
+      ? '<p class="cv-lock">En intervención. ' + (S.isAdmin ? 'Lo destrabás vos.' : 'Lo destraba un admin.') + '</p>' : '';
     if (!puedeEscribir()) {
       lectura += '<p class="cv-leyenda-pc">' + (window.innerWidth < PUNTO_CORTE_PC ? 'Solo consulta en el celular. Para cambiar, usá la PC.' : 'Solo consulta: tu usuario no tiene permiso para cambiar casos.') + '</p>';
     }
@@ -624,7 +640,7 @@
       + tarjetaOperacion()
       + datosHtml()
       + candidatosHtml(soloLectura)
-      + (soloLectura ? '' : '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>')
+      + (soloLectura ? '' : '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>')
       + (soloLectura ? '' : accionesHtml())
       + historialHtml()
       + (S.accionError ? '<div class="ui-aviso ui-aviso--critico cv-aviso-fijo cv-aviso-rojo" role="alert" tabindex="-1" id="err-accion"><span class="cv-icono" aria-hidden="true">✗</span><span>' + esc(S.accionError) + '</span></div>' : '')
@@ -685,7 +701,7 @@
     if (S.isAdmin) {
       var destrabar = c.estado === 'intervencion'
         ? '<button type="button" class="ui-btn" data-accion="admin" data-admin="destrabar">Destrabar</button>' : '';
-      admin = '<div class="cv-grupo-solo-jose"><p class="ui-label cv-lock">Solo José</p><div class="cv-acciones__fila">'
+      admin = '<div class="cv-grupo-solo-jose"><p class="ui-label cv-lock">Solo admin</p><div class="cv-acciones__fila">'
         + (veto ? '<button type="button" class="ui-btn ui-btn--peligro" data-accion="admin" data-admin="confirmar">Confirmar igual</button>' : '')
         + destrabar
         + '<button type="button" class="ui-btn" data-accion="admin" data-admin="link">Link de pago</button>'
@@ -718,9 +734,9 @@
   function hermanasHtml() {
     var n = S.hermanas.n;
     return '<div class="ui-aviso ui-aviso--atencion cv-foco-bloque" role="alert" tabindex="-1" id="bloque-hermanas">'
-      + '<p><span aria-hidden="true">⚠</span> Esto cambia también ' + n + ' publicaciones hermanas. ¿Seguimos?</p>'
+      + '<p><span aria-hidden="true">⚠</span> Esto cambia también ' + cuenta(n, 'publicación hermana', 'publicaciones hermanas') + '. ¿Seguimos?</p>'
       + listaHermanas(0)
-      + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="hermanas-si">Vincular esta y las ' + n + ' hermanas al SKU ' + esc(S.hermanas.sku || '—') + '</button>'
+      + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="hermanas-si">Vincular esta y ' + (n === 1 ? 'la hermana' : 'las ' + n + ' hermanas') + ' al SKU ' + esc(S.hermanas.sku || '—') + '</button>'
       + '<button type="button" class="ui-btn" data-accion="hermanas-no">Volver</button></div></div>';
   }
 
@@ -967,9 +983,9 @@
   function mostrarAlcance(n) {
     var al = $('#ns-alcance');
     al.hidden = false;
-    al.innerHTML = '<div class="ui-aviso ui-aviso--atencion cv-alcance"><p><span aria-hidden="true">⚠</span> La pausa es de la publicación entera. Pausa también estas ' + n + ' variaciones.</p>' + listaHermanas(6)
-      + '<label class="cv-switch"><input type="checkbox" id="ns-conf"> <span>Entiendo, pausar las ' + n + '</span></label>'
-      + '<p id="ns-conf-razon" class="cv-acciones__razon">Marcá la confirmación para pausar las ' + n + ' variaciones.</p></div>';
+    al.innerHTML = '<div class="ui-aviso ui-aviso--atencion cv-alcance"><p><span aria-hidden="true">⚠</span> La pausa es de la publicación entera. ' + (n === 1 ? 'Pausa también esta variación.' : 'Pausa también estas ' + n + ' variaciones.') + '</p>' + listaHermanas(6)
+      + '<label class="cv-switch"><input type="checkbox" id="ns-conf"> <span>' + (n === 1 ? 'Entiendo, pausar la variación' : 'Entiendo, pausar las ' + n) + '</span></label>'
+      + '<p id="ns-conf-razon" class="cv-acciones__razon">Marcá la confirmación para pausar ' + (n === 1 ? 'la variación' : 'las ' + n + ' variaciones') + '.</p></div>';
     var cb = $('#ns-conf');
     cb.focus();
     $('#ns-enviar').setAttribute('aria-disabled', 'true');
@@ -1074,7 +1090,7 @@
     var m = {
       encolada: ['cv-chip-estado', '↻', 'En cola para ML'],
       aplicada: ['cv-chip-estado cv-chip-estado--aplicada', '✓', 'Aplicada en ML'],
-      fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', 'ML la rechazó: ' + (o.ultimo_error || 'sin detalle') + '. ' + reintentaTxt()],
+      fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', errMlTxt(o.ultimo_error) + '. ' + reintentaTxt()],
       frenada: ['cv-chip-estado cv-chip-estado--frenada', '⏸', 'Frenada: ' + (o.ultimo_error || 'regla de protección') + '. Stock en 0 hasta resolver.'],
       espera: ['cv-chip-estado cv-chip-estado--espera', '⏳', 'Espera tu confirmación']
     }[k];
@@ -1115,15 +1131,15 @@
     var encoladas = ops.filter(function (o) { return ESTADO_OP[o.estado] === 'encolada'; }).length;
     $('#ejec-cabecera').innerHTML = '<div class="cv-cabecera-ejec">'
       + (fall > 0
-        ? '<span class="cv-contador cv-contador--critico"><span aria-hidden="true">✗</span> ' + fall + ' fallidas</span> <span class="ui-resumen">ML rechazó ' + fall + '</span>'
+        ? '<span class="cv-contador cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(fall, 'fallida', 'fallidas') + '</span>'
         : '<span class="cv-contador cv-contador--ok"><span aria-hidden="true">✓</span> Sin fallidas</span>')
-      + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + frenadas + ' frenadas</span> · ↻ ' + encoladas + ' en cola</span></div>'
+      + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + cuenta(frenadas, 'frenada', 'frenadas') + '</span> · ↻ ' + encoladas + ' en cola</span></div>'
       + saludHtml();
     var riesgo = (e.pausas || []).filter(function (p) { return p.impacto_hermanas > 0 && p.estado !== 'completada' && p.estado !== 'cancelada'; });
     var bloqueRiesgo = riesgo.length
       ? '<section class="ui-aviso ui-aviso--atencion cv-bloque" aria-labelledby="riesgo-h"><h3 id="riesgo-h" class="cv-h2"><span aria-hidden="true">⚠</span> Pausas con riesgo</h3>'
         + riesgo.map(function (p) {
-          return '<p class="ui-resumen">' + esc(p.ml_key) + ' · pausa ' + p.impacto_hermanas + ' variaciones · ' + esc(motivoTxt(p.motivo)) + ' ' + chipEstado(p.estado, p) + '</p>';
+          return '<p class="ui-resumen">' + esc(p.ml_key) + ' · pausa ' + cuenta(p.impacto_hermanas, 'variación', 'variaciones') + ' · ' + esc(motivoTxt(p.motivo)) + ' ' + chipEstado(p.estado, p) + '</p>';
         }).join('') + '</section>'
       : '';
     var filas = ops.map(function (o) {
@@ -1140,11 +1156,13 @@
       var msgHtml = msg ? '<p class="ui-resumen cv-ejec-msg' + (msg.error ? ' cv-ejec-msg--error' : '') + '" role="' + (msg.error ? 'alert' : 'status') + '">'
         + (msg.error ? '✗ ' : '') + esc(msg.error || msg.texto) + '</p>' : '';
       return '<article class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + '" data-op="' + o.id + '">'
-        + '<div class="cv-ejec-fila__cab"><strong>' + esc(o.nombre_canonico || o.ml_key) + '</strong>' + chipEstado(o.estado, o) + '</div>'
-        + '<p class="ui-resumen"><span class="ui-id">' + esc(o.sku_objetivo || '') + '</span> · ' + esc(fecha(o.actualizada_en || o.iniciada_en)) + '</p>'
+        + '<div class="cv-ejec-fila__info">'
+        + '<div class="cv-ejec-fila__cab"><strong class="cv-ejec-fila__titulo">' + esc(o.nombre_canonico || o.ml_key) + '</strong>' + chipEstado(o.estado, o) + '</div>'
+        + '<p class="ui-resumen cv-ejec-fila__meta"><span class="ui-id">' + esc(o.sku_objetivo || '') + '</span> · ' + esc(fecha(o.actualizada_en || o.iniciada_en)) + '</p>'
         + (fallida && !S.isAdmin ? '<p class="ui-resumen">' + reintentaTxt() + '</p>' : '')
-        + (acciones ? '<div class="cv-ejec-acciones">' + acciones + '</div>' : '')
         + msgHtml
+        + '</div>'
+        + (acciones ? '<div class="cv-ejec-acciones">' + acciones + '</div>' : '')
         + '</article>';
     }).join('');
     $('#ejec-cuerpo').innerHTML = bloqueRiesgo + (filas || '<p class="ui-resumen">No hay operaciones en ML.</p>');
@@ -1154,8 +1172,8 @@
     var e = S.ejec; if (!e) return;
     var n = e.fallidas || 0;
     $('#cnt-ejecucion').innerHTML = n > 0
-      ? '<span class="cv-contador--critico"><span aria-hidden="true">✗</span> ' + n + ' fallidas</span>'
-      : '<span class="ui-resumen">0 fallidas</span>';
+      ? '<span class="cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(n, 'fallida', 'fallidas') + '</span>'
+      : '<span class="ui-resumen">' + cuenta(0, 'fallida', 'fallidas') + '</span>';
   }
 
   // Estado de la pantalla Ejecución: salud de lectura y conciliación (lo que muestran las pastillas de Casos).
@@ -1172,27 +1190,47 @@
   }
 
   // Confirmar impacto (admin): la pausa de hermanas se confirma en un diálogo antes de encolarse.
-  // La lista de variaciones solo se conoce si el caso está abierto; si no, se muestra la cantidad.
-  function abrirConfirmarImpacto(id) {
+  // La lista sale de /ejecucion (operaciones[].variaciones); si falta, cae a hermanas_item del caso abierto.
+  // Sin lista no se puede confirmar: el botón queda aria-disabled y se ofrece Reintentar (recarga /ejecucion).
+  function listaImpacto(o) {
+    if (Array.isArray(o.variaciones) && o.variaciones.length) return o.variaciones;
+    return (S.detalle && S.detalle.caso && S.detalle.caso.id === o.caso_id && S.detalle.hermanas_item) || [];
+  }
+  function pintarImpacto(id) {
     var o = ((S.ejec && S.ejec.operaciones) || []).find(function (x) { return x.id === id; });
     if (!o) return;
     var n = Number(o.impacto_hermanas) || 0;
-    // Lista de variaciones: la trae /ejecucion (operaciones[].variaciones). Si el backend no la manda,
-    // cae a la copia del caso abierto y, si tampoco hay, muestra solo la cantidad.
-    var lista = Array.isArray(o.variaciones) && o.variaciones.length ? o.variaciones
-      : ((S.detalle && S.detalle.caso && S.detalle.caso.id === o.caso_id && S.detalle.hermanas_item) || []);
+    var lista = listaImpacto(o);
+    var sinLista = n > 0 && !lista.length;
     var MAX_IMP = 10;
-    var cuerpo = '<p>Esto pausa ' + n + ' variaciones en ML' + (lista.length ? ':' : '.') + '</p>'
+    var cuerpo = '<p>Esto pausa ' + cuenta(n, 'variación', 'variaciones') + ' en ML' + (lista.length ? ':' : '.') + '</p>'
       + (lista.length ? '<ul class="cv-impacto-lista">' + lista.slice(0, MAX_IMP).map(function (h) {
           return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '')
             + (h.status ? ' <span class="ui-label">' + esc(h.status) + '</span>' : '') + '</li>';
         }).join('') + (lista.length > MAX_IMP ? '<li class="ui-resumen">y ' + (lista.length - MAX_IMP) + ' más</li>' : '') + '</ul>' : '')
+      + (sinLista ? '<div class="api-estado api-estado--error" role="alert"><p>No pudimos obtener la lista de variaciones.</p>'
+        + '<button type="button" class="btn-reintentar cv-btn-44" data-accion="dlg-imp-reintentar" data-op="' + id + '">Reintentar</button></div>' : '')
       + '<p class="ui-resumen">La pausa va como operación en la cola de Identidad. Su resultado aparece en Ejecución.</p>';
     $('#dlg-imp-cuerpo').innerHTML = cuerpo;
     var ok = $('#dlg-imp-ok');
-    ok.textContent = 'Pausar las ' + n;
+    ok.textContent = n === 1 ? 'Pausar la variación' : 'Pausar las ' + n;
     ok.setAttribute('data-op', String(id));
+    ok.setAttribute('aria-disabled', String(sinLista));
+  }
+  function abrirConfirmarImpacto(id) {
+    var o = ((S.ejec && S.ejec.operaciones) || []).find(function (x) { return x.id === id; });
+    if (!o) return;
+    pintarImpacto(id);
     abrirDialogo($('#dlg-impacto'), $('[data-accion="confirmar-impacto"][data-op="' + id + '"]'), $('#dlg-imp-volver'));
+  }
+  // Reintentar dentro del diálogo: recarga /ejecucion y vuelve a pintar la lista si el diálogo sigue abierto.
+  function reintentarListaImpacto(id) {
+    var cab = $('#dlg-imp-cuerpo');
+    cab.setAttribute('aria-busy', 'true');
+    cargarEjecucion().then(function () {
+      cab.setAttribute('aria-busy', 'false');
+      if (!$('#dlg-impacto').hidden) pintarImpacto(id);
+    });
   }
 
   function reintentarOp(id, accion) {
@@ -1234,7 +1272,7 @@
   function renderRetenidas() {
     var cont = $('#ret-cuerpo');
     var lista = S.retenidas || [];
-    var cabecera = '<div class="ui-aviso ui-aviso--info" role="note">Se liberan solas cada 5 minutos cuando la causa se resuelve.</div>';
+    var cabecera = '<div class="ui-aviso ui-aviso--info" role="note">Se liberan solas cada 5 minutos cuando la causa se resuelve. Las de publicaciones marcadas como no sincronizar se liberan solo a mano.</div>';
     if (!lista.length) { cont.innerHTML = cabecera + '<div class="api-estado api-estado--vacio" role="status"><p>No hay ventas retenidas.</p></div>'; return; }
     cont.innerHTML = cabecera + lista.map(function (f) {
       var abierta = S.retAbierta === f.ml_order_id;
@@ -1256,12 +1294,12 @@
       }
       var titulo = f.titulo ? esc(f.titulo) : 'Sin dato del título';
       var importe = f.importe != null ? esc(money(f.importe)) : 'sin dato';
-      return '<article class="cv-ret">'
+      return '<article class="cv-ret"><div class="cv-ret__info">'
         + '<div class="cv-ret__cab"><span><strong>' + titulo + '</strong> · pedido <span class="ui-id">' + esc(f.ml_order_id) + '</span></span>'
         + '<span class="ui-label">' + esc(fecha(f.creado_en)) + '</span></div>'
         + '<p class="ui-resumen">Publicación <span class="ui-id">' + esc(normClave((f.claves || [])[0]) || '—') + '</span> · importe ' + importe + '</p>'
         + '<p class="ui-resumen">Causa: ' + esc(causaDe(f)) + '</p>'
-        + aviso + liberar + '</article>';
+        + aviso + '</div>' + (liberar ? '<div class="cv-ret__accion">' + liberar + '</div>' : '') + '</article>';
     }).join('');
     actualizarContadoresTab();
   }
@@ -1350,7 +1388,7 @@
       if (!x.r.ok) { cont.innerHTML = cajaError(mensajeDe(x.r), 'buscarVinculos'); return; }
       if (x.computing) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>El Matcher está calculando. Probá en un rato.</p></div>'; return; }
       if (!x.lista.length) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin resultados para “' + esc(S.vincQ) + '”.</p></div>'; return; }
-      cont.innerHTML = '<p class="ui-resumen" role="status">' + x.lista.length + ' resultados</p>' + x.lista.map(function (it) {
+      cont.innerHTML = '<p class="ui-resumen" role="status">' + cuenta(x.lista.length, 'resultado', 'resultados') + '</p>' + x.lista.map(function (it) {
         return x.modo === 'producto' ? tarjetaProducto(it) : tarjetaML(it);
       }).join('');
     });
@@ -1466,7 +1504,7 @@
     if (marca && marca.tipo === 'no_sincronizar') {
       if (!escribe) revertir = '<p class="cv-leyenda-pc">Para revertir, usá la PC.</p>';
       else revertir = (marca.variante === 'c' && !S.isAdmin)
-        ? '<p class="cv-lock">Lo revierte José.</p>'
+        ? '<p class="cv-lock">Lo revierte un admin.</p>'
         : '<form data-accion="vinc-revertir" class="cv-cuadro-motivo" novalidate><label class="ui-label" for="rev-motivo">Motivo <span>(obligatorio)</span></label>'
           + '<textarea id="rev-motivo" class="ui-input" rows="2"></textarea><p class="cv-error" hidden></p>'
           + '<div class="cv-acciones__fila"><button type="submit" class="ui-btn">Revertir no sincronizar</button></div></form>';
@@ -1534,12 +1572,12 @@
     return identidad('/identificadores/conflictos').then(function (r) {
       if (!r.ok) { cuerpo.innerHTML = cajaError(mensajeDe(r), 'cargarConflictos'); return; }
       S.conflictos = r.data.data || [];
-      $('#cnt-conflictos').textContent = ' · ' + S.conflictos.length;
+      $('#cnt-conflictos').textContent = '· ' + S.conflictos.length;
       if (!S.conflictos.length) { cuerpo.innerHTML = '<p class="ui-resumen">Ningún código en conflicto.</p>'; return; }
       cuerpo.innerHTML = S.conflictos.map(function (x) {
         var abierto = S.conflictoAbierto === x.valor_normalizado;
         return '<article class="cv-conflicto"><div class="cv-conflicto__cab"><span><span class="ui-id">' + esc(x.valor_normalizado) + '</span> '
-          + '<span class="ui-label">' + esc(x.subtipo || '') + ' · ' + esc(x.productos) + ' productos</span></span>'
+          + '<span class="ui-label">' + esc(x.subtipo || '') + ' · ' + esc(cuenta(Number(x.productos) || 0, 'producto', 'productos')) + '</span></span>'
           + '<button type="button" class="ui-btn" data-accion="ver-conflicto" data-valor="' + esc(x.valor_normalizado) + '" aria-expanded="' + abierto + '">'
           + (abierto ? 'Cerrar' : 'Ver y resolver') + '</button></div>'
           + (abierto ? conflictoDetalleHtml() : '') + '</article>';
@@ -1563,7 +1601,7 @@
     // "Es de este" marca a todos los demás como incorrectos: pide confirmación con la cantidad antes de enviar.
     var cr = S.confResolver;
     var confirmar = (cr && cr.valor === d.valor_normalizado)
-      ? '<div class="ui-aviso ui-aviso--atencion cv-foco-bloque" role="alert" tabindex="-1" id="bloque-conf-resolver"><p>¿Marcar ' + cr.n + ' productos como incorrectos? El código queda en «' + esc(cr.nombre) + '».</p>'
+      ? '<div class="ui-aviso ui-aviso--atencion cv-foco-bloque" role="alert" tabindex="-1" id="bloque-conf-resolver"><p>¿Marcar ' + cuenta(cr.n, 'producto', 'productos') + ' como ' + plural(cr.n, 'incorrecto', 'incorrectos') + '? El código queda en «' + esc(cr.nombre) + '».</p>'
         + '<div class="cv-acciones__fila"><button type="button" class="ui-btn ui-btn--primario" data-accion="resolver-ok">Sí, marcar ' + cr.n + '</button>'
         + '<button type="button" class="ui-btn" data-accion="resolver-cancelar">Cancelar</button></div></div>'
       : '';
@@ -1656,7 +1694,12 @@
     $('#dlg-atajos-cerrar').addEventListener('click', function () { cerrarDialogo(); });
     $('#ns-volver').addEventListener('click', intentarCerrarDialogo);
     $('#dlg-imp-volver').addEventListener('click', function () { cerrarDialogo(); });
+    $('#dlg-imp-cuerpo').addEventListener('click', function (e) {
+      var b = e.target.closest && e.target.closest('[data-accion="dlg-imp-reintentar"]');
+      if (b) reintentarListaImpacto(Number(b.getAttribute('data-op')));
+    });
     $('#dlg-imp-ok').addEventListener('click', function () {
+      if (this.getAttribute('aria-disabled') === 'true') return;
       var id = Number(this.getAttribute('data-op'));
       cerrarDialogo();
       reintentarOp(id, 'confirmar-impacto');
@@ -1947,7 +1990,7 @@
     var filas = notas.map(function (h) {
       return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(h.evento) + '</li>';
     }).join('');
-    return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial <span class="cv-kbd-pc">(<kbd aria-hidden="true">h</kbd>)</span></summary>'
+    return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">h</kbd></summary>'
       + '<ol class="cv-hist__lista">' + (filas || '<li class="ui-resumen">Sin movimientos.</li>') + '</ol>'
       + (puedeEscribir()
         ? '<div class="cv-campo"><label class="ui-label" for="nota-txt">Agregar nota</label>'
