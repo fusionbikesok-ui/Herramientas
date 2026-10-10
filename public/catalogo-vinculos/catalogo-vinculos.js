@@ -1627,6 +1627,11 @@
   var VINC_PAGINA = 50;
   var VINC_DEBOUNCE_MS = 300;
   var vincTimer = null;
+  // Matcher calculando (202 {computing:true}): reintento automático cada 1,5 s, tope ~60 s.
+  var VINC_REINTENTO_MS = 1500;
+  var VINC_REINTENTOS_MAX = 40;
+  var vincRetryTimer = null;
+  function cancelarReintentoML() { clearTimeout(vincRetryTimer); vincRetryTimer = null; }
   function vincUrl(offset) {
     return '/api/matcher/candidatos?q=' + enc(S.vincQ.trim()) + '&filtro=' + enc(S.vincFiltro || 'all')
       + '&limit=' + VINC_PAGINA + '&offset=' + (offset || 0);
@@ -1643,6 +1648,7 @@
     S.vincQ = q || '';
     var req = S.vincReq = (S.vincReq || 0) + 1; // contador de petición: solo vale la última (también para "Ver más")
     clearTimeout(vincTimer);
+    cancelarReintentoML(); // una búsqueda nueva descarta el reintento pendiente del Matcher
     if (!S.vincFiltro) S.vincFiltro = 'all';
     S.vincItems = []; S.vincTotal = 0; S.vincOffset = 0; S.vincCargandoMas = false;
     if (modo !== 'ml') S.vincConteos = null;
@@ -1656,28 +1662,42 @@
       return Promise.resolve();
     }
     cont.setAttribute('aria-busy', 'true');
-    var pr = modo === 'producto'
-      ? identidad('/productos/buscar?q=' + enc(S.vincQ.trim())).then(function (r) { return { r: r, lista: r.ok ? (r.data.data || []) : [], modo: modo }; })
-      : llamar('GET', vincUrl(0)).then(function (r) {
-          return { r: r, lista: r.ok && !r.data.computing ? (r.data.items || []) : [], modo: modo, computing: !!(r.ok && r.data.computing) };
-        });
-    return pr.then(function (x) {
+    if (modo === 'ml') return pedirML(req, 0);
+    return identidad('/productos/buscar?q=' + enc(S.vincQ.trim())).then(function (r) {
       if (req !== S.vincReq) return; // respuesta de una búsqueda o modalidad anterior
       cont.setAttribute('aria-busy', 'false');
-      if (!x.r.ok) { cont.innerHTML = cajaError(mensajeDe(x.r), 'buscarVinculos'); return; }
-      if (x.computing) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>El Matcher está calculando. Probá en un rato.</p></div>'; return; }
-      if (modo === 'ml') {
-        S.vincConteos = x.r.data.conteos || null;
-        S.vincTotal = Number(x.r.data.total) || 0;
-        S.vincItems = x.lista;
-        S.vincOffset = x.lista.length;
-        renderVincFiltros();
-        if (!S.vincTotal) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin resultados para “' + esc(S.vincQ) + '”.</p></div>'; return; }
-        pintarML();
+      if (!r.ok) { cont.innerHTML = cajaError(mensajeDe(r), 'buscarVinculos'); return; }
+      var lista = r.data.data || [];
+      if (!lista.length) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin resultados para “' + esc(S.vincQ) + '”.</p></div>'; return; }
+      cont.innerHTML = '<p class="ui-resumen" role="status">' + cuenta(lista.length, 'resultado', 'resultados') + '</p>' + lista.map(tarjetaProducto).join('');
+    });
+  }
+
+  // Pide la primera página ML. Si el Matcher está calculando (202 computing), muestra "Calculando candidatos…"
+  // (anunciado con role=status) y reintenta solo. El DOM no se reescribe en cada reintento para no re-anunciar.
+  function pedirML(req, intento) {
+    var cont = $('#vinc-resultados');
+    return llamar('GET', vincUrl(0)).then(function (r) {
+      if (req !== S.vincReq) return; // búsqueda o modalidad distinta: descarta esta respuesta y su reintento
+      if (r.ok && r.data.computing) {
+        if (intento >= VINC_REINTENTOS_MAX) {
+          cont.setAttribute('aria-busy', 'false');
+          cont.innerHTML = cajaError('El Matcher tardó demasiado en calcular los candidatos. Probá de nuevo.', 'buscarVinculos');
+          return;
+        }
+        if (intento === 0) cont.innerHTML = '<div class="api-estado api-estado--cargando" role="status" aria-live="polite"><p><span class="cv-girando" aria-hidden="true">◌</span> Calculando candidatos…</p></div>';
+        vincRetryTimer = setTimeout(function () { vincRetryTimer = null; pedirML(req, intento + 1); }, VINC_REINTENTO_MS);
         return;
       }
-      if (!x.lista.length) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin resultados para “' + esc(S.vincQ) + '”.</p></div>'; return; }
-      cont.innerHTML = '<p class="ui-resumen" role="status">' + cuenta(x.lista.length, 'resultado', 'resultados') + '</p>' + x.lista.map(tarjetaProducto).join('');
+      cont.setAttribute('aria-busy', 'false');
+      if (!r.ok) { cont.innerHTML = cajaError(mensajeDe(r), 'buscarVinculos'); return; }
+      S.vincConteos = r.data.conteos || null;
+      S.vincTotal = Number(r.data.total) || 0;
+      S.vincItems = r.data.items || [];
+      S.vincOffset = S.vincItems.length;
+      renderVincFiltros();
+      if (!S.vincTotal) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>Sin resultados para “' + esc(S.vincQ) + '”.</p></div>'; return; }
+      pintarML();
     });
   }
 
@@ -2151,6 +2171,7 @@
           else if (rc === 'cargarRetenidas') cargarRetenidas();
           else if (rc === 'cargarConflictos') cargarConflictos();
           else if (rc === 'reabrirCaso' && S.casoId) abrirCaso(S.casoId);
+          else if (rc === 'buscarVinculos') buscarVinculos($('#vinc-q').value);
           break;
         case 'reintentar': reintentarOp(Number(el.getAttribute('data-op')), 'reintentar'); break;
         case 'confirmar-impacto': abrirConfirmarImpacto(Number(el.getAttribute('data-op'))); break;
