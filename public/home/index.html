@@ -640,20 +640,13 @@ fetch('/api/auth/me').then(function(r) {
       { tool: 'consulta-precios', href: 'consulta-precios', t: 'Consulta de precios', d: 'Buscá un producto y mirá su precio de lista, de contado y en cuotas.', tag: 'Mostrador · Contado · Cuotas' },
       { tool: 'precios', href: 'precios', t: 'Precios ML — auditoría', d: 'Dónde estás perdiendo margen en MercadoLibre y qué precio deja el neto que querés.', tag: 'Neto · Comisión · Envío' },
       { tool: 'codigos', href: 'codigos', t: 'Códigos universales', d: 'Asociá el EAN o UPC del producto a su SKU para poder escanearlo en todas las herramientas.', tag: 'EAN · UPC · GTIN' },
-      { tool: 'identidad-productos', href: 'identidad-productos', t: 'Identidad de productos', d: 'Casos donde el código, el SKU o el stock no coinciden entre canales.', tag: 'GTIN · SKU · Canales' },
+      // Catálogo y vínculos reemplaza a Identidad de productos, Guardia ML, Matcher y Bandeja de
+      // identidad (Fase D, paso 6). Guardia retenía ventas pagas que NADA liberaba solo; por eso
+      // las retenidas viven en esta pantalla y el aviso de retenidas sigue en el panel de atención.
+      { tool: 'matcher', href: 'catalogo-vinculos', t: 'Catálogo y vínculos', d: 'Vinculá cada publicación de MercadoLibre con su producto de la web, resolvé los casos que no coinciden y liberá las ventas retenidas.', tag: 'Vínculos · ML ↔ Woo · Retenidas' },
     ]},
     { titulo: 'MercadoLibre', color: 'sync', tools: [
       { tool: 'sync-ml', href: 'sync-ml', t: 'Sincronización ML', d: 'Estado del stock y los pedidos entre MercadoLibre y la web, y qué necesita atención.', tag: 'Stock · Pedidos · Reactivación' },
-      // Guardia retiene ventas pagas de ML que no puede convertir en pedido, y NADA las libera
-      // solo: hay que entrar y liberarlas a mano. No estaba enlazada desde el home —ni en el
-      // diseño viejo ni en el nuevo— y por eso dos ventas quedaron retenidas 8 y 1 días sin que
-      // nadie se enterara (Jersey Santini $218.000 y una caramañola Camelbak, 2026-09-12).
-      { tool: 'guardia-ml', href: 'guardia-ml', t: 'Guardia ML', d: 'Ventas retenidas que todavía no se convirtieron en pedido, y publicaciones que necesitan una decisión.', tag: 'Retenidas · Casos · Bloqueos' },
-      // Cobertura de catálogo NO es una herramienta aparte desde el 2026-08-14: se unificó
-      // dentro del Matcher como su dirección Woo→ML, y /cobertura sólo redirige ahí. Tenerla
-      // como tarjeta propia mandaba a una pantalla que ya no existe por separado.
-      { tool: 'matcher', href: 'matcher', t: 'Matcher (solo lectura)', d: 'Consulta de vínculos y cobertura entre ML y Woo. Para decidir una publicación usá la Bandeja de identidad.', tag: 'Consulta · ML ↔ Woo' },
-      { tool: 'matcher', href: 'bandeja-identidad', t: 'Bandeja de identidad', d: 'Cola de decisión sobre publicaciones de ML: vinculá, omitís o indicá que no existe en el catálogo.', tag: 'Identidad · ML · Vinculación' },
       { tool: 'config-ml', href: 'config-ml', t: 'Config ML — reservas', d: 'Cuánto stock reservás para el local y qué política sigue cada SKU.', tag: 'Reservas · Política' },
     ]},
     { titulo: 'Posventa', color: 'control', adminOnly: true, tools: [
@@ -765,10 +758,18 @@ fetch('/api/auth/me').then(function(r) {
     peMostrarAtencion();
   }
 
+  // Chips de Catálogo y vínculos, desde su estado de salud (GET /api/catalogo-vinculos/estado,
+  // gate: matcher). Reemplaza los contadores de Identidad y de SKUs pendientes del home viejo.
+  function chipsCatalogo() {
+    return fetch('/api/catalogo-vinculos/estado').then(function(r){return r.json();}).then(function(d){
+      if (!d.ok) throw new Error('estado de catálogo');
+      var salud = (d.data && d.data.salud) || {};
+      return [peChip(salud.operaciones_pendientes, 'operaciones de identidad pendientes · Catálogo y vínculos', 'warn', '/herramientas/catalogo-vinculos/', 'matcher')].filter(Boolean);
+    });
+  }
+
   function cargarPanelSoloMatcher() {
-    fetch('/api/matcher/push-skus-pendientes/count').then(function(r){return r.json();}).then(function(d){
-      if (!d.ok) return;
-      var chips = [peChip(d.pendientes, 'SKUs decididos que ML no refleja', 'warn', '/herramientas/identidad-productos/', null)].filter(Boolean);
+    chipsCatalogo().then(function(chips){
       document.getElementById('pe-atencion').innerHTML = chips.length ? renderChips(chips)
         : '<span class="attn-ok">✓ Todo al día — nada requiere tu atención.</span>';
       peMostrarAtencion();
@@ -790,24 +791,24 @@ fetch('/api/auth/me').then(function(r) {
       ].join('');
       peMostrarProgreso();
 
-      var idq = d.identidad_encoladas || {};
-      var idEnc = idq.n || 0, idTrab = idq.procesando_vencidas || 0;
-      var idEtiqueta = 'correcciones de SKU: ' + [idEnc ? idEnc + ' encoladas sin ejecutar' : '', idTrab ? idTrab + ' trabadas en proceso' : ''].filter(Boolean).join(' · ');
-      var chips = [
-        peChip(at.ventas_retenidas_guardia, 'ventas retenidas en Guardia ML', 'crit', '/herramientas/guardia-ml/', 'guardia-ml'),
-        peChip(at.errores_reales, 'errores de sync', 'crit', '/herramientas/sync-detalle/?cat=errores', 'sync-ml'),
-        peChip(at.requiere_atencion_ml, 'con exceso de fotos', 'crit', '/herramientas/sync-detalle/?cat=requiere_atencion_ml', 'sync-ml'),
-        peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
-        peChip(d.frenadas, 'pausadas frenadas por precio', 'warn', '/herramientas/sync-ml/#frenadas', 'sync-ml'),
-        peChip(idEnc + idTrab, idEtiqueta, 'warn', '/herramientas/identidad-productos/', 'matcher'),
-        peChip(sk.pendientes, 'SKUs decididos que ML no refleja', 'warn', '/herramientas/identidad-productos/', 'matcher'),
-        peChip(at.sin_mapeo, 'ventas sin mapear', 'warn', '/herramientas/sync-detalle/?cat=sin_mapeo', 'sync-ml'),
-        peChip(at.remapeo_requerido, 'a re-mapear', 'warn', '/herramientas/sync-detalle/?cat=remapeo_requerido', 'sync-ml')
-      ].filter(Boolean);
-      document.getElementById('pe-atencion').innerHTML = chips.length ? renderChips(chips)
-        : '<span class="attn-ok">✓ Todo al día — nada requiere tu atención.</span>';
-      document.getElementById('attn-updated').textContent = 'actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
-      peMostrarAtencion();
+      // Quien tiene matcher ve también el estado de Catálogo y vínculos; si ese pedido falla,
+      // el panel de ML sigue sin ese chip en vez de caerse entero.
+      var catalogoP = tienePermiso('matcher') ? chipsCatalogo().catch(function(){ return []; }) : Promise.resolve([]);
+      catalogoP.then(function(extra){
+        var chips = [
+          peChip(at.ventas_retenidas_guardia, 'ventas retenidas · Catálogo y vínculos', 'crit', '/herramientas/catalogo-vinculos/', 'matcher'),
+          peChip(at.errores_reales, 'errores de sync', 'crit', '/herramientas/sync-detalle/?cat=errores', 'sync-ml'),
+          peChip(at.requiere_atencion_ml, 'con exceso de fotos', 'crit', '/herramientas/sync-detalle/?cat=requiere_atencion_ml', 'sync-ml'),
+          peChip(d.reactivables, 'publicaciones pausadas · reactivar', 'warn', '/herramientas/sync-detalle/?cat=reactivables', 'sync-ml'),
+          peChip(d.frenadas, 'pausadas frenadas por precio', 'warn', '/herramientas/sync-ml/#frenadas', 'sync-ml'),
+          peChip(at.sin_mapeo, 'ventas sin mapear', 'warn', '/herramientas/sync-detalle/?cat=sin_mapeo', 'sync-ml'),
+          peChip(at.remapeo_requerido, 'a re-mapear', 'warn', '/herramientas/sync-detalle/?cat=remapeo_requerido', 'sync-ml')
+        ].concat(extra).filter(Boolean);
+        document.getElementById('pe-atencion').innerHTML = chips.length ? renderChips(chips)
+          : '<span class="attn-ok">✓ Todo al día — nada requiere tu atención.</span>';
+        document.getElementById('attn-updated').textContent = 'actualizado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+        peMostrarAtencion();
+      });
     }).catch(function(){ peError('No se pudo cargar el estado de ML.', 'cargarPanelSync'); });
   }
 

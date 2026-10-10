@@ -4,9 +4,12 @@ import fs from 'node:fs';
 const vista = fs.readFileSync('./public/matcher/index.html', 'utf8');
 
 describe('Matcher: pantalla de solo lectura', () => {
-  it('avisa que quedó de solo lectura y lleva a la Bandeja de identidad', () => {
-    expect(vista).toContain('solo lectura');
-    expect(vista).toContain('/herramientas/bandeja-identidad/');
+  // Fase D, paso 6: la pantalla vieja se retiró; public/matcher/index.html es sólo un stub de redirección
+  // a Catálogo y vínculos. Los controles de solo lectura de abajo quedan como guarda: el stub no escribe.
+  it('redirige a Catálogo y vínculos y ya no lleva a la Bandeja de identidad', () => {
+    expect(vista).toContain("'catalogo-vinculos/'");
+    expect(vista).not.toContain('bandeja-identidad');
+    expect(vista).not.toContain('solo lectura');
   });
 
   it('no puede escribir: sin llamadas de vinculación ni POST', () => {
