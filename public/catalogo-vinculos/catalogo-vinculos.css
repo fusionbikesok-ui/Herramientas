@@ -112,7 +112,8 @@
 
 /* ── Tarjeta de caso (.cv-caso) ── */
 .cv-caso {
-  display: block; width: 100%; min-height: 4rem; padding: var(--sp-2); text-align: left;
+  /* flex: 0 0 auto evita que la cola (flex column con max-height) encoja la tarjeta y pise la siguiente. */
+  display: block; flex: 0 0 auto; width: 100%; min-height: 4rem; padding: var(--sp-2); text-align: left;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: inherit;
   font: inherit; cursor: pointer; position: relative;
 }
@@ -288,6 +289,8 @@
 .cv-chip-estado--fallida { color: var(--critical); border-color: var(--critical-bd); background: var(--critical-bg); }
 .cv-chip-estado--frenada { color: var(--warning); border-color: var(--warning-bd); background: var(--warning-bg); }
 .cv-chip-estado--espera { color: var(--text); border-color: var(--warning-bd); background: var(--surface2); }
+/* Cancelada: no es un rechazo de ML; va en gris neutro. */
+.cv-chip-estado--cancelada { color: var(--muted); border-color: var(--border); background: var(--surface2); }
 .cv-ejec-acciones { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .cv-ejec-acciones .ui-btn { min-height: var(--tap-min); }
 .cv-ejec-msg { font-size: var(--fs-meta); margin: 0; }
@@ -361,3 +364,5 @@
 .cv-hist__lista { margin: var(--sp-2) 0; padding-left: var(--sp-3); }
 .cv-hist__lista li { margin-bottom: .35rem; }
 .cv-vinc-card { display: grid; gap: var(--sp-2); }
+.cv-ejec-fila--cancelada .cv-ejec-fila__titulo { color: var(--muted); font-weight: 500; }
+.cv-canceladas { color: var(--muted); }

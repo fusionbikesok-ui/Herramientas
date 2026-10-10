@@ -15,7 +15,36 @@
     rodado: 'el rodado', transmision: 'la transmisión', velocidades: 'las velocidades' };
   var ICONO = { rojo: '✗', ambar: '⚠', verde: '✓', gris: '–' };
   var ESTADO_OP = { shadow: 'encolada', pendiente: 'encolada', procesando: 'encolada', verificando: 'encolada',
-    completada: 'aplicada', fallida: 'fallida', intervencion: 'frenada', bloqueada_impacto: 'espera' };  var MSG = {
+    completada: 'aplicada', fallida: 'fallida', intervencion: 'frenada', bloqueada_impacto: 'espera' };
+  // Cancelada NO es un rechazo de ML. identidad_operaciones no admite estado 'cancelada' (CHECK de la migración 082):
+  // el backend la guarda como 'fallida' con ultimo_error 'cancelada: …'. Por eso se detecta por el texto.
+  function esCancelada(o) {
+    if (!o) return false;
+    if (o.estado === 'cancelada') return true;
+    return o.estado === 'fallida' && /^cancelada\b/i.test(String(o.ultimo_error || '').trim());
+  }
+  // Texto de una cancelación: el backend manda motivo_cancelacion ('sin_cambio_sku', texto libre o null).
+  function cancelacionTxt(o) {
+    var m = o && o.motivo_cancelacion;
+    if (!m && o && /sku_anterior\s*==\s*sku_objetivo|no-op/i.test(String(o.ultimo_error || ''))) m = 'sin_cambio_sku';
+    if (m === 'sin_cambio_sku') return 'Cancelada: no hacía falta cambiar el SKU';
+    if (m) return 'Cancelada: ' + motivoTxt(m).charAt(0).toLowerCase() + motivoTxt(m).slice(1);
+    return 'Cancelada';
+  }
+  // Estado visible de una operación/pausa: 'cancelada' tiene prioridad sobre 'fallida'.
+  function estOp(o) { return esCancelada(o) ? 'cancelada' : (ESTADO_OP[o.estado] || o.estado); }
+  // Fallidas reales: data.fallidas del backend ya excluye canceladas (y data.canceladas viene aparte).
+  // Si el backend todavía no manda data.canceladas (build anterior), se descuentan en el cliente.
+  function fallidasReales(e) {
+    var f = (e && e.fallidas) || 0;
+    if (e && typeof e.canceladas === 'number') return f;
+    return f - ((e && e.operaciones) || []).filter(function (o) { return o.estado === 'fallida' && esCancelada(o); }).length;
+  }
+  function canceladasN(e) {
+    if (e && typeof e.canceladas === 'number') return e.canceladas;
+    return ((e && e.operaciones) || []).filter(esCancelada).length;
+  }
+  var MSG = {
     NOT_FOUND: 'Este caso ya no existe. Se resolvió o lo sacaron.',
     INVALID_INPUT: 'Falta completar un dato (por ejemplo, el motivo). Revisá lo marcado.',
     omitir_requiere_override: 'Esta publicación está en "no sincronizar". Quitalo antes de vincular.',
@@ -48,7 +77,8 @@
     identidad_ml_archivada: 'Publicación archivada en ML',
     gtin_marcado_incorrecto: 'GTIN marcado como incorrecto',
     regla_proteccion: 'Regla de protección',
-    proteccion_woo: 'Protección de Woo'
+    proteccion_woo: 'Protección de Woo',
+    decision_no_aplicada: 'Decisión no aplicada'
   };
   function motivoTxt(code) {
     if (code == null || code === '') return '';
@@ -60,21 +90,20 @@
   // Único mapa de status de publicaciones ML (valores crudos de ML -> texto para la operadora).
   // Todas las vistas que muestran status de ML pasan por estadoMlTxt().
   var ESTADO_ML_TXT = {
-    active: 'activa',
-    paused: 'pausada',
-    closed: 'cerrada',
-    under_review: 'en revisión',
-    inactive: 'inactiva',
-    not_yet_active: 'todavía no activa',
-    payment_required: 'pendiente de pago',
-    banned: 'bloqueada'
+    active: 'Activa',
+    paused: 'Pausada',
+    closed: 'Cerrada',
+    under_review: 'En revisión',
+    inactive: 'Inactiva',
+    not_yet_active: 'Todavía no activa',
+    payment_required: 'Pendiente de pago',
+    banned: 'Bloqueada'
   };
   function estadoMlTxt(code) {
-    if (code == null || code === '') return 'sin dato';
+    if (code == null || code === '') return 'Sin dato';
     var k = String(code).trim();
     if (ESTADO_ML_TXT[k]) return ESTADO_ML_TXT[k];
-    var t = k.replace(/_/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-    return t || 'sin dato';
+    return motivoTxt(k) || 'Sin dato';
   }
   // "Reintenta José" pasa a ser "Lo reintenta un admin"; para un admin, "Reintentalo".
   function reintentaTxt() { return S.isAdmin ? 'Reintentalo.' : 'Lo reintenta un admin.'; }
@@ -456,7 +485,7 @@
       S.detalleError = null;
       S.detalle = r.data.data;
       // /ejecucion completo solo si el caso lo necesita (intervención, o hay fallidas que mirar); si no, sirve la copia cacheada.
-      var necesitaEjec = !S.ejec || S.ejec.fallidas > 0 || S.detalle.caso.estado === 'intervencion';
+      var necesitaEjec = !S.ejec || fallidasReales(S.ejec) > 0 || S.detalle.caso.estado === 'intervencion';
       var ej = necesitaEjec ? api('GET', '/ejecucion') : Promise.resolve(null);
       return ej.then(function (re) {
         if (re && re.ok) S.ejec = re.data.data;
@@ -538,7 +567,7 @@
 
   function operacionDelCaso() {
     var ops = (S.ejec && S.ejec.operaciones) || [];
-    return ops.find(function (o) { return o.caso_id === S.casoId && ['fallida', 'intervencion', 'bloqueada_impacto'].indexOf(o.estado) !== -1; }) || null;
+    return ops.find(function (o) { return o.caso_id === S.casoId && !esCancelada(o) && ['fallida', 'intervencion', 'bloqueada_impacto'].indexOf(o.estado) !== -1; }) || null;
   }
 
   function tarjetaOperacion() {
@@ -1105,8 +1134,9 @@
 
   // ── Ejecución ──────────────────────────────────────────────────────────────────────────────────
   function chipEstado(estado, o) {
-    var k = ESTADO_OP[estado] || estado;
+    var k = o ? estOp(o) : (ESTADO_OP[estado] || estado);
     var m = {
+      cancelada: ['cv-chip-estado cv-chip-estado--cancelada', '—', cancelacionTxt(o)],
       encolada: ['cv-chip-estado', '↻', 'En cola para ML'],
       aplicada: ['cv-chip-estado cv-chip-estado--aplicada', '✓', 'Aplicada en ML'],
       fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', errMlTxt(o.ultimo_error) + '. ' + reintentaTxt()],
@@ -1129,7 +1159,7 @@
       var nuevos = {};
       var cambios = [];
       (e.operaciones || []).forEach(function (o) {
-        var k = 'op' + o.id; var est = ESTADO_OP[o.estado] || o.estado;
+        var k = 'op' + o.id; var est = estOp(o);
         nuevos[k] = est;
         if (anteriores && anteriores[k] && anteriores[k] !== est) cambios.push(o.sku_objetivo + ': ' + est);
       });
@@ -1144,17 +1174,18 @@
 
   function renderEjecucion() {
     var e = S.ejec; if (!e) return;
-    var fall = e.fallidas || 0;
+    var fall = fallidasReales(e);
     var ops = e.operaciones || [];
-    var frenadas = ops.filter(function (o) { return ESTADO_OP[o.estado] === 'frenada'; }).length;
-    var encoladas = ops.filter(function (o) { return ESTADO_OP[o.estado] === 'encolada'; }).length;
+    var frenadas = ops.filter(function (o) { return estOp(o) === 'frenada'; }).length;
+    var encoladas = ops.filter(function (o) { return estOp(o) === 'encolada'; }).length;
     $('#ejec-cabecera').innerHTML = '<div class="cv-cabecera-ejec">'
       + (fall > 0
         ? '<span class="cv-contador cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(fall, 'fallida', 'fallidas') + '</span>'
         : '<span class="cv-contador cv-contador--ok"><span aria-hidden="true">✓</span> Sin fallidas</span>')
-      + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + cuenta(frenadas, 'frenada', 'frenadas') + '</span> · ↻ ' + encoladas + ' en cola</span></div>'
+      + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + cuenta(frenadas, 'frenada', 'frenadas') + '</span> · ↻ ' + encoladas + ' en cola'
+      + (canceladasN(e) > 0 ? ' · <span class="cv-canceladas">' + canceladasN(e) + ' cancelada' + (canceladasN(e) === 1 ? '' : 's') + '</span>' : '') + '</span></div>'
       + saludHtml();
-    var riesgo = (e.pausas || []).filter(function (p) { return p.impacto_hermanas > 0 && p.estado !== 'completada' && p.estado !== 'cancelada'; });
+    var riesgo = (e.pausas || []).filter(function (p) { return p.impacto_hermanas > 0 && p.estado !== 'completada' && !esCancelada(p); });
     var bloqueRiesgo = riesgo.length
       ? '<section class="ui-aviso ui-aviso--atencion cv-bloque" aria-labelledby="riesgo-h"><h3 id="riesgo-h" class="cv-h2"><span aria-hidden="true">⚠</span> Pausas con riesgo</h3>'
         + riesgo.map(function (p) {
@@ -1162,8 +1193,9 @@
         }).join('') + '</section>'
       : '';
     var filas = ops.map(function (o) {
-      var est = ESTADO_OP[o.estado] || o.estado;
+      var est = estOp(o);
       var fallida = est === 'fallida';
+      var cancelada = est === 'cancelada';
       var acciones = '';
       var enviandoEsta = S.busyOp === o.id;
       var dis = 'aria-disabled="' + !!S.busy + '"';
@@ -1174,7 +1206,7 @@
       var msg = S.ejecMsgs[o.id];
       var msgHtml = msg ? '<p class="ui-resumen cv-ejec-msg' + (msg.error ? ' cv-ejec-msg--error' : '') + '" role="' + (msg.error ? 'alert' : 'status') + '">'
         + (msg.error ? '✗ ' : '') + esc(msg.error || msg.texto) + '</p>' : '';
-      return '<article class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + '" data-op="' + o.id + '">'
+      return '<article class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + (cancelada ? ' cv-ejec-fila--cancelada' : '') + '" data-op="' + o.id + '">'
         + '<div class="cv-ejec-fila__info">'
         + '<div class="cv-ejec-fila__cab"><strong class="cv-ejec-fila__titulo">' + esc(o.nombre_canonico || o.ml_key) + '</strong>' + chipEstado(o.estado, o) + '</div>'
         + '<p class="ui-resumen cv-ejec-fila__meta"><span class="ui-id">' + esc(o.sku_objetivo || '') + '</span> · ' + esc(fecha(o.actualizada_en || o.iniciada_en)) + '</p>'
@@ -1189,7 +1221,7 @@
 
   function actualizarContadoresTab() {
     var e = S.ejec; if (!e) return;
-    var n = e.fallidas || 0;
+    var n = fallidasReales(e);
     $('#cnt-ejecucion').innerHTML = n > 0
       ? '<span class="cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(n, 'fallida', 'fallidas') + '</span>'
       : '<span class="ui-resumen">' + cuenta(0, 'fallida', 'fallidas') + '</span>';
