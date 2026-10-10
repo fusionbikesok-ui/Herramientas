@@ -219,6 +219,7 @@
       var pausada = S.detalle && S.detalle.caso && S.detalle.caso.publicacion && S.detalle.caso.publicacion.status === 'paused';
       return pausada ? 'Vínculo actualizado, ML ya tenía este SKU.' : 'Activa: ML ya tiene este SKU, no hay nada que cambiar.';
     }
+    if (d.code === 'INVALID_INPUT' && d.error) return d.error;
     if (MSG[d.code]) return MSG[d.code];
     return d.error || ('Error HTTP ' + res.status);
   }
@@ -475,6 +476,7 @@
   function abrirCaso(id, opts) {
     opts = opts || {};
     S.casoId = id;
+    if (S.queryCandCaso !== id) { S.queryCand = ''; S.queryCandCaso = id; }
     S.candidatos = null; S.candidatosError = null; S.elegido = null; S.elegidoIdx = null; S.matrizError = null; S.matrizCargando = false;
     S.hermanas = null; S.accionError = null; S.accionInfo = null; S.conflictoVersion = null; S.retAbierta = null;
     var d = $('#cv-detalle');
@@ -525,9 +527,11 @@
     S.queryCand = q || '';
     var pub = (S.detalle && S.detalle.caso && S.detalle.caso.publicacion) || {};
     if (!S.queryCand.trim()) { S.candidatos = []; return Promise.resolve(); }
+    var casoAntes = S.casoId;
     S.candCargando = true; renderDetalle();
     var extra = (pub.gtin ? '&gtin_ml=' + enc(pub.gtin) : '') + (pub.seller_sku ? '&sku_ml=' + enc(pub.seller_sku) : '');
     return identidad('/productos/buscar?q=' + enc(S.queryCand.trim()) + extra).then(function (r) {
+      if (S.casoId !== casoAntes) return; // respuesta tardía de otro caso: se descarta
       S.candCargando = false;
       if (!r.ok) { S.candidatosError = mensajeDe(r); S.candidatos = []; return; }
       S.candidatosError = null;
@@ -535,12 +539,13 @@
     });
   }
 
-  function elegirCandidato(idx) {
+  function elegirCandidato(idx, porTeclado) {
     var c = (S.candidatos || [])[idx];
     if (!c || !S.detalle) return Promise.resolve();
     S.elegido = c; S.elegidoIdx = idx;
     S.accionError = null; S.accionInfo = null;
-    S.focoPendiente = '[data-accion="elegir"][data-idx="' + idx + '"]';
+    // Por teclado el foco va al contenedor (no interactivo): así Enter vincula y no vuelve a elegir la candidata.
+    S.focoPendiente = porTeclado ? '#cv-detalle' : '[data-accion="elegir"][data-idx="' + idx + '"]';
     return cargarMatriz(c);
   }
 
@@ -1115,7 +1120,13 @@
     }
     var hist = $('#det-hist');
     if (ev.key === 'Escape' && hist && hist.open) { ev.preventDefault(); hist.open = false; S.histOpen = false; hist.querySelector('summary').focus(); return; }
-    if (ev.key === 'Escape' && S.hermanas) { ev.preventDefault(); S.hermanas = null; renderDetalle(); return; }
+    if (ev.key === 'Escape' && S.hermanas) { ev.preventDefault(); S.hermanas = null; renderDetalle(); enfocarPorSelector('[data-accion="vincular"]'); return; }
+    if (ev.key === 'Escape' && S.retAbierta) {
+      ev.preventDefault();
+      var ordAb = S.retAbierta; S.retAbierta = null; renderRetenidas();
+      enfocarPorSelector('[data-accion="liberar-abrir"][data-orden="' + ordAb + '"]');
+      return;
+    }
     if (ev.key === 'Escape' && S.conflictoVersion) { ev.preventDefault(); S.conflictoVersion = null; renderDetalle(); return; }
     if (ev.key === 'Escape' && S.adminForm) {
       ev.preventDefault();
@@ -1131,7 +1142,7 @@
     var interactivo = t && (t.tagName === 'BUTTON' || t.tagName === 'A');
     switch (ev.key) {
       case '1': case '2': case '3':
-        if (enCaso && S.candidatos && S.candidatos[Number(ev.key) - 1] && !soloLecturaActual()) { ev.preventDefault(); elegirCandidato(Number(ev.key) - 1); }
+        if (enCaso && S.candidatos && S.candidatos[Number(ev.key) - 1] && !soloLecturaActual()) { ev.preventDefault(); elegirCandidato(Number(ev.key) - 1, true); }
         break;
       case 'Enter':
         if (!interactivo && enCaso && !soloLecturaActual()) { ev.preventDefault(); vincular(); }
@@ -1395,15 +1406,31 @@
     });
   }
 
+  // Validadores del backend: expected_version y evidence_fingerprint del caso (vienen en cada operación de /ejecucion).
+  function opEjec(id) {
+    return ((S.ejec && S.ejec.operaciones) || []).find(function (x) { return x.id === id; })
+      || ((S.ejecSnap && S.ejecSnap.operaciones) || []).find(function (x) { return x.id === id; }) || null;
+  }
+  function camposVersion(op) {
+    return op ? { expected_version: op.caso_expected_version, evidence_fingerprint: op.evidencia_fingerprint } : {};
+  }
   function reintentarOp(id, accion) {
     var clave = accion + ':' + id;
     if (S.busy || !puedeEscribir()) return;
+    var op = opEjec(id);
+    var body = Object.assign({ operation_id: opIdPara(clave) }, camposVersion(op));
     S.busy = accion; S.busyOp = id; S.ejecMsgs[id] = { texto: 'Enviando…' };
     renderEjecucion();
-    api('POST', '/operaciones/' + id + '/' + (accion === 'reintentar' ? 'reintentar' : 'confirmar-impacto'), { operation_id: opIdPara(clave) }).then(function (r) {
+    api('POST', '/operaciones/' + id + '/' + (accion === 'reintentar' ? 'reintentar' : 'confirmar-impacto'), body).then(function (r) {
       S.busy = null; S.busyOp = null;
       if (r.ok || (!r.red && r.status !== 409 && r.status !== 0)) soltarOpId(clave);
       if (r.red) { S.ejecMsgs[id] = { error: MSG_ERROR_SIN_RED }; anunciar(MSG_ERROR_SIN_RED, 'alerta'); return renderEjecucion(); }
+      if (r.status === 409) {
+        // Caso o evidencia cambiaron: se recarga Ejecución y se avisa claro.
+        var aviso = mensajeDe(r) + ' Se recargó Ejecución: revisá la operación y volvé a intentar.';
+        S.ejecMsgs[id] = { error: aviso }; anunciar(aviso, 'alerta');
+        return cargarEjecucion();
+      }
       if (!r.ok) { S.ejecMsgs[id] = { error: mensajeDe(r) }; anunciar(mensajeDe(r), 'alerta'); return renderEjecucion(); }
       S.ejecMsgs[id] = { texto: 'Enviado · En cola para ML. Se actualiza solo.' };
       anunciar('Enviado. Mirá el estado en Ejecución.', 'estado');
@@ -1489,9 +1516,9 @@
         err.textContent = mensajeDe(r); err.hidden = false; return;
       }
       S.retAbierta = null;
-      if (sigueCausa) { S.retAviso[orden] = true; renderRetenidas(); anunciar('Liberada, pero se va a volver a retener.', 'alerta'); return; }
+      if (sigueCausa) { S.retAviso[orden] = true; renderRetenidas(); anunciar('Liberada, pero se va a volver a retener.', 'alerta'); enfocarPorSelector('#tab-retenidas'); return; }
       anunciar('Venta liberada.', 'estado');
-      cargarRetenidas();
+      cargarRetenidas().then(function () { enfocarPorSelector('#ret-cuerpo [data-accion="liberar-abrir"], #tab-retenidas'); });
     });
   }
 
@@ -2000,7 +2027,11 @@
         case 'reintentar': reintentarOp(Number(el.getAttribute('data-op')), 'reintentar'); break;
         case 'confirmar-impacto': abrirConfirmarImpacto(Number(el.getAttribute('data-op'))); break;
         case 'liberar-abrir': S.retAbierta = el.getAttribute('data-orden'); renderRetenidas(); enfocarPorSelector('#ret-cuerpo textarea'); break;
-        case 'liberar-cancelar': S.retAbierta = null; renderRetenidas(); break;
+        case 'liberar-cancelar':
+          var ordCan = el.closest('[data-orden]').getAttribute('data-orden');
+          S.retAbierta = null; renderRetenidas();
+          enfocarPorSelector('[data-accion="liberar-abrir"][data-orden="' + ordCan + '"]');
+          break;
         case 'ver-conflicto':
           var valor = el.getAttribute('data-valor');
           if (S.conflictoAbierto === valor) { S.conflictoAbierto = null; cargarConflictos(); break; }
@@ -2132,7 +2163,7 @@
       // Destrabar: la operación en intervención es la que se destraba.
       var op = (S.ejecSnap && S.ejecSnap.operaciones || []).find(function (o) { return o.caso_id === c.id && o.estado === 'intervencion'; });
       if (!op) { err.textContent = 'No hay una operación en intervención para este caso.'; err.hidden = false; return; }
-      body = { operation_id: opIdPara('destrabar:' + op.id), motivo: motivo };
+      body = Object.assign({ operation_id: opIdPara('destrabar:' + op.id), motivo: motivo }, camposVersion(op));
       ruta = '/operaciones/' + op.id + '/destrabar';
       clave = 'destrabar:' + op.id;
     }
@@ -2140,7 +2171,12 @@
     api('POST', ruta, body).then(function (r) {
       S.busy = null;
       if (r.red) { err.textContent = MSG_ERROR_SIN_RED; err.hidden = false; return; }
-      if (clave) soltarOpId(clave);
+      if (clave && r.status !== 409) soltarOpId(clave);
+      if (r.status === 409) {
+        err.textContent = mensajeDe(r) + ' Se recargó el caso: revisá y volvé a intentar.'; err.hidden = false;
+        cargarEjecucion();
+        return abrirCaso(c.id, { foco: false });
+      }
       if (!r.ok) { err.textContent = mensajeDe(r); err.hidden = false; return; }
       S.adminForm = null;
       S.guardado = { caso: c.id, texto: tipo === 'link' ? 'Guardado · Link de pago' : 'Guardado · Destrabado' };
