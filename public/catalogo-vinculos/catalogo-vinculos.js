@@ -60,7 +60,8 @@
     retenidas: null, retError: null, retAbierta: null, retAviso: {},
     vincResultados: null, vincQ: '', vincPanel: null, identMsg: null,
     conflictos: null, conflictosError: null, conflictoAbierto: null, conflictoDetalle: null, confResolver: null,
-    estadoRaw: null, adminForm: null, notaTxt: '', notaError: null, histOpen: false, franjaLista: null
+    estadoRaw: null, adminForm: null, notaTxt: '', notaError: null, histOpen: false, franjaLista: null,
+    matrizSeq: 0, pubsCache: {}, confMotivo: null
   };
 
   // ── Red ───────────────────────────────────────────────────────────────────────────────────────
@@ -163,18 +164,22 @@
       var sinRespaldo = cuentaLista(e.sin_respaldo_woo);
       var protec = cuentaLista(e.esperando_proteccion);
       var chips = [
-        { lbl: 'Salud de lectura', txt: salud.sano ? 'Sana' : (salud.degradado ? 'Degradada' : 'Con observación'), alerta: !salud.sano, accion: 'ir-ejecucion' },
-        { lbl: 'Conciliación', txt: conc.exacta ? 'Exacta' : 'Sin conciliar', alerta: !conc.exacta, accion: 'ir-ejecucion' },
-        { lbl: 'Conflictos de bolsa compartida', txt: String(bolsa), alerta: bolsa > 0, accion: 'franja-lista', lista: 'bolsa' },
-        { lbl: 'Vendiendo sin respaldo en Woo', txt: String(sinRespaldo), critico: sinRespaldo > 0, accion: 'franja-lista', lista: 'sinrespaldo' },
-        { lbl: 'Protección pendiente', txt: String(protec), alerta: protec > 0, accion: 'franja-lista', lista: 'proteccion' }
+        // lbl: etiqueta corta visible; largo: texto completo (title y aria-label).
+        { lbl: 'Lectura', largo: 'Salud de lectura', txt: salud.sano ? 'Sana' : (salud.degradado ? 'Degradada' : 'Con observación'), alerta: !salud.sano, accion: 'ir-ejecucion' },
+        { lbl: 'Conciliación', largo: 'Conciliación', txt: conc.exacta ? 'Exacta' : 'Sin conciliar', alerta: !conc.exacta, accion: 'ir-ejecucion' },
+        { lbl: 'Bolsa compartida', largo: 'Conflictos de bolsa compartida', txt: String(bolsa), alerta: bolsa > 0, accion: 'franja-lista', lista: 'bolsa' },
+        { lbl: 'Sin respaldo Woo', largo: 'Vendiendo sin respaldo en Woo', txt: String(sinRespaldo), critico: sinRespaldo > 0, accion: 'franja-lista', lista: 'sinrespaldo' },
+        { lbl: 'Protección pendiente', largo: 'Protección pendiente', txt: String(protec), alerta: protec > 0, accion: 'franja-lista', lista: 'proteccion' }
       ];
       cont.innerHTML = chips.map(function (c) {
         var clase = c.critico ? ' cv-chip-salud--critico' : (c.alerta ? ' cv-chip-salud--alerta' : '');
         var icono = c.critico ? '✗ ' : (c.alerta ? '⚠ ' : '');
+        var completo = c.largo + ': ' + c.txt;
         return '<button type="button" class="cv-chip-salud' + clase + '" data-accion="' + c.accion + '"'
+          + ' title="' + esc(completo) + '" aria-label="' + esc(completo) + '"'
           + (c.lista ? ' data-lista="' + c.lista + '" aria-expanded="' + (S.franjaLista === c.lista) + '"' : '')
-          + '><span>' + esc(c.lbl) + ':</span> <b>' + icono + esc(c.txt) + '</b></button>';
+          + '><span class="cv-chip-salud__lbl">' + esc(c.lbl) + '</span>'
+          + '<b class="cv-chip-salud__val">' + icono + esc(c.txt) + '</b></button>';
       }).join('');
       renderFranjaLista();
     });
@@ -423,9 +428,12 @@
 
   // Matriz contra un candidato. Si falla, Vincular queda bloqueado hasta reintentar (no se decide a ciegas).
   function cargarMatriz(c) {
+    // Contador de petición: solo la última vigente baja la bandera y aplica resultado; las viejas se descartan.
+    var req = ++S.matrizSeq;
     S.matrizError = null; S.matrizCargando = true;
     aplicarBloqueo();
     return api('GET', '/casos/' + S.casoId + '?sku=' + enc(c.sku_woo || '')).then(function (r) {
+      if (req !== S.matrizSeq) return;
       S.matrizCargando = false;
       if (S.elegido !== c) return;
       if (r.ok) { S.detalle.matriz = r.data.data.matriz; }
@@ -509,9 +517,12 @@
     var reglaTxt = regla.frena ? 'Stock 0 por ' + (regla.motivo || 'protección') : ('Stock de Woo ' + (regla.stock_esperado != null ? regla.stock_esperado : 'sin dato'));
     var desfase = S.detalle.ml_no_refleja_regla
       ? '<div class="ui-aviso ui-aviso--atencion cv-aviso-desfase cv-aviso-fijo" role="note"><span class="cv-icono" aria-hidden="true">⚠</span><span>ML todavía no refleja la regla.</span></div>' : '';
+    var vig = S.detalle.vinculo_vigente;
+    var vigTxt = vig ? 'Vínculo vigente: SKU ' + vig.sku + ' · desde ' + fecha(vig.desde) : 'Vínculo vigente: sin vínculo activo';
     return '<div class="cv-datos">'
       + '<div class="cv-dato ui-panel"><h3 class="ui-label">Observado en ML</h3><p class="cv-dato__valor">' + esc(estadoML) + ' · cantidad ' + esc(obs.cantidad != null ? obs.cantidad : 'sin dato') + '</p></div>'
       + '<div class="cv-dato ui-panel"><h3 class="ui-label">Lo que manda la regla</h3><p class="cv-dato__valor">' + esc(reglaTxt) + '</p></div>'
+      + '<div class="cv-dato ui-panel"><p class="cv-dato__valor" data-vig="1">' + esc(vigTxt) + '</p></div>'
       + '</div>' + desfase;
   }
 
@@ -567,7 +578,6 @@
       + tarjetaOperacion()
       + datosHtml()
       + candidatosHtml(soloLectura)
-      + (S.candidatos && !soloLectura ? '' : '')
       + (soloLectura ? '' : '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>')
       + (soloLectura ? '' : accionesHtml())
       + historialHtml()
@@ -1117,11 +1127,12 @@
     // cae a la copia del caso abierto y, si tampoco hay, muestra solo la cantidad.
     var lista = Array.isArray(o.variaciones) && o.variaciones.length ? o.variaciones
       : ((S.detalle && S.detalle.caso && S.detalle.caso.id === o.caso_id && S.detalle.hermanas_item) || []);
+    var MAX_IMP = 10;
     var cuerpo = '<p>Esto pausa ' + n + ' variaciones en ML' + (lista.length ? ':' : '.') + '</p>'
-      + (lista.length ? '<ul class="cv-impacto-lista">' + lista.slice(0, 10).map(function (h) {
+      + (lista.length ? '<ul class="cv-impacto-lista">' + lista.slice(0, MAX_IMP).map(function (h) {
           return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '')
             + (h.status ? ' <span class="ui-label">' + esc(h.status) + '</span>' : '') + '</li>';
-        }).join('') + '</ul>' : '')
+        }).join('') + (lista.length > MAX_IMP ? '<li class="ui-resumen">y ' + (lista.length - MAX_IMP) + ' más</li>' : '') + '</ul>' : '')
       + '<p class="ui-resumen">La pausa va como operación en la cola de Identidad. Su resultado aparece en Ejecución.</p>';
     $('#dlg-imp-cuerpo').innerHTML = cuerpo;
     var ok = $('#dlg-imp-ok');
@@ -1301,20 +1312,38 @@
   }
 
   // Publicaciones ML de un producto Woo. Endpoint: GET /api/catalogo-vinculos/productos/:id/publicaciones.
+  // Toggle real: aria-expanded refleja si la caja está abierta. Cache por producto; un error queda
+  // visible y el próximo clic (con la caja abierta) cierra; reabrir reintenta si la última fue error.
+  function pintarPublicaciones(caja, entrada) {
+    if (entrada.error) { caja.innerHTML = '<p class="cv-error">No pudimos listar las publicaciones de este producto. Volvé a tocar el botón para reintentar.</p>'; return; }
+    var lista = entrada.lista;
+    caja.innerHTML = lista.length
+      ? '<ul class="cv-lista-hermanas">' + lista.map(function (x) {
+          return '<li><span class="ui-id">' + esc(x.clave) + '</span> ' + esc(x.titulo || '') + ' <span class="ui-label">' + esc(x.status || '') + '</span>'
+            + ' <button type="button" class="ui-btn" data-accion="vinc-ml" data-clave="' + esc(x.clave) + '">Ver vínculo</button></li>';
+        }).join('') + '</ul>'
+      : '<p class="ui-resumen">Este producto no tiene publicaciones ML.</p>';
+  }
+
   function verPublicacionesProducto(id, boton) {
     var caja = $('[data-pubs="' + id + '"]');
     if (!caja) return;
+    var abierta = boton && boton.getAttribute('aria-expanded') === 'true';
+    if (abierta) {
+      if (boton) boton.setAttribute('aria-expanded', 'false');
+      caja.hidden = true; caja.innerHTML = '';
+      return;
+    }
+    if (boton) boton.setAttribute('aria-expanded', 'true');
+    caja.hidden = false;
+    var previa = S.pubsCache[id];
+    if (previa && !previa.error) { pintarPublicaciones(caja, previa); return; }
     caja.innerHTML = '<p class="ui-resumen">Buscando publicaciones…</p>';
     api('GET', '/productos/' + enc(id) + '/publicaciones').then(function (r) {
-      if (boton) boton.setAttribute('aria-expanded', 'true');
-      if (!r.ok) { caja.innerHTML = '<p class="cv-error">No pudimos listar las publicaciones de este producto.</p>'; return; }
-      var lista = r.data.data || [];
-      caja.innerHTML = lista.length
-        ? '<ul class="cv-lista-hermanas">' + lista.map(function (x) {
-            return '<li><span class="ui-id">' + esc(x.clave) + '</span> ' + esc(x.titulo || '') + ' <span class="ui-label">' + esc(x.status || '') + '</span>'
-              + ' <button type="button" class="ui-btn" data-accion="vinc-ml" data-clave="' + esc(x.clave) + '">Ver vínculo</button></li>';
-          }).join('') + '</ul>'
-        : '<p class="ui-resumen">Este producto no tiene publicaciones ML.</p>';
+      // Si el usuario cerró mientras cargaba, no reabrimos la caja.
+      if (!boton || boton.getAttribute('aria-expanded') !== 'true') return;
+      S.pubsCache[id] = r.ok ? { lista: r.data.data || [] } : { error: true };
+      pintarPublicaciones(caja, S.pubsCache[id]);
     });
   }
 
@@ -1488,7 +1517,7 @@
     return '<div class="cv-prod-conf">'
       + '<p class="ui-resumen">«Es de este» le deja el código a ese producto y marca a todos los demás como incorrectos. «No le corresponde» descarta sólo a ese.</p>'
       + (escribe ? '<div class="cv-campo"><label class="ui-label" for="conf-motivo">Motivo <span>(obligatorio)</span></label>'
-      + '<input id="conf-motivo" class="ui-input" type="text" autocomplete="off" value="' + esc(cr && cr.valor === d.valor_normalizado ? cr.motivo : '') + '"><p id="conf-err" class="cv-error" hidden></p></div>' : '<p class="cv-leyenda-pc">Para resolver conflictos, usá la PC.</p>')
+      + '<input id="conf-motivo" class="ui-input" type="text" autocomplete="off" value="' + esc(cr && cr.valor === d.valor_normalizado ? cr.motivo : (S.confMotivo && S.confMotivo.valor === d.valor_normalizado ? S.confMotivo.motivo : '')) + '"><p id="conf-err" class="cv-error" hidden></p></div>' : '<p class="cv-leyenda-pc">Para resolver conflictos, usá la PC.</p>')
       + confirmar
       + filas + (d.truncado ? '<p class="ui-resumen">Se muestran los ' + esc((d.productos || []).length) + ' con más stock, de ' + esc(d.total_productos) + '.</p>' : '')
       + '</div>';
@@ -1522,7 +1551,7 @@
     llamar('POST', IDENT + ruta, body).then(function (r) {
       S.busy = null; aplicarBloqueo();
       if (!r.ok) { var e2 = $('#conf-err'); if (e2) { e2.textContent = mensajeDe(r); e2.hidden = false; } return; }
-      S.conflictoAbierto = null; S.conflictoDetalle = null; S.confResolver = null;
+      S.conflictoAbierto = null; S.conflictoDetalle = null; S.confResolver = null; S.confMotivo = null;
       anunciar('Código resuelto: ' + valor, 'estado');
       cargarConflictos();
     });
@@ -1555,7 +1584,13 @@
   // Conteos de pestañas (fallidas y retenidas) al abrir la pantalla.
   function actualizarContadoresIniciales() {
     api('GET', '/ejecucion').then(function (r) { if (r.ok) { S.ejec = r.data.data; actualizarContadoresTab(); } });
-    api('GET', '/retenidas').then(function (r) { if (r.ok) $('#cnt-retenidas').textContent = '· ' + (r.data.data || []).length; });
+    // Las retenidas se guardan acá (no solo al abrir la tab) para que el link del caso aparezca sin visitarla.
+    api('GET', '/retenidas').then(function (r) {
+      if (!r.ok) return;
+      S.retenidas = r.data.data || [];
+      $('#cnt-retenidas').textContent = '· ' + S.retenidas.length;
+      if (S.detalle) renderDetalle();
+    });
   }
 
   // ── Eventos (delegación) ──────────────────────────────────────────────────────────────────────
@@ -1723,7 +1758,10 @@
         case 'ident-guardar': identGuardar(); break;
         case 'resolver': pedirConfirmacionResolver(el); break;
         case 'resolver-ok': if (S.confResolver) resolverConflicto({ accion: 'resolver', valor: S.confResolver.valor, producto: S.confResolver.ganador }); break;
-        case 'resolver-cancelar': S.confResolver = null; cargarConflictos(); break;
+        case 'resolver-cancelar':
+          // Cancelar la confirmación no borra el motivo que ya escribió.
+          if (S.confResolver) S.confMotivo = { valor: S.confResolver.valor, motivo: S.confResolver.motivo };
+          S.confResolver = null; cargarConflictos(); break;
         case 'incorrecto':
           if (!window.confirm('¿Descartar este código para ese producto? Los demás productos no cambian.')) break;
           resolverConflicto({ accion: 'incorrecto', valor: el.getAttribute('data-valor'), producto: el.getAttribute('data-producto') }); break;
