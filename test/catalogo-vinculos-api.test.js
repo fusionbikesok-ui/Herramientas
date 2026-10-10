@@ -324,6 +324,54 @@ describe('API de Catálogo y vínculos', () => {
     });
   });
 
+  describe('ejecución: canceladas no cuentan como fallidas', () => {
+    // identidad_operaciones no tiene estado 'cancelada' (CHECK de 082/091): Fase B la guarda como 'fallida' con
+    // ultimo_error 'cancelada: …'. La API la reconoce por ese marcador y la expone como estado 'cancelada'.
+    function opConEstado(id, { sku_anterior, sku_objetivo, estado, ultimo_error }) {
+      const c = caso(id);
+      return request(app(operador)).post(`${BASE}/casos/${c.f.id}/decisiones`)
+        .send({ tipo: 'vincular', product_id: c.p.id, operation_id: `op-${id}`, expected_version: c.f.expected_version, evidence_fingerprint: c.f.evidencia_fingerprint })
+        .then(() => db.prepare('UPDATE identidad_operaciones SET sku_anterior=?, sku_objetivo=?, estado=?, ultimo_error=? WHERE operation_id=?')
+          .run(sku_anterior, sku_objetivo, estado, ultimo_error, `op-${id}`));
+    }
+
+    it('una cancelada (no-op) y una fallida real: fallidas=1, canceladas=1, estado y motivo por operación', async () => {
+      await opConEstado(2501, { sku_anterior: 'FB-2501', sku_objetivo: 'FB-2501', estado: 'fallida', ultimo_error: 'cancelada: sku_anterior == sku_objetivo (no-op de SKU)' });
+      await opConEstado(2502, { sku_anterior: 'VIEJO', sku_objetivo: 'FB-2502', estado: 'fallida', ultimo_error: 'ML rechazó el SKU' });
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      expect(r.status).toBe(200);
+      expect(r.body.data.fallidas).toBe(1);
+      expect(r.body.data.canceladas).toBe(1);
+      const noop = r.body.data.operaciones.find((o) => o.ml_key === 'MLA2501|');
+      expect(noop).toMatchObject({ estado: 'cancelada', estado_db: 'fallida', motivo_cancelacion: 'sin_cambio_sku' });
+      const real = r.body.data.operaciones.find((o) => o.ml_key === 'MLA2502|');
+      expect(real).toMatchObject({ estado: 'fallida', estado_db: 'fallida', motivo_cancelacion: null });
+    });
+
+    it('cancelación explícita (sku distinto): motivo_cancelacion es el texto tras el prefijo', async () => {
+      await opConEstado(2503, { sku_anterior: 'A', sku_objetivo: 'B', estado: 'fallida', ultimo_error: 'cancelada: duplicada de otra clave' });
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      expect(r.body.data.fallidas).toBe(0);
+      expect(r.body.data.canceladas).toBe(1);
+      expect(r.body.data.operaciones[0]).toMatchObject({ estado: 'cancelada', motivo_cancelacion: 'duplicada de otra clave' });
+    });
+
+    it('pausas: fallida cuenta en fallidas; cancelada cuenta en canceladas', async () => {
+      db.prepare(`INSERT INTO identidad_pausas (operation_id,ml_key,item_id,motivo,estado,creada_por,creada_en,actualizada_en)
+        VALUES ('p-f','MLA9001|','MLA9001','m','fallida','ana',?,?), ('p-c','MLA9002|','MLA9002','m','cancelada','ana',?,?)`).run(ISO, ISO, ISO, ISO);
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      expect(r.body.data.fallidas).toBe(1);
+      expect(r.body.data.canceladas).toBe(1);
+    });
+
+    it('estado de salud: operaciones_pendientes excluye canceladas', async () => {
+      await opConEstado(2504, { sku_anterior: 'FB-2504', sku_objetivo: 'FB-2504', estado: 'fallida', ultimo_error: 'cancelada: sku_anterior == sku_objetivo (no-op de SKU)' });
+      const r = await request(app(lector)).get(`${BASE}/estado`);
+      expect(r.body.data.salud.operaciones_pendientes).toBe(0);
+      expect(r.body.data.salud.operaciones_canceladas).toBe(1);
+    });
+  });
+
   describe('ejecución: variaciones de las operaciones con impacto en hermanas', () => {
     it('sin operaciones: listas vacías y contadores en cero', async () => {
       const r = await request(app(lector)).get(`${BASE}/ejecucion`);
