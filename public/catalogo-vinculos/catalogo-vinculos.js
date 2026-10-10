@@ -23,6 +23,49 @@
     OPERACION_DUPLICADA: 'Ya se mandó este cambio. Mirá su estado en Ejecución.',
     vista_vieja: 'El vínculo cambió. Se recarga el caso.'
   };
+  // Mapa único código → texto humano. Lo usan la cola, el detalle, Ejecución, Retenidas e Historial.
+  // Cubre los códigos que emiten lib/catalogoVinculos.js, lib/identidadProductos.js y lib/guardiaMl.js.
+  // Un código no mapeado cae en motivoTxt() y se muestra en snake_case→texto (nunca el código crudo con guiones bajos).
+  var MOTIVO_TXT = {
+    sku_ausente: 'Sin SKU en la publicación',
+    sku_vacio: 'La publicación no tiene SKU',
+    sku_inexistente: 'Sin producto asignado',
+    sku_no_unico: 'SKU repetido en Woo',
+    sku_exacto: 'SKU coincide',
+    gtin_contradictorio: 'El GTIN no coincide',
+    contradiccion_titulo: 'El título no coincide',
+    stock_no_verificado: 'Stock sin verificar',
+    disponible: 'Disponible',
+    no_disponible: 'Sin dato',
+    bloqueado_contradiccion: 'Bloqueada por contradicción',
+    sin_cobertura: 'Sin cobertura',
+    cubierto_o_sin_exposicion: 'Cubierta o sin exposición',
+    pedido_retenido: 'Pedido retenido',
+    pedido_liberado: 'Pedido liberado',
+    scan_sano: 'Sin problemas',
+    identidad_contradiccion: 'Contradicción de identidad',
+    cambio_identidad: 'Cambio de identidad',
+    identidad_ml_archivada: 'Publicación archivada en ML',
+    gtin_marcado_incorrecto: 'GTIN marcado como incorrecto',
+    regla_proteccion: 'Regla de protección',
+    proteccion_woo: 'Protección de Woo'
+  };
+  function motivoTxt(code) {
+    if (code == null || code === '') return '';
+    var k = String(code).trim();
+    if (MOTIVO_TXT[k]) return MOTIVO_TXT[k];
+    var t = k.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+  // "Reintenta José" pasa a ser "Lo reintenta un admin"; para un admin, "Reintentalo".
+  function reintentaTxt() { return S.isAdmin ? 'Reintentalo.' : 'Lo reintenta un admin.'; }
+  function plural(n, uno, varios) { return n === 1 ? uno : varios; }
+  // Permalink de la publicación en ML: el de la API si viene; si no, la URL del artículo por clave (sin variación ni pipe).
+  function urlML(pub, clave) {
+    if (pub && pub.permalink) return pub.permalink;
+    var item = normClave(clave).split('|')[0];
+    return item ? 'https://articulo.mercadolibre.com.ar/' + encodeURIComponent(item) : null;
+  }
   var MSG_ERROR_SIN_RED = 'Sin conexión. No se guardó nada.';
   var MSG_SIN_PERMISO = 'No tenés permiso para esto.';
   var PUNTO_CORTE_PC = 768;
@@ -244,7 +287,7 @@
       var n = S.conteos[f[0]];
       var on = S.filtro === f[0];
       return '<button type="button" class="ui-chip" data-accion="filtro" data-filtro="' + f[0] + '" aria-pressed="' + on + '">'
-        + esc(f[1]) + (n != null ? ' <span>(' + n + ')</span>' : '') + '</button>';
+        + esc(f[1]) + (n != null ? ' · ' + n : '') + '</button>';
     }).join('');
   }
 
@@ -291,7 +334,7 @@
       return '<button type="button" role="option" class="cv-caso" data-accion="abrir" data-caso="' + f.caso_id + '"'
         + ' aria-selected="' + sel + '" tabindex="' + (i === foco ? '0' : '-1') + '">'
         + '<span class="cv-caso__titulo">' + esc(f.titulo || f.ml_key) + '</span>'
-        + '<span class="cv-caso__motivo">' + esc(f.motivo || '') + '</span>'
+        + '<span class="cv-caso__motivo">' + esc(motivoTxt(f.motivo)) + '</span>'
         + (f.salteado_por ? '<span class="cv-salteado">↷ Salteado por ' + esc(f.salteado_por) + '</span>' : '')
         + '<span class="cv-caso__pie">' + plata + '<span class="cv-chips">' + chipsCaso(f) + '</span></span>'
         + '</button>';
@@ -470,13 +513,13 @@
     var esEspera = o.estado === 'bloqueada_impacto';
     var titulo = esFallida ? '✗ ML la rechazó' : (esEspera ? '⏳ Espera tu confirmación' : '⏸ Frenada');
     var motivo = o.ultimo_error || (esFallida ? 'sin detalle' : 'regla de protección');
-    var accion = esFallida ? 'Reintenta José.' : 'Stock en 0 hasta resolver.';
+    var accion = esFallida ? reintentaTxt() : 'Stock en 0 hasta resolver.';
     var texto = esFallida ? 'ML la rechazó: ' + motivo + '. ' + accion
       : (esEspera ? 'La pausa de otras variaciones necesita confirmación de José.' : 'Frenada: ' + motivo + '. ' + accion);
     return '<section class="cv-tarjeta-op" role="region" aria-label="Operación con problema" tabindex="-1">'
       + '<h3>' + titulo + '</h3><p>' + esc(texto) + '</p>'
       + '<p><a href="#cv-ejec" data-accion="ir-ejecucion">Ver en Ejecución</a>'
-      + (S.retenidasDelCaso ? ' · <a href="#cv-ret" data-accion="ir-retenidas">Ver ' + S.retenidasDelCaso + ' ventas retenidas</a>' : '')
+      + (S.retenidasDelCaso ? ' · <a href="#cv-ret" data-accion="ir-retenidas">Ver ' + S.retenidasDelCaso + plural(S.retenidasDelCaso, ' venta retenida', ' ventas retenidas') + '</a>' : '')
       + '</p></section>';
   }
 
@@ -492,7 +535,7 @@
       return '<div class="ui-aviso ui-aviso--critico cv-aviso-fijo cv-aviso-rojo" role="alert" tabindex="-1" id="err-matriz"><span class="cv-icono" aria-hidden="true">✗</span>'
         + '<span>' + esc(S.matrizError) + ' <button type="button" class="ui-btn" data-accion="reintentar-matriz">Reintentar</button></span></div>';
     }
-    if (!S.elegido) return '<p class="ui-resumen cv-matriz-vacia">' + (soloLecturaDetalle() ? 'No hay candidato para comparar.' : 'Elegí un candidato para ver la comparación de atributos.') + '</p>';
+    if (!S.elegido) return '<p class="ui-resumen cv-matriz-vacia">' + (soloLecturaDetalle() ? 'No hay candidato para comparar.' : 'La comparación aparece al elegir un candidato.') + '</p>';
     if (!m || !m.filas || !m.filas.length) return '<p class="ui-resumen">Sin datos para comparar.</p>';
     var filas = m.filas.map(function (f) {
       var ocultar = S.soloDif && (f.semaforo === 'verde' || f.semaforo === 'gris');
@@ -514,7 +557,7 @@
   function datosHtml() {
     var c = caso(); var obs = S.detalle.observado_ml || {}; var regla = S.detalle.regla || {};
     var estadoML = obs.estado === 'active' ? 'Activa' : (obs.estado === 'paused' ? 'Pausada' : (obs.estado || 'sin dato'));
-    var reglaTxt = regla.frena ? 'Stock 0 por ' + (regla.motivo || 'protección') : ('Stock de Woo ' + (regla.stock_esperado != null ? regla.stock_esperado : 'sin dato'));
+    var reglaTxt = regla.frena ? 'Stock 0 por ' + (motivoTxt(regla.motivo) || 'protección').toLowerCase() : ('Stock de Woo ' + (regla.stock_esperado != null ? regla.stock_esperado : 'sin dato'));
     var desfase = S.detalle.ml_no_refleja_regla
       ? '<div class="ui-aviso ui-aviso--atencion cv-aviso-desfase cv-aviso-fijo" role="note"><span class="cv-icono" aria-hidden="true">⚠</span><span>ML todavía no refleja la regla.</span></div>' : '';
     var vig = S.detalle.vinculo_vigente;
@@ -533,9 +576,12 @@
       var sel = S.elegido && S.elegido.id === p.id;
       return '<button type="button" class="cv-cand' + (S.fotoGrande ? ' cv-cand--grande' : '') + '" data-accion="elegir" data-idx="' + i + '" aria-pressed="' + !!sel + '">'
         + '<span class="cv-cand__num" aria-hidden="true">' + (i + 1) + '</span>'
-        + (p.img ? '<img class="cv-cand__img" src="' + esc(p.img) + '" alt="" loading="lazy">' : '<span class="cv-cand__img" aria-hidden="true"></span>')
+        + (p.img ? '<img class="cv-cand__img" src="' + esc(p.img) + '" alt="" loading="lazy">'
+          : '<span class="cv-cand__img cv-cand__img--vacia" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6"/></svg></span>')
         + '<span><span class="cv-cand__nombre">' + esc(p.nombre_canonico || p.nombre_woo || 'Producto') + '</span><br>'
-        + '<span class="cv-cand__sku">SKU <span class="ui-id">' + esc(p.sku_woo || p.fusion_sku || '—') + '</span></span></span>'
+        + '<span class="cv-cand__sku">SKU <span class="ui-id">' + esc(p.sku_woo || p.fusion_sku || '—') + '</span>'
+        + (p.stock_woo != null ? ' · Stock Woo ' + esc(p.stock_woo) : '') + '</span>'
+        + (p.precio != null ? '<br><span class="cv-cand__precio">' + esc(money(p.precio)) + '</span>' : '') + '</span>'
         + '<span class="cv-cand__estado">' + (sel ? '✓ Elegido' : '') + '</span></button>';
     }).join('');
     var error = S.candidatosError ? '<p class="cv-error">' + esc(S.candidatosError) + '</p>' : '';
@@ -573,7 +619,7 @@
     var html = guardado
       + '<button type="button" class="ui-btn cv-volver" data-accion="volver-cola">← Volver a la cola</button>'
       + '<div class="cv-det__cabecera"><h2 id="det-titulo" tabindex="-1">' + esc(pub.titulo || c.ml_key) + '</h2>'
-      + '<div class="cv-det__meta"><span class="ui-id">' + esc(pub.item_id || c.ml_key) + '</span> ' + chips.join(' ') + '</div>'
+      + '<div class="cv-det__meta">' + mlaHtml(pub, c.ml_key) + ' ' + chips.join(' ') + '</div>'
       + lectura + '</div>'
       + tarjetaOperacion()
       + datosHtml()
@@ -589,6 +635,14 @@
     if (S.focoPendiente) { var f = $(S.focoPendiente); if (f) f.focus(); S.focoPendiente = null; }
     var q = $('#det-q'); if (q && S.queryCand) q.value = S.queryCand;
     var nt = $('#nota-txt'); if (nt) nt.value = S.notaTxt || '';
+  }
+
+  function mlaHtml(pub, clave) {
+    var id = esc(pub.item_id || normClave(clave));
+    var url = urlML(pub, clave);
+    return url
+      ? '<a class="ui-id" href="' + esc(url) + '" target="_blank" rel="noopener">' + id + '<span class="sr-only"> (abre la publicación en Mercado Libre, en otra pestaña)</span></a>'
+      : '<span class="ui-id">' + id + '</span>';
   }
 
   function barraGuardado() {
@@ -1020,7 +1074,7 @@
     var m = {
       encolada: ['cv-chip-estado', '↻', 'En cola para ML'],
       aplicada: ['cv-chip-estado cv-chip-estado--aplicada', '✓', 'Aplicada en ML'],
-      fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', 'ML la rechazó: ' + (o.ultimo_error || 'sin detalle') + '. Reintenta José.'],
+      fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', 'ML la rechazó: ' + (o.ultimo_error || 'sin detalle') + '. ' + reintentaTxt()],
       frenada: ['cv-chip-estado cv-chip-estado--frenada', '⏸', 'Frenada: ' + (o.ultimo_error || 'regla de protección') + '. Stock en 0 hasta resolver.'],
       espera: ['cv-chip-estado cv-chip-estado--espera', '⏳', 'Espera tu confirmación']
     }[k];
@@ -1069,7 +1123,7 @@
     var bloqueRiesgo = riesgo.length
       ? '<section class="ui-aviso ui-aviso--atencion cv-bloque" aria-labelledby="riesgo-h"><h3 id="riesgo-h" class="cv-h2"><span aria-hidden="true">⚠</span> Pausas con riesgo</h3>'
         + riesgo.map(function (p) {
-          return '<p class="ui-resumen">' + esc(p.ml_key) + ' · pausa ' + p.impacto_hermanas + ' variaciones · ' + esc(p.motivo || '') + ' ' + chipEstado(p.estado, p) + '</p>';
+          return '<p class="ui-resumen">' + esc(p.ml_key) + ' · pausa ' + p.impacto_hermanas + ' variaciones · ' + esc(motivoTxt(p.motivo)) + ' ' + chipEstado(p.estado, p) + '</p>';
         }).join('') + '</section>'
       : '';
     var filas = ops.map(function (o) {
@@ -1088,7 +1142,7 @@
       return '<article class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + '" data-op="' + o.id + '">'
         + '<div class="cv-ejec-fila__cab"><strong>' + esc(o.nombre_canonico || o.ml_key) + '</strong>' + chipEstado(o.estado, o) + '</div>'
         + '<p class="ui-resumen"><span class="ui-id">' + esc(o.sku_objetivo || '') + '</span> · ' + esc(fecha(o.actualizada_en || o.iniciada_en)) + '</p>'
-        + (fallida && !S.isAdmin ? '<p class="ui-resumen">Reintenta José.</p>' : '')
+        + (fallida && !S.isAdmin ? '<p class="ui-resumen">' + reintentaTxt() + '</p>' : '')
         + (acciones ? '<div class="cv-ejec-acciones">' + acciones + '</div>' : '')
         + msgHtml
         + '</article>';
@@ -1160,9 +1214,8 @@
   // ── Retenidas ─────────────────────────────────────────────────────────────────────────────────
   // Motivo en lenguaje humano (sin snake_case): "sin_cobertura_woo" -> "Sin cobertura woo".
   function causaDe(f) {
-    var raw = f.motivo ? String(f.motivo).replace(/_/g, ' ').trim() : 'sin cobertura';
-    var c = raw.charAt(0).toUpperCase() + raw.slice(1);
-    return c + ((f.claves && f.claves.length) ? ' · ' + f.claves.join(', ') : '');
+    var c = f.motivo ? motivoTxt(f.motivo) : 'Sin cobertura';
+    return c + ((f.claves && f.claves.length) ? ' · ' + f.claves.map(normClave).join(', ') : '');
   }
 
   function cargarRetenidas() {
@@ -1206,7 +1259,7 @@
       return '<article class="cv-ret">'
         + '<div class="cv-ret__cab"><span><strong>' + titulo + '</strong> · pedido <span class="ui-id">' + esc(f.ml_order_id) + '</span></span>'
         + '<span class="ui-label">' + esc(fecha(f.creado_en)) + '</span></div>'
-        + '<p class="ui-resumen">Publicación <span class="ui-id">' + esc((f.claves || [])[0] || '—') + '</span> · importe ' + importe + '</p>'
+        + '<p class="ui-resumen">Publicación <span class="ui-id">' + esc(normClave((f.claves || [])[0]) || '—') + '</span> · importe ' + importe + '</p>'
         + '<p class="ui-resumen">Causa: ' + esc(causaDe(f)) + '</p>'
         + aviso + liberar + '</article>';
     }).join('');
@@ -1378,7 +1431,7 @@
 
   function listaItems(arr) {
     return arr.map(function (h) {
-      return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '') + ' <span class="ui-label">' + esc(h.motivo || '') + '</span></li>';
+      return '<li><span class="ui-id">' + esc(h.clave) + '</span> ' + esc(h.titulo || '') + ' <span class="ui-label">' + esc(motivoTxt(h.motivo)) + '</span></li>';
     }).join('');
   }
 
@@ -1481,7 +1534,7 @@
     return identidad('/identificadores/conflictos').then(function (r) {
       if (!r.ok) { cuerpo.innerHTML = cajaError(mensajeDe(r), 'cargarConflictos'); return; }
       S.conflictos = r.data.data || [];
-      $('#cnt-conflictos').textContent = '· ' + S.conflictos.length;
+      $('#cnt-conflictos').textContent = ' · ' + S.conflictos.length;
       if (!S.conflictos.length) { cuerpo.innerHTML = '<p class="ui-resumen">Ningún código en conflicto.</p>'; return; }
       cuerpo.innerHTML = S.conflictos.map(function (x) {
         var abierto = S.conflictoAbierto === x.valor_normalizado;
@@ -1894,7 +1947,7 @@
     var filas = notas.map(function (h) {
       return '<li><span class="ui-label">' + esc(fecha(h.creado_en)) + ' · ' + esc(h.actor || 'sistema') + '</span> ' + esc(h.evento) + '</li>';
     }).join('');
-    return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial<span class="cv-kbd-pc"> · tecla <kbd aria-hidden="true">h</kbd></span></summary>'
+    return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial <span class="cv-kbd-pc">(<kbd aria-hidden="true">h</kbd>)</span></summary>'
       + '<ol class="cv-hist__lista">' + (filas || '<li class="ui-resumen">Sin movimientos.</li>') + '</ol>'
       + (puedeEscribir()
         ? '<div class="cv-campo"><label class="ui-label" for="nota-txt">Agregar nota</label>'

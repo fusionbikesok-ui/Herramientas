@@ -18,10 +18,15 @@
 .cv-saltar { position: absolute; left: -999px; top: 0; }
 .cv-saltar:focus { left: .5rem; top: .5rem; z-index: 20; background: var(--surface); color: var(--text); padding: var(--sp-1) var(--sp-2); border-radius: var(--radius); }
 
+/* Fuente: theme.css no declara un token de familia para el body. Se usa la misma pila que sync-detalle y config-ml. */
 .cv-body {
   margin: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
   font-size: var(--fs-cuerpo);
 }
+.cv-body button, .cv-body input, .cv-body select, .cv-body textarea { font-family: inherit; }
+/* Caja de borde incluido: con width:100% (variantes, candidatos, casos) el padding no las desborda del diálogo. */
+.cv-body, .cv-body *, .cv-body *::before, .cv-body *::after { box-sizing: border-box; }
 .cv-body [hidden] { display: none !important; }
 .cv-body a { color: var(--accent); }
 .cv-body kbd {
@@ -78,16 +83,20 @@
 }
 .cv-chip-salud b { color: var(--text); font-weight: 700; }
 /* Etiqueta corta en una línea (muted) arriba; valor con ícono abajo. El texto largo va en title/aria-label. */
-.cv-chip-salud__lbl { display: block; max-width: 100%; font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-chip-salud__lbl { display: block; max-width: 100%; font-size: var(--fs-sm); color: var(--muted); overflow-wrap: anywhere; }
+.cv-franja > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 .cv-chip-salud__val { display: block; max-width: 100%; overflow-wrap: anywhere; }
 .cv-chip-salud--alerta { background: var(--chip-alert-bg); border-color: var(--chip-alert-bd); color: var(--chip-alert-txt); }
 .cv-chip-salud--critico { background: var(--critical-bg); border-color: var(--critical-bd); color: var(--critical); }
 .cv-chip-salud:hover { border-color: var(--border2); }
 
 /* ── Filtros ── */
-.cv-filtros { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-bottom: .75rem; }
-.cv-filtros .ui-chip { cursor: pointer; min-height: var(--tap-min); display: inline-flex; align-items: center; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-meta); }
+.cv-filtros { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-1); margin-bottom: .75rem; }
+.cv-filtros .ui-chip { cursor: pointer; min-height: var(--tap-min); display: inline-flex; align-items: center; justify-content: center; text-align: center; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-meta); }
 .cv-filtros [aria-pressed="true"] { background: var(--chip-on-bg); border-color: var(--chip-on-bd); color: var(--chip-on-txt); }
+@media (min-width: 640px) {
+  .cv-filtros { display: flex; flex-wrap: wrap; }
+}
 
 /* ── Layout cola | detalle ── */
 .cv-layout { display: grid; gap: var(--sp-3); grid-template-columns: minmax(0, 1fr); align-items: start; }
@@ -127,7 +136,8 @@
 .cv-volver { display: none; margin-bottom: .6rem; }
 .cv-bloque { margin: .75rem 0; }
 .cv-datos { display: grid; grid-template-columns: 1fr; gap: var(--sp-2); }
-.cv-dato .ui-panel { height: 100%; }
+.cv-dato.ui-panel { padding: var(--sp-2) var(--sp-3); min-height: 0; height: auto; }
+.cv-dato > h3 { margin: 0; }
 .cv-dato__valor { font-size: var(--fs-dato); font-weight: 600; margin-top: .2rem; overflow-wrap: anywhere; }
 .cv-aviso-desfase { margin-top: var(--sp-2); }
 .cv-tarjeta-op {
@@ -149,6 +159,9 @@
 .cv-cand__num { font-size: var(--fs-titulo); font-weight: 700; text-align: center; }
 .cv-cand__img { width: 40px; height: 40px; object-fit: contain; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
 .cv-cand--grande .cv-cand__img { width: 56px; height: 56px; }
+.cv-cand__img--vacia { display: grid; place-items: center; color: var(--muted); }
+.cv-cand__img--vacia svg { width: 55%; height: 55%; }
+.cv-cand__precio { font-weight: 600; font-variant-numeric: tabular-nums; }
 .cv-cand__nombre { font-weight: 600; overflow-wrap: anywhere; font-size: var(--fs-cuerpo); }
 .cv-cand__sku { color: var(--muted); font-size: var(--fs-meta); }
 .cv-cand__estado { font-size: var(--fs-label); font-weight: 700; color: var(--chip-on-txt); white-space: nowrap; }
@@ -282,11 +295,13 @@
 
 /* ── Responsive ── */
 @media (min-width: 640px) {
-  .cv-franja { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .cv-franja { grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); }
+  .cv-franja > :last-child:nth-child(odd) { grid-column: auto; }
 }
 @media (min-width: 768px) {
   .cv-matriz thead { display: table-header-group; }
   .cv-datos { grid-template-columns: 1fr 1fr; }
+  .cv-datos > :last-child { grid-column: 1 / -1; }
   .cv-acciones__grid { grid-auto-flow: column; grid-template-columns: none; grid-auto-columns: max-content; }
   .cv-acciones__grid .ui-btn { width: auto; }
 }
@@ -323,13 +338,16 @@
   .cv-dialogo-fondo { align-items: center; }
   .cv-dialogo { border-radius: var(--radius); max-width: 40rem; max-height: 90vh; }
   .cv-volver { display: none; }
-  .cv-datos { grid-template-columns: 1fr 1fr; }
+  .cv-datos { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cv-datos > :last-child { grid-column: auto; }
 }
 
 /* Vínculos: selector de modo, historial y tarjetas del panel de vínculo */
 .cv-modo { border: 0; padding: 0; margin: 0 0 var(--sp-2); display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 .cv-modo legend { padding: 0; margin-bottom: .25rem; }
 .cv-hist { margin: var(--sp-2) 0; }
+.cv-hist summary .cv-kbd-pc { margin-left: .35rem; }
+.cv-hist summary kbd { margin: 0 .1rem; }
 .cv-hist__lista { margin: var(--sp-2) 0; padding-left: var(--sp-3); }
 .cv-hist__lista li { margin-bottom: .35rem; }
 .cv-vinc-card { display: grid; gap: var(--sp-2); }
