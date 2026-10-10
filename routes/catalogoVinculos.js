@@ -6,6 +6,9 @@ import {
 import { liberarPedidoRetenido } from '../lib/guardiaMl.js';
 import { marcarNoSincronizar, marcarLinkDePago, deshacerNoSincronizar } from '../lib/noSincronizar.js';
 import { solicitarNoSincronizarPausa } from '../lib/pausasIdentidad.js';
+import {
+  cancelarVinculo, deshacerNingunoSirve, deshacerSalteo, excepcionSoloMl, ningunoSirve, revertirVinculo,
+} from '../lib/catalogoVinculosAcciones.js';
 import { colaCasos, detalleCaso, ejecucion, parametrosEjecucion, estadoSalud, publicacionesDeProducto, retenidas, salteoVigente, vinculoVigente, marcaDeClave, hermanasDeItem } from '../lib/catalogoVinculos.js';
 
 /**
@@ -30,7 +33,9 @@ const ESTADOS = { NOT_FOUND: 404, VERSION_CONFLICT: 409, EVIDENCE_CONFLICT: 409,
   SIBLING_IMPACT_CONFIRMATION_REQUIRED: 409, ALREADY_EXISTS: 409, INVALID_STATE: 409, INVALID_INPUT: 422,
   FORBIDDEN: 403, contradiccion_titulo: 409, omitir_requiere_override: 409,
   // Distinto de la API de Identidad (400): acá un reintento o una corrección sin efecto es un conflicto de estado.
-  OPERACION_DUPLICADA: 409, SIN_CAMBIO_SKU: 409 };
+  OPERACION_DUPLICADA: 409, SIN_CAMBIO_SKU: 409,
+  // Deshacer: la operación ya se mandó a ML (procesando, verificando, completada, fallida o intervención).
+  OPERACION_YA_INICIADA: 409 };
 
 function responder(res, r, creado = false) {
   if (!r?.ok) return res.status(r?.status || ESTADOS[r?.code || r?.error] || 400).json(r);
@@ -94,6 +99,31 @@ export function catalogoVinculosRouter(db) {
     db.prepare(`INSERT INTO identidad_historial (entidad_tipo,entidad_id,evento,actor,detalle_json,creado_en)
       VALUES ('caso',?,'caso_salteado',?,?,?)`).run(caso.id, actor(req), JSON.stringify({ expected_version: caso.expected_version }), new Date().toISOString());
     return res.json({ ok: true, salteado_por: actor(req) });
+  });
+
+  // Excepción "solo ML" con vencimiento (motivo y expires_at obligatorios). Operador: como en la pantalla vieja.
+  router.post('/casos/:id/excepcion', exigir('write'), (req, res) => responder(res,
+    excepcionSoloMl(db, req.params.id, req.body || {}, actor(req)), true));
+
+  // "Ninguno sirve" (tecla x): saca el caso de la cola hasta que cambie la evidencia. Sin operación remota.
+  router.post('/casos/:id/ninguno-sirve', exigir('write'), (req, res) => responder(res,
+    ningunoSirve(db, req.params.id, req.body || {}, actor(req)), true));
+  router.post('/casos/:id/ninguno-sirve/deshacer', exigir('write'), (req, res) => responder(res,
+    deshacerNingunoSirve(db, req.params.id, req.body || {}, actor(req))));
+
+  // Deshacer un saltear: vuelve el caso a la cola. Sin operación remota.
+  router.post('/casos/:id/deshacer-salteo', exigir('write'), (req, res) => responder(res,
+    deshacerSalteo(db, req.params.id, req.body || {}, actor(req))));
+
+  // Deshacer un Vincular que no empezó: cancela la operación y vuelve el caso a su estado previo. Solo la propia decisión (o admin).
+  router.post('/operaciones/:id/deshacer', exigir('write'), (req, res) => responder(res,
+    cancelarVinculo(db, req.params.id, req.body || {}, actor(req), { esAdmin: esAdmin(req) })));
+
+  // Revertir un Vincular completado: encola una operación nueva hacia el SKU anterior (mismas barreras que Vincular).
+  router.post('/operaciones/:id/revertir', exigir('write'), (req, res) => {
+    const b = req.body || {};
+    if ((b.override_contradiccion === true || b.override_omitir === true) && !esAdmin(req)) return res.status(403).json(FORBIDDEN);
+    return responder(res, revertirVinculo(db, req.params.id, b, actor(req)), true);
   });
 
   // No sincronizar (a/b/c). La (b) pausa el ítem completo en ML como operación durable.
