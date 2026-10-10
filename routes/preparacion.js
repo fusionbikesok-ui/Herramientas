@@ -12,7 +12,7 @@ import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
-  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
+  clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio, envioMlRetenido,
 } from '../lib/preparacion.js';
 import { tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
@@ -266,6 +266,14 @@ function ensureTables(db) {
     db.prepare("ALTER TABLE pedidos_cache ADD COLUMN customer_note TEXT NOT NULL DEFAULT ''").run();
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) console.error('ensureTables pedidos_cache.customer_note:', e.message);
+  }
+  // etiqueta_disponible_en: solo para filas ML `estado_envio='proximo'` (envío retenido por
+  // ML, ver envioMlRetenido). Es el `buffering.date` del shipment: desde cuándo ML deja
+  // imprimir la etiqueta y el pedido pasa a la cola de preparar.
+  try {
+    db.prepare('ALTER TABLE pedidos_cache ADD COLUMN etiqueta_disponible_en TEXT').run();
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) console.error('ensureTables pedidos_cache.etiqueta_disponible_en:', e.message);
   }
 
   db.prepare(`CREATE TABLE IF NOT EXISTS preparacion_vistas (
@@ -1332,12 +1340,32 @@ export function preparacionRouter(db, cfg) {
           estado_preparacion: prep?.estado || null,
         };
       });
+      // Ventas ML con etiqueta retenida por ML (ver envioMlRetenido): van aparte de `data`
+      // a propósito, para que nada que recorre la cola (recolección, conteos, App) las tome
+      // como trabajo de hoy. Solo lectura: no llevan preparacion_id ni acción.
+      const proximos = db.prepare(
+        "SELECT * FROM pedidos_cache WHERE canal='ml' AND estado_envio='proximo' ORDER BY fecha_despacho IS NULL, fecha_despacho, fecha"
+      ).all().map((row) => ({
+        canal: 'ml',
+        ml_order_id: row.ml_order_id,
+        wc_order_id: row.wc_order_id,
+        pack_id: row.pack_id || null,
+        numero_pedido: row.numero_pedido,
+        comprador: row.comprador,
+        fecha: row.fecha,
+        fecha_despacho: row.fecha_despacho,
+        etiqueta_disponible_en: row.etiqueta_disponible_en || null,
+        logistic_type: row.logistic_type,
+        substatus: row.substatus,
+        items: JSON.parse(row.items_json).map(item => ({ ...item, imagen: imagenProductoPendiente(db, item) })),
+      }));
       const ultimoLog = db.prepare(
         "SELECT creado_en, estado, error FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1"
       ).get();
       res.json({
         ok: true,
         data,
+        proximos,
         actualizado_en: ultimoLog?.creado_en || null,
         sync_error: ultimoLog?.estado === 'error' ? ultimoLog.error : null,
       });
@@ -3512,6 +3540,7 @@ async function pendientesMl(db, mlCfg) {
   const fallosHttp = [];
   const fallosSinStatus = [];
   const out = [];
+  const proximos = [];
   const clavesInconclusas = new Set();
   for (const orden of resultados) {
     const shipmentId = orden.shipping?.id;
@@ -3580,6 +3609,35 @@ async function pendientesMl(db, mlCfg) {
     // pendientes no vuelve: la preparación está confirmada del lado local.
     if (yaPreparado) continue;
     if (envioMlYaSalio(envio)) continue;
+    if (envioMlRetenido(envio)) {
+      // Venta paga con logística local cuya etiqueta ML todavía no libera: no se puede
+      // preparar, pero se lista como próxima. La fecha de despacho sale SOLO del SLA de ML
+      // (`expected_date`), nunca de `buffering.date`: esa es la liberación de la etiqueta
+      // (00:00 UTC = 21:00 del día ANTERIOR en Argentina) y daría un día de menos.
+      if (orden.status === 'paid' && esEnvioLocal(logisticType)) {
+        const conSla = await resolverSlaShipment({ db, mlCfg, shipmentId, shipment: envio, logisticType,
+          beforeFetch: () => esperarEntreGetsMl(ritmoGets) });
+        const ov = normalizarOrdenMl(orden);
+        const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
+        proximos.push({
+          ml_order_id: ov.ml_order_id,
+          wc_order_id: vinculo?.wc_order_id || null,
+          pack_id: ov.pack_id,
+          numero_pedido: ov.numero,
+          comprador: ov.comprador.nickname || 'Comprador ML',
+          fecha: ov.fecha,
+          sla: {
+            fecha_local: fechaEstimadaShipment({ sla: conSla?.sla }),
+            limite: null, estado: 'diferido', razon: 'ML_ETIQUETA_RETENIDA', fuente: 'ml_buffering',
+          },
+          etiqueta_disponible_en: typeof envio.buffering?.date === 'string' ? envio.buffering.date : null,
+          logistic_type: logisticType,
+          substatus: envio.substatus || null,
+          items: itemsDesdeOrdenMl(db, orden),
+        });
+      }
+      continue;
+    }
     if (envio.status !== 'ready_to_ship') continue;
     const elegibilidad = clasificarElegibilidadMl(orden, envio);
     if (elegibilidad.estado !== 'elegible') {
@@ -3627,7 +3685,7 @@ async function pendientesMl(db, mlCfg) {
     if (fallosSinStatus.length) detalle.push(`sin_status[${fallosSinStatus.slice(0, 10).join(' ')}${fallosSinStatus.length > 10 ? ' …' : ''}]`);
     console.warn(`pendientesMl: ${fallosShipment} fallo(s) de /shipments al listar pendientes ML — ${detalle.join(' ')}`);
   }
-  return { pendientes: out, confiable, clavesInconclusas };
+  return { pendientes: out, proximos, confiable, clavesInconclusas };
 }
 
 // ─── Caché local de pedidos (para GET /pendientes y GET /historial) ──────────
@@ -3654,21 +3712,22 @@ function upsertPedidoCache(db, row) {
     INSERT INTO pedidos_cache
       (clave, canal, wc_order_id, ml_order_id, pack_id, numero_pedido, comprador, fecha,
        fecha_despacho, estado_envio, estado_wc, espejo_ml, logistic_type, substatus, items_json, actualizado_en, customer_note,
-       fecha_despacho_limite, estado_despacho, despacho_motivo, shipment_limite_original)
+       fecha_despacho_limite, estado_despacho, despacho_motivo, shipment_limite_original, etiqueta_disponible_en)
     VALUES (@clave, @canal, @wc_order_id, @ml_order_id, @pack_id, @numero_pedido, @comprador, @fecha,
        @fecha_despacho, @estado_envio, @estado_wc, @espejo_ml, @logistic_type, @substatus, @items_json, @actualizado_en, @customer_note,
-       @fecha_despacho_limite, @estado_despacho, @despacho_motivo, @shipment_limite_original)
+       @fecha_despacho_limite, @estado_despacho, @despacho_motivo, @shipment_limite_original, @etiqueta_disponible_en)
     ON CONFLICT(clave) DO UPDATE SET
       pack_id=excluded.pack_id,
       fecha_despacho=excluded.fecha_despacho,
       fecha_despacho_limite=excluded.fecha_despacho_limite,
       estado_despacho=excluded.estado_despacho, despacho_motivo=excluded.despacho_motivo,
       shipment_limite_original=excluded.shipment_limite_original,
+      etiqueta_disponible_en=excluded.etiqueta_disponible_en,
       numero_pedido=excluded.numero_pedido, comprador=excluded.comprador, fecha=excluded.fecha,
       estado_envio=excluded.estado_envio, estado_wc=excluded.estado_wc, espejo_ml=excluded.espejo_ml,
       logistic_type=excluded.logistic_type, substatus=excluded.substatus,
       items_json=excluded.items_json, actualizado_en=excluded.actualizado_en, customer_note=excluded.customer_note
-  `).run({ ...row, customer_note: row.customer_note ?? '', fecha_despacho: fechaDespacho, fecha_despacho_limite: limiteDespacho, estado_despacho: estadoDespacho, despacho_motivo: motivoDespacho, shipment_limite_original: shipmentOriginal });
+  `).run({ ...row, customer_note: row.customer_note ?? '', etiqueta_disponible_en: row.etiqueta_disponible_en ?? null, fecha_despacho: fechaDespacho, fecha_despacho_limite: limiteDespacho, estado_despacho: estadoDespacho, despacho_motivo: motivoDespacho, shipment_limite_original: shipmentOriginal });
 }
 
 // Un pedido WC (de cualquiera de los 3 estados relevantes) → fila de pedidos_cache.
@@ -3741,8 +3800,9 @@ export async function syncPedidosCache(db, cfg) {
       // de abajo solo puede confiar en la ausencia de una fila si esa fila estaba dentro del
       // rango que la consulta a ML pudo haber visto.
       const desdeMl = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-      const { pendientes: mlPend, confiable: mlConfiable, clavesInconclusas } = await pendientesMl(db, cfg.ml);
+      const { pendientes: mlPend, proximos: mlProximos = [], confiable: mlConfiable, clavesInconclusas } = await pendientesMl(db, cfg.ml);
       const clavesVigentesMl = new Set(mlPend.map((p) => `ml:${p.ml_order_id}`));
+      const clavesProximasMl = new Set(mlProximos.map((p) => `ml:${p.ml_order_id}`));
       const txMl = db.transaction(() => {
         for (const p of mlPend) {
           upsertPedidoCache(db, {
@@ -3761,6 +3821,30 @@ export async function syncPedidosCache(db, cfg) {
             logistic_type: p.logistic_type,
             substatus: p.substatus,
             items_json: JSON.stringify(p.items),
+            actualizado_en: now(),
+          });
+        }
+        // Próximos: estado_envio='proximo' los deja fuera de todo lo que lee 'pendiente'
+        // (cola, recolección, App). Cuando ML libera la etiqueta, el upsert de arriba de una
+        // corrida posterior los pasa a 'pendiente' sobre la misma clave.
+        for (const p of mlProximos) {
+          upsertPedidoCache(db, {
+            clave: `ml:${p.ml_order_id}`,
+            canal: 'ml',
+            wc_order_id: p.wc_order_id,
+            ml_order_id: p.ml_order_id,
+            pack_id: p.pack_id || null,
+            numero_pedido: p.numero_pedido,
+            comprador: p.comprador,
+            fecha: p.fecha,
+            sla: p.sla,
+            estado_envio: 'proximo',
+            estado_wc: null,
+            espejo_ml: 0,
+            logistic_type: p.logistic_type,
+            substatus: p.substatus,
+            items_json: JSON.stringify(p.items),
+            etiqueta_disponible_en: p.etiqueta_disponible_en,
             actualizado_en: now(),
           });
         }
@@ -3794,6 +3878,12 @@ export async function syncPedidosCache(db, cfg) {
             // se poda lo que se confirmó activamente que ya no es ready_to_ship.
             if (r.estado_prep === 'completada') continue;
             if (!clavesVigentesMl.has(r.clave) && !clavesInconclusas.has(r.clave)) borrar.run(r.clave);
+          }
+          // Mismo criterio fail-closed para los próximos: uno que ya no figura retenido ni
+          // pasó a la cola (cancelado, Full, etc.) se borra solo con un listado confiable.
+          const proximosViejos = db.prepare("SELECT clave FROM pedidos_cache WHERE canal='ml' AND estado_envio='proximo'").all();
+          for (const r of proximosViejos) {
+            if (!clavesProximasMl.has(r.clave) && !clavesInconclusas.has(r.clave)) borrar.run(r.clave);
           }
         } else {
           console.warn('syncPedidosCache: listado ML no confiable esta corrida (truncado o fallos de shipment), se omite la poda');

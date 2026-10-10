@@ -4013,3 +4013,87 @@ describe('UI de confirmación manual diferida', () => {
     expect(html).toMatch(/api\('\/'\+PREP\.id\+'\/etiquetas-manuales'\)/);
   });
 });
+
+// ML retiene la etiqueta (`pending/buffered`) cuando falta para despachar: el envío todavía
+// no está `ready_to_ship`, así que no entra a la cola de preparar, pero el depósito necesita
+// verlo con anticipación (incidente 2026-10-10: 6 ventas para el martes 13 invisibles todo
+// el fin de semana largo). Se cachean como `estado_envio='proximo'` y viajan aparte.
+describe('Próximos ML con etiqueta retenida (buffered)', () => {
+  let db;
+  const CFG = {
+    woo: { url: 'https://fusionbikes.com.ar', ck: 'ck_x', cs: 'cs_x' },
+    ml: { clientId: 'cid', clientSecret: 'cs', userId: '99999' },
+  };
+  const haceUnDia = () => new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const orden = (id, shippingId) => ({
+    id, status: 'paid', date_created: haceUnDia(), buyer: { nickname: `comprador${id}` },
+    shipping: { id: shippingId },
+    order_items: [{ item: { id: `MLA${id}`, title: 'Cubierta 29' }, seller_sku: 'CUB-29', quantity: 2 }],
+  });
+  const retenido = (logistic_type = 'xd_drop_off') => ({
+    status: 'pending', substatus: 'buffered', logistic_type,
+    buffering: { date: '2026-10-13T00:00:00.000Z' },
+  });
+  const mockMl = ({ ordenes, envios }) => mlFetch.mockImplementation(async (_db, _cfg, _m, path) => {
+    if (path.startsWith('/orders/search')) return { status: 200, data: { results: ordenes } };
+    const sla = /^\/shipments\/(\d+)\/sla$/.exec(path);
+    if (sla) return { status: 200, data: { status: 'on_time', expected_date: '2026-10-13T23:59:59-03:00' } };
+    const ship = /^\/shipments\/(\d+)$/.exec(path);
+    if (ship && envios[ship[1]]) return { status: 200, data: envios[ship[1]] };
+    return { status: 404, data: {} };
+  });
+
+  beforeEach(() => { db = openDb(TEST_DB); vi.clearAllMocks(); wooFetch.mockResolvedValue({ data: [] }); });
+  afterEach(() => { mlFetch.mockReset(); db.close(); if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB); });
+
+  it('cachea la venta paga con envío local retenido como próximo, con día de despacho y liberación de etiqueta', async () => {
+    mockMl({ ordenes: [orden(3001, 7001)], envios: { 7001: retenido() } });
+    await syncPedidosCache(db, CFG);
+    const row = db.prepare("SELECT * FROM pedidos_cache WHERE clave='ml:3001'").get();
+    expect(row.estado_envio).toBe('proximo');
+    expect(row.fecha_despacho).toBe('2026-10-13');
+    expect(row.etiqueta_disponible_en).toBe('2026-10-13T00:00:00.000Z');
+    expect(row.estado_despacho).toBe('diferido');
+    expect(row.despacho_motivo).toBe('ML_ETIQUETA_RETENIDA');
+    expect(row.fecha_despacho_limite).toBeNull();
+  });
+
+  it('GET /pendientes no lo pone en la cola de preparar y lo devuelve aparte en `proximos`', async () => {
+    mockMl({ ordenes: [orden(3002, 7002)], envios: { 7002: retenido() } });
+    await syncPedidosCache(db, CFG);
+    const r = await request(buildTestApp(db)).get('/api/preparacion/pendientes');
+    expect(r.status).toBe(200);
+    expect(r.body.data.some(p => p.ml_order_id === '3002')).toBe(false);
+    expect(r.body.proximos).toHaveLength(1);
+    expect(r.body.proximos[0]).toMatchObject({
+      canal: 'ml', ml_order_id: '3002', fecha_despacho: '2026-10-13',
+      etiqueta_disponible_en: '2026-10-13T00:00:00.000Z', logistic_type: 'xd_drop_off',
+    });
+    expect(r.body.proximos[0].items[0]).toMatchObject({ cantidad: 2 });
+  });
+
+  it('cuando ML libera la etiqueta (ready_to_ship) pasa sola a la cola de preparar', async () => {
+    mockMl({ ordenes: [orden(3003, 7003)], envios: { 7003: retenido() } });
+    await syncPedidosCache(db, CFG);
+    mockMl({ ordenes: [orden(3003, 7003)], envios: { 7003: { status: 'ready_to_ship', substatus: 'ready_to_print', logistic_type: 'xd_drop_off' } } });
+    await syncPedidosCache(db, CFG);
+    expect(db.prepare("SELECT estado_envio FROM pedidos_cache WHERE clave='ml:3003'").get().estado_envio).toBe('pendiente');
+    const r = await request(buildTestApp(db)).get('/api/preparacion/pendientes');
+    expect(r.body.proximos).toHaveLength(0);
+    expect(r.body.data.some(p => p.ml_order_id === '3003')).toBe(true);
+  });
+
+  it('un próximo que deja de estar retenido sin pasar a la cola (cancelado) se poda', async () => {
+    mockMl({ ordenes: [orden(3004, 7004)], envios: { 7004: retenido() } });
+    await syncPedidosCache(db, CFG);
+    mockMl({ ordenes: [{ ...orden(3004, 7004), status: 'cancelled' }], envios: { 7004: { status: 'cancelled', logistic_type: 'xd_drop_off' } } });
+    await syncPedidosCache(db, CFG);
+    expect(db.prepare("SELECT 1 FROM pedidos_cache WHERE clave='ml:3004'").get()).toBeUndefined();
+  });
+
+  it('Full retenido nunca aparece como próximo (no lo prepara el depósito)', async () => {
+    mockMl({ ordenes: [orden(3005, 7005)], envios: { 7005: retenido('fulfillment') } });
+    await syncPedidosCache(db, CFG);
+    expect(db.prepare("SELECT 1 FROM pedidos_cache WHERE clave='ml:3005'").get()).toBeUndefined();
+  });
+});

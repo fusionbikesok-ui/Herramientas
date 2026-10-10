@@ -331,3 +331,43 @@ describe('preparacion/index.html — header visible a 360px', () => {
     expect(html).toContain('360px');
   });
 });
+
+describe('preparacion/index.html — próximos ML con despacho diferido', () => {
+  const proximo = (id, cant) => ({
+    canal: 'ml', ml_order_id: String(id), pack_id: null, numero_pedido: String(id), comprador: `comprador${id}`,
+    fecha: '2026-10-09T12:16:03.000-04:00', fecha_despacho: '2026-10-13',
+    etiqueta_disponible_en: '2026-10-13T00:00:00.000Z', logistic_type: 'xd_drop_off', substatus: 'buffered',
+    items: [{ sku: 'CUB-29', nombre: 'Cubierta 29', cantidad: cant }],
+  });
+
+  it('muestra aviso arriba y sección aparte, con día de despacho, liberación de etiqueta y sin botón de preparar', () => {
+    ctx.PEND_STATUS = 'ready';
+    ctx.PEND_CACHE = [];
+    ctx.PEND_META = { actualizado_en: null, sync_error: null };
+    ctx.PEND_PROXIMOS = [proximo(3001, 1), proximo(3002, 3)];
+    ctx.renderPendientes();
+    const html = ctx.document.getElementById('cuerpo').innerHTML;
+    expect(html).toContain('2 pedidos ML con despacho diferido');
+    expect(html).toContain('DESPACHO DIFERIDO · NO PREPARAR TODAVÍA');
+    expect(html).toContain('Despacha el MARTES 13/10');
+    expect(html).toContain('Despachan el martes 13/10 · 2 pedidos');
+    expect(html).toMatch(/hasta el <b>lun 12\/10 21:00<\/b>/);
+    expect(html).toContain('4× Cubierta 29');
+    const seccion = html.slice(html.indexOf('prox-panel'));
+    expect(seccion).not.toContain('Preparar →');
+    expect(seccion).not.toContain('prepararClave');
+    // La cola vacía se sigue diciendo como tal: los próximos no son trabajo de hoy.
+    expect(html).toContain('No hay pedidos para preparar');
+  });
+
+  it('sin próximos no agrega nada', () => {
+    ctx.PEND_STATUS = 'ready';
+    ctx.PEND_CACHE = [];
+    ctx.PEND_META = {};
+    ctx.PEND_PROXIMOS = [];
+    ctx.renderPendientes();
+    const html = ctx.document.getElementById('cuerpo').innerHTML;
+    expect(html).not.toContain('prox-aviso');
+    expect(html).not.toContain('prox-panel');
+  });
+});
