@@ -291,6 +291,9 @@
   .cv-volver { display: inline-flex; min-height: var(--tap-min); }
 }
 @media (max-width: 767px) {
+  /* Tabs en grilla 2×2: sin scroll horizontal, cada una con label completo y contador. */
+  .cv-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-1); overflow-x: visible; padding-bottom: 0; }
+  .cv-tabs > .ui-btn { min-width: 0; min-height: var(--tap-min); white-space: normal; overflow-wrap: anywhere; padding: var(--sp-1) var(--sp-2); }
   .cv-matriz thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .cv-matriz, .cv-matriz tbody, .cv-matriz tr, .cv-matriz th, .cv-matriz td { display: block; width: 100%; }
   .cv-matriz tr { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-1) var(--sp-2); margin-bottom: var(--sp-2); }
