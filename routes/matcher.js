@@ -12,6 +12,7 @@ import { armarClaveMl } from '../lib/mlUtil.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { escanearGuardiaMl } from '../lib/guardiaMl.js';
 import { modoProteccion } from '../lib/proteccionIdentidad.js';
+import { parsearPaginado, paginarCandidatos } from '../lib/matcherCandidatosPaginado.js';
 import { archivarIdentidadesMlHuerfanas, auditarIdentidadProductos, sembrarIdentificadoresMl, marcarClaveNoSincroniza } from '../lib/identidadProductos.js';
 import { detectarCambios } from '../lib/vigiaFormato.js';
 import { procesarCambios } from '../lib/vigiaPausado.js';
@@ -1274,8 +1275,19 @@ export function matcherRouter(db, cfg) {
       // resultado cacheado válido para la firma actual lo marca cache:true, y ahí lo servimos
       // síncrono como siempre. En un peek explícito también respondemos al toque (vacío si no
       // hay hit): comportamiento del warm-start sin cambios.
+      // Paginado (aditivo): si viene q, filtro, limit u offset, se filtra y pagina sobre la caché
+      // en memoria y se responde {total, items, limit, offset, conteos,...} (ver
+      // lib/matcherCandidatosPaginado.js y docs/api-contrato.md). Sin esos parámetros, respuesta vieja.
+      const pedidoPaginado = ['q', 'filtro', 'limit', 'offset'].some((k) => req.query[k] !== undefined);
+      const pag = pedidoPaginado ? parsearPaginado(req.query) : null;
+      if (pag?.error) return res.status(400).json({ ok: false, error: pag.error });
       const cacheado = candidatosApiCacheado(db, scope, { peek: true });
       const actualizado = db.prepare('SELECT MAX(actualizado_en) t FROM ml_publicaciones_cache').get().t ?? null;
+      if (pag && (cacheado.cache || peek)) {
+        // Filtrado síncrono sobre ~7000 ítems (ms, sin serializar el cruce completo): la respuesta es chica.
+        const r = paginarCandidatos(cacheado.items, pag.params);
+        return res.json({ ok: true, ...r, filtro: pag.params.filtro, q: pag.params.q, actualizado, scope, cache: cacheado.cache });
+      }
       if (cacheado.cache || peek) {
         // Lista grande: se envía por tramos cediendo el loop (ver enviarJsonCedible). Mismo JSON que res.json.
         return enviarJsonCedible(res, { ok: true, data: cacheado.items, total: cacheado.total, actualizado, scope, cache: cacheado.cache })

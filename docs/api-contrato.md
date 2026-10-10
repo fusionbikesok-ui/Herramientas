@@ -3699,3 +3699,51 @@ Base: `/api/catalogo-vinculos`. Pantalla: `/catalogo-vinculos`. Permisos: lectur
 
 ### Escrituras (admin)
 - `POST /claves/link-de-pago`, `POST /operaciones/:id/reintentar`, `POST /operaciones/:id/confirmar-impacto`, `POST /operaciones/:id/destrabar`.
+
+## Matcher: GET /api/matcher/candidatos paginado (Fase D, 2026-10-10)
+
+Modo Publicación ML de la pestaña Vínculos. Sin parámetros de paginación la respuesta es la vieja
+(`{ok, data, total, actualizado, scope, cache}` con TODA la lista, ~21 MB; la usan `scope=all` de
+`test/matcher-rendimiento.test.js` y otros consumidores). Con **cualquiera** de `q`, `filtro`,
+`limit` u `offset` la respuesta es la paginada de abajo.
+
+- Request: `GET /api/matcher/candidatos?scope=all&q=&filtro=&limit=&offset=`
+  - `scope`: `all` (default) o `atencion`, igual que antes.
+  - `q` (opcional): texto libre. Semántica idéntica a la pantalla anterior: `trim` + minúsculas,
+    subcadena sobre `ml_title + " " + clave`. Sin acentos normalizados y sin AND por palabras
+    (`q=bicicleta rodado` busca esa frase exacta, no las dos palabras por separado).
+  - `filtro` (default `all`): `all` | `asignar` | `verificar` | `conf-baja` | `color-talle`.
+    Otro valor → 400. Mismos criterios que `filtroMatcher` del cliente (`conf-baja` =
+    `verificar` con `score_confianza < 0.7`; `color-talle` = `candidatos[0].color_ok && talle_ok`).
+  - `limit` (default 50): entero ≥ 1. Por encima de 200 se recorta a 200 (ver `limit` en la respuesta).
+    No entero o < 1 → 400.
+  - `offset` (default 0): entero ≥ 0. Fuera de rango → `items: []`.
+  - `peek=1` sigue funcionando: sin caché devuelve `items: []`, `total: 0`, `cache: false`.
+- Response 200 (paginada):
+  ```
+  {
+    ok: true,
+    total: number,          // cuántos cumplen q + filtro (lo que se pagina)
+    items: [                // hasta `limit` ítems, desde `offset`
+      { clave: "MLA123|456", ml_item_id: "MLA123", ml_variation_id: "456",
+        ml_title: string, modo: "asignar"|"verificar", score_confianza: number|null }
+    ],
+    limit: number,          // valor efectivo (default 50, máx 200)
+    offset: number,
+    conteos: { all, asignar, verificar, "conf-baja", "color-talle" },  // con q aplicado, para los chips
+    total_todas: number,    // publicaciones del cruce sin filtrar
+    filtro: string,         // eco del filtro efectivo
+    q: string,              // eco del q recibido
+    actualizado: string|null,
+    scope: "all"|"atencion",
+    cache: boolean
+  }
+  ```
+  `clave` es el valor que devuelve la pantalla (`clave` o `ml_item_id|ml_variation_id`). Los
+  `candidatos` y el resto del cruce NO viajan en la lista: el detalle del vínculo se pide aparte.
+- Response 202 cuando el cruce está frío: `{ ok: true, computing: true, scope }` (igual que antes;
+  el frontend reintenta).
+- Errores: 400 `{ ok: false, error }` por parámetros inválidos; 500 `{ ok: false, error }` como antes.
+- Tamaño y tiempo (medido, 7000 publicaciones sintéticas, caché caliente): página de 50 ≈ 8 KB
+  (~12–23 ms); página de 200 no se midió por separado (el test exige < 200 KB); respuesta vieja ≈ 8.8 MB (~140 ms, sin contar el JSON
+  real de ~21 MB).
