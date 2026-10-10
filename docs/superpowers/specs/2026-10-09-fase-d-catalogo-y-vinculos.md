@@ -68,7 +68,9 @@ Una pantalla, 4 pestañas.
   item y variación, que la orden normalizada ya conoce en `lib/modelos/ordenVenta.js:53-65`) a
   `gestion_pedido_items` con una migración, y se completa una vez con la reconciliación de 30 días existente. El cron
   de 48 h la mantiene al día.
-- Saltear (`s`) manda el caso al final y lo marca "salteado por X". No resuelve nada.
+- Saltear (`s`) manda el caso al final y lo marca "salteado por X". No resuelve nada. Saltear no es una decisión, así que
+  NO invalida un Vincular abierto por otro usuario (no hay `VERSION_CONFLICT`); es intencional. El conflicto de versión
+  solo salta cuando cambia el estado que importa para vincular.
 
 ### R2. Detalle y matriz por atributo
 
