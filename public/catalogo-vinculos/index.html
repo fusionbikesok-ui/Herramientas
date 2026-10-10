@@ -130,6 +130,18 @@
     </div>
   </div>
 
+  <!-- Diálogo genérico de confirmación (reemplaza el confirm nativo). Texto y botones los pone el JS. Foco inicial en Volver. -->
+  <div id="dlg-confirmar" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-conf-titulo" aria-describedby="dlg-conf-texto">
+      <h2 id="dlg-conf-titulo" class="cv-h2"></h2>
+      <p id="dlg-conf-texto" class="ui-resumen"></p>
+      <div class="cv-dialogo__pie">
+        <button type="button" class="ui-btn" id="dlg-conf-volver">Volver</button>
+        <button type="button" class="ui-btn ui-btn--peligro" id="dlg-conf-ok">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Diálogo: fotos del candidato (tecla f, solo PC). Foto ML y Woo lado a lado; apiladas en 360 px. -->
   <div id="dlg-foto" class="cv-dialogo-fondo cv-dialogo-fondo--centro" hidden>
     <div class="cv-dialogo cv-dialogo--foto" role="dialog" aria-modal="true" aria-labelledby="dlg-foto-titulo">

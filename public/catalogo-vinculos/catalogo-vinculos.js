@@ -365,7 +365,13 @@
     var error = salud.error_lectura
       ? '<div class="ui-aviso ui-aviso--critico" role="alert"><span class="cv-icono" aria-hidden="true">✗</span><span>La lectura de ML falló: ' + esc(lecturaErrTxt(salud.error_lectura)) + '</span></div>'
       : '';
-    box.innerHTML = '<p class="cv-franja-detalle__linea">' + lineas.map(esc).join(' · ') + '</p>' + error;
+    // Lectura incompleta (campo nuevo del backend). Si no viene, no se muestra nada (backend viejo).
+    var incompleta = '';
+    if (salud.observacion_incompleta === true) {
+      var det = salud.observacion_incompleta_detalle ? ' (' + String(salud.observacion_incompleta_detalle).slice(0, 160) + ')' : '';
+      incompleta = '<div class="ui-aviso ui-aviso--atencion" role="alert"><span class="cv-icono" aria-hidden="true">!</span><span>La lectura de ML está incompleta: no confíes en los vínculos hasta que se complete.' + esc(det) + '</span></div>';
+    }
+    box.innerHTML = '<p class="cv-franja-detalle__linea">' + lineas.map(esc).join(' · ') + '</p>' + incompleta + error;
   }
 
   // Listas de la franja: se resuelven con GET estado; cada caso se abre en Casos (abrirPorClave).
@@ -1512,6 +1518,35 @@
     else { var f = $('#cv-cola [aria-selected="true"]') || $('#cv-detalle'); if (f) f.focus(); }
   }
 
+  // Confirmación propia (reemplaza el confirm nativo). Un solo diálogo genérico: #dlg-confirmar.
+  // o: { titulo, texto, ok, volver, peligro, disparador, onOk, onCancel }. Foco inicial en Volver; Esc cancela.
+  // Si había otro diálogo abierto (p. ej. No sincronizar), se guarda y se restaura al cerrar.
+  function pedirConfirmacion(o) {
+    if (S.confOnOk) return; // ya hay una confirmación abierta
+    var dlg = $('#dlg-confirmar');
+    S.confPrev = S.dlgActivo ? { el: S.dlgActivo, disp: S.dlgDisparador, foco: document.activeElement } : null;
+    S.confOnOk = o.onOk || function () {}; S.confOnCancel = o.onCancel || null;
+    S.confDisp = o.disparador || document.activeElement;
+    $('#dlg-conf-titulo').textContent = o.titulo || 'Confirmar';
+    $('#dlg-conf-texto').textContent = o.texto || '';
+    $('#dlg-conf-ok').textContent = o.ok || 'Confirmar';
+    $('#dlg-conf-ok').className = 'ui-btn ' + (o.peligro ? 'ui-btn--peligro' : 'ui-btn--primario');
+    $('#dlg-conf-ok').setAttribute('aria-disabled', 'false');
+    abrirDialogo(dlg, S.confDisp, $('#dlg-conf-volver'));
+  }
+  // ok=true ejecuta onOk; ok=false ejecuta onCancel. Antes de ejecutar, el foco vuelve al disparador (o al diálogo previo).
+  function cerrarConfirmacion(ok) {
+    if (!S.confOnOk) return;
+    var cb = ok ? S.confOnOk : S.confOnCancel; var prev = S.confPrev; var disp = S.confDisp;
+    S.confOnOk = null; S.confOnCancel = null; S.confPrev = null; S.confDisp = null;
+    $('#dlg-confirmar').hidden = true;
+    S.dlgActivo = null; S.dlgDisparador = null;
+    if (prev) { S.dlgActivo = prev.el; S.dlgDisparador = prev.disp; if (prev.foco && document.contains(prev.foco)) prev.foco.focus(); }
+    else if (disp && document.contains(disp)) disp.focus();
+    else { var f = $('#cv-cola [aria-selected="true"]') || $('#cv-detalle'); if (f) f.focus(); }
+    if (cb) cb();
+  }
+
   // Versión grande de la foto ML (-I → -O en mlstatic https); helper en foto-ml.js. Sin helper, usa la URL tal cual.
   var fotoMlGrande = (window.CvFotoMl && window.CvFotoMl.fotoMlGrande) || function (u) { return u; };
   // Tecla f: fotos del candidato (ML y Woo) en un diálogo. Foto Woo = candidato del disparador o el elegido;
@@ -1545,8 +1580,11 @@
 
   // Esc o clic afuera: si hay un motivo escrito en No sincronizar, pide confirmación antes de descartarlo.
   function intentarCerrarDialogo() {
+    if (S.dlgActivo === $('#dlg-confirmar')) { cerrarConfirmacion(false); return; }
     if (S.dlgActivo === $('#dlg-ns') && $('#ns-motivo').value.trim() && S.nsEnviando === false) {
-      if (!window.confirm('Tenés un motivo escrito. ¿Descartarlo y cerrar?')) return;
+      pedirConfirmacion({ titulo: 'Descartar el motivo', texto: 'Tenés un motivo escrito. ¿Descartarlo y cerrar?', ok: 'Descartar y cerrar', peligro: true,
+        disparador: $('#ns-volver'), onOk: function () { cerrarDialogo(); } });
+      return;
     }
     cerrarDialogo();
   }
@@ -2406,11 +2444,10 @@
       return llamar('POST', IDENT + ruta, Object.assign({}, body, extra || {})).then(function (r) {
         S.busy = null; aplicarBloqueo();
         if (!r.ok && spec.accion === 'incorrecto' && !extra && r.data && r.data.requiere_confirmacion === 'permitir_unico') {
-          if (!window.confirm('Es el único código de ese producto. Va a quedar sin GTIN; ¿confirmás igual?')) {
-            anunciar('No se marcó el código.', 'estado');
-            return;
-          }
-          return enviar({ permitir_unico: true });
+          pedirConfirmacion({ titulo: 'Es el único código del producto', texto: 'Va a quedar sin GTIN; ¿confirmás igual?', ok: 'Confirmar igual', peligro: true,
+            onCancel: function () { anunciar('No se marcó el código.', 'estado'); },
+            onOk: function () { enviar({ permitir_unico: true }); } });
+          return;
         }
         if (!r.ok) { var e2 = $('#conf-err'); if (e2) { e2.textContent = mensajeDe(r); e2.hidden = false; } return; }
         S.conflictoAbierto = null; S.conflictoDetalle = null; S.confResolver = null; S.confMotivo = null;
@@ -2467,6 +2504,11 @@
     $('#dlg-atajos-cerrar').addEventListener('click', function () { cerrarDialogo(); });
     $('#ns-volver').addEventListener('click', intentarCerrarDialogo);
     $('#dlg-imp-volver').addEventListener('click', function () { cerrarDialogo(); });
+    $('#dlg-conf-volver').addEventListener('click', function () { cerrarConfirmacion(false); });
+    $('#dlg-conf-ok').addEventListener('click', function () {
+      if (S.busy || !S.confOnOk) return; // doble clic: la primera pulsación ya consumió la confirmación
+      cerrarConfirmacion(true);
+    });
     $('#exc-volver').addEventListener('click', function () { cerrarDialogo(); });
     $('#ning-volver').addEventListener('click', function () { cerrarDialogo(); });
     $('#rev-volver').addEventListener('click', function () { S.rev = null; cerrarDialogo(); });
@@ -2663,8 +2705,9 @@
           if (S.confResolver) S.confMotivo = { valor: S.confResolver.valor, motivo: S.confResolver.motivo };
           S.confResolver = null; cargarConflictos(); break;
         case 'incorrecto':
-          if (!window.confirm('¿Descartar este código para ese producto? Los demás productos no cambian.')) break;
-          resolverConflicto({ accion: 'incorrecto', valor: el.getAttribute('data-valor'), producto: el.getAttribute('data-producto') }); break;
+          pedirConfirmacion({ titulo: 'Descartar este código', texto: '¿Descartar este código para ese producto? Los demás productos no cambian.', ok: 'Descartar', peligro: true, disparador: el,
+            onOk: function () { resolverConflicto({ accion: 'incorrecto', valor: el.getAttribute('data-valor'), producto: el.getAttribute('data-producto') }); } });
+          break;
         default: break;
       }
     });
