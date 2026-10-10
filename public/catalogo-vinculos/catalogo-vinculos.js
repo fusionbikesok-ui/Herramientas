@@ -1134,6 +1134,8 @@
     else { var f = $('#cv-cola [aria-selected="true"]') || $('#cv-detalle'); if (f) f.focus(); }
   }
 
+  // Versión grande de la foto ML (-I → -O en mlstatic https); helper en foto-ml.js. Sin helper, usa la URL tal cual.
+  var fotoMlGrande = (window.CvFotoMl && window.CvFotoMl.fotoMlGrande) || function (u) { return u; };
   // Tecla f: fotos del candidato (ML y Woo) en un diálogo. Foto Woo = candidato del disparador o el elegido;
   // foto ML = caso.publicacion.thumbnail (GET /casos/:id, ya saneada en el backend).
   function abrirFotos(t) {
@@ -1146,14 +1148,20 @@
     if (!disp && t && t !== document.body) disp = t;
     var pub = (caso() && caso().publicacion) || {};
     var fotos = [];
-    if (pub.thumbnail) fotos.push({ src: pub.thumbnail, alt: 'Publicación ML', leyenda: 'Publicación ML' });
-    if (cand && cand.img) fotos.push({ src: cand.img, alt: 'Producto Woo: ' + (cand.nombre_canonico || cand.nombre_woo || 'producto'), leyenda: 'Producto Woo' });
+    if (pub.thumbnail) fotos.push({ src: fotoMlGrande(pub.thumbnail), mini: pub.thumbnail, alt: 'Publicación ML', leyenda: 'Publicación ML' });
+    if (cand && cand.img) fotos.push({ src: cand.img, mini: '', alt: 'Producto Woo: ' + (cand.nombre_canonico || cand.nombre_woo || 'producto'), leyenda: 'Producto Woo' });
     var cuerpo = $('#dlg-foto-cuerpo');
     cuerpo.innerHTML = fotos.length
       ? '<div class="cv-fotos">' + fotos.map(function (f) {
-          return '<figure class="cv-foto"><img class="cv-foto__img" src="' + esc(f.src) + '" alt="' + esc(f.alt) + '" loading="lazy"><figcaption>' + esc(f.leyenda) + '</figcaption></figure>';
+          return '<figure class="cv-foto"><img class="cv-foto__img" src="' + esc(f.src) + '"' + (f.mini && f.mini !== f.src ? ' data-mini="' + esc(f.mini) + '"' : '') + ' alt="' + esc(f.alt) + '" loading="lazy"><figcaption>' + esc(f.leyenda) + '</figcaption></figure>';
         }).join('') + '</div>'
       : '<p class="ui-resumen">Sin foto</p>';
+    // Si la versión grande de ML falla, cae a la miniatura original (una sola vez, sin bucle).
+    Array.prototype.forEach.call(cuerpo.querySelectorAll('img[data-mini]'), function (img) {
+      img.addEventListener('error', function () {
+        if (img.dataset.mini && img.getAttribute('src') !== img.dataset.mini) img.src = img.dataset.mini;
+      });
+    });
     abrirDialogo($('#dlg-foto'), disp, $('#dlg-foto-cerrar'));
   }
 
