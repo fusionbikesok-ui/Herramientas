@@ -269,5 +269,88 @@ describe('API de Catálogo y vínculos', () => {
       const l = await request(app(lector)).get(`${BASE}/retenidas`);
       expect(l.body.data[0].se_vuelve_a_retener).toBe(true);
     });
+
+    it('cada retenida trae titulo (de la publicación) e importe (suma de unit_price × cantidad)', async () => {
+      caso(2203);
+      const items = [
+        { item: { id: 'MLA2203', variation_id: null, seller_sku: null, title: 'Título del pedido' }, quantity: 2, unit_price: 100.5 },
+        { item: { id: 'MLA2203', variation_id: null, seller_sku: null, title: 'Título del pedido' }, quantity: 1, unit_price: 50 },
+      ];
+      db.prepare('INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en) VALUES (?, 0, NULL, ?)').run('ORD-P1', ISO);
+      db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'retenido', ?)").run('ORD-P1', ISO, ISO);
+      retenerPedidoMl(db, { orderId: 'ORD-P1', items, claves: ['MLA2203|'] });
+      const l = await request(app(lector)).get(`${BASE}/retenidas`);
+      expect(l.body.data[0]).toMatchObject({ ml_order_id: 'ORD-P1', titulo: 'Bicicleta Rodado 29 Talle M', importe: 251 });
+    });
+
+    it('sin precio en los ítems, importe null; sin publicación en cache, titulo cae al del pedido; nunca rompe', async () => {
+      const sinPrecio = [{ item: { id: 'MLA9901', variation_id: null, seller_sku: null, title: 'Del pedido' }, quantity: 1 }];
+      db.prepare('INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en) VALUES (?, 0, NULL, ?)').run('ORD-P2', ISO);
+      db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'retenido', ?)").run('ORD-P2', ISO, ISO);
+      retenerPedidoMl(db, { orderId: 'ORD-P2', items: sinPrecio, claves: ['MLA9901|'] });
+      db.prepare(`INSERT INTO guardia_ml_pedidos_retenidos (ml_order_id,motivo,items_json,creado_en,actualizado_en)
+        VALUES ('ORD-P3','sin_cobertura','no es json',?,?)`).run(ISO, ISO);
+      const l = await request(app(lector)).get(`${BASE}/retenidas`);
+      expect(l.status).toBe(200);
+      const byId = Object.fromEntries(l.body.data.map((f) => [f.ml_order_id, f]));
+      expect(byId['ORD-P2']).toMatchObject({ titulo: 'Del pedido', importe: null });
+      expect(byId['ORD-P3']).toMatchObject({ titulo: null, importe: null, claves: [] });
+    });
+  });
+
+  describe('publicaciones de un producto', () => {
+    it('404 si el producto no existe', async () => {
+      const r = await request(app(lector)).get(`${BASE}/productos/99999/publicaciones`);
+      expect(r.status).toBe(404);
+      expect(r.body).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+    });
+
+    it('producto sin vínculo: data vacío', async () => {
+      const c = caso(2301);
+      const r = await request(app(lector)).get(`${BASE}/productos/${c.p.id}/publicaciones`);
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, data: [] });
+    });
+
+    it('lista las publicaciones con asignar/confirmar del SKU Woo del producto; ignora omitir', async () => {
+      const c = caso(2302);
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en)
+        VALUES ('MLA2302|7','MLA2302','7','Variación 7','paused',?)`).run(ISO);
+      db.prepare("INSERT INTO sku_matcher_decisiones (clave,sku,accion,actualizado_en) VALUES ('MLA2302|','FB-2302','asignar',?)").run(ISO);
+      db.prepare("INSERT INTO sku_matcher_decisiones (clave,sku,accion,actualizado_en) VALUES ('MLA2302|7','FB-2302','omitir',?)").run(ISO);
+      const r = await request(app(lector)).get(`${BASE}/productos/${c.p.id}/publicaciones`);
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, data: [{ clave: 'MLA2302|', titulo: 'Bicicleta Rodado 29 Talle M', status: 'active' }] });
+    });
+  });
+
+  describe('ejecución: variaciones de las operaciones con impacto en hermanas', () => {
+    it('sin operaciones: listas vacías y contadores en cero', async () => {
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      expect(r.status).toBe(200);
+      expect(r.body.data).toMatchObject({ operaciones: [], pausas: [], fallidas: 0, pausas_con_riesgo: 0 });
+    });
+
+    it('operación sin hermanas: variaciones [] y impacto_hermanas numérico 0', async () => {
+      const c = caso(2401);
+      await request(app(operador)).post(`${BASE}/casos/${c.f.id}/decisiones`)
+        .send({ tipo: 'vincular', product_id: c.p.id, operation_id: 'op-2401', expected_version: c.f.expected_version, evidence_fingerprint: c.f.evidencia_fingerprint });
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      expect(r.body.data.operaciones).toMatchObject([{ ml_key: 'MLA2401|', impacto_hermanas: 0, variaciones: [] }]);
+    });
+
+    it('operación con hermanas: variaciones [{clave,titulo,status}] e impacto_hermanas sigue numérico', async () => {
+      const c = caso(2402);
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en)
+        VALUES ('MLA2402|9','MLA2402','9','Hermana 9','active',?)`).run(ISO);
+      const dec = await request(app(operador)).post(`${BASE}/casos/${c.f.id}/decisiones`)
+        .send({ tipo: 'vincular', product_id: c.p.id, operation_id: 'op-2402', expected_version: c.f.expected_version, evidence_fingerprint: c.f.evidencia_fingerprint, confirm_sibling_impact: true });
+      expect(dec.status).toBe(201);
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      const op = r.body.data.operaciones.find((o) => o.ml_key === 'MLA2402|');
+      expect(op.impacto_hermanas).toBe(1);
+      expect(typeof op.impacto_hermanas).toBe('number');
+      expect(op.variaciones).toEqual([{ clave: 'MLA2402|9', titulo: 'Hermana 9', status: 'active' }]);
+    });
   });
 });
