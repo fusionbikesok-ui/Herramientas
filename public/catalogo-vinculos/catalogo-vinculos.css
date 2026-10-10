@@ -374,6 +374,8 @@
 /* Vínculos: selector de modo, historial y tarjetas del panel de vínculo */
 .cv-modo { border: 0; padding: 0; margin: 0 0 var(--sp-2); display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 .cv-modo legend { padding: 0; margin-bottom: .25rem; }
+.cv-modo label { display: inline-flex; align-items: center; gap: .4rem; min-height: var(--tap-min); padding: 0 .5rem; cursor: pointer; }
+.cv-modo input[type="radio"] { width: 1.1rem; height: 1.1rem; margin: 0; }
 .cv-hist { margin: var(--sp-2) 0; }
 .cv-hist__lista { margin: var(--sp-2) 0; padding-left: var(--sp-3); }
 .cv-hist__lista li { margin-bottom: .35rem; }

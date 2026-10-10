@@ -28,7 +28,7 @@
     var m = o && o.motivo_cancelacion;
     if (!m && o && /sku_anterior\s*==\s*sku_objetivo|no-op/i.test(String(o.ultimo_error || ''))) m = 'sin_cambio_sku';
     if (m === 'sin_cambio_sku') return 'Cancelada: no hacía falta cambiar el SKU';
-    if (m) return 'Cancelada: ' + motivoTxt(m).charAt(0).toLowerCase() + motivoTxt(m).slice(1);
+    if (m) return sinNombres('Cancelada: ' + motivoTxt(m).charAt(0).toLowerCase() + motivoTxt(m).slice(1));
     return 'Cancelada';
   }
   // Estado visible de una operación/pausa: 'cancelada' tiene prioridad sobre 'fallida'.
@@ -62,6 +62,32 @@
   // Mapa único código → texto humano. Lo usan la cola, el detalle, Ejecución, Retenidas e Historial.
   // Cubre los códigos que emiten lib/catalogoVinculos.js, lib/identidadProductos.js y lib/guardiaMl.js.
   // Un código no mapeado cae en motivoTxt() y se muestra en snake_case→texto (nunca el código crudo con guiones bajos).
+  // Motivos de regla que arma el backend (lib/proteccionIdentidad.js): "sin_vinculo:<clasificación>", "hermana_user_product:<clave>", etc.
+  var CLASIF_TXT = { sku_ausente: 'la publicación no tiene SKU', sku_vacio: 'el SKU de la publicación está vacío',
+    sku_inexistente: 'el SKU no existe en Woo', sku_no_unico: 'el SKU está repetido en Woo',
+    contradiccion_titulo: 'el título contradice el producto', gtin_contradictorio: 'el código de barras no coincide' };
+  var MOTIVO_REGLA_TXT = { intervencion: 'caso en intervención', omitir: 'publicación marcada como no sincronizar',
+    contradiccion_sku_distinto: 'el SKU de ML es distinto al de Woo', hermana_user_product: 'hay una variante con producto de usuario' };
+  function motivoRegla(code) {
+    if (code == null || code === '') return '';
+    var k = String(code).trim();
+    var m = /^sin_vinculo:(.+)$/.exec(k);
+    if (m) return 'sin vínculo: ' + (CLASIF_TXT[m[1]] || motivoTxt(m[1]).toLowerCase());
+    m = /^hermana_user_product:/.exec(k);
+    if (m) return MOTIVO_REGLA_TXT.hermana_user_product;
+    if (MOTIVO_REGLA_TXT[k]) return MOTIVO_REGLA_TXT[k];
+    return motivoTxt(k);
+  }
+  // Ningún nombre propio de persona en motivos de sistema (cancelaciones, reglas): "por José" -> "por un usuario".
+  function sinNombres(t) {
+    return String(t).replace(/\bpor (?!ML\b|Woo\b|WooCommerce\b|Fusion\b|Mercado\b)[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*/g, 'por un usuario');
+  }
+  var TIPO_IDENT_TXT = { ean_8: 'EAN-8', ean_13: 'EAN-13', upc_a: 'UPC-A', gtin_14: 'GTIN-14' };
+  function tipoIdentTxt(t) {
+    if (!t) return '';
+    var k = String(t).trim().toLowerCase();
+    return TIPO_IDENT_TXT[k] || k.replace(/_/g, '-').toUpperCase();
+  }
   var MOTIVO_TXT = {
     sku_ausente: 'Sin SKU en la publicación',
     sku_vacio: 'La publicación no tiene SKU',
@@ -637,7 +663,7 @@
   function datosHtml() {
     var c = caso(); var obs = S.detalle.observado_ml || {}; var regla = S.detalle.regla || {};
     var estadoML = estadoMlTxt(obs.estado);
-    var reglaTxt = regla.frena ? 'Stock 0 por ' + (motivoTxt(regla.motivo) || 'protección').toLowerCase() : ('Stock de Woo ' + (regla.stock_esperado != null ? regla.stock_esperado : 'sin dato'));
+    var reglaTxt = regla.frena ? 'Stock 0 por ' + (motivoRegla(regla.motivo) || 'protección').toLowerCase() : ('Stock de Woo ' + (regla.stock_esperado != null ? regla.stock_esperado : 'sin dato'));
     var desfase = S.detalle.ml_no_refleja_regla
       ? '<div class="ui-aviso ui-aviso--atencion cv-aviso-desfase cv-aviso-fijo" role="note"><span class="cv-icono" aria-hidden="true">⚠</span><span>ML todavía no refleja la regla.</span></div>' : '';
     var vig = S.detalle.vinculo_vigente;
@@ -1170,7 +1196,7 @@
       encolada: ['cv-chip-estado', '↻', 'En cola para ML'],
       aplicada: ['cv-chip-estado cv-chip-estado--aplicada', '✓', 'Aplicada en ML'],
       fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', errMlTxt(o.ultimo_error) + '. ' + reintentaTxt()],
-      frenada: ['cv-chip-estado cv-chip-estado--frenada', '⏸', 'Frenada: ' + (o.ultimo_error || 'regla de protección') + '. Stock en 0 hasta resolver.'],
+      frenada: ['cv-chip-estado cv-chip-estado--frenada', '⏸', 'Frenada: ' + sinNombres(motivoRegla(o.ultimo_error) || 'regla de protección') + '. Stock en 0 hasta resolver.'],
       espera: ['cv-chip-estado cv-chip-estado--espera', '⏳', 'Espera tu confirmación']
     }[k];
     if (!m) return '<span class="cv-chip-estado">' + esc(estado) + '</span>';
@@ -1306,7 +1332,7 @@
       : '';
     var filas = ops.map(filaEjecHtml).join('');
     var vacio = S.ejecQ
-      ? '<p class="ui-resumen">Ninguna operación pendiente coincide con «' + esc(S.ejecQ) + '».</p>'
+      ? '<p class="ui-resumen">Sin pendientes que coincidan con «' + esc(S.ejecQ) + '».</p>'
       : '<p class="ui-resumen cv-ejec-vacio"><span aria-hidden="true">✓</span> Nada pendiente</p>';
     var secciones = nuevo ? seccionEjecHtml('completadas', 'Completadas') + seccionEjecHtml('canceladas', 'Canceladas') : '';
     $('#ejec-cuerpo').innerHTML = bloquePausas + (filas || (pausas.length ? '' : vacio)) + secciones;
@@ -1552,6 +1578,7 @@
     var cont = $('#vinc-resultados');
     var modo = modoVinc();
     S.vincQ = q || '';
+    var req = S.vincReq = (S.vincReq || 0) + 1; // contador de petición: solo vale la última
     if (!S.vincFiltro) S.vincFiltro = 'all';
     renderVincFiltros();
     // Sin texto no se busca (no se pide la lista entera): se muestra el estado inicial con instrucciones.
@@ -1573,6 +1600,7 @@
           return { r: r, lista: lista, modo: modo, computing: !!(r.ok && r.data.computing) };
         });
     return pr.then(function (x) {
+      if (req !== S.vincReq) return; // respuesta de una búsqueda o modalidad anterior
       cont.setAttribute('aria-busy', 'false');
       if (!x.r.ok) { cont.innerHTML = cajaError(mensajeDe(x.r), 'buscarVinculos'); return; }
       if (x.computing) { cont.innerHTML = '<div class="api-estado api-estado--vacio" role="status"><p>El Matcher está calculando. Probá en un rato.</p></div>'; return; }
@@ -1766,7 +1794,7 @@
       cuerpo.innerHTML = S.conflictos.map(function (x) {
         var abierto = S.conflictoAbierto === x.valor_normalizado;
         return '<article class="cv-conflicto"><div class="cv-conflicto__cab"><span><span class="ui-id">' + esc(x.valor_normalizado) + '</span> '
-          + '<span class="ui-label">' + esc(x.subtipo || '') + ' · ' + esc(cuenta(Number(x.productos) || 0, 'producto', 'productos')) + '</span></span>'
+          + '<span class="ui-label">' + esc(tipoIdentTxt(x.subtipo)) + ' · ' + esc(cuenta(Number(x.productos) || 0, 'producto', 'productos')) + '</span></span>'
           + '<button type="button" class="ui-btn" data-accion="ver-conflicto" data-valor="' + esc(x.valor_normalizado) + '" aria-expanded="' + abierto + '">'
           + (abierto ? 'Cerrar' : 'Ver y resolver') + '</button></div>'
           + (abierto ? conflictoDetalleHtml() : '') + '</article>';
@@ -2094,7 +2122,7 @@
       } else if (f.id === 'vinc-form') {
         ev.preventDefault();
         var v = $('#vinc-q').value.trim();
-        if (v) buscarVinculos(v);
+        buscarVinculos(v);
       }
     });
 
