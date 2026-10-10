@@ -33,15 +33,22 @@
   }
   // Estado visible de una operación/pausa: 'cancelada' tiene prioridad sobre 'fallida'.
   function estOp(o) { return esCancelada(o) ? 'cancelada' : (ESTADO_OP[o.estado] || o.estado); }
-  // Fallidas reales: data.fallidas del backend ya excluye canceladas (y data.canceladas viene aparte).
-  // Si el backend todavía no manda data.canceladas (build anterior), se descuentan en el cliente.
+  // Contrato nuevo de /ejecucion: operaciones = solo accionables; completadas y canceladas = {total, items[]} paginadas;
+  // fallidas y canceladas_total = números. Si completadas/canceladas no vienen como objeto (backend viejo), se degrada.
+  function esNuevo(e) {
+    return !!e && typeof e.completadas === 'object' && e.completadas !== null && typeof e.canceladas === 'object' && e.canceladas !== null;
+  }
+  // Fallidas reales: data.fallidas del backend ya excluye canceladas.
+  // Si el backend no manda un conteo de canceladas (build anterior), se descuentan en el cliente.
   function fallidasReales(e) {
     var f = (e && e.fallidas) || 0;
-    if (e && typeof e.canceladas === 'number') return f;
+    if (e && (typeof e.canceladas_total === 'number' || typeof e.canceladas === 'number')) return f;
     return f - ((e && e.operaciones) || []).filter(function (o) { return o.estado === 'fallida' && esCancelada(o); }).length;
   }
   function canceladasN(e) {
+    if (e && typeof e.canceladas_total === 'number') return e.canceladas_total;
     if (e && typeof e.canceladas === 'number') return e.canceladas;
+    if (esNuevo(e)) return e.canceladas.total || 0;
     return ((e && e.operaciones) || []).filter(esCancelada).length;
   }
   var MSG = {
@@ -165,6 +172,7 @@
     deshacer: null, deshacerTimer: null,
     opIds: {}, dlgActivo: null, dlgDisparador: null,
     ejecEstados: null, ejecPoll: null, ejecError: null, ejecMsgs: {}, busyOp: null,
+    ejecQ: '', ejecSnap: null, ejecTimer: null, ejecAbiertas: { completadas: false, canceladas: false }, ejecMasBusy: null, ejecMasError: null,
     retenidas: null, retError: null, retAbierta: null, retAviso: {},
     vincResultados: null, vincQ: '', vincPanel: null, identMsg: null,
     conflictos: null, conflictosError: null, conflictoAbierto: null, conflictoDetalle: null, confResolver: null,
@@ -225,7 +233,7 @@
 
   // Navegación de lectura: nunca se bloquea (ni offline ni con operación en curso).
   var NAV = ['tab', 'reintentar-carga', 'volver-cola', 'filtro', 'vinc-filtro', 'ver-mas', 'solo-dif', 'elegir', 'abrir', 'abrir-clave',
-    'ver-conflicto', 'vinc-ml', 'vinc-historial', 'vinc-pubs-producto', 'ir-ejecucion', 'ir-retenidas', 'buscar-cand', 'reintentar-matriz'];
+    'ver-conflicto', 'vinc-ml', 'vinc-historial', 'vinc-pubs-producto', 'ir-ejecucion', 'ir-retenidas', 'buscar-cand', 'reintentar-matriz', 'ejec-ver-mas'];
   // Única fuente del estado deshabilitado: la usan el render (accionesHtml) y aplicarBloqueo.
   // Offline bloquea escrituras; una operación en curso bloquea escrituras; la matriz en carga bloquea vincular.
   function bloqueado(accion) {
@@ -485,10 +493,11 @@
       S.detalleError = null;
       S.detalle = r.data.data;
       // /ejecucion completo solo si el caso lo necesita (intervención, o hay fallidas que mirar); si no, sirve la copia cacheada.
-      var necesitaEjec = !S.ejec || fallidasReales(S.ejec) > 0 || S.detalle.caso.estado === 'intervencion';
+      var necesitaEjec = !S.ejecSnap || fallidasReales(S.ejecSnap) > 0 || S.detalle.caso.estado === 'intervencion';
       var ej = necesitaEjec ? api('GET', '/ejecucion') : Promise.resolve(null);
       return ej.then(function (re) {
-        if (re && re.ok) S.ejec = re.data.data;
+        // Sin q: la respuesta es el snapshot real del caso (nunca una caché filtrada por el buscador).
+        if (re && re.ok) S.ejecSnap = re.data.data;
         if (S.casoId !== id) return;
         return (soloLecturaDetalle() ? Promise.resolve() : buscarCandidatos(S.queryCand || S.detalle.caso.publicacion?.titulo || '')).then(function () {
           renderDetalle();
@@ -566,7 +575,7 @@
   function casoEnCola() { return S.cola.find(function (f) { return f.caso_id === S.casoId; }) || null; }
 
   function operacionDelCaso() {
-    var ops = (S.ejec && S.ejec.operaciones) || [];
+    var ops = (S.ejecSnap && S.ejecSnap.operaciones) || [];
     return ops.find(function (o) { return o.caso_id === S.casoId && !esCancelada(o) && ['fallida', 'intervencion', 'bloqueada_impacto'].indexOf(o.estado) !== -1; }) || null;
   }
 
@@ -1147,14 +1156,41 @@
     return '<span class="' + m[0] + '"><span aria-hidden="true">' + m[1] + '</span> ' + esc(m[2]) + '</span>';
   }
 
-  function cargarEjecucion() {
+  // Query de /ejecucion: filtro de texto y offsets. Sin filtro no se manda q.
+  var LIMITE_MAX_EJEC = 200; // tope del backend para limite
+  function ejecQs(limite, offs) {
+    var p = [];
+    if (S.ejecQ) p.push('q=' + encodeURIComponent(S.ejecQ));
+    p.push('limite=' + limite);
+    p.push('completadas_offset=' + ((offs && offs.completadas) || 0));
+    p.push('canceladas_offset=' + ((offs && offs.canceladas) || 0));
+    return p.join('&');
+  }
+  // reiniciar: vuelve a la primera página (50) — usado al cambiar el filtro.
+  // Sin reiniciar (polling, cambio de tab), se piden de nuevo todas las ya cargadas para no perder "Ver más".
+  function cargarEjecucion(opts) {
     var cab = $('#ejec-cabecera');
+    var reiniciar = !!(opts && opts.reiniciar);
+    var cargadas = S.ejec && esNuevo(S.ejec) ? Math.max(S.ejec.completadas.items.length, S.ejec.canceladas.items.length) : 0;
+    var limite = reiniciar ? 50 : Math.min(LIMITE_MAX_EJEC, Math.max(50, cargadas));
+    var sinQ = !S.ejecQ;
+    var previo = S.ejec;
     cab.setAttribute('aria-busy', 'true');
-    return api('GET', '/ejecucion').then(function (r) {
+    return api('GET', '/ejecucion?' + ejecQs(limite)).then(function (r) {
       cab.setAttribute('aria-busy', 'false');
       if (!r.ok) { cab.innerHTML = cajaError(mensajeDe(r), 'cargarEjecucion'); $('#ejec-cuerpo').innerHTML = ''; return; }
       var e = r.data.data;
+      // Histórico terminal (completadas/canceladas no vuelven a accionables): lo cargado más allá de la ventana de 200 se conserva.
+      if (!reiniciar && previo && esNuevo(previo) && esNuevo(e)) {
+        ['completadas', 'canceladas'].forEach(function (sec) {
+          var ids = {};
+          e[sec].items.forEach(function (o) { ids[o.id] = true; });
+          previo[sec].items.forEach(function (o) { if (!ids[o.id]) e[sec].items.push(o); });
+        });
+      }
+      if (sinQ) S.ejecSnap = e;
       S.ejec = e;
+      S.ejecMasError = null;
       var anteriores = S.ejecEstados;
       var nuevos = {};
       var cambios = [];
@@ -1172,16 +1208,59 @@
 
   function refrescarEjecucion() { return cargarEjecucion(); }
 
+  // Una fila de operación (Ejecución). Sirve para accionables, completadas y canceladas.
+  function filaEjecHtml(o) {
+    var est = estOp(o);
+    var fallida = est === 'fallida';
+    var cancelada = est === 'cancelada';
+    var acciones = '';
+    var enviandoEsta = S.busyOp === o.id;
+    var dis = 'aria-disabled="' + !!S.busy + '"';
+    if (S.isAdmin && puedeEscribir() && fallida) acciones += '<button type="button" class="ui-btn" data-accion="reintentar" data-op="' + o.id + '" ' + dis + '>'
+      + (enviandoEsta && S.busy === 'reintentar' ? 'Enviando…' : 'Reintentar') + '</button> ';
+    if (S.isAdmin && puedeEscribir() && o.estado === 'bloqueada_impacto') acciones += '<button type="button" class="ui-btn" data-accion="confirmar-impacto" data-op="' + o.id + '" ' + dis + '>'
+      + (enviandoEsta && S.busy === 'confirmar-impacto' ? 'Enviando…' : 'Confirmar impacto') + '</button>';
+    var msg = S.ejecMsgs[o.id];
+    var msgHtml = msg ? '<p class="ui-resumen cv-ejec-msg' + (msg.error ? ' cv-ejec-msg--error' : '') + '" role="' + (msg.error ? 'alert' : 'status') + '">'
+      + (msg.error ? '✗ ' : '') + esc(msg.error || msg.texto) + '</p>' : '';
+    return '<article class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + (cancelada ? ' cv-ejec-fila--cancelada' : '') + '" data-op="' + o.id + '">'
+      + '<div class="cv-ejec-fila__info">'
+      + '<div class="cv-ejec-fila__cab"><strong class="cv-ejec-fila__titulo">' + esc(o.nombre_canonico || o.ml_key) + '</strong>' + chipEstado(o.estado, o) + '</div>'
+      + '<p class="ui-resumen cv-ejec-fila__meta"><span class="ui-id">' + esc(o.sku_objetivo || '') + '</span> · ' + esc(fecha(o.actualizada_en || o.iniciada_en)) + '</p>'
+      + (fallida && !S.isAdmin ? '<p class="ui-resumen">' + reintentaTxt() + '</p>' : '')
+      + msgHtml
+      + '</div>'
+      + (acciones ? '<div class="cv-ejec-acciones">' + acciones + '</div>' : '')
+      + '</article>';
+  }
+
+  // Sección colapsada (Completadas / Canceladas) con contador, filas acumuladas y "Ver más" de a 50.
+  function seccionEjecHtml(sec, titulo) {
+    var s = S.ejec[sec] || { items: [], total: 0 };
+    var items = s.items || [];
+    var total = s.total || 0;
+    var pie = '';
+    if (!items.length) pie = '<p class="ui-resumen">' + (S.ejecQ ? 'Ninguna coincide con «' + esc(S.ejecQ) + '».' : 'Todavía no hay operaciones ' + sec + '.') + '</p>';
+    if (S.ejecMasError && S.ejecMasError.sec === sec) pie += '<p class="ui-resumen cv-ejec-msg cv-ejec-msg--error" role="alert">✗ ' + esc(S.ejecMasError.msg) + '</p>';
+    if (items.length < total) {
+      var cargando = S.ejecMasBusy === sec;
+      pie += '<p class="cv-ejec-mas"><button type="button" class="ui-btn" data-accion="ejec-ver-mas" data-seccion="' + sec + '" aria-disabled="' + cargando + '">'
+        + (cargando ? 'Cargando…' : 'Ver más') + '</button> <span class="ui-resumen">Mostrando ' + items.length + ' de ' + total + '</span></p>';
+    }
+    return '<details class="cv-ejec-seccion ui-card" data-seccion="' + sec + '"' + (S.ejecAbiertas[sec] ? ' open' : '') + '>'
+      + '<summary class="cv-ejec-seccion__sum">' + titulo + ' · ' + total + '</summary>'
+      + '<div class="cv-ejec-seccion__cuerpo">' + items.map(filaEjecHtml).join('') + pie + '</div></details>';
+  }
+
   function renderEjecucion() {
     var e = S.ejec; if (!e) return;
+    var nuevo = esNuevo(e);
     var fall = fallidasReales(e);
     var ops = e.operaciones || [];
     var frenadas = ops.filter(function (o) { return estOp(o) === 'frenada'; }).length;
     var encoladas = ops.filter(function (o) { return estOp(o) === 'encolada'; }).length;
     $('#ejec-cabecera').innerHTML = '<div class="cv-cabecera-ejec">'
-      + (fall > 0
-        ? '<span class="cv-contador cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(fall, 'fallida', 'fallidas') + '</span>'
-        : '<span class="cv-contador cv-contador--ok"><span aria-hidden="true">✓</span> Sin fallidas</span>')
+      + (fall > 0 ? '<span class="cv-contador cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(fall, 'fallida', 'fallidas') + '</span>' : '')
       + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + cuenta(frenadas, 'frenada', 'frenadas') + '</span> · ↻ ' + encoladas + ' en cola'
       + (canceladasN(e) > 0 ? ' · <span class="cv-canceladas">' + canceladasN(e) + ' cancelada' + (canceladasN(e) === 1 ? '' : 's') + '</span>' : '') + '</span></div>'
       + saludHtml();
@@ -1192,39 +1271,49 @@
           return '<p class="ui-resumen">' + esc(p.ml_key) + ' · pausa ' + cuenta(p.impacto_hermanas, 'variación', 'variaciones') + ' · ' + esc(motivoTxt(p.motivo)) + ' ' + chipEstado(p.estado, p) + '</p>';
         }).join('') + '</section>'
       : '';
-    var filas = ops.map(function (o) {
-      var est = estOp(o);
-      var fallida = est === 'fallida';
-      var cancelada = est === 'cancelada';
-      var acciones = '';
-      var enviandoEsta = S.busyOp === o.id;
-      var dis = 'aria-disabled="' + !!S.busy + '"';
-      if (S.isAdmin && puedeEscribir() && fallida) acciones += '<button type="button" class="ui-btn" data-accion="reintentar" data-op="' + o.id + '" ' + dis + '>'
-        + (enviandoEsta && S.busy === 'reintentar' ? 'Enviando…' : 'Reintentar') + '</button> ';
-      if (S.isAdmin && puedeEscribir() && o.estado === 'bloqueada_impacto') acciones += '<button type="button" class="ui-btn" data-accion="confirmar-impacto" data-op="' + o.id + '" ' + dis + '>'
-        + (enviandoEsta && S.busy === 'confirmar-impacto' ? 'Enviando…' : 'Confirmar impacto') + '</button>';
-      var msg = S.ejecMsgs[o.id];
-      var msgHtml = msg ? '<p class="ui-resumen cv-ejec-msg' + (msg.error ? ' cv-ejec-msg--error' : '') + '" role="' + (msg.error ? 'alert' : 'status') + '">'
-        + (msg.error ? '✗ ' : '') + esc(msg.error || msg.texto) + '</p>' : '';
-      return '<article class="cv-ejec-fila' + (fallida ? ' cv-ejec-fila--fallida' : '') + (cancelada ? ' cv-ejec-fila--cancelada' : '') + '" data-op="' + o.id + '">'
-        + '<div class="cv-ejec-fila__info">'
-        + '<div class="cv-ejec-fila__cab"><strong class="cv-ejec-fila__titulo">' + esc(o.nombre_canonico || o.ml_key) + '</strong>' + chipEstado(o.estado, o) + '</div>'
-        + '<p class="ui-resumen cv-ejec-fila__meta"><span class="ui-id">' + esc(o.sku_objetivo || '') + '</span> · ' + esc(fecha(o.actualizada_en || o.iniciada_en)) + '</p>'
-        + (fallida && !S.isAdmin ? '<p class="ui-resumen">' + reintentaTxt() + '</p>' : '')
-        + msgHtml
-        + '</div>'
-        + (acciones ? '<div class="cv-ejec-acciones">' + acciones + '</div>' : '')
-        + '</article>';
-    }).join('');
-    $('#ejec-cuerpo').innerHTML = bloqueRiesgo + (filas || '<p class="ui-resumen">No hay operaciones en ML.</p>');
+    var filas = ops.map(filaEjecHtml).join('');
+    var vacio = S.ejecQ
+      ? '<p class="ui-resumen">Ninguna operación pendiente coincide con «' + esc(S.ejecQ) + '».</p>'
+      : '<p class="ui-resumen cv-ejec-vacio"><span aria-hidden="true">✓</span> Nada pendiente</p>';
+    var secciones = nuevo ? seccionEjecHtml('completadas', 'Completadas') + seccionEjecHtml('canceladas', 'Canceladas') : '';
+    $('#ejec-cuerpo').innerHTML = bloqueRiesgo + (filas || vacio) + secciones;
   }
 
+  // "Ver más": pide la siguiente página (50) de la sección y acumula sin repetir filas.
+  function verMasEjec(sec) {
+    var e = S.ejec;
+    if (!esNuevo(e) || S.ejecMasBusy) return;
+    var offs = {}; offs[sec] = e[sec].items.length;
+    var qAntes = S.ejecQ;
+    S.ejecMasBusy = sec; S.ejecMasError = null; renderEjecucion();
+    return api('GET', '/ejecucion?' + ejecQs(50, offs)).then(function (r) {
+      if (qAntes !== S.ejecQ) { S.ejecMasBusy = null; return; }
+      S.ejecMasBusy = null;
+      if (!r.ok) {
+        S.ejecMasError = { sec: sec, msg: r.red ? MSG_ERROR_SIN_RED : mensajeDe(r) };
+        anunciar(S.ejecMasError.msg, 'alerta'); renderEjecucion(); return;
+      }
+      var nd = r.data.data;
+      if (esNuevo(nd) && S.ejec && esNuevo(S.ejec)) {
+        var vistos = {};
+        S.ejec[sec].items.forEach(function (o) { vistos[o.id] = true; });
+        nd[sec].items.forEach(function (o) { if (!vistos[o.id]) S.ejec[sec].items.push(o); });
+        S.ejec[sec].total = nd[sec].total;
+      }
+      renderEjecucion();
+      var btn = document.querySelector('.cv-ejec-seccion[data-seccion="' + sec + '"] [data-accion="ejec-ver-mas"]');
+      var foco = btn || document.querySelector('.cv-ejec-seccion[data-seccion="' + sec + '"] > summary');
+      if (foco) foco.focus();
+    });
+  }
+
+  // Pestaña: "Ejecución" sin fallidas; con fallidas, "Ejecución · ✗ N".
   function actualizarContadoresTab() {
     var e = S.ejec; if (!e) return;
     var n = fallidasReales(e);
     $('#cnt-ejecucion').innerHTML = n > 0
-      ? '<span class="cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(n, 'fallida', 'fallidas') + '</span>'
-      : '<span class="ui-resumen">' + cuenta(0, 'fallida', 'fallidas') + '</span>';
+      ? '<span class="cv-contador--critico" aria-hidden="true">· ✗ ' + n + '</span><span class="sr-only"> (' + cuenta(n, 'fallida', 'fallidas') + ')</span>'
+      : '';
   }
 
   // Estado de la pantalla Ejecución: salud de lectura y conciliación (lo que muestran las pastillas de Casos).
@@ -1725,7 +1814,7 @@
 
   // Conteos de pestañas (fallidas y retenidas) al abrir la pantalla.
   function actualizarContadoresIniciales() {
-    api('GET', '/ejecucion').then(function (r) { if (r.ok) { S.ejec = r.data.data; actualizarContadoresTab(); } });
+    api('GET', '/ejecucion').then(function (r) { if (r.ok) { S.ejecSnap = r.data.data; S.ejec = r.data.data; actualizarContadoresTab(); } });
     // Las retenidas se guardan acá (no solo al abrir la tab) para que el link del caso aparezca sin visitarla.
     api('GET', '/retenidas').then(function (r) {
       if (!r.ok) return;
@@ -1776,6 +1865,21 @@
       if (this.getAttribute('aria-disabled') === 'true') { e.preventDefault(); $('#ns-conf') && $('#ns-conf').focus(); }
     });
 
+    // Ejecución: filtro por texto con debounce (300 ms); cada cambio reinicia la paginación.
+    $('#ejec-q').addEventListener('input', function (ev) {
+      var v = ev.target.value.trim();
+      clearTimeout(S.ejecTimer);
+      S.ejecTimer = setTimeout(function () {
+        if (v === S.ejecQ) return;
+        S.ejecQ = v; S.ejecMasError = null;
+        cargarEjecucion({ reiniciar: true });
+      }, 300);
+    });
+    // Recuerda qué secciones colapsadas quedaron abiertas (el cuerpo se repinta en cada refresco).
+    $('#ejec-cuerpo').addEventListener('toggle', function (ev) {
+      var sec = ev.target.getAttribute && ev.target.getAttribute('data-seccion');
+      if (sec) S.ejecAbiertas[sec] = ev.target.open;
+    }, true);
     // Tabs: flechas y Home/End.
     $('.cv-tabs').addEventListener('keydown', function (ev) {
       var i = TABS.indexOf(S.tab);
@@ -1896,6 +2000,7 @@
           renderFranjaLista(); break;
         case 'ir-ejecucion': activarTab('ejecucion'); break;
         case 'ir-retenidas': activarTab('retenidas'); break;
+        case 'ejec-ver-mas': verMasEjec(el.getAttribute('data-seccion')); break;
         case 'abrir-clave': abrirPorClave(el.getAttribute('data-clave')); break;
         case 'vinc-ml': abrirVinculoML(el.getAttribute('data-clave')); break;
         case 'vinc-revincular': irACaso(Number(el.getAttribute('data-caso')), false); break;
@@ -2003,7 +2108,7 @@
       ruta = '/claves/link-de-pago';
     } else {
       // Destrabar: la operación en intervención es la que se destraba.
-      var op = (S.ejec && S.ejec.operaciones || []).find(function (o) { return o.caso_id === c.id && o.estado === 'intervencion'; });
+      var op = (S.ejecSnap && S.ejecSnap.operaciones || []).find(function (o) { return o.caso_id === c.id && o.estado === 'intervencion'; });
       if (!op) { err.textContent = 'No hay una operación en intervención para este caso.'; err.hidden = false; return; }
       body = { operation_id: opIdPara('destrabar:' + op.id), motivo: motivo };
       ruta = '/operaciones/' + op.id + '/destrabar';

@@ -295,6 +295,14 @@
 .cv-ejec-acciones .ui-btn { min-height: var(--tap-min); }
 .cv-ejec-msg { font-size: var(--fs-meta); margin: 0; }
 .cv-ejec-msg--error { color: var(--critical); }
+/* Ejecución: filtro, estado vacío y secciones colapsadas (Completadas / Canceladas) */
+.cv-ejec-filtro { display: grid; gap: var(--sp-1); margin-bottom: var(--sp-3); max-width: 28rem; }
+.cv-ejec-vacio { font-weight: 600; color: var(--success); }
+.cv-ejec-seccion { margin-top: var(--sp-3); padding: var(--sp-2); }
+.cv-ejec-seccion__sum { cursor: pointer; font-weight: 700; min-height: var(--tap-min); display: flex; align-items: center; gap: .35rem; }
+.cv-ejec-seccion__cuerpo { display: grid; gap: var(--sp-2); margin-top: var(--sp-2); }
+.cv-ejec-seccion__cuerpo > p { margin: 0; }
+.cv-ejec-mas { display: flex; flex-wrap: wrap; gap: var(--sp-1); align-items: center; }
 .cv-frenadas { color: var(--warning); }
 .cv-impacto-lista { margin: .3rem 0 .3rem 1rem; padding: 0; }
 
