@@ -40,7 +40,7 @@
 
 /* ── Marco ── */
 .cv-offline {
-  position: sticky; top: 0; z-index: 30; padding: var(--sp-2) var(--sp-2);
+  position: static; padding: var(--sp-2) var(--sp-2);
   background: var(--cv-offline-bg); border-bottom: 1px solid var(--cv-offline-bd); color: var(--critical);
 }
 .cv-top {

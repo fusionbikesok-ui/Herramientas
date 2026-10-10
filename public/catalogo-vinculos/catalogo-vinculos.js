@@ -525,8 +525,10 @@
     S.queryCand = q || '';
     var pub = (S.detalle && S.detalle.caso && S.detalle.caso.publicacion) || {};
     if (!S.queryCand.trim()) { S.candidatos = []; return Promise.resolve(); }
+    S.candCargando = true; renderDetalle();
     var extra = (pub.gtin ? '&gtin_ml=' + enc(pub.gtin) : '') + (pub.seller_sku ? '&sku_ml=' + enc(pub.seller_sku) : '');
     return identidad('/productos/buscar?q=' + enc(S.queryCand.trim()) + extra).then(function (r) {
+      S.candCargando = false;
       if (!r.ok) { S.candidatosError = mensajeDe(r); S.candidatos = []; return; }
       S.candidatosError = null;
       S.candidatos = (r.data.data || []).slice(0, 3);
@@ -644,7 +646,7 @@
 
   function candidatosHtml(soloLectura) {
     if (soloLectura) return '';
-    var lista = S.candidatos || [];
+    var lista = S.candCargando ? [] : (S.candidatos || []);
     var filas = lista.map(function (p, i) {
       var sel = S.elegido && S.elegido.id === p.id;
       return '<button type="button" class="cv-cand' + (S.fotoGrande ? ' cv-cand--grande' : '') + '" data-accion="elegir" data-idx="' + i + '" aria-pressed="' + !!sel + '">'
@@ -658,7 +660,8 @@
         + '<span class="cv-cand__estado">' + (sel ? '✓ Elegido' : '') + '</span></button>';
     }).join('');
     var error = S.candidatosError ? '<p class="cv-error">' + esc(S.candidatosError) + '</p>' : '';
-    var vacio = (!lista.length && !S.candidatosError) ? '<p class="ui-resumen">Sin candidatos para esa búsqueda. Probá con otro texto.</p>' : '';
+    var vacio = S.candCargando ? '<p class="ui-resumen" role="status" aria-busy="true">Buscando candidatos…</p>'
+      : ((!lista.length && !S.candidatosError) ? '<p class="ui-resumen">Sin candidatos para esa búsqueda. Probá con otro texto.</p>' : '');
     return '<section class="cv-bloque" aria-labelledby="cand-h">'
       + '<h3 id="cand-h" class="ui-label">Candidatos (1, 2 o 3 para elegir · sin preselección)</h3>'
       + '<form id="det-buscar" class="cv-buscador__fila" role="search" data-accion="buscar-cand">'
@@ -911,7 +914,7 @@
     renderDetalle();
     api('POST', '/casos/' + c.id + '/saltear', { expected_version: c.expected_version }).then(function (r) {
       S.busy = null;
-      if (r.ok) { S.guardado = { caso: c.id, texto: 'Salteado. Pasa al final de la cola.' }; S.focoPendiente = '#det-titulo'; return siguienteCaso(); }
+      if (r.ok) { S.guardado = { caso: c.id, texto: 'Salteado. Pasa al final de la cola.' }; S.focoPendiente = '#det-titulo'; cargarConteos(); return siguienteCaso(); }
       if (r.status === 409 && r.data.code === 'VERSION_CONFLICT') return abrirCaso(c.id, { foco: false }).then(function () { setErrorAccion(mensajeDe(r)); renderDetalle(); });
       setErrorAccion(mensajeDe(r)); renderDetalle();
     });
@@ -1114,6 +1117,13 @@
     if (ev.key === 'Escape' && hist && hist.open) { ev.preventDefault(); hist.open = false; S.histOpen = false; hist.querySelector('summary').focus(); return; }
     if (ev.key === 'Escape' && S.hermanas) { ev.preventDefault(); S.hermanas = null; renderDetalle(); return; }
     if (ev.key === 'Escape' && S.conflictoVersion) { ev.preventDefault(); S.conflictoVersion = null; renderDetalle(); return; }
+    if (ev.key === 'Escape' && S.adminForm) {
+      ev.preventDefault();
+      var previo = S.adminForm; S.adminForm = null; renderDetalle();
+      var disparador = previo === 'destrabar' ? '[data-admin="destrabar"]' : '[data-accion="relevar-abrir"]';
+      enfocarPorSelector(disparador);
+      return;
+    }
     if (ev.ctrlKey || ev.metaKey || ev.altKey || !atajosActivos()) return;
     var t = ev.target;
     if (esCampo(t)) return;
@@ -1253,23 +1263,34 @@
       + '<div class="cv-ejec-seccion__cuerpo">' + items.map(filaEjecHtml).join('') + pie + '</div></details>';
   }
 
+  // Pausas en ML visibles: toda pausa no terminal (pendiente, procesando, fallida…) es accionable, no solo las de impacto.
+  var PAUSA_TERMINAL = { completada: 1, aplicada: 1, cancelada: 1 };
+  function pausasVisibles(e) {
+    return (e.pausas || []).filter(function (p) { return !esCancelada(p) && !PAUSA_TERMINAL[p.estado]; });
+  }
+  function pausaEstadoTxt(p) { return p.estado === 'fallida' ? 'Pausa en ML fallida' : 'Pausa en ML pendiente'; }
+
   function renderEjecucion() {
     var e = S.ejec; if (!e) return;
     var nuevo = esNuevo(e);
     var fall = fallidasReales(e);
     var ops = e.operaciones || [];
+    var pausas = pausasVisibles(e);
     var frenadas = ops.filter(function (o) { return estOp(o) === 'frenada'; }).length;
-    var encoladas = ops.filter(function (o) { return estOp(o) === 'encolada'; }).length;
+    var encoladas = ops.filter(function (o) { return estOp(o) === 'encolada'; }).length
+      + pausas.filter(function (p) { return p.estado !== 'fallida'; }).length;
     $('#ejec-cabecera').innerHTML = '<div class="cv-cabecera-ejec">'
       + (fall > 0 ? '<span class="cv-contador cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(fall, 'fallida', 'fallidas') + '</span>' : '')
       + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + cuenta(frenadas, 'frenada', 'frenadas') + '</span> · ↻ ' + encoladas + ' en cola'
       + (canceladasN(e) > 0 ? ' · <span class="cv-canceladas">' + canceladasN(e) + ' cancelada' + (canceladasN(e) === 1 ? '' : 's') + '</span>' : '') + '</span></div>'
       + saludHtml();
-    var riesgo = (e.pausas || []).filter(function (p) { return p.impacto_hermanas > 0 && p.estado !== 'completada' && !esCancelada(p); });
-    var bloqueRiesgo = riesgo.length
-      ? '<section class="ui-aviso ui-aviso--atencion cv-bloque" aria-labelledby="riesgo-h"><h3 id="riesgo-h" class="cv-h2"><span aria-hidden="true">⚠</span> Pausas con riesgo</h3>'
-        + riesgo.map(function (p) {
-          return '<p class="ui-resumen">' + esc(p.ml_key) + ' · pausa ' + cuenta(p.impacto_hermanas, 'variación', 'variaciones') + ' · ' + esc(motivoTxt(p.motivo)) + ' ' + chipEstado(p.estado, p) + '</p>';
+    var conRiesgo = pausas.filter(function (p) { return p.impacto_hermanas > 0; }).length;
+    var bloquePausas = pausas.length
+      ? '<section class="ui-aviso ui-aviso--' + (conRiesgo ? 'atencion' : 'info') + ' cv-bloque" aria-labelledby="pausas-h"><h3 id="pausas-h" class="cv-h2">'
+        + (conRiesgo ? '<span aria-hidden="true">⚠</span> ' : '') + 'Pausas en ML</h3>'
+        + pausas.map(function (p) {
+          return '<p class="ui-resumen">' + esc(p.ml_key) + ' · ' + esc(pausaEstadoTxt(p)) + ' · ' + esc(motivoTxt(p.motivo))
+            + (p.impacto_hermanas > 0 ? ' · afecta ' + cuenta(p.impacto_hermanas, 'variación', 'variaciones') : '') + '</p>';
         }).join('') + '</section>'
       : '';
     var filas = ops.map(filaEjecHtml).join('');
@@ -1277,7 +1298,7 @@
       ? '<p class="ui-resumen">Ninguna operación pendiente coincide con «' + esc(S.ejecQ) + '».</p>'
       : '<p class="ui-resumen cv-ejec-vacio"><span aria-hidden="true">✓</span> Nada pendiente</p>';
     var secciones = nuevo ? seccionEjecHtml('completadas', 'Completadas') + seccionEjecHtml('canceladas', 'Canceladas') : '';
-    $('#ejec-cuerpo').innerHTML = bloqueRiesgo + (filas || vacio) + secciones;
+    $('#ejec-cuerpo').innerHTML = bloquePausas + (filas || (pausas.length ? '' : vacio)) + secciones;
   }
 
   // "Ver más": pide la siguiente página (50) de la sección y acumula sin repetir filas.
@@ -2029,7 +2050,7 @@
         var q = $('#det-q').value;
         S.queryCand = q; S.elegido = null;
         if (!caso()) return;
-        buscarCandidatos(q).then(renderDetalle);
+        buscarCandidatos(q).then(function () { renderDetalle(); enfocarPorSelector('#det-q'); });
       } else if (f.getAttribute('data-accion') === 'admin-enviar') {
         ev.preventDefault();
         adminEnviar(f);
@@ -2179,7 +2200,7 @@
       S.busy = null;
       if (r.red) { setErrorAccion(MSG_ERROR_SIN_RED); return renderDetalle(); }
       if (clave) soltarOpId(clave);
-      if (r.ok) { S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; S.focoPendiente = '#det-titulo'; return abrirCaso(c.id, { foco: false }); }
+      if (r.ok) { S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; S.focoPendiente = '#det-titulo'; cargarConteos(); return abrirCaso(c.id, { foco: false }); }
       if (r.status === 409 && (r.data.code === 'VERSION_CONFLICT' || r.data.code === 'EVIDENCE_CONFLICT')) {
         return abrirCaso(c.id, { foco: false }).then(function () { setErrorAccion(mensajeDe(r)); renderDetalle(); });
       }
