@@ -57,6 +57,7 @@
     omitir_requiere_override: 'Esta publicación está en "no sincronizar". Quitalo antes de vincular.',
     INVALID_STATE: 'Este caso no admite esa acción en su estado actual.',
     OPERACION_DUPLICADA: 'Ya se mandó este cambio. Mirá su estado en Ejecución.',
+    OPERACION_YA_INICIADA: 'Ya se empezó a aplicar en ML.',
     vista_vieja: 'El vínculo cambió. Se recarga el caso.'
   };
   // Mapa único código → texto humano. Lo usan la cola, el detalle, Ejecución, Retenidas e Historial.
@@ -167,6 +168,30 @@
   var MSG_ERROR_SIN_RED = 'Sin conexión. No se guardó nada.';
   var MSG_SIN_PERMISO = 'No tenés permiso para esto.';
   var PUNTO_CORTE_PC = 768;
+  var MOTIVO_NINGUNO_TXT = { no_es_ninguno: 'No es ninguno de estos', no_existe_en_woo: 'No existe en Woo' };
+  // Fechas para la excepción solo ML: el vencimiento es un día posterior a hoy (hora local) como mínimo.
+  function ymd(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function minVence() { var d = new Date(); d.setDate(d.getDate() + 1); return ymd(d); }
+  function ddmm(iso) { var p = String(iso || '').split('-'); return p.length === 3 ? p[2] + '/' + p[1] : String(iso || ''); }
+  // Error de lectura: código conocido en castellano; si no, el texto del backend recortado (sin el prefijo de escrituras).
+  function lecturaErrTxt(raw) {
+    var s = String(raw || '').trim();
+    return ERR_ML_TXT[s.toLowerCase()] || (s ? s.slice(0, 120) : 'sin detalle');
+  }
+  // "hace 5 min" para la última lectura confiable; a partir de un día, la fecha absoluta.
+  function relTxt(iso) {
+    if (!iso) return 'sin registro';
+    var t = Date.parse(iso);
+    if (isNaN(t)) return String(iso);
+    var min = Math.round((Date.now() - t) / 60000);
+    if (min < 1) return 'hace instantes';
+    if (min < 60) return 'hace ' + min + ' min';
+    var h = Math.round(min / 60);
+    if (h < 24) return 'hace ' + h + (h === 1 ? ' hora' : ' horas');
+    return fecha(iso);
+  }
 
   var esc = (window.Fmt && window.Fmt.esc) || function (s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
@@ -325,8 +350,22 @@
           + '><span class="cv-chip-salud__lbl">' + esc(c.lbl) + '</span>'
           + '<b class="cv-chip-salud__val">' + icono + esc(c.txt) + '</b></button>';
       }).join('');
+      renderFranjaEstado(salud);
       renderFranjaLista();
     });
+  }
+
+  // Modo, escrituras, última lectura confiable y error de lectura (Fase D H5). El error va en role=alert.
+  function renderFranjaEstado(salud) {
+    var box = $('#cv-estado-detalle');
+    var lineas = [];
+    if (salud.modo === 'shadow') lineas.push('Modo prueba: no se escribe en ML');
+    else if (salud.modo === 'enforced') lineas.push('Modo normal · ' + (salud.escrituras_remotas ? 'escribe en ML' : 'escrituras a ML pausadas'));
+    lineas.push('Última lectura confiable de ML: ' + relTxt(salud.ultima_lectura_confiable));
+    var error = salud.error_lectura
+      ? '<div class="ui-aviso ui-aviso--critico" role="alert"><span class="cv-icono" aria-hidden="true">✗</span><span>La lectura de ML falló: ' + esc(lecturaErrTxt(salud.error_lectura)) + '</span></div>'
+      : '';
+    box.innerHTML = '<p class="cv-franja-detalle__linea">' + lineas.map(esc).join(' · ') + '</p>' + error;
   }
 
   // Listas de la franja: se resuelven con GET estado; cada caso se abre en Casos (abrirPorClave).
@@ -496,7 +535,9 @@
   function renderDetalleVacio() {
     var d = $('#cv-detalle');
     d.setAttribute('aria-busy', 'false');
-    d.innerHTML = '<p class="cv-vacio-det">Elegí un caso de la cola.</p>';
+    // Si la última acción fue la que vació la cola, su confirmación (y el deshacer) sigue visible aquí.
+    d.innerHTML = (S.guardado ? barraGuardado() : '') + '<p class="cv-vacio-det">Elegí un caso de la cola.</p>';
+    aplicarBloqueo();
   }
 
   // ── Detalle ────────────────────────────────────────────────────────────────────────────────────
@@ -604,6 +645,28 @@
     return S.opIds[clave];
   }
   function soltarOpId(clave) { delete S.opIds[clave]; }
+  // Cuerpo común de las escrituras con versión: operation_id por intento, expected_version y evidence_fingerprint del caso.
+  function cuerpoMutacion(clave, extra) {
+    var c = caso();
+    return Object.assign({ operation_id: opIdPara(clave), expected_version: c.expected_version, evidence_fingerprint: c.evidencia_fingerprint }, extra || {});
+  }
+  // Versión y evidencia actuales del caso, sin repintar la pantalla. Deshacer y revertir las leen antes de mandar.
+  function versionActual(casoId) {
+    return api('GET', '/casos/' + casoId).then(function (r) {
+      if (!r.ok) return { error: mensajeDe(r) };
+      var c = r.data.data && r.data.data.caso;
+      return c ? { expected_version: c.expected_version, evidence_fingerprint: c.evidencia_fingerprint } : { error: MSG.NOT_FOUND };
+    });
+  }
+  // Error de campo: texto junto al control, aria-invalid y foco en el control.
+  function marcarError(campo, err, texto) {
+    err.textContent = texto; err.hidden = false;
+    if (campo) { campo.setAttribute('aria-invalid', 'true'); campo.focus(); }
+  }
+  function limpiarError(campo, err) {
+    err.hidden = true;
+    if (campo) campo.removeAttribute('aria-invalid');
+  }
 
   function caso() { return S.detalle && S.detalle.caso; }
   function casoEnCola() { return S.cola.find(function (f) { return f.caso_id === S.casoId; }) || null; }
@@ -762,6 +825,7 @@
       + '<div class="cv-det__meta">' + mlaHtml(pub, c.ml_key) + ' ' + chips.join(' ') + '</div>'
       + lectura + '</div>'
       + tarjetaOperacion()
+      + (soloLectura ? '' : marcaNingunoHtml())
       + datosHtml()
       + candidatosHtml(soloLectura)
       + (soloLectura ? '' : '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>')
@@ -789,10 +853,17 @@
     var g = S.guardado;
     var cuenta = '';
     if (S.deshacer && S.deshacer.caso === g.caso) {
-      cuenta = S.deshacer.vencido
-        ? '<span class="cv-deshacer">Ya no se puede deshacer</span>'
-        : '<button type="button" class="ui-btn" data-accion="deshacer">Deshacer (10 s)' + atajoTxt('z') + ' · <span id="cv-deshacer-txt">' + esc(textoDeshacer()) + '</span></button>';
+      if (S.deshacer.tipo !== 'ns') {
+        // Vincular, salteo y ninguno sirve: sin ventana de 10 s; el botón vive mientras la barra esté visible.
+        cuenta = '<button type="button" class="ui-btn" data-accion="deshacer">' + esc(S.deshacer.etiqueta) + atajoTxt('z') + '</button>';
+      } else {
+        cuenta = S.deshacer.vencido
+          ? '<span class="cv-deshacer">Ya no se puede deshacer</span>'
+          : '<button type="button" class="ui-btn" data-accion="deshacer">Deshacer (10 s)' + atajoTxt('z') + ' · <span id="cv-deshacer-txt">' + esc(textoDeshacer()) + '</span></button>';
+      }
     }
+    // Operación ya iniciada en ML: no se deshace, se ofrece revertir (operación nueva, con motivo).
+    if (g.revertirOp) cuenta += ' <button type="button" class="ui-btn" data-accion="revertir-caso" data-op="' + g.revertirOp + '" data-caso="' + g.caso + '">Revertir</button>';
     return '<div class="ui-aviso ui-aviso--ok cv-guardado" role="status" aria-live="polite">'
       + '<span>' + esc(g.texto) + '</span>' + cuenta + '</div>';
   }
@@ -820,6 +891,8 @@
     var acciones = '<div class="cv-acciones__grid">'
       + '<button type="button" class="ui-btn" data-accion="saltear" aria-disabled="' + !!S.busy + '">Saltear' + atajoTxt('s') + '</button>'
       + '<button type="button" class="ui-btn" data-accion="no-sincronizar" aria-disabled="' + !!S.busy + '">No sincronizar' + atajoTxt('n') + '</button>'
+      + '<button type="button" class="ui-btn" data-accion="excepcion" aria-disabled="' + !!S.busy + '">Excepción solo ML</button>'
+      + '<button type="button" class="ui-btn" data-accion="ninguno" aria-disabled="' + !!S.busy + '">Ninguno sirve' + atajoTxt('x') + '</button>'
       + '</div>';
     var admin = '';
     if (S.isAdmin) {
@@ -848,6 +921,7 @@
     var titulo = { relevar: 'Relevar · el caso pasa a vos. Motivo obligatorio.', confirmar: 'Confirmar igual · vincula pese a la contradicción', link: 'Link de pago · ignora stock y ventas', destrabar: 'Destrabar · vuelve a pendiente' }[tipo] || '';
     return '<form class="cv-cuadro-motivo" data-accion="admin-enviar" data-admin="' + tipo + '" novalidate>'
       + '<p class="ui-label">' + esc(titulo) + '</p>'
+      + (tipo === 'link' && caso() && caso().link_de_pago_sin_marketplace ? avisoSinMarketplaceHtml() : '')
       + '<label class="ui-label" for="adm-motivo">Motivo <span>(obligatorio)</span></label>'
       + '<textarea id="adm-motivo" class="ui-input" rows="2" aria-describedby="adm-err"></textarea>'
       + '<p id="adm-err" class="cv-error" hidden></p>'
@@ -899,7 +973,14 @@
   function resultadoVincular(c, productoId, body, r, textoOk, cand) {
     var clave = 'vincular:' + c.id + ':' + productoId;
     if (r.red) { setErrorAccion(MSG_ERROR_SIN_RED); return renderDetalle(); }
-    if (r.ok) { soltarOpId(clave); return guardadoOk(c, textoOk || 'Guardado · En cola para ML', 'vincular'); }
+    if (r.ok) {
+      soltarOpId(clave);
+      var opV = r.data && r.data.operacion;
+      guardadoOk(c, textoOk || 'Guardado · En cola para ML', 'vincular');
+      // Deshacer solo si la operación se creó en este intento (un repetido no trae operación nueva).
+      if (opV && opV.id && !r.data.repetido) setDeshacer({ tipo: 'vincular', caso: c.id, opId: opV.id, etiqueta: 'Deshacer vínculo' });
+      return;
+    }
     var code = r.data && r.data.code;
     if (r.status === 409 && code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED') {
       S.hermanas = { n: r.data.sibling_count, body: body, sku: skuDe(cand || S.elegido) };
@@ -978,7 +1059,11 @@
     renderDetalle();
     api('POST', '/casos/' + c.id + '/saltear', { expected_version: c.expected_version }).then(function (r) {
       S.busy = null;
-      if (r.ok) { S.guardado = { caso: c.id, texto: 'Salteado. Pasa al final de la cola.' }; S.focoPendiente = '#det-titulo'; cargarConteos(); return siguienteCaso(); }
+      if (r.ok) {
+        S.guardado = { caso: c.id, texto: 'Salteado. Pasa al final de la cola.' };
+        setDeshacer({ tipo: 'salteo', caso: c.id, etiqueta: 'Deshacer salteo' });
+        S.focoPendiente = '#det-titulo'; cargarConteos(); return siguienteCaso();
+      }
       if (r.status === 409 && r.data.code === 'VERSION_CONFLICT') return abrirCaso(c.id, { foco: false }).then(function () { setErrorAccion(mensajeDe(r)); renderDetalle(); });
       setErrorAccion(mensajeDe(r)); renderDetalle();
     });
@@ -995,9 +1080,119 @@
     });
   }
 
-  // Deshacer visible = el botón se renderiza (misma condición que barraGuardado). El atajo z solo actúa si se ve.
-  function deshacerVisible() {
-    return !!(S.guardado && S.deshacer && !S.deshacer.vencido && S.deshacer.caso === S.guardado.caso);
+  // Un solo deshacer vigente a la vez. Limpia el temporizador de No sincronizar (si había).
+  function setDeshacer(d) { limpiarDeshacer(); S.deshacer = d; }
+
+  // Botón "Deshacer" (data-accion="deshacer"). Despacha según la acción que se puede deshacer.
+  function deshacerAccion() {
+    var d = S.deshacer; if (!d || S.busy) return;
+    if (d.tipo === 'ns') return deshacerNS();
+    if (d.tipo === 'vincular') return deshacerVincular(d);
+    if (d.tipo === 'salteo') return deshacerSalteo(d);
+    if (d.tipo === 'ninguno') return deshacerNinguno(d.caso);
+  }
+
+  // Cierre común de un deshacer/revertir. Éxito: vuelve el caso a la cola y se muestra el texto. Error: se avisa y el botón sigue.
+  function finDeshacer(casoId, texto, error) {
+    S.busy = null; aplicarBloqueo();
+    if (error) { setErrorAccion(error); return renderDetalle(); }
+    limpiarDeshacer();
+    S.guardado = { caso: casoId, texto: texto };
+    anunciar(texto, 'estado');
+    S.focoPendiente = '#det-titulo';
+    return abrirCaso(casoId, { foco: false }).then(function () { return cargarCola({ seleccionar: false }); }).then(cargarConteos);
+  }
+
+  // Deshacer un Vincular: POST /operaciones/:id/deshacer con la versión fresca del caso (la subió el propio vincular).
+  function deshacerVincular(d) {
+    var clave = 'deshacer-vinc:' + d.opId;
+    S.busy = 'deshacer'; aplicarBloqueo(); renderDetalle();
+    return versionActual(d.caso).then(function (v) {
+      if (v.error) return finDeshacer(d.caso, null, v.error);
+      var body = { operation_id: opIdPara(clave), expected_version: v.expected_version, evidence_fingerprint: v.evidence_fingerprint };
+      return api('POST', '/operaciones/' + d.opId + '/deshacer', body).then(function (r) {
+        if (r.ok) { soltarOpId(clave); return finDeshacer(d.caso, 'Vínculo deshecho. El caso vuelve a la cola.'); }
+        if (r.status === 409 && r.data && r.data.code === 'OPERACION_YA_INICIADA') {
+          // Ya salió hacia ML: no hay nada que deshacer. Se mira el estado real antes de ofrecer Revertir.
+          return estadoOperacion(d.opId).then(function (est) {
+            limpiarDeshacer(); S.busy = null; aplicarBloqueo();
+            var txt = textoNoDeshacible(est);
+            S.guardado = est === 'completada'
+              ? { caso: d.caso, texto: MSG.OPERACION_YA_INICIADA, revertirOp: d.opId }
+              : { caso: d.caso, texto: MSG.OPERACION_YA_INICIADA + ' ' + txt };
+            S.focoPendiente = est === 'completada' ? '[data-accion="revertir-caso"]' : '#det-titulo';
+            anunciar(S.guardado.texto, 'alerta');
+            return renderDetalle();
+          });
+        }
+        return finDeshacer(d.caso, null, mensajeDe(r));
+      });
+    });
+  }
+
+  // Estado real de una operación (Ejecución trae accionables, completadas y canceladas). null si no aparece.
+  function estadoOperacion(opId) {
+    return api('GET', '/ejecucion').then(function (r) {
+      if (!r.ok) return null;
+      var e = r.data.data || {};
+      var listas = [e.operaciones, e.completadas && e.completadas.items, e.canceladas && e.canceladas.items];
+      for (var i = 0; i < listas.length; i++) {
+        var hit = (listas[i] || []).find(function (x) { return x.id === opId; });
+        if (hit) return hit.estado;
+      }
+      return null;
+    });
+  }
+  // Texto cuando ya no se puede deshacer ni revertir desde acá, según el estado real.
+  function textoNoDeshacible(est) {
+    if (est === 'procesando' || est === 'verificando') return 'Se está aplicando en ML; esperá a que termine para revertir.';
+    if (est === 'fallida' || est === 'intervencion') return 'Esta operación no se puede revertir desde acá.';
+    if (est === 'completada') return 'Podés revertirla con Revertir.';
+    return 'No pudimos ver el estado de la operación; revisalo en Ejecución.';
+  }
+
+  // Deshacer un Saltear: sin operación remota; la versión se lee fresca.
+  function deshacerSalteo(d) {
+    S.busy = 'deshacer'; aplicarBloqueo(); renderDetalle();
+    return versionActual(d.caso).then(function (v) {
+      if (v.error) return finDeshacer(d.caso, null, v.error);
+      return api('POST', '/casos/' + d.caso + '/deshacer-salteo', { expected_version: v.expected_version }).then(function (r) {
+        if (r.ok) return finDeshacer(d.caso, 'Salteo deshecho. El caso vuelve a la cola.');
+        return finDeshacer(d.caso, null, mensajeDe(r));
+      });
+    });
+  }
+
+  // Deshacer "ninguno sirve" (tecla z o botón de la marca en el detalle).
+  function deshacerNinguno(casoId) {
+    var clave = 'deshacer-ning:' + casoId;
+    if (S.busy) return;
+    S.busy = 'deshacer'; aplicarBloqueo(); renderDetalle();
+    return versionActual(casoId).then(function (v) {
+      if (v.error) return finDeshacer(casoId, null, v.error);
+      var body = { operation_id: opIdPara(clave), expected_version: v.expected_version, evidence_fingerprint: v.evidence_fingerprint };
+      return api('POST', '/casos/' + casoId + '/ninguno-sirve/deshacer', body).then(function (r) {
+        if (r.ok) { soltarOpId(clave); return finDeshacer(casoId, 'Ninguno sirve deshecho. El caso vuelve a la cola.'); }
+        return finDeshacer(casoId, null, mensajeDe(r));
+      });
+    });
+  }
+
+  // Marca "Ninguno sirve" en el detalle del caso (vigente solo con la evidencia actual). Deshacer solo si puede escribir.
+  function marcaNingunoHtml() {
+    var n = caso() && caso().ninguno_sirve; if (!n) return '';
+    var m = MOTIVO_NINGUNO_TXT[n.motivo] || motivoTxt(n.motivo);
+    return '<div class="ui-aviso ui-aviso--info cv-marca-ninguno" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>Ninguno sirve (' + esc(m) + ')</strong> · reaparece si cambia la evidencia.'
+      + (n.nota ? ' Nota: ' + esc(n.nota) : '') + '</span>'
+      + (puedeEscribir() ? ' <button type="button" class="ui-btn" data-accion="deshacer-ninguno" data-caso="' + caso().id + '">Deshacer' + atajoTxt('z') + '</button>' : '')
+      + '</div>';
+  }
+
+  // Aviso de link de pago (solo admin, en el formulario de Link de pago, antes de confirmar).
+  function avisoSinMarketplaceHtml() {
+    return '<div class="ui-aviso ui-aviso--atencion cv-sin-mkt" role="note"><span class="cv-icono" aria-hidden="true">⚠</span>'
+      + '<p><strong>Esta publicación no está en el marketplace.</strong> Su canal es Mercado Pago (link de pago): existe en la API y figura activa, '
+      + 'pero no se encuentra buscando en MercadoLibre y no vende por el marketplace. Revisá si corresponde exigirle identidad de catálogo.</p></div>';
   }
 
   function limpiarDeshacer() {
@@ -1115,6 +1310,175 @@
     $('#ns-enviar').setAttribute('aria-disabled', 'true');
     $('#ns-enviar').setAttribute('aria-describedby', 'ns-conf-razon');
     S.nsConfirm = false;
+  }
+
+  // ── Excepción solo ML (H1): motivo y vencimiento obligatorios; POST /casos/:id/excepcion ──────
+  function abrirExcepcion(disparador) {
+    var c = caso(); if (!c || !puedeEscribir() || S.busy || S.offline) return;
+    $('#exc-motivo').value = ''; $('#exc-vence').value = ''; $('#exc-vence').min = minVence();
+    limpiarError($('#exc-motivo'), $('#exc-motivo-err')); limpiarError($('#exc-vence'), $('#exc-vence-err'));
+    $('#exc-estado').hidden = true;
+    $('#dlg-exc-titulo').textContent = 'Excepción solo ML · ' + (c.publicacion && c.publicacion.titulo || c.ml_key);
+    abrirDialogo($('#dlg-exc'), disparador, $('#exc-motivo'));
+  }
+
+  // Un 409 cierra el diálogo y recarga el caso con el aviso (versión o evidencia cambiaron, o el caso ya no admite la acción).
+  function recargarCaso(id, texto) {
+    return abrirCaso(id, { foco: false }).then(function () { setErrorAccion(texto); renderDetalle(); });
+  }
+
+  function excepcionEnviar(ev) {
+    ev.preventDefault();
+    var c = caso(); if (!c || S.busy) return;
+    var campoM = $('#exc-motivo'), errM = $('#exc-motivo-err'), campoV = $('#exc-vence'), errV = $('#exc-vence-err'), est = $('#exc-estado');
+    limpiarError(campoM, errM); limpiarError(campoV, errV); est.hidden = true;
+    var motivo = campoM.value.trim(), vence = campoV.value;
+    if (!motivo) return marcarError(campoM, errM, 'Falta el motivo. Es obligatorio.');
+    if (!vence) return marcarError(campoV, errV, 'Falta la fecha de vencimiento.');
+    if (vence < minVence()) return marcarError(campoV, errV, 'La fecha tiene que ser posterior a hoy.');
+    var clave = 'excepcion:' + c.id;
+    // El backend parsea una fecha sola como medianoche UTC (21:00 del día anterior en Buenos Aires): se manda fin del día local.
+    var body = cuerpoMutacion(clave, { motivo: motivo, expires_at: vence + 'T23:59:59-03:00' });
+    var btn = $('#exc-enviar');
+    S.busy = 'excepcion'; aplicarBloqueo(); btn.textContent = 'Guardando…';
+    api('POST', '/casos/' + c.id + '/excepcion', body).then(function (r) {
+      S.busy = null; aplicarBloqueo(); btn.textContent = 'Guardar excepción';
+      if (r.red) { est.textContent = MSG_ERROR_SIN_RED; est.hidden = false; return; }
+      if (r.ok) { soltarOpId(clave); cerrarDialogo(true); return guardadoOk(c, 'Excepción guardada hasta ' + ddmm(vence), 'excepcion'); }
+      if (r.status === 409) { soltarOpId(clave); cerrarDialogo(true); return recargarCaso(c.id, mensajeDe(r)); }
+      // 422 (fecha o motivo), 403 y otros: el aviso queda dentro del diálogo.
+      est.textContent = mensajeDe(r); est.hidden = false;
+    });
+  }
+
+  // ── Ninguno sirve (H4, tecla x): motivo enumerado y nota opcional; POST /casos/:id/ninguno-sirve ──
+  function abrirNinguno(disparador) {
+    var c = caso(); if (!c || !puedeEscribir() || S.busy || S.offline) return;
+    $$('#ning-motivo input').forEach(function (i) { i.checked = false; });
+    $('#ning-nota').value = '';
+    limpiarError(null, $('#ning-motivo-err')); limpiarError($('#ning-nota'), $('#ning-nota-err'));
+    $('#ning-estado').hidden = true;
+    $('#dlg-ning-titulo').textContent = 'Ninguno sirve · ' + (c.publicacion && c.publicacion.titulo || c.ml_key);
+    abrirDialogo($('#dlg-ning'), disparador, $('#ning-motivo input'));
+  }
+
+  function ningunoEnviar(ev) {
+    ev.preventDefault();
+    var c = caso(); if (!c || S.busy) return;
+    var radio = $('#ning-motivo input:checked');
+    var campoN = $('#ning-nota'), errN = $('#ning-nota-err'), errM = $('#ning-motivo-err'), est = $('#ning-estado');
+    limpiarError(campoN, errN); est.hidden = true;
+    if (!radio) { errM.textContent = 'Elegí el motivo. Es obligatorio.'; errM.hidden = false; $('#ning-motivo input').focus(); return; }
+    errM.hidden = true;
+    var nota = campoN.value.trim();
+    if (nota.length > 500) return marcarError(campoN, errN, 'La nota no puede pasar de 500 caracteres.');
+    var clave = 'ninguno:' + c.id;
+    var body = cuerpoMutacion(clave, { motivo: radio.value, nota: nota });
+    var btn = $('#ning-enviar');
+    S.busy = 'ninguno'; aplicarBloqueo(); btn.textContent = 'Guardando…';
+    api('POST', '/casos/' + c.id + '/ninguno-sirve', body).then(function (r) {
+      S.busy = null; aplicarBloqueo(); btn.textContent = 'Marcar ninguno sirve';
+      if (r.red) { est.textContent = MSG_ERROR_SIN_RED; est.hidden = false; return; }
+      if (r.ok) {
+        soltarOpId(clave); cerrarDialogo(true);
+        guardadoOk(c, 'Ninguno sirve: ' + MOTIVO_NINGUNO_TXT[radio.value] + '. Sale de la cola hasta que cambie la evidencia.', 'ninguno');
+        setDeshacer({ tipo: 'ninguno', caso: c.id, etiqueta: 'Deshacer' });
+        return;
+      }
+      if (r.status === 409) { soltarOpId(clave); cerrarDialogo(true); return recargarCaso(c.id, mensajeDe(r)); }
+      est.textContent = mensajeDe(r); est.hidden = false;
+    });
+  }
+
+  // ── Revertir (H3): operación completada → vínculo nuevo al SKU anterior. Motivo obligatorio ──────
+  // ctx 'caso' (barra tras Vincular) o 'ejec' (Ejecución). La versión se lee fresca antes de abrir.
+  function abrirRevertir(opId, ctx, v, disparador) {
+    S.rev = { op: opId, ctx: ctx, casoId: v.casoId, expected_version: v.expected_version, evidence_fingerprint: v.evidence_fingerprint, sib: false, veto: false };
+    $('#dlg-rev-titulo').textContent = 'Revertir vínculo';
+    $('#rev-motivo').value = '';
+    limpiarError($('#rev-motivo'), $('#rev-motivo-err'));
+    $('#rev-alcance').hidden = true; $('#rev-conf-sib').checked = false;
+    $('#rev-veto').hidden = true; $('#rev-override').checked = false;
+    $('#rev-estado').hidden = true;
+    abrirDialogo($('#dlg-revertir'), disparador, $('#rev-motivo'));
+  }
+
+  function abrirRevertirCaso(opId, casoId, disparador) {
+    if (!puedeEscribir() || S.busy) return;
+    return versionActual(casoId).then(function (v) {
+      if (v.error) { setErrorAccion(v.error); return renderDetalle(); }
+      abrirRevertir(opId, 'caso', { casoId: casoId, expected_version: v.expected_version, evidence_fingerprint: v.evidence_fingerprint }, disparador);
+    });
+  }
+
+  function abrirRevertirEjec(opId, disparador) {
+    if (!puedeEscribir() || S.busy) return;
+    var op = opEjec(opId); if (!op) return;
+    return versionActual(op.caso_id).then(function (v) {
+      if (v.error) { S.ejecMsgs[opId] = { error: v.error }; return renderEjecucion(); }
+      abrirRevertir(opId, 'ejec', { casoId: op.caso_id, expected_version: v.expected_version, evidence_fingerprint: v.evidence_fingerprint }, disparador);
+    });
+  }
+
+  function recargarRevertir(R, texto) {
+    if (R.ctx === 'caso') return recargarCaso(R.casoId, texto);
+    S.ejecMsgs[R.op] = { error: texto };
+    anunciar(texto, 'alerta');
+    S.focoPendiente = '.cv-ejec-fila[data-op="' + R.op + '"]';
+    return cargarEjecucion();
+  }
+
+  function revertirEnviar(ev) {
+    ev.preventDefault();
+    var R = S.rev; if (!R || S.busy) return;
+    var campo = $('#rev-motivo'), err = $('#rev-motivo-err'), est = $('#rev-estado');
+    limpiarError(campo, err); est.hidden = true;
+    var motivo = campo.value.trim();
+    if (!motivo) return marcarError(campo, err, 'Falta el motivo. Es obligatorio.');
+    var clave = 'revertir:' + R.op;
+    var body = { operation_id: opIdPara(clave), expected_version: R.expected_version, evidence_fingerprint: R.evidence_fingerprint, motivo: motivo };
+    if (R.sib && $('#rev-conf-sib').checked) body.confirm_sibling_impact = true;
+    // La confirmación de contradicción es solo admin: el operador nunca manda override (el backend lo rechazaría con 403).
+    if (R.veto && S.isAdmin && $('#rev-override').checked) body.override_contradiccion = true;
+    var btn = $('#rev-enviar');
+    S.busy = 'revertir'; aplicarBloqueo(); btn.textContent = 'Enviando…';
+    api('POST', '/operaciones/' + R.op + '/revertir', body).then(function (r) {
+      S.busy = null; aplicarBloqueo(); btn.textContent = 'Revertir';
+      if (r.red) { est.textContent = MSG_ERROR_SIN_RED; est.hidden = false; return; }
+      if (r.ok) {
+        soltarOpId(clave); S.rev = null; cerrarDialogo(true);
+        var txt = 'Revertido: se encoló un vínculo al SKU anterior. Mirá Ejecución.';
+        anunciar(txt, 'estado');
+        if (R.ctx === 'caso') {
+          limpiarDeshacer(); S.guardado = { caso: R.casoId, texto: txt }; S.focoPendiente = '#det-titulo';
+          return abrirCaso(R.casoId, { foco: false }).then(cargarConteos);
+        }
+        S.ejecMsgs[R.op] = { texto: 'Revertida. En cola para ML · se actualiza solo.' };
+        S.focoPendiente = '.cv-ejec-fila[data-op="' + R.op + '"]';
+        return cargarEjecucion();
+      }
+      var code = r.data && r.data.code;
+      if (r.status === 409 && code === 'SIBLING_IMPACT_CONFIRMATION_REQUIRED') {
+        R.sib = true;
+        var n = r.data.sibling_count;
+        $('#rev-alcance-txt').textContent = 'Esto cambia también ' + cuenta(n, 'publicación hermana', 'publicaciones hermanas') + '. ¿Seguimos?';
+        $('#rev-alcance').hidden = false;
+        est.textContent = 'Falta confirmar el impacto en las hermanas.'; est.hidden = false;
+        $('#rev-conf-sib').focus();
+        return;
+      }
+      if (r.status === 409 && code === 'contradiccion_titulo') {
+        R.veto = true;
+        est.textContent = mensajeDe(r); est.hidden = false;
+        if (S.isAdmin) { $('#rev-veto').hidden = false; $('#rev-override').focus(); }
+        return;
+      }
+      if (r.status === 409 && ['VERSION_CONFLICT', 'EVIDENCE_CONFLICT', 'INVALID_STATE', 'OPERACION_DUPLICADA'].indexOf(code) !== -1) {
+        soltarOpId(clave); S.rev = null; cerrarDialogo(true);
+        return recargarRevertir(R, mensajeDe(r));
+      }
+      est.textContent = mensajeDe(r); est.hidden = false;
+    });
   }
 
   // ── Diálogos (foco atrapado, Esc, foco vuelve al disparador) ──────────────────────────────────
@@ -1242,7 +1606,13 @@
         break;
       case 's': if (enCaso && !soloLecturaActual()) { ev.preventDefault(); saltear(); } break;
       case 'n': if (enCaso && !soloLecturaActual()) { ev.preventDefault(); abrirNS($('[data-accion="no-sincronizar"]')); } break;
-      case 'z': if (deshacerVisible()) { ev.preventDefault(); deshacerNS(); } break;
+      case 'x': if (enCaso && !soloLecturaActual()) { ev.preventDefault(); abrirNinguno($('[data-accion="ninguno"]')); } break;
+      // z actúa solo si hay un botón Deshacer visible y habilitado (la barra o la marca "Ninguno sirve").
+      case 'z': {
+        var bz = $('#cv-detalle [data-accion="deshacer"]:not([aria-disabled="true"]), #cv-detalle [data-accion="deshacer-ninguno"]:not([aria-disabled="true"])');
+        if (bz) { ev.preventDefault(); bz.click(); }
+        break;
+      }
       case 'd': if (enCaso) { ev.preventDefault(); S.soloDif = !S.soloDif; renderDetalle(); } break;
       case 'f': if (enCaso) { ev.preventDefault(); abrirFotos(t); } break;
       case '/': ev.preventDefault(); if (S.tab === 'casos' && enCaso) { $('#det-q') && $('#det-q').focus(); } else { activarTab('vinculos'); $('#vinc-q').focus(); } break;
@@ -1335,6 +1705,8 @@
       + (enviandoEsta && S.busy === 'reintentar' ? 'Enviando…' : 'Reintentar') + '</button> ';
     if (S.isAdmin && puedeEscribir() && o.estado === 'bloqueada_impacto') acciones += '<button type="button" class="ui-btn" data-accion="confirmar-impacto" data-op="' + o.id + '" ' + dis + '>'
       + (enviandoEsta && S.busy === 'confirmar-impacto' ? 'Enviando…' : 'Confirmar impacto') + '</button>';
+    // Revertir: solo sobre completadas. /ejecucion no trae quién decidió la operación, así que por ahora solo el admin lo ve.
+    if (S.isAdmin && puedeEscribir() && o.estado === 'completada' && !esCancelada(o)) acciones += '<button type="button" class="ui-btn" data-accion="revertir-abrir" data-op="' + o.id + '" ' + dis + '>Revertir</button> ';
     var msg = S.ejecMsgs[o.id];
     var msgHtml = msg ? '<p class="ui-resumen cv-ejec-msg' + (msg.error ? ' cv-ejec-msg--error' : '') + '" role="' + (msg.error ? 'alert' : 'status') + '">'
       + (msg.error ? '✗ ' : '') + esc(msg.error || msg.texto) + '</p>' : '';
@@ -1521,9 +1893,16 @@
   }
 
   // Validadores del backend: expected_version y evidence_fingerprint del caso (vienen en cada operación de /ejecucion).
+  // Operación por id en Ejecución: accionables, o las de las secciones Completadas / Canceladas (paginadas).
   function opEjec(id) {
-    return ((S.ejec && S.ejec.operaciones) || []).find(function (x) { return x.id === id; })
-      || ((S.ejecSnap && S.ejecSnap.operaciones) || []).find(function (x) { return x.id === id; }) || null;
+    var e = S.ejec || {};
+    var listas = [e.operaciones, e.completadas && e.completadas.items, e.canceladas && e.canceladas.items,
+      (S.ejecSnap && S.ejecSnap.operaciones)];
+    for (var i = 0; i < listas.length; i++) {
+      var hit = (listas[i] || []).find(function (x) { return x.id === id; });
+      if (hit) return hit;
+    }
+    return null;
   }
   function camposVersion(op) {
     return op ? { expected_version: op.caso_expected_version, evidence_fingerprint: op.evidencia_fingerprint } : {};
@@ -2006,14 +2385,26 @@
     } else {
       ruta = '/identificadores/incorrecto'; body = { valor_normalizado: valor, producto_id: Number(spec.producto), motivo: motivo };
     }
-    S.busy = 'conflicto'; aplicarBloqueo();
-    llamar('POST', IDENT + ruta, body).then(function (r) {
-      S.busy = null; aplicarBloqueo();
-      if (!r.ok) { var e2 = $('#conf-err'); if (e2) { e2.textContent = mensajeDe(r); e2.hidden = false; } return; }
-      S.conflictoAbierto = null; S.conflictoDetalle = null; S.confResolver = null; S.confMotivo = null;
-      anunciar('Código resuelto: ' + valor, 'estado');
-      cargarConflictos();
-    });
+    // Si el producto tiene un único GTIN activo, el backend responde requiere_confirmacion:'permitir_unico'.
+    // Se pregunta y se reenvía con permitir_unico:true solo si la persona confirma; cancelar no envía nada.
+    var enviar = function (extra) {
+      S.busy = 'conflicto'; aplicarBloqueo();
+      return llamar('POST', IDENT + ruta, Object.assign({}, body, extra || {})).then(function (r) {
+        S.busy = null; aplicarBloqueo();
+        if (!r.ok && spec.accion === 'incorrecto' && !extra && r.data && r.data.requiere_confirmacion === 'permitir_unico') {
+          if (!window.confirm('Es el único código de ese producto. Va a quedar sin GTIN; ¿confirmás igual?')) {
+            anunciar('No se marcó el código.', 'estado');
+            return;
+          }
+          return enviar({ permitir_unico: true });
+        }
+        if (!r.ok) { var e2 = $('#conf-err'); if (e2) { e2.textContent = mensajeDe(r); e2.hidden = false; } return; }
+        S.conflictoAbierto = null; S.conflictoDetalle = null; S.confResolver = null; S.confMotivo = null;
+        anunciar('Código resuelto: ' + valor, 'estado');
+        cargarConflictos();
+      });
+    };
+    return enviar();
   }
 
   // ── Tabs ─────────────────────────────────────────────────────────────────────────────────────
@@ -2062,6 +2453,9 @@
     $('#dlg-atajos-cerrar').addEventListener('click', function () { cerrarDialogo(); });
     $('#ns-volver').addEventListener('click', intentarCerrarDialogo);
     $('#dlg-imp-volver').addEventListener('click', function () { cerrarDialogo(); });
+    $('#exc-volver').addEventListener('click', function () { cerrarDialogo(); });
+    $('#ning-volver').addEventListener('click', function () { cerrarDialogo(); });
+    $('#rev-volver').addEventListener('click', function () { S.rev = null; cerrarDialogo(); });
     $('#dlg-foto-cerrar').addEventListener('click', function () { cerrarDialogo(); });
     $('#dlg-imp-cuerpo').addEventListener('click', function (e) {
       var b = e.target.closest && e.target.closest('[data-accion="dlg-imp-reintentar"]');
@@ -2164,7 +2558,12 @@
         case 'vincular': vincular(); break;
         case 'saltear': saltear(); break;
         case 'no-sincronizar': abrirNS(el); break;
-        case 'deshacer': deshacerNS(); break;
+        case 'deshacer': deshacerAccion(); break;
+        case 'deshacer-ninguno': deshacerNinguno(Number(el.getAttribute('data-caso'))); break;
+        case 'excepcion': abrirExcepcion(el); break;
+        case 'ninguno': abrirNinguno(el); break;
+        case 'revertir-caso': abrirRevertirCaso(Number(el.getAttribute('data-op')), Number(el.getAttribute('data-caso')), el); break;
+        case 'revertir-abrir': abrirRevertirEjec(Number(el.getAttribute('data-op')), el); break;
         case 'solo-dif': S.soloDif = !S.soloDif; renderDetalle(); break;
         case 'hermanas-si':
           if (!S.hermanas || !caso() || !puedeEscribir()) break;
@@ -2273,6 +2672,12 @@
       } else if (f.getAttribute('data-accion') === 'vinc-revertir') {
         ev.preventDefault();
         revertirNS(f);
+      } else if (f.id === 'exc-form') {
+        excepcionEnviar(ev);
+      } else if (f.id === 'ning-form') {
+        ningunoEnviar(ev);
+      } else if (f.id === 'rev-form') {
+        revertirEnviar(ev);
       } else if (f.id === 'vinc-form') {
         ev.preventDefault();
         var v = $('#vinc-q').value.trim();
@@ -2454,7 +2859,7 @@
       S.busy = null;
       if (r.red) { setErrorAccion(MSG_ERROR_SIN_RED); return renderDetalle(); }
       if (clave) soltarOpId(clave);
-      if (r.ok) { S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; S.focoPendiente = S.dispSel || '#det-titulo'; S.dispSel = null; cargarConteos(); return abrirCaso(c.id, { foco: false }); }
+      if (r.ok) { limpiarDeshacer(); S.guardado = { caso: c.id, texto: texto }; S.adminForm = null; S.notaTxt = ''; S.notaError = null; S.focoPendiente = S.dispSel || '#det-titulo'; S.dispSel = null; cargarConteos(); return abrirCaso(c.id, { foco: false }); }
       if (r.status === 409 && (r.data.code === 'VERSION_CONFLICT' || r.data.code === 'EVIDENCE_CONFLICT')) {
         return abrirCaso(c.id, { foco: false }).then(function () { setErrorAccion(mensajeDe(r)); renderDetalle(); });
       }

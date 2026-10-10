@@ -203,6 +203,12 @@
 .cv-grupo-solo-jose > .ui-label { font-weight: 600; }
 .cv-cuadro-motivo { display: grid; gap: var(--sp-1); }
 .cv-acciones__grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+/* Franja Estado (H5): modo y última lectura, debajo de los chips. Se parte en líneas en 360 px. */
+.cv-franja-detalle { margin: 0 0 .6rem; display: grid; gap: var(--sp-1); }
+.cv-franja-detalle__linea { font-size: var(--fs-meta); color: var(--muted); margin: 0; overflow-wrap: anywhere; }
+.cv-sin-mkt { display: flex; gap: var(--sp-1); align-items: flex-start; margin: 0 0 var(--sp-1); }
+.cv-sin-mkt p { margin: 0; }
+.cv-marca-ninguno { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .cv-acciones__grid .ui-btn { min-height: var(--tap-min); width: 100%; }
 .cv-acciones .cv-btn-ancho { width: 100%; min-height: var(--tap-comfort); }
 .cv-kbd-accion { display: none; margin-left: .35rem; }
