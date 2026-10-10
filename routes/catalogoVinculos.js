@@ -6,7 +6,7 @@ import {
 import { liberarPedidoRetenido } from '../lib/guardiaMl.js';
 import { marcarNoSincronizar, marcarLinkDePago, deshacerNoSincronizar } from '../lib/noSincronizar.js';
 import { solicitarNoSincronizarPausa } from '../lib/pausasIdentidad.js';
-import { colaCasos, detalleCaso, ejecucion, estadoSalud, publicacionesDeProducto, retenidas, salteoVigente, vinculoVigente, marcaDeClave, hermanasDeItem } from '../lib/catalogoVinculos.js';
+import { colaCasos, detalleCaso, ejecucion, parametrosEjecucion, estadoSalud, publicacionesDeProducto, retenidas, salteoVigente, vinculoVigente, marcaDeClave, hermanasDeItem } from '../lib/catalogoVinculos.js';
 
 /**
  * API de la pantalla "Catálogo y vínculos" (Fase D). Las lecturas arman vistas sobre Identidad; las escrituras
@@ -58,7 +58,8 @@ export function catalogoVinculosRouter(db) {
     return data ? res.json({ ok: true, data }) : res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'producto no encontrado' });
   });
   router.get('/estado', exigir(), (_req, res) => res.json({ ok: true, data: estadoSalud(db) }));
-  router.get('/ejecucion', exigir(), (_req, res) => res.json({ ok: true, data: ejecucion(db) }));
+  // Query opcionales: q, limite (1..200, default 50), completadas_offset, canceladas_offset (ver parametrosEjecucion).
+  router.get('/ejecucion', exigir(), (req, res) => res.json({ ok: true, data: ejecucion(db, parametrosEjecucion(req.query)) }));
   router.get('/retenidas', exigir(), (_req, res) => res.json({ ok: true, data: retenidas(db) }));
 
   // ── Casos: operador (matcher:write) ──

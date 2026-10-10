@@ -3677,7 +3677,16 @@ Base: `/api/catalogo-vinculos`. Pantalla: `/catalogo-vinculos`. Permisos: lectur
 - `GET /claves/:clave` → `{ ok, data:{ clave, vinculo_vigente, marca, hermanas_item } }` (sin necesidad de caso abierto).
 - `GET /productos/:id/publicaciones` → `{ ok, data:[{clave,titulo,status}] }` ordenado por clave; `[]` sin vínculo; 404 si el producto no existe.
 - `GET /estado` → resumen de salud. `salud.operaciones_pendientes` excluye canceladas; `salud.operaciones_canceladas` es nuevo.
-- `GET /ejecucion` → `data.operaciones[]` (cada una con `estado` derivado, `estado_db`, `motivo_cancelacion`, `impacto_hermanas` numérico y `variaciones:[{clave,titulo,status}]`), `data.pausas[]`, `data.fallidas` (solo fallidas reales, ops y pausas), `data.canceladas` (nuevo), `data.pausas_con_riesgo`. Una operación **cancelada** se guarda como `estado='fallida'` con `ultimo_error` que empieza con `cancelada:` (el CHECK de `identidad_operaciones` no admite `cancelada`); la API la expone como `estado:'cancelada'` y `motivo_cancelacion` (`sin_cambio_sku` si `sku_anterior == sku_objetivo`, si no el texto tras el prefijo).
+- `GET /ejecucion` — query opcionales: `q` (texto; case-insensitive; busca en SKU `sku_anterior`/`sku_objetivo`/`fusion_sku`, clave/MLA `ml_key`/`item_id` y título; aplica a todas las secciones), `limite` (1..200, default 50; inválido o <1 → 50; >200 → 200), `completadas_offset` y `canceladas_offset` (>=0, default 0). Respuesta `data`:
+  - `operaciones[]`: **solo accionables** (estado real `fallida` no cancelada, `intervencion`, `bloqueada_impacto`, `pendiente`, `procesando`, `verificando`, `shadow`), sin límite. Cada una con todos los campos de `identidad_operaciones` más `estado` derivado, `estado_db`, `motivo_cancelacion`, `impacto_hermanas` numérico y `variaciones:[{clave,titulo,status}]`.
+  - `completadas`: `{ total, items[] }`, `items` con el mismo shape que `operaciones[]`; más recientes primero (`actualizada_en` desc, luego `id` desc); paginado con `limite` y `completadas_offset`.
+  - `canceladas`: `{ total, items[] }`, mismo orden y paginación con `canceladas_offset`. Una operación **cancelada** se guarda como `estado='fallida'` con `ultimo_error` que empieza con `cancelada:` (el CHECK de `identidad_operaciones` no admite `cancelada`); la API la expone como `estado:'cancelada'`, `estado_db:'fallida'` y `motivo_cancelacion` (`sin_cambio_sku` si `sku_anterior == sku_objetivo`, si no el texto tras el prefijo).
+  - `total` de `completadas`/`canceladas`: cantidad antes de paginar y ya filtrada por `q`.
+  - `pausas[]`: sin cambio de shape; `q` también filtra por clave/MLA, `item_id` y título.
+  - `fallidas` (numérico): fallidas reales de operaciones y pausas. **Contadores globales, no dependen de `q`.**
+  - `canceladas_total` (numérico, **renombrado** desde `canceladas`, que ahora es la sección `{total, items}`): operaciones canceladas + pausas `cancelada`. Global, no depende de `q`.
+  - `pausas_con_riesgo` (numérico): sin cambio.
+  - **Breaking (2026-10-10)**: `operaciones[]` ya no incluye completadas ni canceladas; `canceladas` pasó de número a objeto y el número está en `canceladas_total`.
 - `GET /retenidas` → `data:[{...fila, claves, titulo, importe, se_vuelve_a_retener}]` (sin `items_json`); `titulo` de la caché de publicaciones o del ítem del pedido, `importe` = suma de `unit_price × quantity` o `null`.
 
 ### Escrituras (operador)

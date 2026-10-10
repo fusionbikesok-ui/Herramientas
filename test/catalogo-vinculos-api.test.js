@@ -8,6 +8,7 @@ import { catalogoVinculosRouter } from '../routes/catalogoVinculos.js';
 import { identidadProductosRouter } from '../routes/identidadProductos.js';
 import { resolvePermiso, permiteAcceso } from '../lib/permisos.js';
 import { retenerPedidoMl } from '../lib/guardiaMl.js';
+import { parametrosEjecucion } from '../lib/catalogoVinculos.js';
 
 const FILE = './test/tmp-catalogo-vinculos-api.sqlite';
 const ISO = '2026-10-09T12:00:00.000Z';
@@ -341,9 +342,10 @@ describe('API de Catálogo y vínculos', () => {
       const r = await request(app(lector)).get(`${BASE}/ejecucion`);
       expect(r.status).toBe(200);
       expect(r.body.data.fallidas).toBe(1);
-      expect(r.body.data.canceladas).toBe(1);
-      const noop = r.body.data.operaciones.find((o) => o.ml_key === 'MLA2501|');
+      expect(r.body.data.canceladas_total).toBe(1);
+      const noop = r.body.data.canceladas.items.find((o) => o.ml_key === 'MLA2501|');
       expect(noop).toMatchObject({ estado: 'cancelada', estado_db: 'fallida', motivo_cancelacion: 'sin_cambio_sku' });
+      expect(r.body.data.operaciones.find((o) => o.ml_key === 'MLA2501|')).toBeUndefined();
       const real = r.body.data.operaciones.find((o) => o.ml_key === 'MLA2502|');
       expect(real).toMatchObject({ estado: 'fallida', estado_db: 'fallida', motivo_cancelacion: null });
     });
@@ -352,8 +354,9 @@ describe('API de Catálogo y vínculos', () => {
       await opConEstado(2503, { sku_anterior: 'A', sku_objetivo: 'B', estado: 'fallida', ultimo_error: 'cancelada: duplicada de otra clave' });
       const r = await request(app(lector)).get(`${BASE}/ejecucion`);
       expect(r.body.data.fallidas).toBe(0);
-      expect(r.body.data.canceladas).toBe(1);
-      expect(r.body.data.operaciones[0]).toMatchObject({ estado: 'cancelada', motivo_cancelacion: 'duplicada de otra clave' });
+      expect(r.body.data.canceladas_total).toBe(1);
+      expect(r.body.data.operaciones).toEqual([]);
+      expect(r.body.data.canceladas.items[0]).toMatchObject({ estado: 'cancelada', motivo_cancelacion: 'duplicada de otra clave' });
     });
 
     it('pausas: fallida cuenta en fallidas; cancelada cuenta en canceladas', async () => {
@@ -361,7 +364,7 @@ describe('API de Catálogo y vínculos', () => {
         VALUES ('p-f','MLA9001|','MLA9001','m','fallida','ana',?,?), ('p-c','MLA9002|','MLA9002','m','cancelada','ana',?,?)`).run(ISO, ISO, ISO, ISO);
       const r = await request(app(lector)).get(`${BASE}/ejecucion`);
       expect(r.body.data.fallidas).toBe(1);
-      expect(r.body.data.canceladas).toBe(1);
+      expect(r.body.data.canceladas_total).toBe(1);
     });
 
     it('estado de salud: operaciones_pendientes excluye canceladas', async () => {
@@ -399,6 +402,100 @@ describe('API de Catálogo y vínculos', () => {
       expect(op.impacto_hermanas).toBe(1);
       expect(typeof op.impacto_hermanas).toBe('number');
       expect(op.variaciones).toEqual([{ clave: 'MLA2402|9', titulo: 'Hermana 9', status: 'active' }]);
+    });
+  });
+
+  describe('ejecución: secciones separadas, paginación y búsqueda', () => {
+    // Operación base por la API (queda 'intervencion'), y clones directos en la tabla con mismo caso/decisión.
+    function sembrarOperaciones() {
+      const c = caso(9000);
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en)
+        VALUES ('MLA8888|','MLA8888','','Rodado Especial','active',?)`).run(ISO);
+      return request(app(operador)).post(`${BASE}/casos/${c.f.id}/decisiones`)
+        .send({ tipo: 'vincular', product_id: c.p.id, operation_id: 'base', expected_version: c.f.expected_version, evidence_fingerprint: c.f.evidencia_fingerprint })
+        .then(() => {
+          db.prepare("UPDATE identidad_operaciones SET estado='intervencion', ultimo_error='revisar', sku_objetivo='FB-9000', ml_key='MLA8888|' WHERE operation_id='base'").run();
+          const clonar = db.prepare(`INSERT INTO identidad_operaciones (operation_id,caso_id,decision_id,producto_id,ml_key,sku_anterior,sku_objetivo,
+            stock_objetivo,estado,ultimo_error,iniciada_en,actualizada_en,completada_en)
+            SELECT ?,caso_id,decision_id,producto_id,?,?,?,stock_objetivo,?,?,?,?,? FROM identidad_operaciones WHERE operation_id='base'`);
+          const minuto = (i) => new Date(Date.parse(ISO) + i * 60000).toISOString();
+          for (let i = 0; i < 60; i++) {
+            const sku = i === 5 ? 'ZZ-UNICO' : 'FB-C';
+            clonar.run(`c-${i}`, `MLA5${i}|`, 'FB-C', sku, 'completada', null, ISO, minuto(i), minuto(i));
+          }
+          for (let i = 0; i < 3; i++) clonar.run(`x-${i}`, `MLA7${i}|`, 'FB-X', 'FB-X', 'fallida', `cancelada: motivo ${i}`, ISO, minuto(i), null);
+          clonar.run('f-real', 'MLA8000|', 'A', 'B', 'fallida', 'ML rechazó', ISO, minuto(100), null);
+        });
+    }
+
+    it('operaciones = solo accionables; completadas y canceladas aparte con total real', async () => {
+      await sembrarOperaciones();
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      expect(r.status).toBe(200);
+      const estados = r.body.data.operaciones.map((o) => o.estado).sort();
+      expect(estados).toEqual(['fallida', 'intervencion']);
+      expect(r.body.data.completadas.total).toBe(60);
+      expect(r.body.data.completadas.items).toHaveLength(50);
+      expect(r.body.data.canceladas.total).toBe(3);
+      expect(r.body.data.canceladas.items).toHaveLength(3);
+      expect(r.body.data.canceladas.items[0]).toMatchObject({ estado: 'cancelada', estado_db: 'fallida' });
+      expect(r.body.data.canceladas_total).toBe(3);
+      expect(r.body.data.fallidas).toBe(1);
+    });
+
+    it('completadas_offset=50 devuelve las 10 restantes; total sigue en 60', async () => {
+      await sembrarOperaciones();
+      const r = await request(app(lector)).get(`${BASE}/ejecucion?completadas_offset=50`);
+      expect(r.body.data.completadas.total).toBe(60);
+      expect(r.body.data.completadas.items).toHaveLength(10);
+      expect(r.body.data.completadas.items[0].ml_key).toBe('MLA59|');
+    });
+
+    it('orden reciente primero (actualizada_en desc) en completadas y canceladas', async () => {
+      await sembrarOperaciones();
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      expect(r.body.data.completadas.items[0].ml_key).toBe('MLA559|');
+      expect(r.body.data.completadas.items[1].ml_key).toBe('MLA558|');
+      expect(r.body.data.completadas.items[49].ml_key).toBe('MLA510|');
+      expect(r.body.data.canceladas.items.map((o) => o.ml_key)).toEqual(['MLA72|', 'MLA71|', 'MLA70|']);
+    });
+
+    it('canceladas_offset y limite=5 paginan la sección canceladas', async () => {
+      await sembrarOperaciones();
+      const r = await request(app(lector)).get(`${BASE}/ejecucion?limite=2&canceladas_offset=2`);
+      expect(r.body.data.canceladas.total).toBe(3);
+      expect(r.body.data.canceladas.items.map((o) => o.ml_key)).toEqual(['MLA70|']);
+      expect(r.body.data.completadas.items).toHaveLength(2);
+    });
+
+    it('q filtra por SKU, clave/MLA y título en todas las secciones (case-insensitive)', async () => {
+      await sembrarOperaciones();
+      const sku = await request(app(lector)).get(`${BASE}/ejecucion?q=zz-unico`);
+      expect(sku.body.data.completadas).toMatchObject({ total: 1 });
+      expect(sku.body.data.completadas.items[0].ml_key).toBe('MLA55|');
+      expect(sku.body.data.canceladas.total).toBe(0);
+
+      const clave = await request(app(lector)).get(`${BASE}/ejecucion?q=MLA71`);
+      expect(clave.body.data.canceladas).toMatchObject({ total: 1 });
+      expect(clave.body.data.canceladas.items[0].ml_key).toBe('MLA71|');
+
+      const titulo = await request(app(lector)).get(`${BASE}/ejecucion?q=RODADO%20especial`);
+      expect(titulo.body.data.operaciones.map((o) => o.operation_id)).toEqual(['base']);
+      expect(titulo.body.data.completadas.total).toBe(0);
+      // Contadores globales: no dependen de q.
+      expect(titulo.body.data.canceladas_total).toBe(3);
+    });
+
+    it('limite: default 50, máximo 200 y valores inválidos al default', async () => {
+      expect(parametrosEjecucion({})).toEqual({ q: '', limite: 50, completadas_offset: 0, canceladas_offset: 0 });
+      expect(parametrosEjecucion({ limite: '500' }).limite).toBe(200);
+      expect(parametrosEjecucion({ limite: '0' }).limite).toBe(50);
+      expect(parametrosEjecucion({ limite: 'abc' }).limite).toBe(50);
+      expect(parametrosEjecucion({ completadas_offset: '-4' }).completadas_offset).toBe(0);
+      expect(parametrosEjecucion({ q: ['a', 'b'] }).q).toBe('');
+      await sembrarOperaciones();
+      const r = await request(app(lector)).get(`${BASE}/ejecucion?limite=500`);
+      expect(r.body.data.completadas.items).toHaveLength(60);
     });
   });
 });
