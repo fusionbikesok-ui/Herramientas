@@ -840,12 +840,14 @@
     var c = caso(); var pub = c.publicacion || {};
     var enIntervencion = c.estado === 'intervencion';
     var soloLectura = soloLecturaDetalle();
+    var cerrado = cerradoDetalle();
     var en = casoEnCola();
     var chips = [];
     if (pub.status === 'paused') chips.push('<span class="ui-chip">⏸ PAUSADA</span>');
     if (en && en.chips && en.chips.hermanas > 0) chips.push('<span class="ui-chip">⧉ HERMANAS ' + en.chips.hermanas + '</span>');
     if (enIntervencion) chips.push('<span class="ui-chip ui-chip--urgente"><span aria-hidden="true">🔒</span> INTERVENCIÓN</span>');
-    var guardado = S.guardado ? barraGuardado() : '';
+    // Caso cerrado: la barra de guardado tiene botones de acción (Deshacer, Revertir); no se muestra. Reabrir cubre el cambio.
+    var guardado = S.guardado && !cerrado ? barraGuardado() : '';
     S.retenidasDelCaso = (S.retenidas || []).filter(function (f) { return (f.claves || []).indexOf(c.ml_key) !== -1; }).length;
     var lectura = enIntervencion
       ? '<p class="cv-lock">En intervención. ' + (S.isAdmin ? 'Lo destrabás vos.' : 'Lo destraba un admin.') + '</p>' : '';
@@ -861,8 +863,8 @@
       + tarjetaOperacion()
       + marcaNingunoHtml()
       + marcaExcepcionHtml()
-      + (soloLectura ? '' : reabrirHtml())
-      + datosHtml()
+      + (soloLecturaBase() ? '' : reabrirHtml())
+      + (cerrado ? '' : datosHtml())
       + candidatosHtml(soloLectura)
       + (soloLectura ? '' : '<div class="cv-matriz-wrap"><div class="cv-matriz-cab"><button type="button" class="ui-btn" data-accion="solo-dif" aria-pressed="' + S.soloDif + '">Solo diferencias <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">d</kbd></button></div>' + matrizHtml() + '</div>')
       + (soloLectura ? '' : accionesHtml())
@@ -948,8 +950,16 @@
 
   // Solo lectura del detalle: sin permiso de escritura, en celular, o caso en intervención para el operador.
   function soloLecturaDetalle() {
+    return soloLecturaBase() || cerradoDetalle();
+  }
+  // Solo lectura por permiso, celular o intervención (sin contar el caso cerrado).
+  function soloLecturaBase() {
     var enIntervencion = !!(S.detalle && S.detalle.caso && S.detalle.caso.estado === 'intervencion');
     return !puedeEscribir() || (enIntervencion && !S.isAdmin);
+  }
+  // Caso cerrado (excepción o ninguno sirve vigente): solo la marca y, si se puede escribir, Reabrir. Sin acciones.
+  function cerradoDetalle() {
+    return !!(S.detalle && (S.detalle.excepcion || S.detalle.ninguno_sirve));
   }
 
   function adminFormHtml() {
@@ -1220,7 +1230,6 @@
     var m = MOTIVO_NINGUNO_TXT[n.motivo] || motivoTxt(n.motivo);
     return '<div class="ui-aviso ui-aviso--info cv-marca-ninguno" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>Ninguno sirve (' + esc(m) + ')</strong> · reaparece si cambia la evidencia.'
       + (n.nota ? ' Nota: ' + esc(n.nota) : '') + '</span>'
-      + (puedeEscribir() ? ' <button type="button" class="ui-btn" data-accion="deshacer-ninguno" data-caso="' + caso().id + '">Deshacer' + atajoTxt('z') + '</button>' : '')
       + '</div>';
   }
 
@@ -1749,11 +1758,12 @@
       case 'x': if (enCaso && !soloLecturaActual()) { ev.preventDefault(); abrirNinguno($('[data-accion="ninguno"]')); } break;
       // z actúa solo si hay un botón Deshacer visible y habilitado (la barra o la marca "Ninguno sirve").
       case 'z': {
+        if (cerradoDetalle()) break;
         var bz = $('#cv-detalle [data-accion="deshacer"]:not([aria-disabled="true"]), #cv-detalle [data-accion="deshacer-ninguno"]:not([aria-disabled="true"])');
         if (bz) { ev.preventDefault(); bz.click(); }
         break;
       }
-      case 'd': if (enCaso) { ev.preventDefault(); S.soloDif = !S.soloDif; renderDetalle(); } break;
+      case 'd': if (enCaso && !cerradoDetalle()) { ev.preventDefault(); S.soloDif = !S.soloDif; renderDetalle(); } break;
       case 'f': if (enCaso) { ev.preventDefault(); abrirFotos(t); } break;
       case '/': ev.preventDefault(); if (S.tab === 'casos' && enCaso) { $('#det-q') && $('#det-q').focus(); } else { activarTab('vinculos'); $('#vinc-q').focus(); } break;
       case 'h': if (enCaso) { ev.preventDefault(); var hd = $('#det-hist'); if (hd) { hd.open = !hd.open; S.histOpen = hd.open; hd.querySelector('summary').focus(); } } break;
@@ -2983,7 +2993,7 @@
     }).join('');
     return '<details id="det-hist" class="ui-mas cv-hist"' + (S.histOpen ? ' open' : '') + '><summary>Historial <kbd class="cv-kbd cv-kbd-pc" aria-hidden="true">h</kbd></summary>'
       + '<ol class="cv-hist__lista">' + (filas || '<li class="ui-resumen">Sin movimientos.</li>') + '</ol>'
-      + (puedeEscribir()
+      + (puedeEscribir() && !cerradoDetalle()
         ? '<div class="cv-campo"><label class="ui-label" for="nota-txt">Agregar nota</label>'
           + '<textarea id="nota-txt" class="ui-input" rows="2"></textarea>'
           + (S.notaError ? '<p class="cv-error" role="alert">' + esc(S.notaError) + '</p>' : '')
