@@ -8,7 +8,14 @@ Siembra casos `QAFX-` para la pantalla "Catálogo y vínculos" en la base de QA
 ```bash
 node scripts/qa/fixtures/catalogo-vinculos.mjs              # siembra (idempotente)
 node scripts/qa/fixtures/catalogo-vinculos.mjs --limpiar    # borra solo lo sembrado
+node scripts/qa/fixtures/catalogo-vinculos.mjs --masivos 70  # + 70 casos abiertos extra (QAFX-M<i>|) para probar "Ver más"
 ```
+
+`--masivos N` (0..500, default 0; el modo normal no cambia) agrega N casos abiertos `QAFX-M<i>|` con su producto
+Woo (`QAFX-SKU-M<i>`, ids 9950001..), publicación ML activa y caso `urgente` sin responsable. `--limpiar` los borra
+(prefijo `QAFX-`). Con `--masivos 70` la cola de "abiertos" tiene 75 casos (70 + 5 visibles del fixture; MLA5 va a
+intervención), así que la página 1 (`limit=50`) trae 50 y la página 2 (`offset=50`) trae 25. Con la base anonimizada
+(~24 casos reales) el total sube en consecuencia.
 
 - Antes de escribir hace un respaldo: `fusion.sqlite.bak-qafx-<ts>` en el mismo directorio.
 - Rehúsa rutas de producción (`/opt/fusionbikes/herramientas/data`, por realpath) y cualquier ruta que no sea la de QA.

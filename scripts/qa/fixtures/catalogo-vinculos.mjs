@@ -6,6 +6,7 @@
 //   node scripts/qa/fixtures/catalogo-vinculos.mjs --limpiar  # borra solo lo sembrado (QAFX-)
 //   node scripts/qa/fixtures/catalogo-vinculos.mjs [--limpiar] <ruta.sqlite>
 //   node scripts/qa/fixtures/catalogo-vinculos.mjs <copia.sqlite> --permitir-copia   # solo para verificar en copias
+//   node scripts/qa/fixtures/catalogo-vinculos.mjs --masivos 70 [<ruta>]   # + N casos abiertos QAFX-M- (cola >50, "Ver más")
 //
 // Garantías (no negociables):
 //  - Nunca abre la base de PRODUCCIÓN (/opt/fusionbikes/herramientas/data/...), ni en lectura: la ruta se valida
@@ -31,6 +32,10 @@ const RUTA_QA = '/opt/fusionbikes/qa/data/fusion.sqlite';
 const DIR_PROD = '/opt/fusionbikes/herramientas/data';
 const MARCA = 'QAFX-';
 const ORIGEN = 'qa_fixture';
+// --masivos N: casos abiertos extra de identidad (ml_key QAFX-M<i>|), para probar la paginación de la cola.
+const MASIVOS_MAX = 500;
+const WOO_MASIVO_BASE = 9950000;   // rango distinto del de los 7 productos fijos (9900101..9900107)
+const wooMasivoId = (i) => WOO_MASIVO_BASE + i;
 
 // ── Validación de la ruta (antes de abrir nada) ────────────────────────────────────────────────────────────────
 
@@ -105,7 +110,41 @@ const PUBS = [
   { clave: 'QAFX-MLA7|', item: 'QAFX-MLA7', variation: '', titulo: 'QAFX Pedales plataforma', color: null, talle: null, sku: 'QAFX-SKU-7' },
 ];
 
-function sembrar(db) {
+/** Siembra N casos abiertos (identidad_casos urgente, sin responsable) con su producto Woo y publicación ML.
+ *  Cada uno tiene su propio item_id, así que no tienen hermanas. Idempotente por el mismo limpiarSembrado (prefijo QAFX-). */
+function sembrarMasivos(db, n) {
+  if (!n) return 0;
+  const ajenos = db.prepare(`SELECT COUNT(*) n FROM productos_fusion WHERE primary_woo_id BETWEEN ? AND ? AND creado_por IS NOT ?`)
+    .get(wooMasivoId(1), wooMasivoId(n), ORIGEN).n;
+  if (ajenos) throw new Error(`ABORTA: ${ajenos} producto(s) reales ocupan los primary_woo_id masivos (${wooMasivoId(1)}..${wooMasivoId(n)})`);
+  const ahora = new Date().toISOString();
+  const insWoo = db.prepare('INSERT INTO catalogo_cache (id_woo,nombre,sku,tipo,stock,precio,actualizado_en) VALUES (?,?,?,?,?,?,?)');
+  const insProd = db.prepare(`INSERT INTO productos_fusion (nombre_canonico,primary_woo_id,estado,creado_por,creado_en,actualizado_en)
+    VALUES (?,?,'activo',?,?,?)
+    ON CONFLICT(primary_woo_id) DO UPDATE SET nombre_canonico=excluded.nombre_canonico, estado='activo',
+      archivado_en=NULL, actualizado_en=excluded.actualizado_en`);
+  const insPub = db.prepare(`INSERT INTO ml_publicaciones_cache
+    (clave,item_id,variation_id,titulo,status,es_variante,color,talle,seller_sku,variations_texto,available_quantity,precio,actualizado_en)
+    VALUES (?,?,?,?,'active',?,?,?,?,?,?,?,?)`);
+  const insCaso = db.prepare(`INSERT INTO identidad_casos
+    (ml_key,producto_id,clasificacion,estado,severidad,responsable,tomado_en,evidencia_fingerprint,expected_version,primera_deteccion_en,ultima_deteccion_en)
+    VALUES (?,?,?,'urgente','urgente',NULL,NULL,?,1,?,?)`);
+  const idProd = db.prepare('SELECT id FROM productos_fusion WHERE primary_woo_id=?');
+  for (let i = 1; i <= n; i++) {
+    const clave = `QAFX-M${i}|`;
+    const sku = `QAFX-SKU-M${i}`;
+    const wid = wooMasivoId(i);
+    insWoo.run(wid, `QAFX Masivo ${i}`, sku, 'simple', 1 + (i % 6), 1000 * i, ahora);
+    insProd.run(`QAFX Producto M${i}`, wid, ORIGEN, ahora, ahora);
+    insPub.run(clave, `QAFX-MLAM${i}`, null, `QAFX Masivo ${i} publicación`, 0, null, null, sku, null, 2, 1000, ahora);
+    // Más viejos primero (i mayor = detectado antes), así el orden de la cola es determinista.
+    const detectado = hace(2 + (n - i) / 100);
+    insCaso.run(clave, idProd.get(wid).id, i % 2 ? 'sku_inexistente' : 'contradiccion_titulo', `qafx-${clave}`, detectado, detectado);
+  }
+  return n;
+}
+
+function sembrar(db, { masivos = 0 } = {}) {
   // Guardia: los ids Woo de fixture no pueden pisar productos reales (solo se reutilizan los del propio fixture).
   const ajenos = db.prepare(`SELECT COUNT(*) n FROM productos_fusion WHERE primary_woo_id BETWEEN ? AND ? AND creado_por IS NOT ?`)
     .get(wooId(1), wooId(WOO.length), ORIGEN).n;
@@ -178,7 +217,27 @@ function sembrar(db) {
   insRet.run('QAFX-ORD-2', 'sin_sku_woo', JSON.stringify([item('QAFX-MLA6', 'QAFX-SKU-6', 'QAFX Candado cable 1m', 2300, 1)]), hace(2), hace(2));
   db.prepare(`INSERT INTO sku_matcher_decisiones (clave,sku,wc_nombre,accion,actualizado_en,origen,confirmado_por)
     VALUES ('QAFX-MLA6|',NULL,'QAFX Candado cable 1m','omitir',?,'no_sincronizar_a','Matias')`).run(hace(2));
-  return { casos: Object.keys(casos).length, publicaciones: PUBS.length, operaciones: 3, retenidas: 2 };
+  const extra = sembrarMasivos(db, masivos);
+  return { casos: Object.keys(casos).length + extra, publicaciones: PUBS.length + extra, operaciones: 3, retenidas: 2, masivos: extra };
+}
+
+/** Separa flags, la ruta y --masivos (valor con espacio o con '='). Valida el entero aquí, antes de abrir nada. */
+export function parsearArgs(argv) {
+  let masivos = 0;
+  const posicional = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--masivos') masivos = validarMasivos(argv[++i]);
+    else if (a.startsWith('--masivos=')) masivos = validarMasivos(a.slice('--masivos='.length));
+    else if (!a.startsWith('--')) posicional.push(a);
+  }
+  return { masivos, posicional };
+}
+
+function validarMasivos(v) {
+  const s = String(v ?? '');
+  if (!/^\d+$/.test(s) || Number(s) > MASIVOS_MAX) throw new Error(`REHÚSO: --masivos debe ser un entero entre 0 y ${MASIVOS_MAX}`);
+  return Number(s);
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -186,7 +245,7 @@ function sembrar(db) {
 async function main(argv) {
   const limpiar = argv.includes('--limpiar');
   const permitirCopia = argv.includes('--permitir-copia');
-  const posicional = argv.filter((a) => !a.startsWith('--'));
+  const { masivos, posicional } = parsearArgs(argv);
   const destino = validarDestino(posicional[0], { permitirCopia });
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -197,7 +256,7 @@ async function main(argv) {
     console.log(`respaldo: ${respaldo}`);
     const tx = db.transaction(() => {
       limpiarSembrado(db);
-      return limpiar ? { modo: 'limpiar' } : { modo: 'sembrar', ...sembrar(db) };
+      return limpiar ? { modo: 'limpiar' } : { modo: 'sembrar', ...sembrar(db, { masivos }) };
     });
     const r = tx();
     console.log(JSON.stringify({ destino, ...r }));
@@ -210,4 +269,4 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   main(process.argv.slice(2)).catch((e) => { console.error(e.message); process.exit(1); });
 }
 
-export { limpiarSembrado, sembrar, WOO, PUBS, MARCA };
+export { limpiarSembrado, sembrar, sembrarMasivos, WOO, PUBS, MARCA, MASIVOS_MAX, wooMasivoId };
