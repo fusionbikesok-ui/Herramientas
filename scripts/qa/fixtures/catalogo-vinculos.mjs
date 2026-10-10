@@ -144,6 +144,7 @@ function sembrar(db) {
   crear('QAFX-MLA3|21', 3, 'decision_no_aplicada', 'tomado', 'Matias', 24); // 3: bloqueada_impacto con 2 hermanas
   crear('QAFX-MLA4|', 4, 'sku_inexistente', 'tomado', 'Matias', 20);      // 4: operación fallida
   crear('QAFX-MLA7|', 7, 'sku_inexistente', 'urgente', null, 4);          // 6: candidato único (Enter = Vincular)
+  crear('QAFX-MLA5|', 5, 'sku_inexistente', 'intervencion', 'Matias', 10); // 7: operación en intervención para Destrabar
 
   // Decisiones (la operación exige decision_id NOT NULL).
   const insDec = db.prepare(`INSERT INTO identidad_decisiones
@@ -151,8 +152,9 @@ function sembrar(db) {
     VALUES (?,?,'vincular',?,?,1,?,?,?)`);
   const decDe3 = insDec.run(casos['QAFX-MLA3|21'], productoDe(3), 'QAFX fixture: vincular bloqueado por impacto', 'QAFX-dec-3', 'qafx-QAFX-MLA3|21', 'Matias', hace(24)).lastInsertRowid;
   const decDe4 = insDec.run(casos['QAFX-MLA4|'], productoDe(4), 'QAFX fixture: escritura rechazada', 'QAFX-dec-4', 'qafx-QAFX-MLA4|', 'Matias', hace(20)).lastInsertRowid;
+  const decDe5 = insDec.run(casos['QAFX-MLA5|'], productoDe(5), 'QAFX fixture: intervención por reintentos agotados', 'QAFX-dec-5', 'qafx-QAFX-MLA5|', 'Matias', hace(10)).lastInsertRowid;
 
-  // Operaciones: solo estados que el worker NO despacha (bloqueada_impacto, fallida).
+  // Operaciones: solo estados que el worker NO despacha (bloqueada_impacto, fallida, intervencion).
   const insOp = db.prepare(`INSERT INTO identidad_operaciones
     (operation_id,tipo,caso_id,decision_id,producto_id,ml_key,sku_anterior,sku_objetivo,stock_objetivo,estado,intentos,ultimo_error,impacto_hermanas,iniciada_en,actualizada_en)
     VALUES (?,'correccion_sku',?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -160,6 +162,10 @@ function sembrar(db) {
     'bloqueada_impacto', 0, null, 2, hace(24), hace(24));
   insOp.run('QAFX-op-4', casos['QAFX-MLA4|'], decDe4, productoDe(4), 'QAFX-MLA4|', null, 'QAFX-SKU-4', 2,
     'fallida', 3, 'ML rechazó la escritura (PUT /items/QAFX-MLA4): dup', 0, hace(20), hace(1));
+  // Destrabable: 'intervencion' con su caso en 'intervencion'. destrabarOperacionIdentidad exige expected_version
+  // y evidence_fingerprint del caso (qafx-QAFX-MLA5|) y un motivo; en QA (shadow) la operación vuelve a 'shadow'.
+  insOp.run('QAFX-op-5', casos['QAFX-MLA5|'], decDe5, productoDe(5), 'QAFX-MLA5|', null, 'QAFX-SKU-5', 2,
+    'intervencion', 3, 'QAFX: reintentos agotados, requiere intervención humana', 0, hace(10), hace(10));
 
   // Ventas retenidas. items_json con item.id, seller_sku, unit_price y quantity.
   const insRet = db.prepare(`INSERT INTO guardia_ml_pedidos_retenidos
@@ -172,7 +178,7 @@ function sembrar(db) {
   insRet.run('QAFX-ORD-2', 'sin_sku_woo', JSON.stringify([item('QAFX-MLA6', 'QAFX-SKU-6', 'QAFX Candado cable 1m', 2300, 1)]), hace(2), hace(2));
   db.prepare(`INSERT INTO sku_matcher_decisiones (clave,sku,wc_nombre,accion,actualizado_en,origen,confirmado_por)
     VALUES ('QAFX-MLA6|',NULL,'QAFX Candado cable 1m','omitir',?,'no_sincronizar_a','Matias')`).run(hace(2));
-  return { casos: Object.keys(casos).length, publicaciones: PUBS.length, operaciones: 2, retenidas: 2 };
+  return { casos: Object.keys(casos).length, publicaciones: PUBS.length, operaciones: 3, retenidas: 2 };
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────────────────────────────────────

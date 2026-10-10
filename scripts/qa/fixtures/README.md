@@ -25,8 +25,9 @@ Escenarios, con sus claves:
 | 4 fallida | op `QAFX-op-4` `fallida`, caso `QAFX-MLA4\|` | Reintentar y mapeo del error |
 | 5 retenidas | pedidos `QAFX-ORD-1` (liberable, importe 3000) y `QAFX-ORD-2` (no_sincronizar, importe 2300, `se_vuelve_a_retener`) | liberar, y el aviso de "se vuelve a retener" |
 | 6 Enter | caso `QAFX-MLA7\|` (candidato único `QAFX-SKU-7`) | Enter como atajo de Vincular |
+| 7 destrabar | op `QAFX-op-5` `intervencion`, caso `QAFX-MLA5\|` (tomado por `Matias`, versión 1) | Destrabar: `destrabarOperacionIdentidad` con `expected_version` y `evidence_fingerprint` del caso (`qafx-QAFX-MLA5\|`) y motivo. En QA la op vuelve a `shadow` y el caso a `pendiente` |
 
-Usuarios sugeridos en QA: admin `Matias`, operador `Miguel` (no admin). Los casos 3 y 4 vienen tomados por `Matias`.
+Usuarios sugeridos en QA: admin `Matias`, operador `Miguel` (no admin). Los casos 3, 4 y 7 vienen tomados por `Matias`.
 
 Advertencia: el worker de identidad no despacha estas filas (operaciones en `fallida` / `bloqueada_impacto`).
 Pero el pedido `QAFX-ORD-1` cumple la condición de liberación, así que `liberarRetenidasResueltas` (cron) puede
