@@ -3709,9 +3709,18 @@ Modo Publicación ML de la pestaña Vínculos. Sin parámetros de paginación la
 
 - Request: `GET /api/matcher/candidatos?scope=all&q=&filtro=&limit=&offset=`
   - `scope`: `all` (default) o `atencion`, igual que antes.
-  - `q` (opcional): texto libre. Semántica idéntica a la pantalla anterior: `trim` + minúsculas,
-    subcadena sobre `ml_title + " " + clave`. Sin acentos normalizados y sin AND por palabras
-    (`q=bicicleta rodado` busca esa frase exacta, no las dos palabras por separado).
+  - `q` (opcional): texto libre. **Cambio de semántica (2026-10-10, aprobado por el responsable):**
+    antes era subcadena exacta sobre `ml_title + " " + clave`; ahora es **AND por palabras**:
+    1. Se normaliza (sin acentos ni mayúsculas, `trim`) y se parte por espacios (dobles espacios y
+       tabs se ignoran). Vacío o solo espacios = sin filtro de texto (igual que antes).
+    2. TODAS las palabras deben aparecer como subcadena en `ml_title + " " + clave` normalizados;
+       el orden no importa y cada palabra puede caer en el título o en la clave.
+    3. Una sola palabra se comporta como subcadena (`q=casco` encuentra "Casco…" y "…CASCO…").
+    Ejemplos: `q=maza shimano` encuentra "Shimano Deore Maza Delantera" (orden distinto);
+    `q=ñandú` = `q=nandu` = `q=NANDU`; `q=ruta rodado` no encuentra una publicación que tenga
+    "ruta" en el título y "rodado" solo en otra publicación (el AND es por publicación).
+    `conteos` y `total` se calculan con este `q` ya aplicado. Orden y paginación: el de la caché
+    (estable entre páginas mientras no cambie la caché).
   - `filtro` (default `all`): `all` | `asignar` | `verificar` | `conf-baja` | `color-talle`.
     Otro valor → 400. Mismos criterios que `filtroMatcher` del cliente (`conf-baja` =
     `verificar` con `score_confianza < 0.7`; `color-talle` = `candidatos[0].color_ok && talle_ok`).

@@ -7,9 +7,9 @@ import { matcherRouter } from '../routes/matcher.js';
 import { paginarCandidatos, parsearPaginado } from '../lib/matcherCandidatosPaginado.js';
 
 // GET /api/matcher/candidatos con q/filtro/limit/offset: filtrado y paginación server-side.
-// La referencia "antigua" es una copia fiel de filtroMatcher + filtro de texto de
-// public/catalogo-vinculos/catalogo-vinculos.js (buscarVinculos). La equivalencia exige que la
-// unión de las páginas sea exactamente lo que la pantalla mostraba antes.
+// La referencia del filtro de modo es una copia fiel de filtroMatcher de
+// public/catalogo-vinculos/catalogo-vinculos.js. El texto `q` usa la semántica NUEVA: AND por
+// palabras, sin acentos ni mayúsculas (antes era subcadena exacta; ver docs/api-contrato.md).
 
 const TEST_DB = './test/tmp-matcher-candidatos-paginado.sqlite';
 const ISO = '2026-10-10T12:00:00.000Z';
@@ -23,9 +23,15 @@ function refFiltroMatcher(it, f) {
   if (f === 'conf-baja') return it.modo === 'verificar' && it.score_confianza < 0.7;
   return !!(it.candidatos && it.candidatos[0] && it.candidatos[0].color_ok && it.candidatos[0].talle_ok);
 }
+// Referencia independiente de la texto nuevo: sin acentos (NFD), minúsculas, palabras por espacio, AND.
+function refNorm(v) { return String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
+function refTextoOk(it, q) {
+  const palabras = refNorm(q).split(' ').filter(Boolean);
+  const hay = refNorm(String(it.ml_title || '') + ' ' + refClaveDeMl(it));
+  return palabras.every((p) => hay.includes(p));
+}
 function refListaCliente(items, q, f) {
-  const txt = String(q || '').trim().toLowerCase();
-  return items.filter((it) => refFiltroMatcher(it, f) && (!txt || (String(it.ml_title || '') + ' ' + refClaveDeMl(it)).toLowerCase().indexOf(txt) !== -1));
+  return items.filter((it) => refFiltroMatcher(it, f) && refTextoOk(it, q));
 }
 const claves = (lista) => lista.map((x) => refClaveDeMl(x));
 
@@ -81,15 +87,65 @@ describe('paginarCandidatos (lógica pura)', () => {
     expect(paginarCandidatos(items, { offset: 100000 }).items).toEqual([]);
   });
 
-  it('q multi-palabra: subcadena sobre título+clave en minúsculas, igual que la pantalla (no AND, no sin acentos)', () => {
+  it('q multi-palabra: AND por palabras, sin distinguir mayúsculas (igual a la referencia)', () => {
     const q = '  Bicicleta RODADO ';
     const esperado = claves(refListaCliente(items, q, 'all'));
     const r = paginarCandidatos(items, { q, limit: 200 });
     expect(r.total).toBe(esperado.length);
     expect(claves(r.items)).toEqual(esperado.slice(0, 200));
-    // "ñandu" con ñ sí matchea; "nandu" sin ñ NO (la pantalla no normaliza acentos)
-    expect(paginarCandidatos(items, { q: 'nandu' }).total).toBe(0);
-    expect(paginarCandidatos(items, { q: 'Ñandú' }).total).toBe(refListaCliente(items, 'Ñandú', 'all').length);
+  });
+
+  it('"maza shimano" encuentra "Shimano ... Maza" aunque el orden de palabras cambie', () => {
+    const its = [
+      { ml_item_id: 'MLA1', ml_variation_id: '', ml_title: 'Shimano Deore Maza Delantera', modo: 'asignar', score_confianza: 0, candidatos: [] },
+      { ml_item_id: 'MLA2', ml_variation_id: '', ml_title: 'Shimano Pastillas', modo: 'asignar', score_confianza: 0, candidatos: [] },
+      { ml_item_id: 'MLA3', ml_variation_id: '', ml_title: 'Maza Generica', modo: 'asignar', score_confianza: 0, candidatos: [] },
+    ];
+    expect(claves(paginarCandidatos(its, { q: 'maza shimano' }).items)).toEqual(['MLA1']);
+    expect(claves(paginarCandidatos(its, { q: 'shimano maza' }).items)).toEqual(['MLA1']);
+  });
+
+  it('acentos y mayúsculas: "ñandú" = "nandu" = "NANDU"; "CASCO" = "casco"', () => {
+    const its = [
+      { ml_item_id: 'MLA10', ml_variation_id: '', ml_title: 'Campera Ñandú Talle M', modo: 'asignar', score_confianza: 0, candidatos: [] },
+      { ml_item_id: 'MLA11', ml_variation_id: '', ml_title: 'Casco Urbano Negro', modo: 'asignar', score_confianza: 0, candidatos: [] },
+    ];
+    const ref = claves(paginarCandidatos(its, { q: 'ñandú' }).items);
+    expect(ref).toEqual(['MLA10']);
+    expect(claves(paginarCandidatos(its, { q: 'nandu' }).items)).toEqual(ref);
+    expect(claves(paginarCandidatos(its, { q: 'NANDU' }).items)).toEqual(ref);
+    expect(claves(paginarCandidatos(its, { q: 'CASCO' }).items)).toEqual(['MLA11']);
+    expect(claves(paginarCandidatos(its, { q: 'casco' }).items)).toEqual(['MLA11']);
+  });
+
+  it('una palabra de otra clave/ítem no cruza: el AND es por publicación', () => {
+    const its = [
+      { ml_item_id: 'MLA20', ml_variation_id: '', ml_title: 'Bicicleta Ruta', modo: 'asignar', score_confianza: 0, candidatos: [] },
+      { ml_item_id: 'MLA21', ml_variation_id: '', ml_title: 'Mountain Rodado', modo: 'asignar', score_confianza: 0, candidatos: [] },
+    ];
+    // "ruta" está en MLA20 y "rodado" en MLA21: ninguna publicación tiene ambas
+    expect(paginarCandidatos(its, { q: 'ruta rodado' }).total).toBe(0);
+    // la clave también cuenta como texto buscable (sin cruzar entre ítems)
+    expect(claves(paginarCandidatos(its, { q: 'mla20 ruta' }).items)).toEqual(['MLA20']);
+    expect(paginarCandidatos(its, { q: 'mla20 rodado' }).total).toBe(0);
+  });
+
+  it('q con espacios dobles, tabs o solo espacios: mismo resultado que sus palabras', () => {
+    const base = claves(paginarCandidatos(items, { q: 'bicicleta rodado' }).items);
+    expect(claves(paginarCandidatos(items, { q: 'bicicleta    rodado' }).items)).toEqual(base);
+    expect(claves(paginarCandidatos(items, { q: '\tbicicleta\t rodado  ' }).items)).toEqual(base);
+    expect(paginarCandidatos(items, { q: '   ' }).total).toBe(items.length);
+    expect(paginarCandidatos(items, { q: '' }).total).toBe(items.length);
+  });
+
+  it('orden y paginación estables: páginas contiguas, sin repetidos ni huecos, mismo orden que la caché', () => {
+    const q = 'talle';
+    const total = paginarCandidatos(items, { q }).total;
+    const a = paginarCandidatos(items, { q, limit: 25, offset: 50 });
+    const b = paginarCandidatos(items, { q, limit: 25, offset: 50 });
+    expect(claves(a.items)).toEqual(claves(b.items));
+    expect(claves(a.items)).toEqual(claves(refListaCliente(items, q, 'all')).slice(50, 75));
+    expect(new Set(claves(refListaCliente(items, q, 'all'))).size).toBe(total);
   });
 
   it('cada filtro devuelve lo mismo que filtroMatcher del cliente', () => {
