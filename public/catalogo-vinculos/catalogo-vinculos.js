@@ -1245,10 +1245,11 @@
     if (items.length < total) {
       var cargando = S.ejecMasBusy === sec;
       pie += '<p class="cv-ejec-mas"><button type="button" class="ui-btn" data-accion="ejec-ver-mas" data-seccion="' + sec + '" aria-disabled="' + cargando + '">'
-        + (cargando ? 'Cargando…' : 'Ver más') + '</button> <span class="ui-resumen">Mostrando ' + items.length + ' de ' + total + '</span></p>';
+        + (cargando ? 'Cargando…' : 'Ver más (' + (total - items.length) + ' restantes)') + '</button> <span class="ui-resumen">Mostrando ' + items.length + ' de ' + total + '</span></p>';
     }
-    return '<details class="cv-ejec-seccion ui-card" data-seccion="' + sec + '"' + (S.ejecAbiertas[sec] ? ' open' : '') + '>'
-      + '<summary class="cv-ejec-seccion__sum">' + titulo + ' · ' + total + '</summary>'
+    var abierta = !!S.ejecAbiertas[sec];
+    return '<details class="cv-ejec-seccion ui-card" data-seccion="' + sec + '"' + (abierta ? ' open' : '') + '>'
+      + '<summary class="cv-ejec-seccion__sum" aria-expanded="' + abierta + '">' + titulo + ' · ' + total + '</summary>'
       + '<div class="cv-ejec-seccion__cuerpo">' + items.map(filaEjecHtml).join('') + pie + '</div></details>';
   }
 
@@ -1878,7 +1879,7 @@
     // Recuerda qué secciones colapsadas quedaron abiertas (el cuerpo se repinta en cada refresco).
     $('#ejec-cuerpo').addEventListener('toggle', function (ev) {
       var sec = ev.target.getAttribute && ev.target.getAttribute('data-seccion');
-      if (sec) S.ejecAbiertas[sec] = ev.target.open;
+      if (sec) { S.ejecAbiertas[sec] = ev.target.open; ev.target.querySelector('summary').setAttribute('aria-expanded', String(ev.target.open)); }
     }, true);
     // Tabs: flechas y Home/End.
     $('.cv-tabs').addEventListener('keydown', function (ev) {

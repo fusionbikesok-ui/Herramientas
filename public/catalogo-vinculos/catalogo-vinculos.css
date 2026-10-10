@@ -298,9 +298,15 @@
 /* Ejecución: filtro, estado vacío y secciones colapsadas (Completadas / Canceladas) */
 .cv-ejec-filtro { display: grid; gap: var(--sp-1); margin-bottom: var(--sp-3); max-width: 28rem; }
 .cv-ejec-vacio { font-weight: 600; color: var(--success); }
-.cv-ejec-seccion { margin-top: var(--sp-3); padding: var(--sp-2); }
-.cv-ejec-seccion__sum { cursor: pointer; font-weight: 700; min-height: var(--tap-min); display: flex; align-items: center; gap: .35rem; }
-.cv-ejec-seccion__cuerpo { display: grid; gap: var(--sp-2); margin-top: var(--sp-2); }
+.cv-ejec-seccion { margin-top: var(--sp-3); padding: 0; }
+.cv-ejec-seccion[open] > .cv-ejec-seccion__sum { border-bottom: 1px solid var(--border); }
+.cv-ejec-seccion__sum { cursor: pointer; font-weight: 700; min-height: var(--tap-min); padding: 0 var(--sp-2); display: flex; align-items: center; gap: .5rem; list-style: none; border-radius: var(--radius); }
+.cv-ejec-seccion__sum::-webkit-details-marker { display: none; }
+.cv-ejec-seccion__sum::before { content: '▸'; display: inline-block; width: 1em; text-align: center; transition: transform .15s ease; }
+.cv-ejec-seccion[open] > .cv-ejec-seccion__sum::before { transform: rotate(90deg); }
+.cv-ejec-seccion__sum:hover { background: var(--surface2); }
+.cv-ejec-seccion__sum:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cv-ejec-seccion__cuerpo { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
 .cv-ejec-seccion__cuerpo > p { margin: 0; }
 .cv-ejec-mas { display: flex; flex-wrap: wrap; gap: var(--sp-1); align-items: center; }
 .cv-frenadas { color: var(--warning); }
