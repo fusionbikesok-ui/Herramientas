@@ -48,7 +48,8 @@ Una pantalla, 4 pestañas.
 1. **Casos** (por defecto). La cola a la izquierda y el detalle a la derecha. Filtros: Abiertos, Salteados, En
    intervención, Pausadas.
 2. **Vínculos.** Buscador por producto Woo o publicación ML, con los filtros del Matcher. Muestra el vínculo vigente,
-   las hermanas por SKU y por GTIN, las notas y el orden de identificadores. Permite revincular con la misma matriz y
+   las hermanas por SKU y por GTIN, las notas y el orden de identificadores. Agregar una nota es una escritura
+   (`matcher:write`): un usuario de solo lectura no puede dejar notas (403 `FORBIDDEN`). Permite revincular con la misma matriz y
    revertir un "no sincronizar" (según R3). Incluye la sección **Códigos en conflicto** (por GTIN).
 3. **Ejecución.** Operaciones en ML: encolada → aplicada, fallida o frenada. Un contador muestra las fallidas.
    Reintentar y confirmar impacto son solo de admin.

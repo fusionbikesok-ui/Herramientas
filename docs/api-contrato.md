@@ -3673,7 +3673,7 @@ Base: `/api/catalogo-vinculos`. Pantalla: `/catalogo-vinculos`. Permisos: lectur
 
 ### Lecturas
 - `GET /cola?filtro=&q=&limit=&offset=` → `{ ok, filtro, total, limit, offset, data:[caso] }` (`total` es el de antes de paginar).
-- `GET /casos/:id?sku=` → detalle del caso. Incluye `vinculo_vigente` (`{sku,accion,desde}|null`), `marca` (`{tipo,variante,por,desde}|null`), `hermanas_item` (`[{clave,variation_id,titulo,status,available_quantity}]`) y `notas`. 404 si no existe.
+- `GET /casos/:id?sku=` → detalle del caso. Incluye `vinculo_vigente` (`{sku,accion,desde}|null`), `marca` (`{tipo,variante,por,desde}|null`), `hermanas_item` (`[{clave,variation_id,titulo,status,available_quantity}]`) y `notas` (historial del caso, máx. 100, más reciente primero: `[{evento,actor,creado_en,detalle}]`; en `evento:'nota_agregada'` suma `nota_texto` con el texto de la nota, `null` si ya no existe). 404 si no existe.
 - `GET /claves/:clave` → `{ ok, data:{ clave, vinculo_vigente, marca, hermanas_item } }` (sin necesidad de caso abierto).
 - `GET /productos/:id/publicaciones` → `{ ok, data:[{clave,titulo,status}] }` ordenado por clave; `[]` sin vínculo; 404 si el producto no existe.
 - `GET /estado` → resumen de salud. `salud.operaciones_pendientes` excluye canceladas; `salud.operaciones_canceladas` es nuevo.
@@ -3682,7 +3682,7 @@ Base: `/api/catalogo-vinculos`. Pantalla: `/catalogo-vinculos`. Permisos: lectur
   - `completadas`: `{ total, items[] }`, `items` con el mismo shape que `operaciones[]`; más recientes primero (`actualizada_en` desc, luego `id` desc); paginado con `limite` y `completadas_offset`.
   - `canceladas`: `{ total, items[] }`, mismo orden y paginación con `canceladas_offset`. Una operación **cancelada** se guarda como `estado='fallida'` con `ultimo_error` que empieza con `cancelada:` (el CHECK de `identidad_operaciones` no admite `cancelada`); la API la expone como `estado:'cancelada'`, `estado_db:'fallida'` y `motivo_cancelacion` (`sin_cambio_sku` si `sku_anterior == sku_objetivo`, si no el texto tras el prefijo).
   - `total` de `completadas`/`canceladas`: cantidad antes de paginar y ya filtrada por `q`.
-  - `pausas[]`: sin cambio de shape; `q` también filtra por clave/MLA, `item_id` y título.
+  - `pausas[]`: cada pausa suma `titulo` (string de la publicación en caché, `null` si no hay caché) y `variaciones` (`[{clave,titulo,status}]`, hermanas del mismo ítem; `[]` si no tiene). `q` también filtra por clave/MLA, `item_id` y título.
   - `fallidas` (numérico): fallidas reales de operaciones y pausas. **Contadores globales, no dependen de `q`.**
   - `canceladas_total` (numérico, **renombrado** desde `canceladas`, que ahora es la sección `{total, items}`): operaciones canceladas + pausas `cancelada`. Global, no depende de `q`.
   - `pausas_con_riesgo` (numérico): sin cambio.
@@ -3690,7 +3690,7 @@ Base: `/api/catalogo-vinculos`. Pantalla: `/catalogo-vinculos`. Permisos: lectur
 - `GET /retenidas` → `data:[{...fila, claves, titulo, importe, se_vuelve_a_retener}]` (sin `items_json`); `titulo` de la caché de publicaciones o del ítem del pedido, `importe` = suma de `unit_price × quantity` o `null`.
 
 ### Escrituras (operador)
-- `POST /casos/:id/tomar`, `POST /casos/:id/relevar` (el relevo exige motivo), `POST /casos/:id/notas` (`matcher:read`).
+- `POST /casos/:id/tomar`, `POST /casos/:id/relevar` (el relevo exige motivo), `POST /casos/:id/notas` (`matcher:write`: una nota es una escritura; con `matcher:read` responde 403 `FORBIDDEN` y no se guarda nada).
 - `POST /casos/:id/decisiones` — vincular. `override_contradiccion` y `override_omitir` son **admin**.
 - `POST /casos/:id/saltear` — `{ expected_version }`; 409 `VERSION_CONFLICT` si el caso cambió.
 - `POST /casos/:id/no-sincronizar` — `{ variante:'a'|'b'|'c', motivo, expected_sku?, operation_id?, confirm_sibling_impact? }`. La (b) pausa el ítem en ML como operación durable (`identidad_pausas`).

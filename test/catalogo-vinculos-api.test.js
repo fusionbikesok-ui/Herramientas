@@ -50,7 +50,7 @@ describe('API de Catálogo y vínculos', () => {
     it('resuelve las rutas a matcher con el nivel del método', () => {
       expect(resolvePermiso('GET', '/catalogo-vinculos/cola')).toEqual({ anyOf: ['matcher'], nivel: 'read' });
       expect(resolvePermiso('POST', '/catalogo-vinculos/casos/3/decisiones')).toEqual({ anyOf: ['matcher'], nivel: 'write' });
-      expect(resolvePermiso('POST', '/catalogo-vinculos/casos/3/notas')).toEqual({ anyOf: ['matcher'], nivel: 'read' });
+      expect(resolvePermiso('POST', '/catalogo-vinculos/casos/3/notas')).toEqual({ anyOf: ['matcher'], nivel: 'write' });
       expect(permiteAcceso([{ herramienta: 'matcher', nivel: 'read' }], resolvePermiso('POST', '/catalogo-vinculos/casos/3/decisiones'))).toBe(false);
     });
   });
@@ -191,6 +191,26 @@ describe('API de Catálogo y vínculos', () => {
     it('un lector (matcher:read) no puede decidir', async () => {
       const c = caso(2102);
       expect((await request(app(lector)).post(`${BASE}/casos/${c.f.id}/decisiones`).send(cuerpo(c, {}))).status).toBe(403);
+    });
+
+    it('una nota es escritura: el lector recibe 403 FORBIDDEN y no se guarda nada; el operador recibe 201', async () => {
+      const c = caso(2105);
+      const antes = db.prepare('SELECT COUNT(*) n FROM identidad_notas').get().n;
+      const hist = db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE entidad_tipo='caso'").get().n;
+      const denegada = await request(app(lector)).post(`${BASE}/casos/${c.f.id}/notas`).send({ operation_id: 'nota-lector-1', nota: 'hola' });
+      expect(denegada.status).toBe(403);
+      expect(denegada.body).toEqual({ ok: false, code: 'FORBIDDEN', error: 'Acceso no autorizado' });
+      expect(db.prepare('SELECT COUNT(*) n FROM identidad_notas').get().n).toBe(antes);
+      expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE entidad_tipo='caso'").get().n).toBe(hist);
+
+      const v = db.prepare('SELECT expected_version, evidencia_fingerprint FROM identidad_casos WHERE id=?').get(c.f.id);
+      const ok = await request(app(operador)).post(`${BASE}/casos/${c.f.id}/notas`)
+        .send({ operation_id: 'nota-operador-1', nota: 'hola', expected_version: v.expected_version, evidence_fingerprint: v.evidencia_fingerprint });
+      expect(ok.status).toBe(201);
+      expect(db.prepare('SELECT COUNT(*) n FROM identidad_notas').get().n).toBe(antes + 1);
+      // El historial de la nota trae su texto (sale de identidad_notas por nota_id).
+      const det = await request(app(lector)).get(`${BASE}/casos/${c.f.id}`);
+      expect(det.body.data.notas.find((h) => h.evento === 'nota_agregada')).toMatchObject({ actor: 'ana', nota_texto: 'hola' });
     });
 
     it('confirmar igual y override_omitir: 403 para el operador, ok para el admin', async () => {
@@ -375,6 +395,18 @@ describe('API de Catálogo y vínculos', () => {
       const r = await request(app(lector)).get(`${BASE}/ejecucion`);
       expect(r.body.data.fallidas).toBe(1);
       expect(r.body.data.canceladas_total).toBe(1);
+    });
+
+    it('pausas: traen titulo (null si no hay caché) y variaciones (hermanas del ítem, [] si no tiene)', async () => {
+      db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,actualizado_en) VALUES
+        ('MLA9003|','MLA9003',NULL,'Bici pausada','active',?), ('MLA9004|','MLA9003',NULL,'Bici hermana','paused',?)`).run(ISO, ISO);
+      db.prepare(`INSERT INTO identidad_pausas (operation_id,ml_key,item_id,motivo,estado,creada_por,creada_en,actualizada_en)
+        VALUES ('p-t','MLA9003|','MLA9003','m','pendiente','ana',?,?), ('p-n','MLA9005|','MLA9005','m','pendiente','ana',?,?)`).run(ISO, ISO, ISO, ISO);
+      const r = await request(app(lector)).get(`${BASE}/ejecucion`);
+      const con = r.body.data.pausas.find((p) => p.ml_key === 'MLA9003|');
+      expect(con).toMatchObject({ titulo: 'Bici pausada', variaciones: [{ clave: 'MLA9004|', titulo: 'Bici hermana', status: 'paused' }] });
+      const sin = r.body.data.pausas.find((p) => p.ml_key === 'MLA9005|');
+      expect(sin).toMatchObject({ titulo: null, variaciones: [] });
     });
 
     it('estado de salud: operaciones_pendientes excluye canceladas', async () => {

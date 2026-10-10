@@ -687,13 +687,15 @@ export function remarcarStockResueltos(db, items) {
   return items;
 }
 
-export function computarCandidatosApi(db, scope) {
+// Prepara las entradas del cruce (lecturas de DB + índice WC). Devuelve null si el scope
+// 'atencion' no tiene claves: no hay nada que cruzar.
+function prepararCruceCandidatos(db, scope) {
   const catalogo = db.prepare('SELECT id_woo, nombre, sku, tipo, img, atributos_json FROM catalogo_cache').all();
 
   let pubs;
   if (scope === 'atencion') {
     const claves = clavesNecesitanAtencion(db);
-    if (claves.length === 0) return { items: [], total: 0 };
+    if (claves.length === 0) return null;
     const placeholders = claves.map(() => '?').join(',');
     pubs = db.prepare(`
       SELECT clave, item_id, variation_id, titulo, status, sub_status, es_variante, color, talle, seller_sku, variations_texto, permalink, catalogo
@@ -706,11 +708,120 @@ export function computarCandidatosApi(db, scope) {
     `).all();
   }
 
-  const { wcItems, indice, wcPorSku } = construirWC(catalogo);
-  const { sinSku, conSkuValido } = construirMLdesdeApi(pubs, wcItems);
-  const items = [...sinSku, ...conSkuValido];
+  return { pubs, catalogo };
+}
+
+const ordenarItems = ({ sinSku, conSkuValido }) => [...sinSku, ...conSkuValido];
+
+/**
+ * construirWC por tramos (cede el loop). Los tramos se concatenan en orden: las posiciones del índice
+ * se desplazan por el largo acumulado, así que el resultado es idéntico a construirWC(catalogo).
+ */
+async function construirWCCedible(catalogo) {
+  const wcItems = [], wcPorSku = {}, indice = {};
+  for (let i = 0; i < catalogo.length; i += TRAMO_ITEMS) {
+    const parte = construirWC(catalogo.slice(i, i + TRAMO_ITEMS));
+    const off = wcItems.length;
+    for (const it of parte.wcItems) wcItems.push(it);
+    Object.assign(wcPorSku, parte.wcPorSku); // en orden: el último SKU repetido gana, igual que construirWC
+    for (const t of Object.keys(parte.indice)) {
+      const dst = indice[t] || (indice[t] = []);
+      for (const p of parte.indice[t]) dst.push(p + off);
+    }
+    await ceder();
+  }
+  return { wcItems, indice, wcPorSku };
+}
+
+/** Versión síncrona (tests y usos puntuales). Bloquea el event loop mientras corre: no usar en requests. */
+export function computarCandidatosApi(db, scope) {
+  const prep = prepararCruceCandidatos(db, scope);
+  if (!prep) return { items: [], total: 0 };
+  const { wcItems, indice, wcPorSku } = construirWC(prep.catalogo);
+  const items = ordenarItems(construirMLdesdeApi(prep.pubs, wcItems));
   const candArr = items.map((it) => candidatosDeItem(it, wcItems, indice));
   const resueltos = derivarEstadoApi(items, candArr, wcPorSku);
+  return { items: resueltos, total: resueltos.length };
+}
+
+// Presupuesto de CPU entre dos cesiones del event loop en el cruce en background (ms).
+const PRESUPUESTO_CEDER_MS = 15;
+// Tamaño de tramo para las fases por ítem que no dependen de otros ítems (construirMLdesdeApi, derivarEstadoApi).
+const TRAMO_ITEMS = 300;
+const ceder = () => new Promise((r) => setImmediate(r));
+const TRAMO_JSON = 500;
+
+/**
+ * Responde como res.json(obj) pero serializa la lista `obj[claveLista]` por tramos, cediendo el
+ * event loop entre tramos. Con ~7000 ítems (~21 MB de JSON) un res.json bloqueaba el proceso ~400 ms
+ * en cada búsqueda con caché caliente (medido). Mismo JSON de salida, mismo orden de claves.
+ */
+// Genera el JSON de `obj` en trozos de texto: cualquier array de nivel superior se parte en tramos
+// de TRAMO_JSON elementos, cediendo el loop entre tramos. Concatenado da exactamente JSON.stringify(obj).
+async function* trozosJsonCedibles(obj) {
+  yield '{';
+  let primera = true;
+  for (const [k, v] of Object.entries(obj)) {
+    yield (primera ? '' : ',') + JSON.stringify(k) + ':';
+    primera = false;
+    if (Array.isArray(v)) {
+      yield '[';
+      for (let i = 0; i < v.length; i += TRAMO_JSON) {
+        yield (i ? ',' : '') + JSON.stringify(v.slice(i, i + TRAMO_JSON)).slice(1, -1);
+        await ceder();
+      }
+      yield ']';
+    } else {
+      yield JSON.stringify(v);
+    }
+  }
+  yield '}';
+}
+
+async function enviarJsonCedible(res, obj) {
+  res.set('Content-Type', 'application/json; charset=utf-8');
+  for await (const trozo of trozosJsonCedibles(obj)) res.write(trozo);
+  res.end();
+}
+
+/** JSON (string) de `obj` armado por tramos; igual a JSON.stringify(obj) pero sin bloquear el loop. */
+async function serializarJsonCedible(obj) {
+  const partes = [];
+  for await (const trozo of trozosJsonCedibles(obj)) partes.push(trozo);
+  return partes.join('');
+}
+
+/**
+ * Igual que computarCandidatosApi pero CEDE el event loop (setImmediate) cada
+ * PRESUPUESTO_CEDER_MS de cálculo. Mismo resultado (los ítems son independientes entre sí, así que
+ * partirlos en tramos y reensamblar en orden no cambia nada; `idx` se corrige por tramo).
+ * Lo que queda sin ceder es construirWC (indexa todo el catálogo de una vez) y el JSON de la caché
+ * en disco: son bloques de cientos de ms una sola vez por cómputo frío (ver reporte de medición).
+ */
+export async function computarCandidatosApiAsync(db, scope) {
+  const prep = prepararCruceCandidatos(db, scope);
+  if (!prep) return { items: [], total: 0 };
+  const { wcItems, indice, wcPorSku } = await construirWCCedible(prep.catalogo);
+  const pubs = prep.pubs;
+  const ml = { sinSku: [], conSkuValido: [] };
+  for (let i = 0; i < pubs.length; i += TRAMO_ITEMS) {
+    const parte = construirMLdesdeApi(pubs.slice(i, i + TRAMO_ITEMS), wcItems);
+    ml.sinSku.push(...parte.sinSku); ml.conSkuValido.push(...parte.conSkuValido);
+    await ceder();
+  }
+  const items = ordenarItems(ml);
+  const candArr = new Array(items.length);
+  let t = performance.now();
+  for (let i = 0; i < items.length; i++) {
+    candArr[i] = candidatosDeItem(items[i], wcItems, indice);
+    if (performance.now() - t >= PRESUPUESTO_CEDER_MS) { await ceder(); t = performance.now(); }
+  }
+  const resueltos = [];
+  for (let i = 0; i < items.length; i += TRAMO_ITEMS) {
+    const parte = derivarEstadoApi(items.slice(i, i + TRAMO_ITEMS), candArr.slice(i, i + TRAMO_ITEMS), wcPorSku);
+    for (const r of parte) { r.idx = i + r.idx; resueltos.push(r); }
+    await ceder();
+  }
   return { items: resueltos, total: resueltos.length };
 }
 
@@ -738,7 +849,7 @@ function obtenerCacheValida(db, scope, firma) {
   return null;
 }
 
-function guardarCacheDisco(db, scope, firma, resultado) {
+function guardarCacheDisco(db, scope, firma, resultado, jsonPrecalculado = null) {
   // La caché en disco es una optimización de arranque, nunca debe tumbar un cómputo que ya
   // salió bien — cualquier fallo de escritura se ignora y el próximo restart recomputa.
   try {
@@ -746,7 +857,7 @@ function guardarCacheDisco(db, scope, firma, resultado) {
       INSERT INTO matcher_candidatos_cache (scope, firma, resultado_json, actualizado_en)
       VALUES (?,?,?,?)
       ON CONFLICT(scope) DO UPDATE SET firma=excluded.firma, resultado_json=excluded.resultado_json, actualizado_en=excluded.actualizado_en
-    `).run(scope, firma, JSON.stringify(resultado), now());
+    `).run(scope, firma, jsonPrecalculado ?? JSON.stringify(resultado), now());
   } catch (_) {
     // La caché de candidatos es un acelerador: si no se puede escribir, el cómputo
     // se rehace la próxima vez. No debe tumbar la respuesta que ya se calculó.
@@ -763,21 +874,25 @@ const _computoCandidatos = new Map(); // scope -> { running, done, total, error,
 
 // Arranca (si no hay uno ya corriendo para ese scope) el cruce completo en background y lo
 // guarda en _cacheCandidatos con su firma, para que el próximo GET lo encuentre como hit.
-// OJO: computarCandidatosApi es CPU-bound y síncrono; correrlo en background con setImmediate
-// no lo saca del event loop (lo bloquea mientras corre), pero el response 202 ya salió antes de
-// arrancarlo, así que el request que lo disparó nunca choca el timeout de nginx. Es el mismo
-// trade-off (aceptado) que refrescarPublicacionesMl. Devuelve el estado actual.
+// El cruce corre con computarCandidatosApiAsync, que cede el event loop cada ~15 ms: el 202 sale
+// antes y el cómputo no congela /api/auth ni el resto de requests (antes, al ser síncrono, bloqueaba
+// el proceso decenas de segundos). Devuelve el estado actual.
 function lanzarComputoCandidatos(db, scope) {
   const st = _computoCandidatos.get(scope);
   if (st && st.running) return st;
   const nuevo = { running: true, done: 0, total: 0, error: null, iniciado_en: now() };
   _computoCandidatos.set(scope, nuevo);
-  setImmediate(() => {
+  // La firma se toma ANTES de cruzar: si los caches cambian durante el cómputo (que cede el loop),
+  // la entrada queda con la firma vieja y el próximo GET la recalcula (no sirve un resultado viejo como nuevo).
+  setImmediate(async () => {
     try {
       const firma = firmaCandidatos(db);
-      const resultado = computarCandidatosApi(db, scope);
+      const resultado = await computarCandidatosApiAsync(db, scope);
       _cacheCandidatos.set(scope, { firma, resultado });
-      guardarCacheDisco(db, scope, firma, resultado);
+      // El JSON de la caché en disco (~21 MB) se arma por tramos: un JSON.stringify de una sola vez
+      // bloqueaba ~200 ms al final de cada cómputo frío.
+      const json = await serializarJsonCedible(resultado);
+      guardarCacheDisco(db, scope, firma, resultado, json);
       _computoCandidatos.set(scope, { running: false, done: resultado.total, total: resultado.total, error: null, iniciado_en: nuevo.iniciado_en });
     } catch (e) {
       _computoCandidatos.set(scope, { running: false, done: 0, total: 0, error: e.message, iniciado_en: nuevo.iniciado_en });
@@ -1162,7 +1277,9 @@ export function matcherRouter(db, cfg) {
       const cacheado = candidatosApiCacheado(db, scope, { peek: true });
       const actualizado = db.prepare('SELECT MAX(actualizado_en) t FROM ml_publicaciones_cache').get().t ?? null;
       if (cacheado.cache || peek) {
-        return res.json({ ok: true, data: cacheado.items, total: cacheado.total, actualizado, scope, cache: cacheado.cache });
+        // Lista grande: se envía por tramos cediendo el loop (ver enviarJsonCedible). Mismo JSON que res.json.
+        return enviarJsonCedible(res, { ok: true, data: cacheado.items, total: cacheado.total, actualizado, scope, cache: cacheado.cache })
+          .catch((e) => { if (!res.headersSent) res.status(500).json({ ok: false, error: e.message }); else res.end(); });
       }
       // MISS (y no es peek): el cruce completo es lo que bloqueaba el request más de 120s en
       // frío. Si el último cómputo en background falló, devolvemos ese error una vez (y limpiamos
