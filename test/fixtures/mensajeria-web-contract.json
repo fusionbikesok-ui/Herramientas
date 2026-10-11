@@ -1,0 +1,50 @@
+{
+  "order": {
+    "order_id": 101,
+    "order_number": "ORD-101",
+    "invoices": [
+      {
+        "id": 201,
+        "order_id": 101,
+        "status": "authorized",
+        "environment": "production",
+        "number": "00015-00000001",
+        "label": "Factura B 00015-00000001",
+        "type": 6,
+        "date": "2026-10-07",
+        "customer": "Fixture",
+        "currency": "ARS",
+        "total": "100.00",
+        "revision": 3
+      }
+    ],
+    "has_more": false,
+    "tracking": {
+      "carrier": "Andreani",
+      "number": "123456789012"
+    }
+  },
+  "pdf": {
+    "order_id": 101,
+    "invoice_id": 201,
+    "invoice": {
+      "id": 201,
+      "order_id": 101,
+      "status": "authorized",
+      "environment": "production",
+      "number": "00015-00000001",
+      "label": "Factura B 00015-00000001",
+      "type": 6,
+      "date": "2026-10-07",
+      "customer": "Fixture",
+      "currency": "ARS",
+      "total": "100.00",
+      "revision": 3
+    },
+    "filename": "Factura-fixture.pdf",
+    "mime": "application/pdf",
+    "size": 58,
+    "sha256": "a0cbe6a6f98efcccc17f7ba3d583919bee13602135d0b9b0224871920bb6ed20",
+    "data_base64": "JVBERi0xLjQKRml4dHVyZSBjb250cmFjdCBvbmx5OyBubyBmaXNjYWwgdmFsaWRpdHkuCiUlRU9GCg=="
+  }
+}

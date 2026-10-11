@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { sendWindow, permissions, mergeMessages, oldestMessageId, reconcileHistoryPage, attachmentType, attachmentError, captionError, deliveryLabel, errorMessage } from '../public/mensajeria/app.js';
+import { sendWindow, permissions, mergeMessages, oldestMessageId, reconcileHistoryPage, attachmentType, attachmentError, captionError, deliveryLabel, errorMessage, threadChannel, channelLabel, mediaAllowed, aiStateLabel, safePageUrl } from '../public/mensajeria/app.js';
 
 const now = Date.parse('2026-10-07T15:00:00.000Z');
 const actor = { id: 'herramientas:agent-a', name: 'Agente de prueba', role: 'agent' };
@@ -55,6 +55,61 @@ describe('Mensajería UI: ventana de atención conservadora', () => {
   });
   it('supervisión también respeta la ventana de 24 horas', () => {
     expect(permissions({ ...actor, role: 'supervisor' }, { ...thread, last_inbound_at: '2026-10-01T00:00:00Z' }, now).send).toBe(false);
+  });
+});
+
+describe('Mensajería UI: atención unificada Web y WhatsApp', () => {
+  const web = { ...thread, key: 'web:test', channel: 'web', can_send: true, capabilities: { media: false }, last_inbound_at: '2020-01-01T00:00:00Z' };
+  it('Web puede responder aunque pasaron 24 horas y no presenta restricciones de Meta', () => {
+    expect(sendWindow(web, now)).toEqual({ allowed: true, label: 'Chat web disponible' });
+    expect(permissions(actor, web, now)).toMatchObject({ send: true, note: true, manage: true, control: true });
+    expect(sendWindow({ ...web, channel: 'whatsapp', can_send: undefined }, now).allowed).toBe(false);
+  });
+  it('Web conserva la misma autorización de dueño, supervisor y lector', () => {
+    expect(permissions({ ...actor, role: 'reader' }, web, now).send).toBe(false);
+    expect(permissions(actor, { ...web, owner_id: 'otra-persona' }, now).send).toBe(false);
+    expect(permissions({ ...actor, role: 'supervisor' }, { ...web, owner_id: 'otra-persona' }, now).send).toBe(true);
+    expect(permissions(actor, { ...web, status: 'closed' }, now).send).toBe(false);
+  });
+  it('Web bloquea una disponibilidad no confirmada sin mencionar números ni plantillas', () => {
+    const pending = sendWindow({ ...web, can_send: false, send_blocked_reason: 'web_not_connected' }, now);
+    expect(pending.allowed).toBe(false);
+    expect(pending.label).toContain('chat web');
+    for (const reason of [undefined, 'window_closed', 'number_not_connected']) {
+      const value = sendWindow({ ...web, can_send: undefined, send_blocked_reason: reason }, now);
+      expect(value.allowed).toBe(false);
+      expect(value.label).not.toMatch(/24|plantilla|número|Meta/i);
+    }
+  });
+  it('Web usa únicamente su propio estado de IA, aunque WhatsApp esté desconectado', () => {
+    const status = { web: { connected: true, bot_enabled: true }, numbers: [{ number_id: 'business', connected: false, bot_enabled: false }] };
+    expect(aiStateLabel(web, status)).toBe('IA habilitada');
+    expect(aiStateLabel({ ...web, bot_paused: true }, status)).toBe('IA pausada');
+    expect(aiStateLabel(web, { ...status, web: { connected: false, bot_enabled: true } })).toBe('IA deshabilitada');
+    expect(aiStateLabel(web, { numbers: status.numbers })).toBe('Estado de IA pendiente');
+  });
+  it('WhatsApp mantiene sus controles por número, independientes del estado web', () => {
+    const whatsapp = { ...thread, channel: 'whatsapp', number_id: 'business' };
+    expect(aiStateLabel(whatsapp, { web: { connected: true, bot_enabled: true }, numbers: [{ number_id: 'business', connected: false, bot_enabled: true }] })).toBe('IA deshabilitada');
+    expect(aiStateLabel(whatsapp, { web: { connected: false, bot_enabled: false }, numbers: [{ number_id: 'business', connected: true, bot_enabled: true }] })).toBe('IA habilitada');
+  });
+  it('las capacidades de adjuntos se respetan y Web sin capacidades queda solo texto', () => {
+    expect(mediaAllowed(web)).toBe(false);
+    expect(mediaAllowed({ channel: 'web' })).toBe(false);
+    expect(mediaAllowed({ channel: 'whatsapp' })).toBe(true);
+    expect(mediaAllowed({ channel: 'whatsapp', capabilities: { media: false } })).toBe(false);
+    expect(mediaAllowed(null)).toBe(false);
+    expect(errorMessage({ code: 'web_media_unsupported' })).toContain('solo texto');
+  });
+  it('identifica el canal y mantiene compatibilidad con conversaciones anteriores de WhatsApp', () => {
+    expect(threadChannel(web)).toBe('web');
+    expect(channelLabel(web)).toBe('Chat web');
+    expect(threadChannel(thread)).toBe('whatsapp');
+    expect(channelLabel(thread)).toBe('WhatsApp');
+  });
+  it('la página consultada sólo admite enlaces HTTP(S) sin credenciales', () => {
+    expect(safePageUrl('https://example.test/producto?modelo=1')).toBe('https://example.test/producto?modelo=1');
+    for (const url of ['javascript:alert(1)', 'data:text/html,test', 'file:///tmp/test', 'https://user:secret@example.test', 'no-es-url']) expect(safePageUrl(url)).toBe('');
   });
 });
 

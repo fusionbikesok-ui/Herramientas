@@ -121,6 +121,59 @@ Detectada en el E2E de Fase B; no es de esa rama. Controles por debajo de 44 px 
 
 /herramientas/gestion-vps/?fm_module=facturador muestra emisión manual activa punto15. Selección de variante y precio contado local, series de bicicletas, carga de pedido, borradores con revisión y PDF privado. Configuración sólo consulta, pruebas WSFE/Padrón operativas; botones ML/bulk/mensajería permanecen bloqueados y explican pendiente. Home de Gestión actualizado. Sesión/admin/Origin/CSRF verificadas y cuerpos fiscales firmados; sin parámetros de mutación por query. Formularios privados con campos en español; ninguna factura real durante QA.
 
+## Mensajería Web y WhatsApp (2026-10-07)
+
+Una bandeja en Home → Atención al cliente, con filtro por canal, responsable, notas privadas,
+transferencia y retorno explícito a IA. Matías tiene control completo. Detalle Web incluye
+teléfono copiable, página/producto y motivo de derivación. Web permite texto sin límite de
+24 horas; WhatsApp conserva su ventana y adjuntos. No confundir el estado de conexión de
+WhatsApp con la disponibilidad Web. Las entradas antiguas de Chat abren el mismo panel.
+UI usa tokens compartidos y controles de 44px; contrato en `integrations/mensajeria/README.md`.
+
+
+Mensajería 2026-10-07: lista compacta y panel de conversación con scroll independiente;
+en móvil, una vista a la vez y Volver. Enter envía, Shift+Enter agrega línea; respeta IME.
+Grabar → detener → escuchar → enviar/descartar; no envío implícito. Nuevo chat por teléfono
+internacional/línea y plantilla con preview/consentimiento cuando no hay ventana de 24 h.
+No mostrar insignias de verificación propias: el aviso de servicio seguro es de WhatsApp.
+
+
+Mensajería comercial (2026-10-07): acciones visibles Archivo/Audio/Producto/Factura/Seguimiento.
+Buscador local tipo POS por nombre/SKU, foto, variante, contado/transferencia web, stock y fecha.
+Selección, vista previa y borrador antes de Enviar; pedidos por teléfono exacto y elección manual.
+PDF con validación de teléfono en servidor y referencia privada conservada al recargar; sin emisión.
+Plantilla sólo cuando no está abierta la ventana desde el último mensaje del cliente.
+En móvil, acciones en dos filas y 44 px; sin desborde en 320–1600 px. Usa tokens existentes.
+Contrato y recuperación: integrations/mensajeria/README.md.
+
+
+### Mensajería — ficha comercial y adjuntos directos (2026-10-07)
+
+El selector de productos filtra Solo con stock Sí/No sobre catálogo local antes del límite. Acciones con prefijo +. Elegir producto consulta el contrato comercial vigente con caché 60 s; comparte contado, cuotas 6/9/12/18/24 con redondeo público y envío gratis sólo según Master Control, sin modificarlo. Foto propia convertida a JPEG reducido se prepara como adjunto privado de WhatsApp; web conserva texto/enlace. Factura única del pedido elegido se agrega directamente al borrador; varios comprobantes requieren elegir uno. Se reemplaza el checkbox manual por validación exacta de teléfono y permisos en servidor. Nada se envía hasta Enviar. Publicación verificada.
+
+
+Ficha comercial publicada y verificada 2026-10-07: puente de lectura 0.5.1 y Herramientas
+activos. Comprobados SKU FB-47935, contado3200000, cuotas6/9/12/18/24 y fotoJPEG privada.
+Filtro de stock Sí/No y botones + operativos. Factura única directamente al borrador;
+varias requieren selección. Sin emisión ni mensajes de prueba a clientes reales.
+IA, bot y Master Control conservados. QA aislado cerrado. Si se revierte a la UI anterior,
+una foto JPEG todavía en borrador podría requerir adjuntarse nuevamente después de F5;
+texto e historial no se restauran ni se reenvían. Backup y rollback en README operativo.
+
+
+### Mensajería: pendientes y paneles (publicado 2026-10-08)
+
+Pendientes corresponde a chats abiertos con mensajes sin leer; Todas conserva los leídos. Confirmación explícita POST /read al mostrar historial visible al final, con límite de mensaje perteneciente al chat y contador conservador ante nuevas entradas. No cambia responsable, estado, revisión, orden ni IA. Perfil lector no consume pendientes. Separador de escritorio ajustable por arrastre/teclado con preferencia local por operador; móvil conserva panel completo. Publicado y verificado en producción. Importaciones históricas no generan ni retienen pendientes. Todas las reglas de ancho de escritorio incluyen las tres columnas.
+
+La ficha compartida omite el SKU en el texto; el buscador lo conserva. Contado y cuotas llevan presentación comercial y la leyenda de tarjetas bancarizadas y no bancarizadas; importes siguen verificados por Master Control y envío gratis sólo cuando la fuente lo confirma.
+
+Diálogos abiertos conservan pendientes que llegan detrás del selector. El encabezado y los filtros admiten varias líneas para mantener visibles los controles con la lista reducida.
+
+Corrección publicada IA/permisos: «IA y operación» distingue apagado general, de canal,
+de número y fuera de horario; la pausa del chat sigue separada. Supervisor puede cambiar
+cada número independientemente y abrir los horarios en WordPress. Administrador general
+con rol agente/lector puede recuperar sólo su propia supervisión mediante acción explícita,
+autenticada y auditada. No puede autoexcluirse de Mensajería.
 ## Mensajería (2026-10-07)
 
 - Home agrega Atención al cliente → Mensajería, visible según permiso también para no administradores. UI con tokens compartidos, controles táctiles de 44 px y bandeja/detalle adaptable a 390/768/1440 px.

@@ -337,6 +337,290 @@ Cierre POS 2026-10-06: respaldo diario privado ampliado con snapshot consistente
 
 - 2026-10-06: Entrega manual recuperada en facturador VPS: email con PDF adjunto mediante SMTP existente (TLS verificado, confirmación de destinatario) y WhatsApp wa.me con enlace PDF siete días. Módulo Node delivery.mjs; persistencia privada delivery.sqlite, UUID/exclusión por comprobante/destinatario entre operadores, resultado incierto sin reintento automático. Solo descarga por token aleatorio expirable es pública; email/share/estado requieren administrador y escrituras Origin/CSRF. PDF nativo vía GET firmado, WordPress conserva bloqueo de correo/red genéricos. Backup fiscal incluye snapshot entrega/configuración SMTP privada. Validación funcional sin comunicaciones a clientes; entrega real de correo no probada. Contratos y rollback: integrations/management-migration/README-DELIVERY.md. Master Control y emisión ARCA sin cambios.
 
+## Mensajería unificada (2026-10-07)
+
+Bandeja Web/WhatsApp con sesión de Herramientas y roles propios. Matías con control completo
+y administración global conservada; José supervisa; Santi/Miguel/Fabri atienden. Búsquedas,
+historial, asignaciones, notas, IA y outbox en PostgreSQL del VPS. Widget y copia de presentación
+en WordPress. Callbacks firmados con revisión, IDs opacos y cola de estado; importación sin IA.
+Los modos de corte y rollback se coordinan; no restaurar bases antiguas sobre mensajes nuevos.
+Contrato y rutas de respaldos: `integrations/mensajeria/README.md`. WhatsApp real conectado en coexistencia; emisores POS/ARCA, precios y Master Control no cambian.
+
+Corte completado 2026-10-07 13:33 UTC: 526 sesiones y 1.372 mensajes fuente;
+1.203 mensajes existentes reconocidos y 169 importados, todos mapeados. Ambos flags
+activados; callback de presencia firmado confirmado y cola Web vacía en la verificación.
+Entradas Chat de WordPress y Gestión redirigen a la bandeja. Imagen activa
+`fusion-chatbot-unified:20261007`; plugin 1.7.18. Respaldos privados incluyen WordPress
+antes/después, PostgreSQL, SQLite e historial fuente. El coordinador usa stdin para
+ejecutar el corte como usuario restringido; no depende de un archivo temporal root.
+Suite Node completa, 73 pruebas backend, 60 PHP y 3 de recuperación aprobadas;
+QA visual con datos ficticios. Entrega real a clientes no usada como prueba.
+
+## Conexión de WhatsApp comercial (2026-10-07)
+
+La API de Meta confirmó coexistencia existente (is_on_biz_app=true, platform_type=CLOUD_API)
+en ambos números; no necesitan nuevo registro. La app propia es Fusion Bikes Chatbot
+(1394204749301211). Identidades verificadas: 4819 → phone 2185814538178526 / WABA
+332553100782067; 2035 → phone 106810789054504 / WABA 117361584655886.
+Los IDs reales están configurados en el VPS y la app está suscrita a ambas WABA y a
+messages/history/smb_message_echoes, conservando campos e integraciones previos.
+Meta publicó la app con autorización del dueño. El envío manual está habilitado para
+ambos IDs; la IA de ambos números permanece apagada. Se verificó recepción desde los
+dos teléfonos, reflejo de envíos hechos desde WhatsApp Business y respuestas desde la
+bandeja del VPS con estado entregado/leído en ambos recorridos. Las únicas respuestas
+de prueba se enviaron entre los dos números del dueño, con su autorización.
+No se pidió una importación de historial antiguo ni se enviaron pruebas a clientes. El uso/área de
+cada número espera aclaración; los nombres temporales provienen de los activos de Meta.
+Imagen: fusion-chatbot-whatsapp:20261007. Respaldos privados y estados Meta antes/después:
+/opt/fusionbikes/backups/whatsapp-connect-20261007. Coordinador:
+/opt/fusion-whatsapp-connect-20261007/coexistence_remote.py. No repetir subscribe sin
+reconciliar su marcador de intento; enable exige publicación y suscripciones verificadas.
+
+
+## Audio, plantillas e inicio por teléfono (2026-10-07)
+
+Imagen fusion-chatbot-inbox-tools:20261007 incluye FFmpeg/ffprobe y conversión Ogg Opus mono
+con límites; columna aditiva inbox_media.is_voice. Dos conversiones simultáneas por proceso.
+Nuevo chat idempotente por número/línea, sin envío ni cambio del estado del hilo existente.
+Plantillas de texto posicionales con preview, consentimiento y revalidación antes de enviar.
+No se habilitan plantillas pendientes/pausadas ni se reintentan envíos ambiguos.
+Saludo fusion_inicio_atencion/es_AR aprobado en ambas WABA; revalidar estado real antes de enviar.
+IA de ambos números apagada; no se cambia el modo del widget ni emisores fiscales.
+Backup /opt/fusionbikes/backups/mensajeria-usabilidad-20261007, coordinador
+/opt/fusion-inbox-tools-release-20261007/remote_deploy.py. Rollback detiene API antes de cancelar
+plantillas en cola incompatibles, restaura software y conserva historial/flags. Fuente y manual
+reconstruibles en integrations/mensajeria. No confundir QA con entrega real de audio/plantilla.
+
+
+Publicación de usabilidad verificada el 2026-10-07: imagen activa en API/worker/outbox,
+health correcto, columna is_voice aplicada, dos líneas conectadas y ambas IA apagadas.
+Saludo aprobado y compatible en las dos WABA. Interfaz productiva de consulta verificada;
+audio/plantillas completos sólo con transporte de QA, sin probar entrega real a clientes.
+Servicios aislados y túnel de QA detenidos; respaldo y rollback disponibles en las rutas anteriores.
+
+
+## Compartir productos, facturas y seguimiento (2026-10-07)
+
+Acciones visibles junto al editor: Archivo, Audio, Producto, Factura y Seguimiento.
+Producto abre un buscador por nombre/SKU con miniatura, variante, stock, fecha y precio
+contado/transferencia web (precioContado sobre precio vigente, incluidas ofertas; no lista ML).
+Consulta el catálogo SQLite local, con máximo 30 resultados. Elegir prepara un borrador;
+Enviar sigue siendo explícito. No cambia checkout, Master Control ni stock.
+
+Pedidos: copia sincronizada local, coincidencia exacta de teléfono completo y país;
+nunca por últimos dígitos ni fusión automática. Hasta 50 pedidos recientes para elegir.
+Factura agrega directamente el PDF único y vuelve a validar el teléfono en la tienda antes de
+consultar comprobantes ya autorizados de producción y obtener el PDF. Puente de lectura
+0.5.0 conserva autenticación Woo y permiso administrativo. GET acotado por pedido, sin
+emitir, enviar, modificar pedidos o crear enlaces públicos. Esta acción consulta al facturador web; el producto elegido verifica la cotización comercial con caché. El archivo privado usa el transporte existente y queda en borrador;
+su referencia sobrevive a recarga para el mismo operador y conversación. El servidor
+verifica pertenencia y vigencia al enviar. Audio pendiente sigue siendo sólo en memoria.
+
+Seguimiento usa números Andreani confirmados en preparaciones web, con enlace oficial
+www.andreani.com/envio/<numero>. Exportar etiquetas no prueba que haya seguimiento.
+Si no existe número registrado, se informa y no se inventa. El widget Web admite producto
+y seguimiento como texto/enlaces; el PDF requiere WhatsApp. Fuera de la ventana de 24 h
+desde el último mensaje entrante del cliente se ofrece Plantilla; dentro permanece oculta.
+
+Contrato BFF: GET /products, GET /commerce/orders y POST /commerce/prepare.
+Conserva sesión, permisos, responsable, Origin/CSRF, revisión e idempotencia del envío.
+Fuentes: lib/mensajeriaCommerce.js, lib/mensajeriaInvoiceSource.js y
+integrations/mensajeria/wordpress/fusion-herramientas-bridge. No cambia esquema ni bot.
+Rollback de esta ampliación restaura software sin restaurar bases ni cancelar mensajes:
+python3 /opt/fusion-inbox-share-release-20261007/remote_deploy.py rollback
+Respaldo: /opt/fusionbikes/backups/mensajeria-compartir-20261007.
+El puente puede permanecer como lectura o volver al ZIP 0.4.0 respaldado desde WordPress.
+IA WhatsApp y emisores POS/ARCA se conservan; la emisión sigue únicamente en la web.
+
+
+Publicación comercial verificada 2026-10-07: puente WordPress 0.5.0 actualizado y
+Herramientas recargado, ambos health correctos. Producto FB-70394 confirma contado
+ARS 4.450.000, stock y miniatura; buscador por nombre/SKU y preview comprobados en
+conversación propia. PDF autorizado existente leído y validado en memoria, rechazo de
+teléfono ajeno confirmado. Sin emisiones ni mensajes de prueba a clientes. IA, bot y
+configuración conservados. Envío completo probado sólo con transporte sintético en QA.
+Servicios de QA detenidos; rollback y respaldo conservan historial productivo.
+
+
+### Mensajería — ficha comercial y adjuntos directos (2026-10-07)
+
+El selector de productos filtra Solo con stock Sí/No sobre catálogo local antes del límite. Acciones con prefijo +. Elegir producto consulta el contrato comercial vigente con caché 60 s; comparte contado, cuotas 6/9/12/18/24 con redondeo público y envío gratis sólo según Master Control, sin modificarlo. Foto propia convertida a JPEG reducido se prepara como adjunto privado de WhatsApp; web conserva texto/enlace. Factura única del pedido elegido se agrega directamente al borrador; varios comprobantes requieren elegir uno. Se reemplaza el checkbox manual por validación exacta de teléfono y permisos en servidor. Nada se envía hasta Enviar. Publicación verificada.
+
+
+Ficha comercial publicada y verificada 2026-10-07: puente de lectura 0.5.1 y Herramientas
+activos. Comprobados SKU FB-47935, contado3200000, cuotas6/9/12/18/24 y fotoJPEG privada.
+Filtro de stock Sí/No y botones + operativos. Factura única directamente al borrador;
+varias requieren selección. Sin emisión ni mensajes de prueba a clientes reales.
+IA, bot y Master Control conservados. QA aislado cerrado. Si se revierte a la UI anterior,
+una foto JPEG todavía en borrador podría requerir adjuntarse nuevamente después de F5;
+texto e historial no se restauran ni se reenvían. Backup y rollback en README operativo.
+
+
+### Mensajería: pendientes y paneles (publicado 2026-10-08)
+
+Pendientes corresponde a chats abiertos con mensajes sin leer; Todas conserva los leídos. Confirmación explícita POST /read al mostrar historial visible al final, con límite de mensaje perteneciente al chat y contador conservador ante nuevas entradas. No cambia responsable, estado, revisión, orden ni IA. Perfil lector no consume pendientes. Separador de escritorio ajustable por arrastre/teclado con preferencia local por operador; móvil conserva panel completo. Publicado y verificado en producción. Importaciones históricas no generan ni retienen pendientes. Todas las reglas de ancho de escritorio incluyen las tres columnas.
+
+Preflight: IA 4819 deshabilitada, IA 2035 habilitada y chat web activo. Publicación preserva interruptores vigentes.
+
+Corrección publicada del bot: precio del catálogo sincronizado no equivale a contado.
+Variantes/simples se verifican con commercial-products de Master Control antes de mostrar
+importes o filtrar presupuesto; lotes25, límite75 y caché60s. Sin cotización no usar
+precio base, XML o Store API como respaldo. Datos de transferencia exclusivamente del
+gateway BACS activo de WooCommerce; nunca del texto del cliente o del modelo.
+API/worker usan la imagen corregida y .commercial.env privado con credenciales existentes
+de Woo, sólo para endpoints GET fijos. Master Control y outbox intactos. Respaldo/rollback
+preservan bases vivas, colas e interruptores. Permisos de supervisión no dependen del bot.
+
+Consultas de pago con productos homónimos sólo usan la URL de la última respuesta del bot;
+una aclaración posterior invalida enlaces anteriores y conserva la selección pendiente.
+
+Publicación 2026-10-08 verificada: API y worker usan fusion-chatbot-inbox-pending:20261007;
+salud de bot/Herramientas correcta. Interruptores preservados: 2035 habilitada y 4819
+deshabilitada. Matías administrador general y supervisor. IA y operación muestra causas
+de inactividad; pausar/tomar un chat mantiene precedencia sobre la habilitación del número.
+Credenciales comerciales en .commercial.env privado, fuera del código y de la imagen;
+sólo GET a cotizaciones Master Control y gateway BACS. Catálogo y stock siguen locales,
+cotizaciones con caché 60 s. Rollback respaldado en
+/opt/fusionbikes/backups/mensajeria-pendientes-20261007; ejecutar
+python3 /opt/fusion-inbox-pending-release-20261007/remote_deploy.py rollback.
+La reversión restaura software, sin restaurar bases vivas ni reenviar mensajes.
+
+
+## Recuperación de facturas por IA (publicado 2026-10-08)
+
+El bot pide el número de pedido antes de derivar. Sólo el remitente autenticado de
+WhatsApp permite recuperar automáticamente una factura única autorizada de producción
+del puente GET messaging-orders, que valida el teléfono del pedido. PDF privado validado
+y encolado en la transacción/revisión existente; sin emitir ni modificar comprobantes.
+Chat web, varias facturas, ausencia o error pasan a posventa. Tres búsquedas por conversación
+en una hora, reservadas en auditoría antes del GET aunque luego cambie la revisión; nunca
+usar teléfono escrito por cliente como autorización. Toma humana, pausa,
+ventana y nueva entrada mantienen precedencia. Publicado y verificado. API y worker usan fusion-chatbot-invoice-recovery:20261008; outbox conserva su contenedor. Configuración e interruptores conservados.
+
+Respaldo: /opt/fusionbikes/backups/mensajeria-facturas-ia-20261008. Reversión de software:
+python3 /opt/fusion-invoice-release-20261008/remote_release.py rollback.
+Sin restaurar bases de datos ni reenviar historial. Conversaciones ya derivadas requieren
+Reanudar IA por el operador; esta publicación no las reactiva automáticamente.
+
+
+## Seguimiento por IA (publicado 2026-10-08)
+
+WhatsApp pide pedido y verifica pertenencia por remitente autenticado mediante GET
+messaging-orders. Devuelve exclusivamente el código Andreani registrado y enlace fijo
+https://www.andreani.com/envio/<codigo>. Ausencia de código no prueba despacho ni fecha.
+Web, identidad no verificable y errores pasan a posventa; reservas atómicas de hasta tres
+consultas de seguimiento por hora/conversación, independientes de facturas. Conserva
+revisión, toma humana y cola existente. No cambia pedidos ni realiza consultas periódicas.
+Publicado y verificado. API y worker usan fusion-chatbot-tracking:20261008; outbox, configuración e interruptores conservados.
+
+Pagos/CBU conservan prioridad aunque incluyan número de pedido. El contexto automático
+se limita a la última respuesta de factura/seguimiento; una referencia nueva inválida
+requiere corregir el pedido y nunca reutiliza uno anterior.
+
+Respaldo de seguimiento: /opt/fusionbikes/backups/mensajeria-seguimiento-ia-20261008.
+Rollback sólo de software: python3 /opt/fusion-tracking-release-20261008/remote_release.py rollback.
+No restaurar bases vivas ni reenviar mensajes. Si el chat ya fue derivado, requiere
+Reanudar IA por el operador; la actualización no reactiva conversaciones pausadas.
+
+
+## Lectura de fotos y audios (activada 2026-10-08)
+
+Integración OpenAI opt-in, inicialmente sin clave, lectores apagados y presupuesto cero.
+Configuración desde Mensajería / IA y operación / Configurar fotos y audios; sólo
+administrador general con supervisión. Clave en /opt/fusion-chatbot/private-ai, permisos
+privados, montaje API escritura y worker lectura. Nunca en respuestas, auditoría o imagen.
+Archivos nuevos WhatsApp, IA habilitada y conversación libre; conserva prioridad humana,
+revisión, idempotencia y ventana existente. Audio máximo 5 minutos; imagen normalizada
+a JPEG hasta 1280 px. Audio entra en reglas comerciales verificadas; documentos/comprobantes
+visuales van a posventa sin confirmar pagos. Texto y adjunto original se conservan; lectura
+automática separada y visible al operador. Web conserva texto. No se reprocesa historial.
+Reserva mensual atómica de USD 0,05 por mensaje antes del proveedor y hasta 12 archivos/hora/chat. Audio conserva la reserva preventiva hasta calibrar facturación; fotos liquidan usage válido con tarifa fija verificada.
+Intentos ambiguos no se repiten automáticamente y conservan reserva. Configuración externa
+se aplica al siguiente archivo; cambios durante procesamiento cancelan la respuesta pendiente.
+Publicada inicialmente apagada; configuración completada el 2026-10-08. Clave de proyecto creada mediante OpenAI Developers y guardada por canal privado. Ambos lectores activados, con presupuesto preventivo mensual de USD 50 elegido por el usuario. Acceso a ambos modelos y procesamiento real verificados con una imagen dibujada y una voz sintética en español (OGG/Opus); no se usaron archivos de clientes ni se enviaron mensajes de prueba. Dos solicitudes de inferencia diagnósticas, fuera del contador de mensajes; sin reproducción de historial. El tope de la aplicación no configura el límite de facturación de OpenAI; no se ha verificado un límite duro en el proveedor. API y worker usan fusion-chatbot-multimedia:20261008; outbox e interruptores existentes conservados. Pantalla responsive comprobada en 320/390/768/1440 y permisos administrativos verificados.
+
+Respaldo multimedia: /opt/fusionbikes/backups/mensajeria-multimedia-20261008.
+Rollback sólo de software: python3 /opt/fusion-multimedia-release-20261008/remote_release.py rollback.
+La reversión conserva historial, colas, tabla aditiva y directorio privado; no reenvía archivos.
+No se realizaron consultas pagas ni se enviaron adjuntos de clientes durante la publicación.
+
+
+## Respuestas puntuales y reenvíos en Mensajería (2026-10-08)
+
+Menú por mensaje con Responder y Reenviar. Responder conserva borrador/cita por chat;
+WhatsApp usa context.message_id nativo. Web transmite una cita textual por su contrato
+actual. Las citas entrantes de Meta se resuelven sólo dentro de la misma conversación.
+Audio muestra reproductor sin enlace redundante con extensión. Notas privadas y mensajes
+no confirmados o eliminados no se pueden citar ni reenviar.
+
+Reenvío manual a una conversación existente, con destinatario y línea visibles. Si está
+libre, Tomar y reenviar asigna al agente y pausa IA; nunca toma un chat de otro agente.
+Ventanilla de 24 horas y permisos revalidados por servidor. Contenido original se obtiene
+del historial del servidor; copia de archivo ligada a destino, MIME validado y cuota
+128 MiB/hora por agente serializada con el mismo bloqueo que las subidas. Web sólo texto.
+El reenvío se entrega como mensaje nuevo; Reenviado es una etiqueta interna de la bandeja.
+
+Idempotencia compartida con los envíos normales y sin reintento ambiguo. Outbox bloquea
+origen y destino en orden estable y revalida disponibilidad/versión del original antes
+del transporte; revocación/edición anterior al envío cancela el reenvío. Las respuestas
+puntuales también revalidan disponibilidad del original. No reproduce historial ni cambia
+roles, interruptores IA, integración comercial o la configuración privada multimedia.
+
+Paquete: /opt/fusion-message-actions-release-20261008. Respaldo de software:
+/opt/fusionbikes/backups/mensajeria-message-actions-20261008.
+Reversión: python3 /opt/fusion-message-actions-release-20261008/remote_release.py rollback.
+API, worker y outbox deben usar la misma imagen fusion-chatbot-message-actions:20261008.
+Conservar bases e historial; nunca restaurar datos ni reenviar mensajes. La barrera de
+despliegue usa un contenedor temporal de la imagen base, independiente de API, y un bloqueo
+de outbox para esperar cero envíos activos. Rollback detiene también API/worker antes de
+liberar la barrera y cancela exclusivamente citas/reenvíos nuevos todavía queued, con
+motivo software_rollback_reference, para que el sender anterior no los envíe sin contexto.
+Sent/sending/unknown e historial se conservan; el operador puede revisar las cancelaciones.
+
+
+## Vendedor y continuidad multimodal (paquete 2026-10-08)
+
+Vendedor OpenAI activado por autorización del propietario el 2026-10-08, con tope de
+conversación de US$50 mensuales independiente de los US$50 para fotos y audios.
+La instalación sin configuración conserva el valor por defecto apagado/US$0. Configuración de
+administrador general con supervisión en Mensajería / IA y operación / Configurar OpenAI.
+Modelo GPT-6.1 Sol; Responses sin almacenamiento, herramientas acotadas de sólo lectura.
+Catálogo local fresco para identidad/stock; precios y cuotas exclusivamente de cotización
+web. Bloques comerciales construidos por servidor, datos anteriores no son cotizaciones.
+Factura/seguimiento conservan validación de pedido y teléfono autenticado. No emite ni cobra.
+Reserva mensual atómica en sales_ai_calls, limitada por mensaje/etapa, sin reintento ambiguo;
+cada generación ligada al external_id/revisión original. Pausa, toma humana e interruptores
+prevalecen. No se reactiva historial ni se cambian roles ni precios Master Control.
+
+Lector visual GPT-6.1 Sol compara la foto con nombres del catálogo de bicicletas y propone
+candidatos que el cliente debe confirmar; nunca prueba versión exacta por apariencia.
+Reserva preventiva US$0,25/foto; US$0,05/audio. Presupuesto multimedia existente conservado.
+Agrupa hasta cuatro textos consecutivos con el adjunto inmediatamente anterior, máximo
+90 segundos, mismo chat y sin intervención humana o respuesta entregada en medio. No lee
+adjuntos revocados/editados. Pedido explícito de asesor evita toda solicitud paga.
+Confirmaciones de marca/modelo mantienen filtros y aceptan seguimientos cortos de talle.
+
+Paquete: /opt/fusion-sales-ai-release-20261008. Imagen fusion-chatbot-sales-ai:20261008
+para API/worker/outbox. Respaldo /opt/fusionbikes/backups/mensajeria-sales-ai-20261008.
+Rollback de software con remote_release.py rollback; conserva bases, historial y colas.
+Aprendizaje automático de agentes y voz de salida permanecen pendientes, no publicados
+por este paquete. No confundir transcripción entrante con generación de voz.
+
+
+Voz personalizada (2026-10-08): las grabaciones de muestra y consentimiento se validaron y quedaron en el directorio privado voice-onboarding-20261008, fuera del repositorio y de archivos públicos. OpenAI rechazó el alta de consentimiento porque la organización no tiene acceso al endpoint de voces personalizadas. No se creó una voz ni se activó salida de audio. El siguiente paso requiere habilitación del proveedor o una elección explícita de alternativa; no reutilizar otro proveedor sin autorización. La muestra de voz no es una fuente de precios ni de condiciones comerciales.
+
+
+Mensajería compacta (2026-10-08): Responder aparece directamente en la cabecera de cada
+mensaje elegible; el menú de opciones conserva Reenviar. Audios con reproductor sin
+enlace redundante al nombre del archivo. Editor y acciones compactos con puntero fino;
+controles táctiles mantienen al menos 44 px. Los botones se distribuyen según el ancho
+del editor y no sólo el de la ventana; se preservan advertencias, permisos y borradores.
+HTML referencia app.js y style.css con versión derivada de su contenido, y app.js hace
+lo mismo con message-actions.js: regenerar estas versiones en cada publicación que
+modifique esos archivos. El HTML se sirve no-cache; los assets podían quedar hasta
+cuatro horas en caché. Una pestaña ya abierta requiere recarga para usar la nueva UI.
+Respaldo estático: /opt/fusionbikes/backups/mensajeria-compacta-20261008. Reversión sólo de
+archivos de esta interfaz, sin reiniciar ni restaurar bases, colas o configuración IA.
 ## Mensajería profesional (2026-10-07)
 
 - Nueva bandeja `/herramientas/mensajeria/` en Node con sesión existente; conversaciones y adjuntos privados en PostgreSQL del bot. Proxy HMAC independiente y cola durable `outbox`; migraciones aditivas. Backup/rollback y contrato: `integrations/mensajeria/README.md`.
