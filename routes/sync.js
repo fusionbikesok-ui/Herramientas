@@ -3810,7 +3810,11 @@ export function syncRouter(db, cfg) {
         try { confs = JSON.parse(f.confirmaciones_json || '[]'); } catch { /* sin confirmaciones */ }
         let orden = null, ordenError = null;
         if (f.incidente_motivo && f.woo_confirmado && f.wc_order_id) {
-          try { orden = (await wooFetch(cfg.woo, `/orders/${f.wc_order_id}`))?.data ?? null; } catch (e) { ordenError = String(e.message).slice(0, 120); }
+          try { orden = (await wooFetch(cfg.woo, `/orders/${f.wc_order_id}`))?.data ?? null; } catch (e) {
+            // Al usuario, un mensaje humano; el detalle técnico queda solo en el log.
+            ordenError = /\b404\b/.test(String(e.message)) ? 'El pedido ya no existe en la web.' : 'No se pudo consultar el pedido en la web ahora. Reintentá en unos minutos.';
+            try { logSync(db, { direccion: 'ml_wc', sku: f.sku, clave: f.ml_order_id, estado: 'error', error: `Barrera: no se pudo leer el pedido ${f.wc_order_id}: ${e.message}`.slice(0, 400) }); } catch { /* solo log */ }
+          }
         }
         const out = lineas.map((l) => {
           const confirmada = confs.some((c) => c.idx === l.idx);

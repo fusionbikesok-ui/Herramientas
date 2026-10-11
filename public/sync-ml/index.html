@@ -377,7 +377,7 @@ function bodyBarr(){
       return '<div class="lin"><span>'+esc(l.nombre||('Línea '+(l.idx+1)))+' × '+n(l.cantidad)+(l.reduced_stock!=null?' · Woo descontó '+n(l.reduced_stock):'')+'</span>'+accion+'</div>'+f;
     }).join('');
     return '<div class="barr"><div class="cab"><b>'+esc(b.sku)+'</b><span class="num">venta ML '+esc(b.ml_order_id)+(b.wc_order_id?' · pedido web #'+esc(b.wc_order_id):' · pedido web sin crear')+'</span><span class="tag '+(bloq?'bloq':'lib')+'">'+(bloq?'Esperando a Woo':'Por corregir en ML')+'</span><span class="when">'+hace(b.creado_en)+'</span></div>'
-      +(mot?'<p class="mot">'+esc(mot)+'</p>':'')+(b.orden_error?'<p class="mot">No se pudo leer el pedido en Woo: '+esc(b.orden_error)+'</p>':'')+lin+'</div>';
+      +(mot?'<p class="mot">'+esc(mot)+'</p>':'')+(b.orden_error?'<p class="mot">'+esc(b.orden_error)+'</p>':'')+lin+'</div>';
   }).join('');
   return h;
 }
@@ -628,7 +628,7 @@ document.addEventListener('click',function(e){
   if(d.run){cerrarMenu();correr(d.run);return}
   if(t.id==='refresh'||d.reload!==undefined){cargar();return}
   if(t.id==='bandx'){$('#band').hidden=true;return}
-  if(d.k){open.has(d.k)?open.delete(d.k):open.add(d.k);renderInc();return}
+  if(d.k){open.has(d.k)?open.delete(d.k):open.add(d.k);renderInc();var cab=document.getElementById('ih-'+d.k);if(cab)cab.focus();return}
   if(d.frTodas!==undefined){
     var ids=frenadas.map(function(p){return p.item_id}).filter(Boolean);
     if(selFr.size===ids.length)selFr.clear();else ids.forEach(function(x){selFr.add(x)});
