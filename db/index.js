@@ -938,6 +938,39 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedidos_datos_ml_101')").run();
     })();
   }
+  const gestionPedidoItemsMlKeyMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='gestion_pedido_items_ml_key_122'").get();
+  if (!gestionPedidoItemsMlKeyMigration) {
+    db.transaction(() => {
+      // La columna puede existir ya (bases que la crearon en línea): en ese caso solo se registra.
+      const columnas = db.prepare('PRAGMA table_info(gestion_pedido_items)').all();
+      if (!columnas.some((c) => c.name === 'ml_key')) {
+        db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '122_gestion_pedido_items_ml_key.sql'), 'utf8'));
+      }
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('gestion_pedido_items_ml_key_122')").run();
+    })();
+  }
+  const identidadOverrideContradiccionMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_override_contradiccion_123'").get();
+  if (!identidadOverrideContradiccionMigration) {
+    db.transaction(() => {
+      const columnas = db.prepare('PRAGMA table_info(identidad_decisiones)').all().map((c) => c.name);
+      if (columnas.length && !columnas.includes('override_contradiccion')) db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '123_identidad_override_contradiccion.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_override_contradiccion_123')").run();
+    })();
+  }
+  const identidadPausasMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_pausas_124'").get();
+  if (!identidadPausasMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '124_identidad_pausas.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_pausas_124')").run();
+    })();
+  }
+  const identidadPausasBloqueadaMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='identidad_pausas_125'").get();
+  if (!identidadPausasBloqueadaMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '125_identidad_pausas_bloqueada_impacto.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_pausas_125')").run();
+    })();
+  }
   const devolucionesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_devoluciones_102'").get();
   if (!devolucionesMigration) {
     db.transaction(() => {

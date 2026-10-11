@@ -48,7 +48,8 @@ Una pantalla, 4 pestañas.
 1. **Casos** (por defecto). La cola a la izquierda y el detalle a la derecha. Filtros: Abiertos, Salteados, En
    intervención, Pausadas.
 2. **Vínculos.** Buscador por producto Woo o publicación ML, con los filtros del Matcher. Muestra el vínculo vigente,
-   las hermanas por SKU y por GTIN, las notas y el orden de identificadores. Permite revincular con la misma matriz y
+   las hermanas por SKU y por GTIN, las notas y el orden de identificadores. Agregar una nota es una escritura
+   (`matcher:write`): un usuario de solo lectura no puede dejar notas (403 `FORBIDDEN`). Permite revincular con la misma matriz y
    revertir un "no sincronizar" (según R3). Incluye la sección **Códigos en conflicto** (por GTIN).
 3. **Ejecución.** Operaciones en ML: encolada → aplicada, fallida o frenada. Un contador muestra las fallidas.
    Reintentar y confirmar impacto son solo de admin.
@@ -67,7 +68,9 @@ Una pantalla, 4 pestañas.
   item y variación, que la orden normalizada ya conoce en `lib/modelos/ordenVenta.js:53-65`) a
   `gestion_pedido_items` con una migración, y se completa una vez con la reconciliación de 30 días existente. El cron
   de 48 h la mantiene al día.
-- Saltear (`s`) manda el caso al final y lo marca "salteado por X". No resuelve nada.
+- Saltear (`s`) manda el caso al final y lo marca "salteado por X". No resuelve nada. Saltear no es una decisión, así que
+  NO invalida un Vincular abierto por otro usuario (no hay `VERSION_CONFLICT`); es intencional. El conflicto de versión
+  solo salta cuando cambia el estado que importa para vincular.
 
 ### R2. Detalle y matriz por atributo
 
@@ -89,6 +92,7 @@ Una pantalla, 4 pestañas.
 - El estado nunca se indica solo con color: siempre va con ícono y texto ("Difiere", "Falta", "Coincide").
 - SKU igual con GTIN o título contradictorio se rotula "leve: sigue vendiendo" (R2 de la Fase C).
 - Candidatos sin preselección. Elegir uno (1/2/3) recalcula la matriz.
+- **Decisión (2026-10-09, coordinador):** un GTIN distinto es ámbar "Difiere" con la marca `leve` en la respuesta; no es veto, porque el rojo sale solo de `contradiccionDeClave`, que no compara GTIN.
 
 ### R3. Acciones
 
@@ -102,6 +106,13 @@ Una pantalla, 4 pestañas.
 | Destrabar | Solo José | **Contrato nuevo:** hoy no hay forma de sacar un caso de intervención sin reintentar una operación (`lib/identidadProductos.js:1688-1713`). Se agrega la transición `intervencion → pendiente`, con motivo y evento en el historial. Al pasar a pendiente, el caso se reevalúa con las reglas de la Fase C: si sigue habiendo contradicción, la protección sigue frenando. |
 | Reintentar / confirmar impacto | Solo José | Pestaña Ejecución. |
 | Liberar retenida | Operador con rol Ventas o Supervisor, y José | Igual que hoy (`routes/guardiaMl.js:161-167`). Motivo obligatorio. Si la causa sigue, avisa "Se va a volver a retener". |
+
+**Decisión de contrato (2026-10-09, coordinador): modelo de "no sincronizar".** Marca separada de `omitir`, que no se toca; las ventas quedan siempre retenidas.
+- Se guarda como decisión `no_sincronizar` en `identidad_decisiones`, con la variante (a/b/c) y el motivo en `detalle_json`.
+- La operación durable `pausar` existe solo en la variante **(b)**: alcance de item completo, exige confirmar el impacto en las hermanas.
+- Las variantes **(a)** y **(c)** son solo la marca. Su deshacer es una decisión compensatoria; en (c) es solo admin, validado en servidor (403).
+- En **(b)**, el deshacer solo vale con la op pendiente o en shadow; si no, `INVALID_STATE`.
+- **Implementación (revisada por el coordinador):** la marca es un `omitir` en `sku_matcher_decisiones` con `origen` `no_sincronizar_a|b|c` (link de pago: `link_de_pago`); el motivo y la variante van al historial. La variante (b) usa la tabla `identidad_pausas` (migración 124) en vez de ampliar `identidad_operaciones`.
 
 **Variante (b), pausar en ML.** La pausa es del ítem entero, así que afecta a todas sus variaciones
 (`lib/matcherPush.js:203-219`). Antes de pausar se muestra el alcance ("pausa también estas N variaciones") y se pide
@@ -144,11 +155,11 @@ errores quedan fijos hasta resolverse; no son toasts.
 | `INVALID_INPUT` | Falta completar un dato (por ejemplo, el motivo). Revisá lo marcado. |
 | `omitir_requiere_override` | Esta publicación está en "no sincronizar". Quitalo antes de vincular. |
 | `VERSION_CONFLICT` / `EVIDENCE_CONFLICT` | Alguien cambió este caso. Se vuelve a cargar con los datos nuevos antes de ofrecer "Aplicar mi decisión". |
-| `INVALID_STATE` | Este caso no admite esa acción en su estado actual. |
+| `INVALID_STATE` (409) | Este caso no admite esa acción en su estado actual. |
 | `contradiccion_titulo` | No se puede vincular: difiere {campos}. Lo confirma José. |
 | `SIBLING_IMPACT_CONFIRMATION_REQUIRED` | Esto cambia también {n} publicaciones hermanas. ¿Seguimos? |
-| `SIN_CAMBIO_SKU` | Activa: ML ya tiene este SKU, no hay nada que cambiar. Pausada: Vínculo actualizado, ML ya tenía este SKU. |
-| `OPERACION_DUPLICADA` (400) | Ya se mandó este cambio. Mirá su estado en Ejecución. |
+| `SIN_CAMBIO_SKU` (409) | Activa: ML ya tiene este SKU, no hay nada que cambiar. Pausada: Vínculo actualizado, ML ya tenía este SKU. |
+| `OPERACION_DUPLICADA` (409, con `operacion_id`) | Ya se mandó este cambio. Mirá su estado en Ejecución. |
 | 403 | Esto lo hace José. |
 | Red | Sin conexión. No se guardó nada. |
 | Operación encolada / aplicada / fallida / frenada | En cola para ML / Aplicada en ML / ML la rechazó: {motivo}. Reintenta José. / Frenada: {regla}. Stock en 0 hasta resolver. |
@@ -188,7 +199,7 @@ inventario como checklist: cada acción vieja tiene su equivalente o está desca
 11. Las pantallas viejas redirigen y ninguna acción del inventario queda sin equivalente.
 12. Recorrido E2E de teclado (con operador y con admin): foco en el primer caso → `2` → `d` → `f` → `h`/Esc →
     Enter (encolada) → `z` → `s` → `n` sin motivo da error y con motivo guarda → caso rojo: Enter no hace nada y
-    como admin "Confirmar igual" exige motivo → `/` y `?` → hermanas: modal, Tab, Esc → Retenidas: liberar →
+    como admin "Confirmar igual" exige motivo → `/` y `?` → hermanas: confirmación en la tarjeta, Tab, Esc (vuelve) → Retenidas: liberar →
     sin red: banner y acciones bloqueadas → 360 px.
 
 ## Fuera de alcance

@@ -162,4 +162,25 @@ describe('scripts/qa/snapshot-anonimizado', () => {
     await expect(generarSnapshot(ORIGEN, DESTINO, { claveQa: CLAVE })).rejects.toThrow(/ya existe/);
     expect(fs.readFileSync(DESTINO, 'utf8')).toBe('no tocar');
   });
+  it('fuerza la barrera de escrituras remotas: identidad_config queda en shadow/0/sin canario y sin pausas pendientes', () => {
+    const db = openDb(ORIGEN);
+    try {
+      const ahora = new Date().toISOString();
+      db.prepare(`UPDATE identidad_config SET modo='enforced', escrituras_remotas_habilitadas=1, canario_ml_key='MLA123,MLA456', lote_max=2 WHERE id=1`).run();
+      db.prepare(`INSERT INTO identidad_pausas (operation_id, ml_key, item_id, motivo, estado, creada_por, creada_en, actualizada_en)
+                  VALUES ('op-1', 'MLA123', 'MLA123', 'test', 'pendiente', 'test', ?, ?)`).run(ahora, ahora);
+      anonimizarBase(db, { claveQa: CLAVE });
+      expect(db.prepare('SELECT modo, escrituras_remotas_habilitadas, canario_ml_key, lote_max FROM identidad_config WHERE id=1').get())
+        .toEqual({ modo: 'shadow', escrituras_remotas_habilitadas: 0, canario_ml_key: null, lote_max: 1 });
+      expect(db.prepare("SELECT estado FROM identidad_pausas WHERE operation_id='op-1'").get().estado).toBe('cancelada');
+    } finally { db.close(); }
+  });
+
+  it('una base sin tabla identidad_config no rompe la anonimización', () => {
+    const db = openDb(ORIGEN);
+    try {
+      db.exec('DROP TABLE identidad_config');
+      expect(() => anonimizarBase(db, { claveQa: CLAVE })).not.toThrow();
+    } finally { db.close(); }
+  });
 });
