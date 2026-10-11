@@ -229,7 +229,7 @@
     nsOpId: null, nsVariante: null, nsConfirm: false, nsEnviando: false,
     deshacer: null, deshacerTimer: null,
     opIds: {}, dlgActivo: null, dlgDisparador: null,
-    ejecEstados: null, ejecPoll: null, ejecError: null, ejecMsgs: {}, busyOp: null,
+    ejecEstados: null, ejecPoll: null, ejecError: null, ejecMsgs: {}, busyOp: null, pausasAviso: null,
     ejecQ: '', ejecSnap: null, ejecTimer: null, ejecAbiertas: { completadas: false, canceladas: false }, ejecMasBusy: null, ejecMasError: null,
     retenidas: null, retError: null, retAbierta: null, retAviso: {}, retBloqueo: {},
     vincResultados: null, vincQ: '', vincPanel: null, identMsg: null,
@@ -1935,6 +1935,28 @@
       + (resto.length ? '<details class="ui-mas"><summary>y ' + resto.length + ' más</summary><ul class="cv-lista-hermanas">' + resto.map(li).join('') + '</ul></details>' : '');
   }
   function pausaEstadoTxt(p) { return p.estado === 'fallida' ? 'Pausa en ML fallida' : 'Pausa en ML pendiente'; }
+  // Pausa que espera confirmación del impacto (admin). Mismo chip y texto que las operaciones bloqueada_impacto.
+  var TXT_ESPERA_PAUSA = 'La pausa de otras variaciones necesita confirmación de un admin.';
+  function pausaDe(id) {
+    return ((S.ejec && S.ejec.pausas) || []).find(function (p) { return p.id === id; }) || null;
+  }
+  function nPausaImpacto(p) {
+    var lista = Array.isArray(p.hermanas_activas) ? p.hermanas_activas : [];
+    return p.n_hermanas_activas != null ? (Number(p.n_hermanas_activas) || 0) : lista.length;
+  }
+  // Aviso de Ejecución para las pausas (confirmación, errores 403/404/409/422). Siempre presente para tener dónde enfocar.
+  function pausasAvisoHtml() {
+    var a = S.pausasAviso; if (!a) return '';
+    return '<div id="pausas-aviso" tabindex="-1" class="ui-resumen cv-ejec-msg' + (a.error ? ' cv-ejec-msg--error' : '') + '" role="' + (a.error ? 'alert' : 'status') + '">'
+      + (a.error ? '✗ ' : '') + esc(a.texto) + '</div>';
+  }
+  // Botón "Pausar las N": solo admin con escritura (≥768 px). En celular o solo-consulta no se ofrece.
+  function pausaAccionesHtml(p) {
+    if (!(S.isAdmin && puedeEscribir())) return '';
+    var enviando = S.busy === 'confirmar-pausa' && S.busyOp === 'pausa:' + p.id;
+    return '<div class="cv-ejec-acciones"><button type="button" class="ui-btn" data-accion="confirmar-pausa" data-pausa="' + p.id + '" aria-disabled="' + !!S.busy + '">'
+      + (enviando ? 'Enviando…' : 'Pausar las ' + nPausaImpacto(p)) + '</button></div>';
+  }
 
   function renderEjecucion() {
     var e = S.ejec; if (!e) return;
@@ -1944,7 +1966,7 @@
     var pausas = pausasVisibles(e);
     var frenadas = ops.filter(function (o) { return estOp(o) === 'frenada'; }).length;
     var encoladas = ops.filter(function (o) { return estOp(o) === 'encolada'; }).length
-      + pausas.filter(function (p) { return p.estado !== 'fallida'; }).length;
+      + pausas.filter(function (p) { return p.estado !== 'fallida' && p.estado !== 'bloqueada_impacto'; }).length;
     $('#ejec-cabecera').innerHTML = '<div class="cv-cabecera-ejec">'
       + (fall > 0 ? '<span class="cv-contador cv-contador--critico"><span aria-hidden="true">✗</span> ' + cuenta(fall, 'fallida', 'fallidas') + '</span>' : '')
       + '<span class="ui-resumen"><span class="cv-frenadas">⏸ ' + cuenta(frenadas, 'frenada', 'frenadas') + '</span> · ↻ ' + encoladas + ' en cola'
@@ -1958,9 +1980,12 @@
           var clave = String(p.ml_key || '').replace(/\|.*$/, '');
           var titulo = p.titulo || p.nombre_canonico || '';
           var vars = Array.isArray(p.variaciones) ? p.variaciones : [];
+          var espera = p.estado === 'bloqueada_impacto';
+          var expl = TXT_ESPERA_PAUSA + (S.isAdmin && !puedeEscribir() ? ' Confirmala desde una PC.' : '');
           return '<p class="ui-resumen">' + (titulo ? '<strong>' + esc(titulo) + '</strong> · <span class="ui-id">' + esc(clave) + '</span>' : esc(clave))
-            + ' · ' + esc(pausaEstadoTxt(p)) + ' · ' + esc(motivoTxt(p.motivo))
+            + ' · ' + (espera ? chipEstado(p.estado, p) : esc(pausaEstadoTxt(p))) + ' · ' + esc(motivoTxt(p.motivo))
             + (p.impacto_hermanas > 0 ? ' · afecta ' + cuenta(p.impacto_hermanas, 'variación', 'variaciones') : '') + '</p>'
+            + (espera ? '<p class="ui-resumen">' + esc(expl) + '</p>' + pausaAccionesHtml(p) : '')
             + (vars.length ? pausaVariacionesHtml(vars) : '');
         }).join('') + '</section>'
       : '';
@@ -1969,7 +1994,7 @@
       ? '<p class="ui-resumen">Sin pendientes que coincidan con «' + esc(S.ejecQ) + '».</p>'
       : '<p class="ui-resumen cv-ejec-vacio"><span aria-hidden="true">✓</span> Nada pendiente</p>';
     var secciones = nuevo ? seccionEjecHtml('completadas', 'Completadas') + seccionEjecHtml('canceladas', 'Canceladas') : '';
-    $('#ejec-cuerpo').innerHTML = bloquePausas + (filas || (pausas.length ? '' : vacio)) + secciones;
+    $('#ejec-cuerpo').innerHTML = pausasAvisoHtml() + bloquePausas + (filas || (pausas.length ? '' : vacio)) + secciones;
     if (S.focoPendiente) {
       // Botón de la fila si sigue, si no la fila, si no el encabezado de Ejecución.
       var fp = S.focoPendiente; S.focoPendiente = null;
@@ -2035,11 +2060,23 @@
     if (Array.isArray(o.variaciones) && o.variaciones.length) return o.variaciones;
     return (S.detalle && S.detalle.caso && S.detalle.caso.id === o.caso_id && S.detalle.hermanas_item) || [];
   }
-  function pintarImpacto(id) {
+  // El diálogo sirve a dos cosas: una operación bloqueada_impacto (ref 'op:ID') o una pausa en espera (ref 'pausa:ID').
+  // Mismo texto, misma lista y mismo botón; lo que cambia es de dónde sale la lista y a qué endpoint se confirma.
+  function datosImpacto(ref) {
+    var pr = String(ref).split(':'); var id = Number(pr[1]);
+    if (pr[0] === 'pausa') {
+      var p = pausaDe(id); if (!p) return null;
+      return { n: nPausaImpacto(p), lista: Array.isArray(p.hermanas_activas) ? p.hermanas_activas : [] };
+    }
     var o = ((S.ejec && S.ejec.operaciones) || []).find(function (x) { return x.id === id; });
-    if (!o) return;
-    var n = Number(o.impacto_hermanas) || 0;
-    var lista = listaImpacto(o);
+    if (!o) return null;
+    return { n: Number(o.impacto_hermanas) || 0, lista: listaImpacto(o) };
+  }
+  function pintarImpacto(ref) {
+    var d = datosImpacto(ref);
+    if (!d) return;
+    var n = d.n;
+    var lista = d.lista;
     var sinLista = n > 0 && !lista.length;
     var MAX_IMP = 10;
     var cuerpo = '<p>Esto pausa ' + cuenta(n, 'variación', 'variaciones') + ' en ML' + (lista.length ? ':' : '.') + '</p>'
@@ -2048,27 +2085,69 @@
             + (h.status ? ' <span class="ui-label">' + esc(estadoMlTxt(h.status)) + '</span>' : '') + '</li>';
         }).join('') + (lista.length > MAX_IMP ? '<li class="ui-resumen">y ' + (lista.length - MAX_IMP) + ' más</li>' : '') + '</ul>' : '')
       + (sinLista ? '<div class="api-estado api-estado--error" role="alert"><p>No pudimos obtener la lista de variaciones.</p>'
-        + '<button type="button" class="btn-reintentar cv-btn-44" data-accion="dlg-imp-reintentar" data-op="' + id + '">Reintentar</button></div>' : '')
+        + '<button type="button" class="btn-reintentar cv-btn-44" data-accion="dlg-imp-reintentar" data-ref="' + esc(ref) + '">Reintentar</button></div>' : '')
       + '<p class="ui-resumen">La pausa va como operación en la cola de Identidad. Su resultado aparece en Ejecución.</p>';
     $('#dlg-imp-cuerpo').innerHTML = cuerpo;
     var ok = $('#dlg-imp-ok');
     ok.textContent = n === 1 ? 'Pausar la variación' : 'Pausar las ' + n;
-    ok.setAttribute('data-op', String(id));
+    ok.setAttribute('data-ref', String(ref));
     ok.setAttribute('aria-disabled', String(sinLista));
   }
   function abrirConfirmarImpacto(id) {
     var o = ((S.ejec && S.ejec.operaciones) || []).find(function (x) { return x.id === id; });
     if (!o) return;
-    pintarImpacto(id);
+    pintarImpacto('op:' + id);
     abrirDialogo($('#dlg-impacto'), $('[data-accion="confirmar-impacto"][data-op="' + id + '"]'), $('#dlg-imp-volver'));
   }
+  // Pausa en espera: mismo diálogo. El disparador se resuelve al cerrar (la pausa puede re-renderizarse).
+  function abrirConfirmarPausa(id) {
+    if (!pausaDe(id)) return;
+    pintarImpacto('pausa:' + id);
+    abrirDialogo($('#dlg-impacto'), function () { return $('[data-accion="confirmar-pausa"][data-pausa="' + id + '"]'); }, $('#dlg-imp-volver'));
+  }
   // Reintentar dentro del diálogo: recarga /ejecucion y vuelve a pintar la lista si el diálogo sigue abierto.
-  function reintentarListaImpacto(id) {
+  function reintentarListaImpacto(ref) {
     var cab = $('#dlg-imp-cuerpo');
     cab.setAttribute('aria-busy', 'true');
     cargarEjecucion().then(function () {
       cab.setAttribute('aria-busy', 'false');
-      if (!$('#dlg-impacto').hidden) pintarImpacto(id);
+      if (!$('#dlg-impacto').hidden) pintarImpacto(ref);
+    });
+  }
+
+  // Confirmar impacto de una pausa: POST /pausas/:id/confirmar-impacto con operation_id (un intento = un id).
+  // 201 y replay 200 son éxito. 403/404/409/422 se muestran con texto y foco en el aviso; 409 y 404 recargan Ejecución.
+  function confirmarPausa(id) {
+    var clave = 'confirmar-pausa:' + id;
+    if (S.busy || !puedeEscribir()) return;
+    if (!pausaDe(id)) return;
+    S.busy = 'confirmar-pausa'; S.busyOp = 'pausa:' + id; S.pausasAviso = null;
+    S.focoPendiente = '[data-accion="confirmar-pausa"][data-pausa="' + id + '"]';
+    renderEjecucion();
+    api('POST', '/pausas/' + id + '/confirmar-impacto', { operation_id: opIdPara(clave) }).then(function (r) {
+      S.busy = null; S.busyOp = null;
+      var d = r.data || {};
+      if (r.red) { S.pausasAviso = { error: true, texto: MSG_ERROR_SIN_RED }; anunciar(MSG_ERROR_SIN_RED, 'alerta'); S.focoPendiente = '#pausas-aviso'; return renderEjecucion(); }
+      if (r.ok) {
+        soltarOpId(clave);
+        S.pausasAviso = { texto: 'Pausa confirmada; la anterior quedó reemplazada.' };
+        anunciar(S.pausasAviso.texto, 'estado'); S.focoPendiente = '#pausas-aviso';
+        return cargarEjecucion();
+      }
+      var texto; var recargar = false;
+      if (r.status === 403) texto = MSG_SIN_PERMISO;
+      else if (r.status === 404) { texto = 'Esta pausa ya no existe. Se recargó Ejecución.'; recargar = true; }
+      else if (r.status === 409 && d.code === 'INVALID_STATE') { texto = 'Esta pausa ya no espera confirmación. Se recargó Ejecución.'; recargar = true; }
+      else if (r.status === 409 && d.code === 'OPERATION_ID_REUSED') { texto = 'Ese envío ya se usó para otra acción. Se recargó Ejecución: volvé a intentar.'; recargar = true; }
+      else if (r.status === 422) texto = d.error || 'Falta un dato para confirmar. Revisá la pausa y volvé a intentar.';
+      else texto = mensajeDe(r);
+      // Respuestas definitivas: el próximo intento lleva un operation_id nuevo.
+      soltarOpId(clave);
+      S.pausasAviso = { error: true, texto: texto };
+      anunciar(texto, 'alerta');
+      S.focoPendiente = '#pausas-aviso';
+      if (recargar) return cargarEjecucion();
+      renderEjecucion();
     });
   }
 
@@ -2673,13 +2752,14 @@
     $('#dlg-foto-cerrar').addEventListener('click', function () { cerrarDialogo(); });
     $('#dlg-imp-cuerpo').addEventListener('click', function (e) {
       var b = e.target.closest && e.target.closest('[data-accion="dlg-imp-reintentar"]');
-      if (b) reintentarListaImpacto(Number(b.getAttribute('data-op')));
+      if (b) reintentarListaImpacto(b.getAttribute('data-ref'));
     });
     $('#dlg-imp-ok').addEventListener('click', function () {
       if (this.getAttribute('aria-disabled') === 'true') return;
-      var id = Number(this.getAttribute('data-op'));
+      var ref = String(this.getAttribute('data-ref') || '');
       cerrarDialogo();
-      reintentarOp(id, 'confirmar-impacto');
+      if (ref.indexOf('pausa:') === 0) { confirmarPausa(Number(ref.slice(6))); return; }
+      reintentarOp(Number(ref.slice(3)), 'confirmar-impacto');
     });
     $('#ns-form').addEventListener('submit', nsEnviar);
     $('#ns-form').addEventListener('change', function (e) {
@@ -2821,6 +2901,7 @@
           break;
         case 'reintentar': reintentarOp(Number(el.getAttribute('data-op')), 'reintentar'); break;
         case 'confirmar-impacto': abrirConfirmarImpacto(Number(el.getAttribute('data-op'))); break;
+        case 'confirmar-pausa': abrirConfirmarPausa(Number(el.getAttribute('data-pausa'))); break;
         case 'liberar-abrir': S.retAbierta = el.getAttribute('data-orden'); renderRetenidas(); enfocarPorSelector('#ret-cuerpo textarea'); break;
         case 'liberar-cancelar':
           var ordCan = el.closest('[data-orden]').getAttribute('data-orden');
