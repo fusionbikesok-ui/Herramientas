@@ -1,5 +1,17 @@
 # Operación del VPS y despliegue
 
+## Operación vigente POS y ARCA — regreso a la web, 2026-10-06
+
+POS y Facturador ARCA vuelven a operar exclusivamente en fusionbikes.com.ar, por decisión del usuario. Herramientas ofrece accesos directos; los informes, directorio y etiquetas Andreani/corrector PDF permanecen en el VPS. Los enlaces antiguos ?fm_module=pos/facturador redirigen a la web. El gateway con FUSION_SALES_LOCATION=web bloquea las API antiguas de POS, facturación y envíos manuales del VPS; los enlaces PDF ya compartidos conservan su vigencia original.
+
+Antes de habilitar la web se deshabilitó fusion_arca_vps_enabled y production_enabled en la copia privada y FUSION_POS_VPS_ENABLED en gateway.env; se conciliaron 173 comprobantes, 14 series, 225 ventas ML y 6 registros WhatsApp sin diferencias fiscales. La factura nueva 173/pedido 70706 ya estaba archivada en Woo. Numeración confirmada con ARCA: punto 15 A1/B15/NC_A0/NC_B1; punto16 A7/B135/NC_A0/NC_B0. Ningún pendiente ni CAE solicitado durante las pruebas. El autor del recibo 173 es 0 en la tienda por el contrato del archivo original.
+
+En la web fusion_arca_vps_cutover queda vacío, respaldado junto con settings/ML en opciones fusion_return_web_20261006_*. La emisión manual del punto15 está habilitada y el usuario autorizó recuperar el automatismo ML del punto16. La automatización web por cambio de estado conserva su pausa. Certificados originales y conexión Meta for WooCommerce permanecen en la web. No se cambió Master Control ni precios.
+
+Servicios privados VPS fusion-arca-egress/source y timer outbox detenidos y deshabilitados. El backup fiscal diario conserva el archivo y los borradores/operaciones anteriores. Respaldo del regreso: /opt/fusion-management-migration/backups/return-web-20261006T184545Z. No volver a habilitar VPS ni restaurar una base antigua después de nuevas emisiones web sin otro corte y conciliación. Historial anterior de migración que contradiga esta sección queda superado.
+
+Verificación del regreso: 33 pruebas focalizadas de gateway, desvíos, bloqueo de API, POS, catálogo, transporte fiscal y entrega aprobadas en copia aislada sin credenciales productivas. UI real: WordPress WSFE y Padrón conectados; POS encuentra FB-70394 con stock1/contado ARS4.450.000 y ofrece 3/6/9/12/18/24 cuotas antes del cobro. Se retiró el producto de prueba, borrador web guardado vacío; no se creó un pedido ni se solicitó CAE de prueba. SQL confirmó ML enabled/automatic true, punto16, producción web true; tareas ML recientes completas. Informes VPS cargan 10.140 líneas y Andreani consulta el historial sincronizado. No se probó un envío real de correo/WhatsApp ni un cobro. Las 33 pruebas no constituyen la suite completa del proyecto.
+
 ## Hechos durables
 
 - Ajuste E1 contra 429 de ML desplegado el 2026-09-30: worker en imagen `fusion-plataforma:e1-ml429-20260930T031014Z` y gateway legado recargado en PM2; sin migraciones ni cambios de RPM. API y scheduler no se recrearon. Rollback e IDs de imagen constan en `docs/superpowers/evidence/e1/2026-09-30-E1-429-api-fix-deploy.md`. La medición Tarea 0 de 24–48 horas todavía decide la calibración y el inicio de PM-186; el despliegue no equivale a aceptación E1.
@@ -246,3 +258,316 @@ docker exec fusion-pg-pg-1 psql -U postgres -d plataforma -c \
   'select count(*), max(nombre) from core.schema_migrations'
 ```
 
+- 2026-10-05: Panel de ventas 1.1.0 trasladado a `/herramientas/gestion-vps/ventas/`, bajo sesión/admin vigente y acceso desde Gestión/Directorio. Consultas, filtros, gráficos y CSV calculados sólo en caché VPS `metrics.sqlite`; usa pedidos del directorio (dp=8 explícito y checkpoint versionado), catálogo analítico diario y devoluciones por ítem del puente 0.3.0. Dos timers de 15 min; desfase combinado hasta aproximadamente 30 min, fecha real y alertas visibles. Paridad exacta de 452 líneas de septiembre 2026 (295 pedidos, 497 unidades, ARS 346.975.881) y 23 líneas de marzo 2023 (22 pedidos, 33 unidades, ARS 1.441.599,80), incluidos productos eliminados/reembolsos sin asignar. CSV descargado idéntico byte a byte al origen. 22 pruebas Node, 10 Python, 87 aserciones PHP. Snapshot/generación evita páginas o CSV mezclados; no se exponen contactos en analítica. Respaldo inicial metrics-20261005T154728Z, final metrics-20261005T160049Z; importador precision-20261005T155348Z. Sólo se reinició gateway; Master Control, precios/checkout/emisores originales intactos. POS/ARCA/Taller siguen consulta y Chat productivo pendiente. Usuario agregó migrar generador Andreani funcional: auditoría del plugin 1.1.2 iniciada, aún no publicado en esta etapa.
+
+- 2026-10-05: Generador Andreani 1.1.2 migrado funcional a `/herramientas/gestion-vps/andreani/` y enlazado en Gestión. Lee pedidos/dimensiones locales (directorio shipping_fields_version=1, puente 0.3.1 sólo agrega virtual), guarda revisión versionada y exportación en SQLite privada del gateway; worker PHP interno reutiliza reglas y XLSX originales. Filtro inicial Todos, DNI/teléfono/domicilio y bultos revisables, domicilios/sucursales/Llega hoy, perfiles bicicleta categoría 62 editables. Sesión/admin actual + Origin + CSRF ligado a connect.sid; otras mutaciones continúan 423. 31 pruebas Node con roundtrip real aislado y 22 aserciones PHP; partes no editadas de plantilla idénticas, prueba real de consulta sin guardar/exportar pedidos reales. Descarga privada por autor 24 h, marcas permanentes. Estado nuevo en /var/lib/fusion-management-validation/andreani.sqlite (0700/umask0077), incluir en backups; código reconstruible en integrations/management-migration/andreani. No devuelve nuevas marcas a Woo: usar Herramientas para nuevas preparaciones, no operar el mismo pedido desde ambos generadores. No contratación/pagos ni envío de datos a Andreani; subir Excel en su portal. Backups inicial andreani-publish-20261005T165614Z y corrección andreani-publish-20261005T170119Z; sólo gateway reiniciado, Master Control intacto. Panel de ventas funcional; POS/ARCA/Taller aún consulta y Chat pendiente.
+
+- 2026-10-05: Andreani Observaciones ahora agrega automáticamente el título histórico del primer producto a enviar (primera línea con cantidad positiva y no virtual), conservando aclaraciones de entrega y sin duplicarlo al reabrir o guardar. Regla aplicada en lectura de borradores nuevos/existentes, normalización y nuevas exportaciones. No reescribe archivos ya generados ni modifica la tienda. 27 aserciones PHP y validación del XML de Observaciones en las hojas domicilio/Llega hoy; plantilla de sucursal conserva su esquema original sin columna de observaciones.
+
+- 2026-10-05: Corregida selección de bultos Andreani: borradores importados/locales con un único perfil predefinido conservaban other aunque el producto padre pertenecía a bicicletas. Perfil automático ahora se recalcula al abrir, guardar y exportar; no invalida por sí solo una revisión de destinatario existente. UI agrega Automático según los productos y conserva elecciones explícitas con profile_mode=fixed; medidas personalizadas, cajas guardadas y elecciones heredadas de varios bultos se respetan. Nuevos bultos automáticos llevan profile_mode=auto. Reglas configuradas: bicicletas 30×20×40 cm/9000 g; resto 12×25×30 cm/1000 g. 39 aserciones PHP, incluido Excel de borrador legado mal clasificado y casos manual/caja/múltiples. Tanda de 16 del 2026-10-05 15:03 ART: 11 bicicletas tenían perfil chico; se creó copia privada corregida modificando únicamente B–E (peso/medidas), sin cambiar destinatarios, referencias, observaciones, estados ni marcas originales. No se contrató/envió nada a Andreani. Archivo privado descargable 24 h para su autor, reporte en runtime andreani-package-correction.json.
+
+- 2026-10-05: Por cambio solicitado, Andreani Observaciones ahora usa Pedido #<número visible Woo> en lugar del título. Aplicado permanentemente en la aplicación VPS al abrir borradores nuevos/existentes, guardar y generar nuevos Excel. Retira el antiguo título automático sólo como segmento completo, preserva aclaraciones de entrega y no duplica el número; menciones de productos dentro de frases manuales se conservan. 42 aserciones PHP y verificación XML de Observaciones; clasificación automática de bultos y medidas manuales conservadas. Archivos ya generados permanecen históricos; plantilla de sucursal sigue sin columna de observaciones. Fuentes en integrations/management-migration/andreani/worker.php.
+
+- 2026-10-05: Corrector de etiquetas PDF publicado en Home/Gestión: `/herramientas/gestion-vps/corregir-etiquetas/`, requiere sesión administrador y Origin/CSRF. Entrada y salida editables (peso Gr, ancho/alto/largo Cm), enteros positivos hasta 6 dígitos en peso y 4 en medidas; valores habituales 9000/20/30/40 → 15000/25/70/150 y botón restaurar. Coincidencia conjunta exacta por página; no modifica pedidos ni registros de Andreani. Conserva fuentes/imágenes; ajusta ancho de líneas largas. Vista paginada, impresión al100% y descarga. Regla JSON X-Fusion-Pdf-Rule validada por gateway/Python; sin cabecera aplica habituales para clientes anteriores. Campos bloqueados durante corrección/impresión; cambiar invalida resultado. PDF en memoria sin historial,10MiB/300páginas. Worker loopback8213 autenticado, unidad `fusion-pdf-corrector.service`, fuente `/opt/fusion-pdf-corrector`; gateway `/opt/fusion-management-migration`, guía y pruebas en `integrations/management-migration/README-PDF.md`, pypdf6.10.0/PDF.js5.6.205 locales. Impresora física no probada. Actualización manual con backup /opt/fusion-management-migration/backups/pdf-manual-20261005T193419Z. Home, nginx y aplicación principal sin cambios.
+
+- 2026-10-05: Ranking del Panel de ventas publicado en /herramientas/gestion-vps/ventas/. Carga inicial de últimos 12 meses, períodos rápidos, rankings paginados de productos y marcas por unidades o importe, participación y selección de una marca a sus modelos; comparación de varias marcas y filtros conservados al cambiar de período, incluso sin movimientos. Sólo cambiaron metrics.html, assets/metrics.js y assets/metrics.css; backend, cálculo, caché, sesión y CSV existentes conservados. 13 pruebas Node aprobadas; revisión real de carga automática, septiembre 2026, marca a productos, comparación múltiple, SKU, orden, período vacío y recuperación de filtros; 390/768/1440 px sin desborde del documento y sin errores de consola. Exportador real con la consulta generada en navegador: FB-63080, Venzo, 3 líneas, ARS 2.400.510, igual al panel. Los 30 archivos de runtime fuera del alcance conservaron su hash, incluidos Andreani y el corrector PDF. Sin reiniciar servicios. Respaldo: /opt/fusion-management-migration/backups/ranking-20261005T193115Z-535c3e. Para revertir, restaurar únicamente los tres archivos originales de ese respaldo; fuentes en integrations/management-migration y prueba ranking.test.cjs.
+
+## Corte ARCA al VPS — 2026-10-05
+
+Emisión manual de producción habilitada en punto 15; origen detenido con bridge 0.4.0. Historial reconciliado: 172 comprobantes (+19), 14 series, 225 ventas ML y 6 WhatsApp; IDs/hashes y numeración ARCA iguales (A1/B14/NC_A0/NC_B1). Ninguna factura emitida en validación. Certificados de producción privados fuera del webroot; SOAP con TLS y egress restringido. Servicios fusion-arca-egress/source, outbox durable cada minuto y backup fiscal local diario (14 copias) activos. POS/Taller siguen consulta; ML/bulk y automáticos pendientes. Correo y WhatsApp manual disponibles desde la actualización del 2026-10-06. Manual de operación, contratos y rollback seguro: integrations/management-migration/arca/README-ARCA.md. Backup corte: /opt/fusion-management-migration/backups/arca-cutover-20261005T235059Z. No reactivar origen ni restaurar DB antigua después de emitir sin conciliar CAEs.
+
+Verificación ampliada del 2026-10-05: suite aislada de Gestión 44 aprobadas, 8 fallos y 1 omitida; los 8 fallos pertenecen a ranking.test.cjs (funciones de agrupación/fechas no exportadas), reproducidos al correr ese archivo solo. No se modificaron ranking ni métricas durante el corte ARCA; no afirmar suite global verde. Las 15 pruebas de gateway/catálogo/transporte fiscal y las pruebas nativas ARCA sí pasan. UI WSFE/Padrón y apertura real de PDF histórico verificadas; recepción idempotente del comprobante manual 11 sin pedido ni nuevas facturas aceptada en origen. Captura de escritorio sin desborde; el override de viewport del navegador no cambió su ancho efectivo de 1265px, por lo que no se afirma nueva prueba móvil.
+
+- 2026-10-06: POS VPS activado con puente seguro 0.2.0 en tienda. Catálogo/directorio locales y borrador SQLite por operador; checkout, precio final y pedido en origen, Master Control intacto. HMAC de cuerpo/tiempo, CSRF y operación idempotente; no liberar pedidos existentes. Recorrido FB-70394 ARS 4.450.000 comprobado hasta checkout, luego preparación liberada/tablero limpio; ningún pedido/pago/factura de prueba. 20 pruebas Node y controles PHP aprobados. ARCA continúa en producción punto15; restauradas sus rutas antes de activar POS. Presupuestos nuevos, conversión y cobros manuales siguen pendientes de traslado. Fuente y límites: integrations/management-migration/README-POS.md. Backup de activación pos-active-20261006T104541Z.
+
+Cierre POS 2026-10-06: respaldo diario privado ampliado con snapshot consistente pos.sqlite/configuración gateway y primera ejecución verificada; borrador limpio y operación de prueba liberada. Contraste de tarjetas corregido con variables del tema; confirmaciones internas permiten limpiar/liberar la preparación.
+
+- 2026-10-06: POS VPS 0.3.0 restaura comparación previa de cuotas, checkout completo con plan seleccionado y cobro manual/entrega delegados al POS original antes del facturador ARCA integrado. Master Control intacto; búsquedas locales, cotización HMAC por canasta con caché 60s y revalidación al preparar. Recuperación de pedidos vinculada a actor. Renovación CSRF autenticada y reintento solo si pos_csrf. Ver integrations/management-migration/README-POS.md para contratos, validación y límites.
+
+
+- 2026-10-06: Entrega manual recuperada en facturador VPS: email con PDF adjunto mediante SMTP existente (TLS verificado, confirmación de destinatario) y WhatsApp wa.me con enlace PDF siete días. Módulo Node delivery.mjs; persistencia privada delivery.sqlite, UUID/exclusión por comprobante/destinatario entre operadores, resultado incierto sin reintento automático. Solo descarga por token aleatorio expirable es pública; email/share/estado requieren administrador y escrituras Origin/CSRF. PDF nativo vía GET firmado, WordPress conserva bloqueo de correo/red genéricos. Backup fiscal incluye snapshot entrega/configuración SMTP privada. Validación funcional sin comunicaciones a clientes; entrega real de correo no probada. Contratos y rollback: integrations/management-migration/README-DELIVERY.md. Master Control y emisión ARCA sin cambios.
+
+## Mensajería unificada (2026-10-07)
+
+Bandeja Web/WhatsApp con sesión de Herramientas y roles propios. Matías con control completo
+y administración global conservada; José supervisa; Santi/Miguel/Fabri atienden. Búsquedas,
+historial, asignaciones, notas, IA y outbox en PostgreSQL del VPS. Widget y copia de presentación
+en WordPress. Callbacks firmados con revisión, IDs opacos y cola de estado; importación sin IA.
+Los modos de corte y rollback se coordinan; no restaurar bases antiguas sobre mensajes nuevos.
+Contrato y rutas de respaldos: `integrations/mensajeria/README.md`. WhatsApp real conectado en coexistencia; emisores POS/ARCA, precios y Master Control no cambian.
+
+Corte completado 2026-10-07 13:33 UTC: 526 sesiones y 1.372 mensajes fuente;
+1.203 mensajes existentes reconocidos y 169 importados, todos mapeados. Ambos flags
+activados; callback de presencia firmado confirmado y cola Web vacía en la verificación.
+Entradas Chat de WordPress y Gestión redirigen a la bandeja. Imagen activa
+`fusion-chatbot-unified:20261007`; plugin 1.7.18. Respaldos privados incluyen WordPress
+antes/después, PostgreSQL, SQLite e historial fuente. El coordinador usa stdin para
+ejecutar el corte como usuario restringido; no depende de un archivo temporal root.
+Suite Node completa, 73 pruebas backend, 60 PHP y 3 de recuperación aprobadas;
+QA visual con datos ficticios. Entrega real a clientes no usada como prueba.
+
+## Conexión de WhatsApp comercial (2026-10-07)
+
+La API de Meta confirmó coexistencia existente (is_on_biz_app=true, platform_type=CLOUD_API)
+en ambos números; no necesitan nuevo registro. La app propia es Fusion Bikes Chatbot
+(1394204749301211). Identidades verificadas: 4819 → phone 2185814538178526 / WABA
+332553100782067; 2035 → phone 106810789054504 / WABA 117361584655886.
+Los IDs reales están configurados en el VPS y la app está suscrita a ambas WABA y a
+messages/history/smb_message_echoes, conservando campos e integraciones previos.
+Meta publicó la app con autorización del dueño. El envío manual está habilitado para
+ambos IDs; la IA de ambos números permanece apagada. Se verificó recepción desde los
+dos teléfonos, reflejo de envíos hechos desde WhatsApp Business y respuestas desde la
+bandeja del VPS con estado entregado/leído en ambos recorridos. Las únicas respuestas
+de prueba se enviaron entre los dos números del dueño, con su autorización.
+No se pidió una importación de historial antiguo ni se enviaron pruebas a clientes. El uso/área de
+cada número espera aclaración; los nombres temporales provienen de los activos de Meta.
+Imagen: fusion-chatbot-whatsapp:20261007. Respaldos privados y estados Meta antes/después:
+/opt/fusionbikes/backups/whatsapp-connect-20261007. Coordinador:
+/opt/fusion-whatsapp-connect-20261007/coexistence_remote.py. No repetir subscribe sin
+reconciliar su marcador de intento; enable exige publicación y suscripciones verificadas.
+
+
+## Audio, plantillas e inicio por teléfono (2026-10-07)
+
+Imagen fusion-chatbot-inbox-tools:20261007 incluye FFmpeg/ffprobe y conversión Ogg Opus mono
+con límites; columna aditiva inbox_media.is_voice. Dos conversiones simultáneas por proceso.
+Nuevo chat idempotente por número/línea, sin envío ni cambio del estado del hilo existente.
+Plantillas de texto posicionales con preview, consentimiento y revalidación antes de enviar.
+No se habilitan plantillas pendientes/pausadas ni se reintentan envíos ambiguos.
+Saludo fusion_inicio_atencion/es_AR aprobado en ambas WABA; revalidar estado real antes de enviar.
+IA de ambos números apagada; no se cambia el modo del widget ni emisores fiscales.
+Backup /opt/fusionbikes/backups/mensajeria-usabilidad-20261007, coordinador
+/opt/fusion-inbox-tools-release-20261007/remote_deploy.py. Rollback detiene API antes de cancelar
+plantillas en cola incompatibles, restaura software y conserva historial/flags. Fuente y manual
+reconstruibles en integrations/mensajeria. No confundir QA con entrega real de audio/plantilla.
+
+
+Publicación de usabilidad verificada el 2026-10-07: imagen activa en API/worker/outbox,
+health correcto, columna is_voice aplicada, dos líneas conectadas y ambas IA apagadas.
+Saludo aprobado y compatible en las dos WABA. Interfaz productiva de consulta verificada;
+audio/plantillas completos sólo con transporte de QA, sin probar entrega real a clientes.
+Servicios aislados y túnel de QA detenidos; respaldo y rollback disponibles en las rutas anteriores.
+
+
+## Compartir productos, facturas y seguimiento (2026-10-07)
+
+Acciones visibles junto al editor: Archivo, Audio, Producto, Factura y Seguimiento.
+Producto abre un buscador por nombre/SKU con miniatura, variante, stock, fecha y precio
+contado/transferencia web (precioContado sobre precio vigente, incluidas ofertas; no lista ML).
+Consulta el catálogo SQLite local, con máximo 30 resultados. Elegir prepara un borrador;
+Enviar sigue siendo explícito. No cambia checkout, Master Control ni stock.
+
+Pedidos: copia sincronizada local, coincidencia exacta de teléfono completo y país;
+nunca por últimos dígitos ni fusión automática. Hasta 50 pedidos recientes para elegir.
+Factura agrega directamente el PDF único y vuelve a validar el teléfono en la tienda antes de
+consultar comprobantes ya autorizados de producción y obtener el PDF. Puente de lectura
+0.5.0 conserva autenticación Woo y permiso administrativo. GET acotado por pedido, sin
+emitir, enviar, modificar pedidos o crear enlaces públicos. Esta acción consulta al facturador web; el producto elegido verifica la cotización comercial con caché. El archivo privado usa el transporte existente y queda en borrador;
+su referencia sobrevive a recarga para el mismo operador y conversación. El servidor
+verifica pertenencia y vigencia al enviar. Audio pendiente sigue siendo sólo en memoria.
+
+Seguimiento usa números Andreani confirmados en preparaciones web, con enlace oficial
+www.andreani.com/envio/<numero>. Exportar etiquetas no prueba que haya seguimiento.
+Si no existe número registrado, se informa y no se inventa. El widget Web admite producto
+y seguimiento como texto/enlaces; el PDF requiere WhatsApp. Fuera de la ventana de 24 h
+desde el último mensaje entrante del cliente se ofrece Plantilla; dentro permanece oculta.
+
+Contrato BFF: GET /products, GET /commerce/orders y POST /commerce/prepare.
+Conserva sesión, permisos, responsable, Origin/CSRF, revisión e idempotencia del envío.
+Fuentes: lib/mensajeriaCommerce.js, lib/mensajeriaInvoiceSource.js y
+integrations/mensajeria/wordpress/fusion-herramientas-bridge. No cambia esquema ni bot.
+Rollback de esta ampliación restaura software sin restaurar bases ni cancelar mensajes:
+python3 /opt/fusion-inbox-share-release-20261007/remote_deploy.py rollback
+Respaldo: /opt/fusionbikes/backups/mensajeria-compartir-20261007.
+El puente puede permanecer como lectura o volver al ZIP 0.4.0 respaldado desde WordPress.
+IA WhatsApp y emisores POS/ARCA se conservan; la emisión sigue únicamente en la web.
+
+
+Publicación comercial verificada 2026-10-07: puente WordPress 0.5.0 actualizado y
+Herramientas recargado, ambos health correctos. Producto FB-70394 confirma contado
+ARS 4.450.000, stock y miniatura; buscador por nombre/SKU y preview comprobados en
+conversación propia. PDF autorizado existente leído y validado en memoria, rechazo de
+teléfono ajeno confirmado. Sin emisiones ni mensajes de prueba a clientes. IA, bot y
+configuración conservados. Envío completo probado sólo con transporte sintético en QA.
+Servicios de QA detenidos; rollback y respaldo conservan historial productivo.
+
+
+### Mensajería — ficha comercial y adjuntos directos (2026-10-07)
+
+El selector de productos filtra Solo con stock Sí/No sobre catálogo local antes del límite. Acciones con prefijo +. Elegir producto consulta el contrato comercial vigente con caché 60 s; comparte contado, cuotas 6/9/12/18/24 con redondeo público y envío gratis sólo según Master Control, sin modificarlo. Foto propia convertida a JPEG reducido se prepara como adjunto privado de WhatsApp; web conserva texto/enlace. Factura única del pedido elegido se agrega directamente al borrador; varios comprobantes requieren elegir uno. Se reemplaza el checkbox manual por validación exacta de teléfono y permisos en servidor. Nada se envía hasta Enviar. Publicación verificada.
+
+
+Ficha comercial publicada y verificada 2026-10-07: puente de lectura 0.5.1 y Herramientas
+activos. Comprobados SKU FB-47935, contado3200000, cuotas6/9/12/18/24 y fotoJPEG privada.
+Filtro de stock Sí/No y botones + operativos. Factura única directamente al borrador;
+varias requieren selección. Sin emisión ni mensajes de prueba a clientes reales.
+IA, bot y Master Control conservados. QA aislado cerrado. Si se revierte a la UI anterior,
+una foto JPEG todavía en borrador podría requerir adjuntarse nuevamente después de F5;
+texto e historial no se restauran ni se reenvían. Backup y rollback en README operativo.
+
+
+### Mensajería: pendientes y paneles (publicado 2026-10-08)
+
+Pendientes corresponde a chats abiertos con mensajes sin leer; Todas conserva los leídos. Confirmación explícita POST /read al mostrar historial visible al final, con límite de mensaje perteneciente al chat y contador conservador ante nuevas entradas. No cambia responsable, estado, revisión, orden ni IA. Perfil lector no consume pendientes. Separador de escritorio ajustable por arrastre/teclado con preferencia local por operador; móvil conserva panel completo. Publicado y verificado en producción. Importaciones históricas no generan ni retienen pendientes. Todas las reglas de ancho de escritorio incluyen las tres columnas.
+
+Preflight: IA 4819 deshabilitada, IA 2035 habilitada y chat web activo. Publicación preserva interruptores vigentes.
+
+Corrección publicada del bot: precio del catálogo sincronizado no equivale a contado.
+Variantes/simples se verifican con commercial-products de Master Control antes de mostrar
+importes o filtrar presupuesto; lotes25, límite75 y caché60s. Sin cotización no usar
+precio base, XML o Store API como respaldo. Datos de transferencia exclusivamente del
+gateway BACS activo de WooCommerce; nunca del texto del cliente o del modelo.
+API/worker usan la imagen corregida y .commercial.env privado con credenciales existentes
+de Woo, sólo para endpoints GET fijos. Master Control y outbox intactos. Respaldo/rollback
+preservan bases vivas, colas e interruptores. Permisos de supervisión no dependen del bot.
+
+Consultas de pago con productos homónimos sólo usan la URL de la última respuesta del bot;
+una aclaración posterior invalida enlaces anteriores y conserva la selección pendiente.
+
+Publicación 2026-10-08 verificada: API y worker usan fusion-chatbot-inbox-pending:20261007;
+salud de bot/Herramientas correcta. Interruptores preservados: 2035 habilitada y 4819
+deshabilitada. Matías administrador general y supervisor. IA y operación muestra causas
+de inactividad; pausar/tomar un chat mantiene precedencia sobre la habilitación del número.
+Credenciales comerciales en .commercial.env privado, fuera del código y de la imagen;
+sólo GET a cotizaciones Master Control y gateway BACS. Catálogo y stock siguen locales,
+cotizaciones con caché 60 s. Rollback respaldado en
+/opt/fusionbikes/backups/mensajeria-pendientes-20261007; ejecutar
+python3 /opt/fusion-inbox-pending-release-20261007/remote_deploy.py rollback.
+La reversión restaura software, sin restaurar bases vivas ni reenviar mensajes.
+
+
+## Recuperación de facturas por IA (publicado 2026-10-08)
+
+El bot pide el número de pedido antes de derivar. Sólo el remitente autenticado de
+WhatsApp permite recuperar automáticamente una factura única autorizada de producción
+del puente GET messaging-orders, que valida el teléfono del pedido. PDF privado validado
+y encolado en la transacción/revisión existente; sin emitir ni modificar comprobantes.
+Chat web, varias facturas, ausencia o error pasan a posventa. Tres búsquedas por conversación
+en una hora, reservadas en auditoría antes del GET aunque luego cambie la revisión; nunca
+usar teléfono escrito por cliente como autorización. Toma humana, pausa,
+ventana y nueva entrada mantienen precedencia. Publicado y verificado. API y worker usan fusion-chatbot-invoice-recovery:20261008; outbox conserva su contenedor. Configuración e interruptores conservados.
+
+Respaldo: /opt/fusionbikes/backups/mensajeria-facturas-ia-20261008. Reversión de software:
+python3 /opt/fusion-invoice-release-20261008/remote_release.py rollback.
+Sin restaurar bases de datos ni reenviar historial. Conversaciones ya derivadas requieren
+Reanudar IA por el operador; esta publicación no las reactiva automáticamente.
+
+
+## Seguimiento por IA (publicado 2026-10-08)
+
+WhatsApp pide pedido y verifica pertenencia por remitente autenticado mediante GET
+messaging-orders. Devuelve exclusivamente el código Andreani registrado y enlace fijo
+https://www.andreani.com/envio/<codigo>. Ausencia de código no prueba despacho ni fecha.
+Web, identidad no verificable y errores pasan a posventa; reservas atómicas de hasta tres
+consultas de seguimiento por hora/conversación, independientes de facturas. Conserva
+revisión, toma humana y cola existente. No cambia pedidos ni realiza consultas periódicas.
+Publicado y verificado. API y worker usan fusion-chatbot-tracking:20261008; outbox, configuración e interruptores conservados.
+
+Pagos/CBU conservan prioridad aunque incluyan número de pedido. El contexto automático
+se limita a la última respuesta de factura/seguimiento; una referencia nueva inválida
+requiere corregir el pedido y nunca reutiliza uno anterior.
+
+Respaldo de seguimiento: /opt/fusionbikes/backups/mensajeria-seguimiento-ia-20261008.
+Rollback sólo de software: python3 /opt/fusion-tracking-release-20261008/remote_release.py rollback.
+No restaurar bases vivas ni reenviar mensajes. Si el chat ya fue derivado, requiere
+Reanudar IA por el operador; la actualización no reactiva conversaciones pausadas.
+
+
+## Lectura de fotos y audios (activada 2026-10-08)
+
+Integración OpenAI opt-in, inicialmente sin clave, lectores apagados y presupuesto cero.
+Configuración desde Mensajería / IA y operación / Configurar fotos y audios; sólo
+administrador general con supervisión. Clave en /opt/fusion-chatbot/private-ai, permisos
+privados, montaje API escritura y worker lectura. Nunca en respuestas, auditoría o imagen.
+Archivos nuevos WhatsApp, IA habilitada y conversación libre; conserva prioridad humana,
+revisión, idempotencia y ventana existente. Audio máximo 5 minutos; imagen normalizada
+a JPEG hasta 1280 px. Audio entra en reglas comerciales verificadas; documentos/comprobantes
+visuales van a posventa sin confirmar pagos. Texto y adjunto original se conservan; lectura
+automática separada y visible al operador. Web conserva texto. No se reprocesa historial.
+Reserva mensual atómica de USD 0,05 por mensaje antes del proveedor y hasta 12 archivos/hora/chat. Audio conserva la reserva preventiva hasta calibrar facturación; fotos liquidan usage válido con tarifa fija verificada.
+Intentos ambiguos no se repiten automáticamente y conservan reserva. Configuración externa
+se aplica al siguiente archivo; cambios durante procesamiento cancelan la respuesta pendiente.
+Publicada inicialmente apagada; configuración completada el 2026-10-08. Clave de proyecto creada mediante OpenAI Developers y guardada por canal privado. Ambos lectores activados, con presupuesto preventivo mensual de USD 50 elegido por el usuario. Acceso a ambos modelos y procesamiento real verificados con una imagen dibujada y una voz sintética en español (OGG/Opus); no se usaron archivos de clientes ni se enviaron mensajes de prueba. Dos solicitudes de inferencia diagnósticas, fuera del contador de mensajes; sin reproducción de historial. El tope de la aplicación no configura el límite de facturación de OpenAI; no se ha verificado un límite duro en el proveedor. API y worker usan fusion-chatbot-multimedia:20261008; outbox e interruptores existentes conservados. Pantalla responsive comprobada en 320/390/768/1440 y permisos administrativos verificados.
+
+Respaldo multimedia: /opt/fusionbikes/backups/mensajeria-multimedia-20261008.
+Rollback sólo de software: python3 /opt/fusion-multimedia-release-20261008/remote_release.py rollback.
+La reversión conserva historial, colas, tabla aditiva y directorio privado; no reenvía archivos.
+No se realizaron consultas pagas ni se enviaron adjuntos de clientes durante la publicación.
+
+
+## Respuestas puntuales y reenvíos en Mensajería (2026-10-08)
+
+Menú por mensaje con Responder y Reenviar. Responder conserva borrador/cita por chat;
+WhatsApp usa context.message_id nativo. Web transmite una cita textual por su contrato
+actual. Las citas entrantes de Meta se resuelven sólo dentro de la misma conversación.
+Audio muestra reproductor sin enlace redundante con extensión. Notas privadas y mensajes
+no confirmados o eliminados no se pueden citar ni reenviar.
+
+Reenvío manual a una conversación existente, con destinatario y línea visibles. Si está
+libre, Tomar y reenviar asigna al agente y pausa IA; nunca toma un chat de otro agente.
+Ventanilla de 24 horas y permisos revalidados por servidor. Contenido original se obtiene
+del historial del servidor; copia de archivo ligada a destino, MIME validado y cuota
+128 MiB/hora por agente serializada con el mismo bloqueo que las subidas. Web sólo texto.
+El reenvío se entrega como mensaje nuevo; Reenviado es una etiqueta interna de la bandeja.
+
+Idempotencia compartida con los envíos normales y sin reintento ambiguo. Outbox bloquea
+origen y destino en orden estable y revalida disponibilidad/versión del original antes
+del transporte; revocación/edición anterior al envío cancela el reenvío. Las respuestas
+puntuales también revalidan disponibilidad del original. No reproduce historial ni cambia
+roles, interruptores IA, integración comercial o la configuración privada multimedia.
+
+Paquete: /opt/fusion-message-actions-release-20261008. Respaldo de software:
+/opt/fusionbikes/backups/mensajeria-message-actions-20261008.
+Reversión: python3 /opt/fusion-message-actions-release-20261008/remote_release.py rollback.
+API, worker y outbox deben usar la misma imagen fusion-chatbot-message-actions:20261008.
+Conservar bases e historial; nunca restaurar datos ni reenviar mensajes. La barrera de
+despliegue usa un contenedor temporal de la imagen base, independiente de API, y un bloqueo
+de outbox para esperar cero envíos activos. Rollback detiene también API/worker antes de
+liberar la barrera y cancela exclusivamente citas/reenvíos nuevos todavía queued, con
+motivo software_rollback_reference, para que el sender anterior no los envíe sin contexto.
+Sent/sending/unknown e historial se conservan; el operador puede revisar las cancelaciones.
+
+
+## Vendedor y continuidad multimodal (paquete 2026-10-08)
+
+Vendedor OpenAI activado por autorización del propietario el 2026-10-08, con tope de
+conversación de US$50 mensuales independiente de los US$50 para fotos y audios.
+La instalación sin configuración conserva el valor por defecto apagado/US$0. Configuración de
+administrador general con supervisión en Mensajería / IA y operación / Configurar OpenAI.
+Modelo GPT-6.1 Sol; Responses sin almacenamiento, herramientas acotadas de sólo lectura.
+Catálogo local fresco para identidad/stock; precios y cuotas exclusivamente de cotización
+web. Bloques comerciales construidos por servidor, datos anteriores no son cotizaciones.
+Factura/seguimiento conservan validación de pedido y teléfono autenticado. No emite ni cobra.
+Reserva mensual atómica en sales_ai_calls, limitada por mensaje/etapa, sin reintento ambiguo;
+cada generación ligada al external_id/revisión original. Pausa, toma humana e interruptores
+prevalecen. No se reactiva historial ni se cambian roles ni precios Master Control.
+
+Lector visual GPT-6.1 Sol compara la foto con nombres del catálogo de bicicletas y propone
+candidatos que el cliente debe confirmar; nunca prueba versión exacta por apariencia.
+Reserva preventiva US$0,25/foto; US$0,05/audio. Presupuesto multimedia existente conservado.
+Agrupa hasta cuatro textos consecutivos con el adjunto inmediatamente anterior, máximo
+90 segundos, mismo chat y sin intervención humana o respuesta entregada en medio. No lee
+adjuntos revocados/editados. Pedido explícito de asesor evita toda solicitud paga.
+Confirmaciones de marca/modelo mantienen filtros y aceptan seguimientos cortos de talle.
+
+Paquete: /opt/fusion-sales-ai-release-20261008. Imagen fusion-chatbot-sales-ai:20261008
+para API/worker/outbox. Respaldo /opt/fusionbikes/backups/mensajeria-sales-ai-20261008.
+Rollback de software con remote_release.py rollback; conserva bases, historial y colas.
+Aprendizaje automático de agentes y voz de salida permanecen pendientes, no publicados
+por este paquete. No confundir transcripción entrante con generación de voz.
+
+
+Voz personalizada (2026-10-08): las grabaciones de muestra y consentimiento se validaron y quedaron en el directorio privado voice-onboarding-20261008, fuera del repositorio y de archivos públicos. OpenAI rechazó el alta de consentimiento porque la organización no tiene acceso al endpoint de voces personalizadas. No se creó una voz ni se activó salida de audio. El siguiente paso requiere habilitación del proveedor o una elección explícita de alternativa; no reutilizar otro proveedor sin autorización. La muestra de voz no es una fuente de precios ni de condiciones comerciales.
+
+
+Mensajería compacta (2026-10-08): Responder aparece directamente en la cabecera de cada
+mensaje elegible; el menú de opciones conserva Reenviar. Audios con reproductor sin
+enlace redundante al nombre del archivo. Editor y acciones compactos con puntero fino;
+controles táctiles mantienen al menos 44 px. Los botones se distribuyen según el ancho
+del editor y no sólo el de la ventana; se preservan advertencias, permisos y borradores.
+HTML referencia app.js y style.css con versión derivada de su contenido, y app.js hace
+lo mismo con message-actions.js: regenerar estas versiones en cada publicación que
+modifique esos archivos. El HTML se sirve no-cache; los assets podían quedar hasta
+cuatro horas en caché. Una pestaña ya abierta requiere recarga para usar la nueva UI.
+Respaldo estático: /opt/fusionbikes/backups/mensajeria-compacta-20261008. Reversión sólo de
+archivos de esta interfaz, sin reiniciar ni restaurar bases, colas o configuración IA.

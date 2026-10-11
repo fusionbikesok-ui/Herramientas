@@ -31,6 +31,7 @@ import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
 import { guardiaMlRouter } from './routes/guardiaMl.js';
 import { procesarOperacionesGuardia, liberarRetenidasResueltas } from './lib/guardiaMl.js';
+import { modoProteccion } from './lib/proteccionIdentidad.js';
 import { procesarOperacionesIdentidad } from './lib/identidadProductos.js';
 import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
@@ -75,6 +76,7 @@ import { cargarKeyringInterno, cargarKeyringInternoActivo, crearOrigenesInternos
 import { crearGatewayCanal, crearPresupuestoShadow, CORRIENTES_ML, ErrorOperacionInvalida, validarConfiguracionCupoSombra } from './lib/gatewayCanal.js';
 import { reprocesarJob } from './lib/integrationJobs.js';
 import { chatEventsRouter } from './routes/chatEvents.js';
+import { mensajeriaRouter } from './routes/mensajeria.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -408,7 +410,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     }
   );
 
-  app.use(express.json({ limit: '10mb' }));
+  const defaultJsonParser = express.json({ limit: '10mb' });
+  // Adjuntos: la ruta aplica autenticación/CSRF antes de parsear hasta 24 MiB.
+  app.use((req, res, next) => req.path === '/api/mensajeria/upload' ? next() : defaultJsonParser(req, res, next));
 
   // ── Sesión (store en SQLite aparte, para no contender con las escrituras del sync) ──
   const SqliteStore = SqliteStoreFactory(session);
@@ -446,6 +450,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   });
   app.use('/inventario', express.static(path.join(__dirname, 'public/inventario')));
   app.use('/home', express.static(path.join(__dirname, 'public/home')));
+  app.use('/mensajeria', express.static(path.join(__dirname, 'public/mensajeria'), { setHeaders: res => res.setHeader('Cache-Control', 'no-cache') }));
   app.use('/login', express.static(path.join(__dirname, 'public/login')));
   app.use('/matcher', express.static(path.join(__dirname, 'public/matcher')));
   app.use('/bandeja-identidad', express.static(path.join(__dirname, 'public/bandeja-identidad')));
@@ -683,6 +688,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
 
   // Gestión de usuarios: solo admins.
   app.use('/api/usuarios', requireAdmin, usuariosRouter(db));
+  app.use('/api/mensajeria', mensajeriaRouter(db));
 
 
   app.use('/api/woo', wooRouter(db, wooCfg));
@@ -917,7 +923,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         if (!r.ok && !r.running) console.error('Guardia ML: no se pudo iniciar lectura:', r.error);
       });
       cron.schedule('*/5 * * * *', () => {
-        procesarOperacionesGuardia(app._db, syncCfg)
+        // Fase C: en activo Guardia no ejecuta operaciones; la liberación de ventas retenidas sigue.
+        (modoProteccion() === 'activo' ? Promise.resolve() : procesarOperacionesGuardia(app._db, syncCfg))
           .catch(err => console.error('Guardia ML operaciones:', err.message))
           // A continuación: un vincular confirmado en esta misma corrida ya libera la venta.
           .finally(() => {

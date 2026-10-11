@@ -1,0 +1,29 @@
+[Unit]
+Description=Fusion PDF label corrector (memory only)
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/fusion-pdf-corrector
+EnvironmentFile=/opt/fusion-management-migration/runtime.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/fusion-pdf-corrector/pdf-worker.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+MemoryMax=384M
+MemorySwapMax=64M
+CPUQuota=50%
+TasksMax=16
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

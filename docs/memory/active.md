@@ -1168,3 +1168,61 @@ una fila `persona`: devuelve `'respetada'`; bajar/promover una primaria cierra l
 - Vista previa completa en vivo ejecutada el 2026-09-29: 11/11 preparaciones abiertas consultadas, cero errores. ML `2000018214080180` (prep 238) figuraba `cancelled`; las diez órdenes Web abiertas (preps 307, 366, 393, 404, 430, 431, 454, 458, 459, 466) figuraban `enviadoandreani`.
 - Cron habilitado con `PREPARACION_RECONCILIACION_ACTIVA=true`; primer tick 23:58 UTC procesó las 11: prep 238 → `cancelada_sin_retiro_registrado`; las otras diez → `despachada_sin_verificar`. Cero errores, 11 intentos, cero abiertas. Cada transición tiene exactamente un evento; ítems, fotos y eventos anteriores/autores quedaron conservados. PM2 online y `/healthz` 200. Flag permanece activa para corridas acotadas cada 10 minutos.
 - La salida diagnóstica previa imprimió credenciales de autenticación de Woo. No hay evidencia de acceso de terceros; el usuario rotará la clave otro día y decidió que eso no bloquea esta operación. La vista previa y el tick consultaron los pedidos con la credencial vigente sin volver a imprimirla. Pedido 70312 (prep 446) quedó intacto y fuera del lote: sigue completado, con 0 ítems, 2 fotos y 10 eventos; requiere revisión separada de sus fotos/discrepancia de escaneo, sin inventar un escaneo.
+
+## Atención unificada Web y WhatsApp (2026-10-07)
+
+Contrato de la bandeja `/herramientas/mensajeria/` en `integrations/mensajeria/README.md`.
+Matías administra; José supervisa; Santi/Miguel/Fabri atienden. Atención e historial central
+en VPS con widget/copia de presentación en WordPress. Dos entradas antiguas convergen en la
+misma bandeja bajo modo coordinado; no hay dos controladores humanos. Ambos números comerciales están conectados en coexistencia y la app Meta está publicada.
+Activado y verificado el 2026-10-07: 526 chats y 1.372 mensajes de WordPress reconciliados,
+ambos accesos Chat redirigen a Mensajería; callback firmado de presencia confirmado.
+
+WhatsApp 2026-10-07: app Meta publicada; ambos números conectados con coexistencia y
+atención manual habilitada. Recepción, reflejo del celular y respuestas entregadas/leídas
+verificados entre los teléfonos del dueño. IA de ambos apagada. Ver operations-vps.
+
+Bandeja 2026-10-07: lista compacta/responsive, Enter/Shift+Enter, grabación con vista previa y
+alta por número/línea con plantillas de texto aprobadas. IA WhatsApp sigue apagada; el saludo fue aprobado
+por Meta para ambas líneas. Operación y rollback en integrations/mensajeria/README.md.
+
+
+Mensajería comercial (2026-10-07): buscador de producto tipo POS con datos locales y precio
+web; factura emitida y seguimiento por teléfono exacto. Selección y borrador antes de enviar.
+Puente de lectura 0.5.0, sin nueva emisión ni cambios de IA. Contrato, límites y rollback
+en integrations/mensajeria/README.md; publicación manual sujeta a verificación operativa.
+
+
+Publicación comercial verificada 2026-10-07: puente WordPress 0.5.0 actualizado y
+Herramientas recargado, ambos health correctos. Producto FB-70394 confirma contado
+ARS 4.450.000, stock y miniatura; buscador por nombre/SKU y preview comprobados en
+conversación propia. PDF autorizado existente leído y validado en memoria, rechazo de
+teléfono ajeno confirmado. Sin emisiones ni mensajes de prueba a clientes. IA, bot y
+configuración conservados. Envío completo probado sólo con transporte sintético en QA.
+Servicios de QA detenidos; rollback y respaldo conservan historial productivo.
+
+
+### Mensajería — ficha comercial y adjuntos directos (2026-10-07)
+
+El selector de productos filtra Solo con stock Sí/No sobre catálogo local antes del límite. Acciones con prefijo +. Elegir producto consulta el contrato comercial vigente con caché 60 s; comparte contado, cuotas 6/9/12/18/24 con redondeo público y envío gratis sólo según Master Control, sin modificarlo. Foto propia convertida a JPEG reducido se prepara como adjunto privado de WhatsApp; web conserva texto/enlace. Factura única del pedido elegido se agrega directamente al borrador; varios comprobantes requieren elegir uno. Se reemplaza el checkbox manual por validación exacta de teléfono y permisos en servidor. Nada se envía hasta Enviar. Publicación verificada.
+
+
+Ficha comercial publicada y verificada 2026-10-07: puente de lectura 0.5.1 y Herramientas
+activos. Comprobados SKU FB-47935, contado3200000, cuotas6/9/12/18/24 y fotoJPEG privada.
+Filtro de stock Sí/No y botones + operativos. Factura única directamente al borrador;
+varias requieren selección. Sin emisión ni mensajes de prueba a clientes reales.
+IA, bot y Master Control conservados. QA aislado cerrado. Si se revierte a la UI anterior,
+una foto JPEG todavía en borrador podría requerir adjuntarse nuevamente después de F5;
+texto e historial no se restauran ni se reenvían. Backup y rollback en README operativo.
+
+
+### Mensajería: pendientes y paneles (publicado 2026-10-08)
+
+Pendientes corresponde a chats abiertos con mensajes sin leer; Todas conserva los leídos. Confirmación explícita POST /read al mostrar historial visible al final, con límite de mensaje perteneciente al chat y contador conservador ante nuevas entradas. No cambia responsable, estado, revisión, orden ni IA. Perfil lector no consume pendientes. Separador de escritorio ajustable por arrastre/teclado con preferencia local por operador; móvil conserva panel completo. Publicado y verificado en producción. Importaciones históricas no generan ni retienen pendientes. Todas las reglas de ancho de escritorio incluyen las tres columnas.
+
+La ficha compartida omite el SKU en el texto; el buscador lo conserva. Contado y cuotas llevan presentación comercial y la leyenda de tarjetas bancarizadas y no bancarizadas; importes siguen verificados por Master Control y envío gratis sólo cuando la fuente lo confirma.
+
+Estado vigente de Mensajería (2026-10-08): precios y cuotas de IA verificados con
+Master Control; pagos/transferencias con fuente oficial. Matías conserva administrador y
+supervisor, con recuperación propia disponible. Controles por número en IA y operación.
+IA 2035 activa, 4819 apagada; respeta pausa y toma humana. Operación en modules/operations-vps.md.

@@ -1,0 +1,287 @@
+/*
+ * public/lib/theme.css — Paleta compartida (FusionBikes).
+ *
+ * :root con la UNIÓN de las variables de tema usadas por las páginas que comparten
+ * EXACTAMENTE la misma paleta (mismos valores). Incluye los alias de nombre distinto
+ * que apuntan al mismo color (ej. --bg / --oscuro / --dark, --border / --line,
+ * --txt / --text / --white, --muted / --gray, --azul / --accent / --blue).
+ *
+ * Se enlaza con <link rel="stylesheet" href="../lib/theme.css"> ANTES del <style> de
+ * la página, reemplazando su bloque :root local. Los valores son idénticos a los que
+ * cada página tenía, así el render queda igual pixel a pixel.
+ *
+ * OJO: algunas páginas usan la MISMA variable con OTRO valor (ej. --muted #7A87A3,
+ * --amber #F5B942 / #F59E0B, opacidades -dim .10/.08). Esas NO enlazan este archivo:
+ * conservan su :root local para no cambiar su color. No agregar acá esos valores en
+ * conflicto.
+ */
+:root {
+  /* Fondos / superficies */
+  --bg:        #0C0F16;
+  --oscuro:    #0C0F16;
+  --black:     #080A10;
+  --dark:      #0C0F16;
+  --dark2:     #141A25;
+  --dark3:     #1B2235;
+  --panel:     #141A25;
+  --panel2:    #1B2235;
+  --surface:   #141A25;
+  --surface2:  #1B2235;
+
+  /* Bordes */
+  --border:    #24304A;
+  --border2:   #2E3B57;
+  --line:      #24304A;
+
+  /* Acento / azul */
+  --azul:      #2DB8E8;
+  --azul-dk:   #1C93BD;
+  --accent:    #2DB8E8;
+  --accent-dk: #1C93BD;
+  --accent2:   #A78BFA;
+  --accent2-dk:#8B6FE0;
+  --accent-dim:rgba(45,184,232,.12);
+  --blue:      #2DB8E8;
+  --blue-dk:   #1C93BD;
+  --blue-bg:   rgba(45,184,232,0.10);
+  --blue-bd:   rgba(45,184,232,0.35);
+
+  /* Texto */
+  --txt:       #E4EAF4;
+  --text:      #E4EAF4;
+  --white:     #E4EAF4;
+  --muted:     #8493B0;
+  --muted2:    #5B6B8C;
+  --gray:      #8493B0;
+  --gray2:     #5B6B8C;
+
+  /* Semánticos */
+  --green:     #34D399;
+  --green-dk:  #22B98A;
+  --green-dim: rgba(52,211,153,.12);
+  --green-bg:  rgba(52,211,153,0.10);
+  --green-bd:  rgba(52,211,153,0.35);
+  --red:       #F87171;
+  --red-dim:   rgba(248,113,113,.12);
+  --red-bg:    rgba(248,113,113,0.10);
+  --red-bd:    rgba(248,113,113,0.35);
+  --amber:     #FBBF24;
+  --amber-dim: rgba(251,191,36,.12);
+  --amber-bg:  rgba(251,191,36,0.10);
+  --amber-bd:  rgba(251,191,36,0.35);
+  --yellow:    #FBBF24;
+  --orange:    #FB923C;
+  --orange-bg: rgba(251,146,60,0.10);
+  --orange-bd: rgba(251,146,60,0.35);
+  --purple:    #A78BFA;
+  --purple-dim:rgba(167,139,250,.12);
+
+  /* Alias semánticos (inventario) */
+  --ok:        #34D399;
+  --warn:      #F87171;
+  --sku:       #FBBF24;
+
+  /* Radios (pedidos / recepcion / stock) */
+  --radius:    10px;
+  --radius-lg: 16px;
+
+  --radius-pill: 999px;
+
+  /* Severidad semántica (panel "Requiere tu atención" del home).
+     Aliases sobre colores existentes — el significado no depende del nombre del color. */
+  --critical:    var(--red);
+  --critical-bg: var(--red-bg);
+  --critical-bd: var(--red-bd);
+  --warning:     var(--amber);
+  --warning-bg:  var(--amber-bg);
+  --warning-bd:  var(--amber-bd);
+  --success:     var(--green);
+  --success-bg:  var(--green-bg);
+  --success-bd:  var(--green-bd);
+
+  /* Contador de Inventario — herramienta de depósito, celular en mano, luz variable. */
+  --tap-min: 44px;
+
+  --chip-bg:     var(--surface2);
+  --chip-bd:     var(--border);
+  --chip-txt:    var(--muted);
+  --chip-on-bg:  var(--accent-dim);
+  --chip-on-bd:  var(--accent);
+  --chip-on-txt: var(--accent);
+
+  --diff-neg:  var(--critical);
+  --diff-pos:  var(--success);
+  --diff-zero: var(--muted);
+
+  --state-pending:  var(--muted);
+  --state-counted:  var(--success);
+  --state-unlinked: var(--warning);
+
+  --progress-track: var(--surface2);
+  --progress-fill:  var(--accent);
+
+  --danger:       var(--red);
+  --danger-bg:    var(--red-bg);
+  --danger-bd:    var(--red-bd);
+  --danger-solid: var(--red);
+  --danger-on:    #2A0505;
+  --danger-veil:  rgba(6,8,13,.92);
+
+  --sheet-bg: var(--surface);
+  --sheet-bd: var(--border2);
+
+  /* Blanco de toque cómodo (guantes / manos ocupadas en depósito).
+     --tap-min (44px) es el PISO WCAG; --tap-comfort es el objetivo para
+     controles de ancho completo tipo header colapsable. */
+  --tap-comfort: 56px;
+
+  /* Feed de actividad (registro cronológico de eventos: Preparación de Pedidos,
+     reutilizable en cualquier bitácora futura). */
+  --act-rail:          var(--border);              /* línea vertical del timeline */
+  --act-deleted-veil:  rgba(12,15,22,.55);         /* velo del badge sobre miniatura borrada */
+  --act-deleted-hatch: rgba(248,113,113,.55);      /* trama diagonal = "borrado" no-cromático */
+  --act-new-hold:      6s;                         /* cuánto dura la marca "nuevo" antes de atenuarse */
+
+  /* Foco visible (WCAG 2.2 — 2.4.7 / 2.4.13) */
+  --focus-color: var(--accent);
+
+  /* Cobertura de Catálogo — resaltado de diferencias entre títulos (WC vs. ML).
+     Defensa central contra el error medido (M520 vs M540): un match por bolsa de
+     palabras destaca lo COMPARTIDO; acá se invierte a propósito, se destaca lo que
+     DIFIERE, y dentro de eso se separa "genérico" de "discriminante" (modelo, medida,
+     marca). Cada nivel cambia MÁS de un canal visual (fondo + peso + forma), nunca
+     solo color, para no depender de distinguir rojo/ámbar/verde. */
+  --tok-match-txt:      var(--muted);       /* palabra que coincide en ambos títulos: se atenúa, no compite */
+  --tok-diff-bg:         var(--amber-bg);    /* palabra que difiere, genérica (ej. "alambre" vs "kevlar") */
+  --tok-diff-bd:         var(--amber-bd);
+  --tok-diff-txt:        var(--text);
+  --tok-discriminant-bg: var(--red-bg);      /* palabra que difiere Y es token discriminante: modelo/medida/marca */
+  --tok-discriminant-bd: var(--red-bd);
+  --tok-discriminant-txt:var(--text);
+  --tok-discriminant-font: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; /* forma distinta, no solo color; misma convención que SKU en el resto de la app */
+
+  /* Confianza del matcher inverso, en palabras — nunca porcentaje (ver decisión UX).
+     Icono + texto + color: tres canales, ninguno solo. */
+  --conf-alta:      var(--success);
+  --conf-alta-bg:   var(--success-bg);
+  --conf-alta-bd:   var(--success-bd);
+  --conf-revisar:      var(--warning);
+  --conf-revisar-bg:   var(--warning-bg);
+  --conf-revisar-bd:   var(--warning-bd);
+  --conf-baja:      var(--critical);
+  --conf-baja-bg:   var(--critical-bg);
+  --conf-baja-bd:   var(--critical-bd);
+
+  /* Skeleton de carga (pantalla de entrada: tarjetas de marca). Nunca spinner ciego. */
+  --skeleton-base:      var(--surface2);
+  --skeleton-highlight: var(--border2);
+
+  /* Vinculado en firme vs. pendiente de sincronizar con ML: reusa --success/--warning
+     (ya existentes) pero la distinción NUNCA depende solo de ese color — ver
+     design-system.md "Vinculado vs. pendiente de sincronizar" para el contrato de
+     icono + texto obligatorio que acompaña a cada uno. */
+
+  /* Matcher unificado — tira de chips de secciones persistente.
+     Alias explícitos sobre --chip-*/--warning-* (mismos valores, ya auditados) para que
+     el criterio "ámbar es solo para lo accionable" quede escrito en el nombre del token
+     y no dependa de que quien escriba CSS se acuerde de la regla. Ver design-system.md
+     §Matcher unificado y el criterio ya aplicado en Seguimientos (public/preparacion). */
+  --chip-alert-bg:  var(--warning-bg);
+  --chip-alert-bd:  var(--warning-bd);
+  --chip-alert-txt: var(--warning);
+
+  /* Matcher unificado — rol de cada lado de la tarjeta de comparación (fijo vs.
+     candidato). La tarjeta NO se espeja: WC siempre en el mismo lugar, ML siempre en
+     el mismo lugar; lo que cambia es cuál lado lleva la etiqueta "Punto de partida" y
+     cuál lleva "Candidato". Son alias sobre tokens ya existentes, no colores nuevos:
+     "candidato" reusa el mismo lenguaje que ya significa "tu próximo paso" en el resto
+     de la app (--chip-on-*, usado en "seguir donde quedé" y filtros activos); "punto de
+     partida" reusa el chip neutro por defecto. */
+  --role-anchor-bg:     var(--chip-bg);
+  --role-anchor-bd:     var(--chip-bd);
+  --role-anchor-txt:    var(--chip-txt);
+  --role-candidate-bg:  var(--chip-on-bg);
+  --role-candidate-bd:  var(--chip-on-bd);
+  --role-candidate-txt: var(--chip-on-txt);
+
+  /* Bandeja de identidad (E3) — marcas de comparación por atributo. Alias sobre colores
+     existentes; cada marca SIEMPRE lleva símbolo + texto (WCAG 1.4.1). Ver
+     docs/superpowers/specs/2026-09-24-e3-bandeja-visual-ui.md. */
+  --mk-ok:      var(--success);   /* ✓ coincide: se atenúa, no compite */
+  --mk-diff:    var(--critical);  /* ≠ difiere: lo que salta */
+  --mk-diff-bg: var(--critical-bg);
+  --mk-diff-bd: var(--critical-bd);
+  --mk-miss:    var(--warning);   /* — falta */
+  --mk-miss-bg: var(--warning-bg);
+  --mk-miss-bd: var(--warning-bd);
+  --mk-eq:      var(--accent);    /* ≈ equivalente normalizado */
+  --mk-eq-bg:   var(--accent-dim);
+  --mk-eq-bd:   var(--blue-bd);
+  --sel-bd:     var(--accent);    /* candidato seleccionado */
+  --sel-bg:     var(--accent-dim);
+
+  /* Tipografía y espacio fluidos (sin @media) */
+  --fs-sm:  clamp(.8rem, .76rem + .2vw, .9rem);
+  --fs-md:  clamp(.9rem, .85rem + .25vw, 1.05rem);
+  --fs-lg:  clamp(1.1rem, 1rem + .6vw, 1.5rem);
+  --sp-1:   clamp(.25rem, .2rem + .2vw, .5rem);
+  --sp-2:   clamp(.5rem, .4rem + .4vw, 1rem);
+  --sp-3:   clamp(.75rem, .6rem + .8vw, 1.5rem);
+  --col-min: 14rem;  /* ancho mínimo intrínseco de una columna de la matriz */
+}
+
+/* Bandeja de identidad: marca de celda (símbolo + texto). Ver spec visual. */
+.mk { display: inline-flex; align-items: baseline; gap: .35em; font-size: var(--fs-sm); font-weight: 700; padding: .1em .5em; border-radius: var(--radius-pill); border: 1px solid currentColor; min-width: 0; overflow-wrap: anywhere; }
+.mk--ok   { color: var(--mk-ok);   background: transparent; border-color: transparent; font-weight: 500; }
+.mk--diff { color: var(--mk-diff); background: var(--mk-diff-bg); border-color: var(--mk-diff-bd); border-width: 2px; }
+.mk--miss { color: var(--mk-miss); background: var(--mk-miss-bg); border-color: var(--mk-miss-bd); border-style: dashed; }
+.mk--eq   { color: var(--mk-eq);   background: var(--mk-eq-bg);   border-color: var(--mk-eq-bd); }
+.sr-only-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/*
+ * .api-estado — usado por Api.renderState() (public/lib/api.js) para comunicar de forma
+ * consistente los 4 estados de una carga de datos (cargando/vacío/error) en cualquier
+ * página que lo use. Un solo lugar para decidir cómo se ve un fallo de fetch.
+ *
+ * Copia local: public/usuarios/index.html tiene una copia de estas clases con paleta
+ * propia (esa página no enlaza theme.css a propósito). Si cambiás algo acá, revisá si
+ * corresponde reflejarlo también ahí. Esa copia omite .api-estado--cargando porque no
+ * usa el estado "cargando" de renderState().
+ */
+.api-estado {
+  padding: 14px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  text-align: center;
+}
+.api-estado p { margin: 0 0 8px; }
+.api-estado--error {
+  background: var(--red-bg);
+  border: 1px solid var(--red-bd);
+  color: var(--red);
+}
+.api-estado--vacio {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.api-estado--cargando {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.btn-reintentar {
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}

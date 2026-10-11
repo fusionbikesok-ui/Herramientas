@@ -1,0 +1,89 @@
+{
+  "name": "fusion-management-migration",
+  "services": {
+    "db": {
+      "image": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+      "pull_policy": "never",
+      "env_file": [
+        "runtime.env"
+      ],
+      "command": [
+        "--innodb-buffer-pool-size=192M",
+        "--max-connections=40"
+      ],
+      "volumes": [
+        "mysql_data:/var/lib/mysql"
+      ],
+      "mem_limit": "512m",
+      "cpus": 0.5,
+      "restart": "unless-stopped",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "5m",
+          "max-file": "2"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "mysqladmin ping --silent"
+        ],
+        "interval": "5s",
+        "timeout": "3s",
+        "retries": 24
+      }
+    },
+    "php": {
+      "image": "fusion-management-migration:20261004",
+      "pull_policy": "never",
+      "env_file": [
+        "runtime.env"
+      ],
+      "environment": {
+        "WORDPRESS_CONFIG_EXTRA": "define('DISABLE_WP_CRON',true); define('DISALLOW_FILE_MODS',true); define('WP_HTTP_BLOCK_EXTERNAL',true); define('AUTOMATIC_UPDATER_DISABLED',true); define('WP_HOME',getenv('FUSION_MANAGEMENT_URL')); define('WP_SITEURL',getenv('FUSION_MANAGEMENT_URL')); define('WP_ENVIRONMENT_TYPE','staging');"
+      },
+      "volumes": [
+        "wp_data:/var/www/html",
+        "./mu-plugins:/var/www/html/wp-content/mu-plugins:ro",
+        "./scripts:/opt/fusion-scripts:ro",
+        "./packages:/opt/fusion-packages:ro",
+        "./downloads:/opt/fusion-downloads:ro",
+        "/etc/fusion-arca-private:/opt/fusion-arca-private:ro"
+      ],
+      "mem_limit": "512m",
+      "cpus": 0.75,
+      "restart": "unless-stopped",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "5m",
+          "max-file": "2"
+        }
+      },
+      "depends_on": {
+        "db": {
+          "condition": "service_healthy"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "test -f /var/www/html/wp-config.php && php -r 'exit(extension_loaded(\"soap\") ? 0 : 1);'"
+        ],
+        "interval": "5s",
+        "timeout": "3s",
+        "retries": 24
+      }
+    }
+  },
+  "volumes": {
+    "mysql_data": {},
+    "wp_data": {}
+  },
+  "networks": {
+    "default": {
+      "internal": true
+    }
+  }
+}
