@@ -164,6 +164,22 @@ Spec `docs/superpowers/specs/2026-10-07-fase-c-una-proteccion.md`. Variable `IDE
 - **Antes de pasar a `activo`, José revisa `a_cero_por_r4.total` del reporte de sombra** (si supera el tope, R4 no se aplicaría).
 - **Despliegue:** backup, migración 120 con `sombra`, leer el reporte, OK de José, `activo` + `pm2 restart`. Vuelta atrás: `sombra` + restart.
 
+## Catálogo y vínculos (Fase D, 2026-10-11)
+
+Spec/plan/diseño: `docs/superpowers/specs|plans/2026-10-09-fase-d-*`. Una sola pantalla `/catalogo-vinculos/` (`public/catalogo-vinculos/`) con un único escritor: el motor de Identidad. `/matcher/`, `/identidad-productos/`, `/guardia-ml/` y `/bandeja-identidad/` son stubs que redirigen (`?aviso=unificado`); el Home tiene la tarjeta con chip vía `/api/catalogo-vinculos/estado`. Contrato de la API en `docs/api-contrato.md`.
+
+- **Modelo:** cola de casos (`GET /cola`, filtros incl. `cerrados` con `cierre:{tipo,motivo,por,desde,vence_en}`), detalle `GET /casos/:id` (`data.caso` + en `data`: `vinculo_vigente`, `hermanas_item`, `marca`, `notas`, `excepcion`, `ninguno_sirve{motivo,nota,por,desde}`, `link_de_pago_sin_marketplace`), Ejecución, Retenidas, Vínculos. Toda mutación exige `operation_id`, `expected_version` y `evidence_fingerprint`; el replay por `operation_id` es idempotente.
+- **Cerrar / reabrir:** excepción con vencimiento y «Ninguno sirve» sacan el caso de la cola; filtro «Cerrados» + `POST /casos/:id/reabrir` (write, motivo obligatorio; una marca de no sincronizar o link de pago no se reabre por ahí, 409). Un caso cerrado se ve solo lectura con Reabrir como única acción.
+- **Deshacer / revertir:** `/operaciones/:id/deshacer` solo en shadow/pendiente/bloqueada_impacto (si no, 409 `OPERACION_YA_INICIADA`); `/operaciones/:id/revertir` solo `completada`. Una operación `cancelada:` no se reintenta (409). Deshacer «No sincronizar» restaura `sku_anterior` por la saga normal o avisa que quedó sin vínculo.
+- **Retenidas:** liberar una venta cuya causa es una clave con marca «no sincronizar» da 409 `LIBERAR_BLOQUEADO_POR_MARCA` (también en `/api/guardia-ml/pedidos-retenidos/:id/liberar`); `retenerPedidoMl` repone `retenido` desde `liberado` mientras la marca siga. Sin marca (o ítems sin id) se libera a mano.
+- **Pausas (migraciones 124-125):** `identidad_pausas`; una pausa que cambia las hermanas activas pasa a `bloqueada_impacto` y abre el incidente `pausa_bloqueada_impacto` (advertencia). Salida: `POST /pausas/:id/confirmar-impacto` (solo admin; vieja `cancelada`, nueva con `operation_id` nuevo); exige la marca (b) vigente. Se cancela sola al deshacer la marca, al cambiar de variante («reemplazada por otra marca») o al vincular («reemplazada por vínculo»).
+- **Permisos:** notas y Reabrir exigen `matcher:write`; pisar una marca `link_de_pago`/`no_sincronizar_c` exige admin (403). En celular (<768 px) la pantalla es solo consulta por decisión de José.
+- **Matcher:** `GET /api/matcher/candidatos` paginado en servidor (`q` AND por palabras sin acentos, `filtro`, `limit` 50/200, `offset`); frío ~15 s cediendo el loop (202 `computing` con reintento), caliente p95 0,33 s.
+- **Otros arreglos durables:** `alinearVinculoLocal` propaga «confirmar igual» (override_contradiccion + evento); el único reclamante de un GTIN pasa de `conflicto` a `activo` al descartar al titular; `urlML` solo acepta https.
+- **Migraciones 122-125:** 122 `ml_key` en ítems de pedidos, 123 override de contradicción, 124 `identidad_pausas`, 125 `identidad_pausas` admite `bloqueada_impacto`.
+- **Desplegar:** backup + `integrity_check`, merge, `pm2 restart` inmediato con migraciones en logs, queda en shadow, smoke con auditor/home/redirecciones, verificar gzip de `catalogo-vinculos.js` (~191 KB sin comprimir), backfill de 30 días si sigue en el plan; vuelta atrás con el backup y el commit previo.
+- **QA:** `scripts/qa/qa.sh up <rama>` (pasar la rama explícita) y fixtures `scripts/qa/fixtures/catalogo-vinculos.mjs` (`--masivos N`, GTIN único `7790000000010`); base anonimizada, nunca la de producción.
+
 ## Pausas con sentido (Fase A, 2026-10-05)
 
 - **Vigía de formato** (`lib/vigiaPausado.js`): sólo pausa cambios reales. **Vacío → producto no pausa**: casi siempre es ML asignando catálogo; queda como aviso abierto (`aviso_catalogo`, `solo_aviso=1`) para que una persona lo mire y **no bloquea al reactivador**. Tampoco pausan `desaparece`, `oscila`, `alta_reciente` ni `migracion` (migración de ML). El texto informativo de un aviso sin pausa va en `ml_publicacion_cambios.nota`; `pausada=1` sólo si el vigía pausó de verdad.
