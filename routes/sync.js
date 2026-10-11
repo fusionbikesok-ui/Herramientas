@@ -1127,7 +1127,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       // El pedido SI se habia creado en Woo: se completa la reserva con el id real (mismo
       // camino que el exito) en vez de dejar que el proximo ciclo cree un duplicado.
       let pedidoExistente = null;
-      try { pedidoExistente = (await wooFetch(wooCfg, `/orders/${wcExistente}`))?.data ?? null; } catch { /* las líneas se completan después */ }
+      try { pedidoExistente = (await wooFetch(wooCfg, `/orders/${wcExistente}`))?.data ?? null; } catch (eLect) {
+        // Las líneas se completan después (intentarLiberarFila); queda registro.
+        logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: `No se pudo releer el pedido ${wcExistente} para completar la barrera (se completa en el próximo ciclo): ${eLect.message}`.slice(0, 400) });
+      }
       db.transaction(() => {
         db.prepare(`
           UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, comprador_json = ?, retenido_en = NULL
@@ -1514,7 +1517,8 @@ async function liberarYCorregirTrasVenta(db, cfg, skus, orderId) {
       for (const f of lib) await _corregirBolsaDuena(db, cfg, f.sku, idBarrera(f.sku, f.ml_order_id));
       if (!db.prepare('SELECT 1 FROM stock_refresco_pendiente WHERE ml_order_id = ?').get(String(orderId))) return;
     } catch (e) {
-      logSync(db, { direccion: 'wc_ml', sku: skus[0], estado: 'error', error: `Barrera tras venta ML ${orderId}: ${e.message}`.slice(0, 400) });
+      // Corre en segundo plano: con la base ya cerrada (reinicio/tests) el log no puede convertirse en un rechazo sin manejar.
+      try { logSync(db, { direccion: 'wc_ml', sku: skus[0], estado: 'error', error: `Barrera tras venta ML ${orderId}: ${e.message}`.slice(0, 400) }); } catch { /* sin base: lo retoma el cron */ }
     }
   }
 }
@@ -3794,8 +3798,33 @@ export function syncRouter(db, cfg) {
     }
   });
 
-  router.get('/barrera', requireAdmin, (_req, res) => {
-    res.json({ ok: true, filas: db.prepare('SELECT sku, ml_order_id, estado, woo_confirmado, wc_order_id, incidente_motivo, creado_en FROM stock_refresco_pendiente ORDER BY creado_en').all() });
+  // Barreras activas con su estado y motivo. Para las que tienen un incidente se relee el pedido en Woo y cada línea dice si
+  // se puede ofrecer "Confirmar descuento" (`_reduced_stock` == cantidad y todavía sin confirmar).
+  router.get('/barrera', requireAdmin, async (_req, res) => {
+    try {
+      const filas = db.prepare('SELECT sku, ml_order_id, estado, woo_confirmado, wc_order_id, incidente_motivo, lineas_json, confirmaciones_json, creado_en FROM stock_refresco_pendiente ORDER BY creado_en').all();
+      const salida = [];
+      for (const f of filas) {
+        let lineas = [], confs = [];
+        try { lineas = JSON.parse(f.lineas_json || '[]'); } catch { /* fila ilegible: se muestra sin líneas */ }
+        try { confs = JSON.parse(f.confirmaciones_json || '[]'); } catch { /* sin confirmaciones */ }
+        let orden = null, ordenError = null;
+        if (f.incidente_motivo && f.woo_confirmado && f.wc_order_id) {
+          try { orden = (await wooFetch(cfg.woo, `/orders/${f.wc_order_id}`))?.data ?? null; } catch (e) { ordenError = String(e.message).slice(0, 120); }
+        }
+        const out = lineas.map((l) => {
+          const confirmada = confs.some((c) => c.idx === l.idx);
+          const m = ((orden?.line_items || []).find((x) => x.id === l.line_item_id)?.meta_data || []).find((x) => x.key === '_reduced_stock');
+          return { idx: l.idx, nombre: l.name || null, cantidad: l.cantidad, reduced_stock: m ? Number(m.value) : null, confirmada,
+            puede_confirmar: !confirmada && !!m && Number(m.value) === Number(l.cantidad) };
+        });
+        salida.push({ sku: f.sku, ml_order_id: f.ml_order_id, estado: f.estado, woo_confirmado: f.woo_confirmado, wc_order_id: f.wc_order_id,
+          incidente_motivo: f.incidente_motivo, creado_en: f.creado_en, lineas: out, orden_error: ordenError });
+      }
+      res.json({ ok: true, filas: salida });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   // Fase C: reporte de sombra para José (solo admin). Solo lectura.

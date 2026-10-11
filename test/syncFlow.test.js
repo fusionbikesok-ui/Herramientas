@@ -16,6 +16,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// La liberación de la barrera corre en segundo plano: sin esperas entre reintentos no queda nada vivo al cerrar cada test.
+process.env.STOCK_BARRERA_REINTENTOS_MS = '0';
 import fs from 'fs';
 import { createHash } from 'node:crypto';
 import { openDb as openDbOriginal } from '../db/index.js';

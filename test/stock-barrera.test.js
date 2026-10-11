@@ -8,7 +8,7 @@ import {
   syncMlToWc, syncSkuPuntual, syncWcToMl, procesarBarreraVentas, chequearReservasConBarrera,
 } from '../routes/sync.js';
 import {
-  tomarCandados, liberarCandados, renovarCandados, resolverBolsa, evaluarBarrera, escribirStockMl, idBarrera,
+  tomarCandados, candadosDelToken, liberarCandados, renovarCandados, resolverBolsa, evaluarBarrera, escribirStockMl, idBarrera,
   limpiarNota, entradasDeNota, evaluarEvidencia, confirmarDescuentoLinea, verificarManageStockWoo, intentarLiberarFila,
 } from '../lib/stockBarrera.js';
 
@@ -240,6 +240,16 @@ describe('escribirStockMl: la puerta única', () => {
     await verificarManageStockWoo(db, CFG.woo, { forzar: true });
     expect((await escribirStockMl(db, CFG.ml, { clave: 'MLA100|', sku: 'BIKE-001', cantidad: 3 })).omitido).toBe(false);
   });
+  it('con el token del dueño y una bolsa recalculada más grande no se autobloquea: toma solo los SKUs que faltan', async () => {
+    seed(db, { userProductId: 'UP1' });
+    db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES ('MLA200|', 'OTRO-SKU', 'x', 'confirmar', ?)").run(t());
+    db.prepare("INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, user_product_id, actualizado_en) VALUES ('MLA200|', 'MLA200', '', 'active', 'UP1', ?)").run(t());
+    const duena = tomarCandados(db, ['BIKE-001']); // el dueño solo tiene su SKU; la bolsa recalculada incluye OTRO-SKU
+    const r = await escribirStockMl(db, CFG.ml, { clave: 'MLA100|', sku: 'BIKE-001', cantidad: 3, candadoToken: duena.token });
+    expect(r.omitido).toBe(false);
+    expect(candadosDelToken(db, duena.token, ['BIKE-001'])).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) n FROM stock_lock WHERE sku = 'OTRO-SKU'").get().n).toBe(0);
+  });
   it('un candado ocupado por otro dueño impide escribir (no hay PUT)', async () => {
     seed(db);
     tomarCandados(db, ['BIKE-001']);
@@ -305,6 +315,41 @@ describe('venta ML: la barrera evita empujar el stock anterior al descuento', ()
     const inc = db.prepare("SELECT * FROM incidentes_operativos WHERE proceso = 'barrera_stock' AND estado = 'activo'").get();
     expect(inc.mensaje_humano).toMatch(/Reducir niveles de stock/);
     expect(ml.puts).toHaveLength(0);
+  });
+
+  it('un 403 persistente al leer las notas: reintenta y a los 30 min abre incidente con el motivo', async () => {
+    seed(db);
+    woo.descuenta = false;
+    await vender();
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (cfg, p, ...r) => {
+      if (/\/notes/.test(p)) throw new Error('WooCommerce API error 403');
+      return base(cfg, p, ...r);
+    });
+    let res = await intentarLiberarFila(db, CFG.woo, filas()[0]);
+    expect(res).toMatchObject({ estado: 'reintentar' });
+    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso = 'barrera_stock'").get().n).toBe(0);
+    db.prepare("UPDATE stock_refresco_pendiente SET creado_en = ?").run(new Date(Date.now() - 31 * 60 * 1000).toISOString());
+    res = await intentarLiberarFila(db, CFG.woo, filas()[0]);
+    expect(res.estado).toBe('reintentar');
+    const inc = db.prepare("SELECT * FROM incidentes_operativos WHERE proceso = 'barrera_stock' AND estado = 'activo'").get();
+    expect(inc.mensaje_tecnico).toMatch(/403/);
+    expect(filas()[0].incidente_motivo).toMatch(/403/);
+    expect(ml.puts).toHaveLength(0);
+  });
+
+  it('confirmarDescuentoLinea: si Woo falla al leer el pedido devuelve 502 con mensaje claro', async () => {
+    seed(db);
+    woo.descuenta = false;
+    await vender();
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (cfg, p, ...r) => {
+      if (p === '/orders/7001') throw new Error('WooCommerce API error 503');
+      return base(cfg, p, ...r);
+    });
+    const r = await confirmarDescuentoLinea(db, CFG.woo, { sku: 'BIKE-001', mlOrderId: 'ORD-1', idx: 0, motivo: 'x', actor: 'admin' });
+    expect(r).toMatchObject({ ok: false, code: 502 });
+    expect(r.error).toMatch(/Woo/);
   });
 
   it('el nombre del pedido no coincide con la nota → no libera', async () => {
