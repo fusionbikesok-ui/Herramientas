@@ -286,19 +286,35 @@ describe('API de Catálogo y vínculos', () => {
       caso(2201);
       retener('ORD-R1', 'MLA2201|');
       const l = await request(app(lector)).get(`${BASE}/retenidas`);
-      expect(l.body.data).toMatchObject([{ ml_order_id: 'ORD-R1', se_vuelve_a_retener: true }]);
+      // Sin marca "no sincronizar" la causa no bloquea la liberación manual: se_vuelve_a_retener false.
+      expect(l.body.data).toMatchObject([{ ml_order_id: 'ORD-R1', se_vuelve_a_retener: false }]);
       expect((await request(app(lector)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({ motivo: 'x' })).status).toBe(403);
       expect((await request(app(operador)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({})).status).toBe(422);
-      // Causa activa (sin vínculo): liberar no sirve, el sync la retendría de nuevo. 409 con código propio.
-      const bloqueada = await request(app(operador)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({ motivo: 'Cliente avisó' });
-      expect(bloqueada.status).toBe(409);
-      expect(bloqueada.body).toMatchObject({ ok: false, code: 'LIBERAR_BLOQUEADO_POR_MARCA',
-        error: 'Primero vinculá la publicación o quitá la marca', se_vuelve_a_retener: true, claves: ['MLA2201|'] });
-      expect(db.prepare("SELECT estado FROM guardia_ml_pedidos_retenidos WHERE ml_order_id='ORD-R1'").get().estado).toBe('retenido');
-      // Vinculada la publicación (causa resuelta): sí se libera.
-      db.prepare("INSERT INTO sku_matcher_decisiones (clave,sku,accion,origen,actualizado_en) VALUES ('MLA2201|','FB-2201','confirmar','manual',?)").run(ISO);
+      // Sin marca, sin vínculo: se libera a mano como antes (200), no 409.
       expect((await request(app(operador)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({ motivo: 'Cliente avisó' })).status).toBe(200);
       expect((await request(app(operador)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({ motivo: 'otra vez' })).status).toBe(404);
+    });
+
+    it('liberar bloquea SOLO si la causa es la marca "no sincronizar": 409 LIBERAR_BLOQUEADO_POR_MARCA', async () => {
+      caso(2204);
+      await request(app(operador)).post(`${BASE}/casos/${db.prepare("SELECT id FROM identidad_casos WHERE ml_key='MLA2204|'").get().id}/no-sincronizar`)
+        .send({ variante: 'a', motivo: 'm', expected_sku: null });
+      retener('ORD-R4', 'MLA2204|');
+      const l = await request(app(lector)).get(`${BASE}/retenidas`);
+      expect(l.body.data[0]).toMatchObject({ ml_order_id: 'ORD-R4', se_vuelve_a_retener: true });
+      const bloqueada = await request(app(operador)).post(`${BASE}/retenidas/ORD-R4/liberar`).send({ motivo: 'Cliente avisó' });
+      expect(bloqueada.status).toBe(409);
+      expect(bloqueada.body).toMatchObject({ ok: false, code: 'LIBERAR_BLOQUEADO_POR_MARCA',
+        error: 'Primero vinculá la publicación o quitá la marca', se_vuelve_a_retener: true, claves: ['MLA2204|'] });
+      expect(db.prepare("SELECT estado FROM guardia_ml_pedidos_retenidos WHERE ml_order_id='ORD-R4'").get().estado).toBe('retenido');
+    });
+
+    it('una venta con ítems sin id (claves []) no bloquea: se_vuelve_a_retener false y liberar 200', async () => {
+      db.prepare(`INSERT INTO guardia_ml_pedidos_retenidos (ml_order_id,motivo,items_json,creado_en,actualizado_en)
+        VALUES ('ORD-S1','sin_cobertura',?,?,?)`).run(JSON.stringify([{ item: { seller_sku: 'FB-X', title: 'Sin id' }, quantity: 1 }]), ISO, ISO);
+      const l = await request(app(lector)).get(`${BASE}/retenidas`);
+      expect(l.body.data[0]).toMatchObject({ ml_order_id: 'ORD-S1', claves: [], se_vuelve_a_retener: false });
+      expect((await request(app(operador)).post(`${BASE}/retenidas/ORD-S1/liberar`).send({ motivo: 'Revisado a mano' })).status).toBe(200);
     });
 
     it('una venta de "no sincronizar" avisa que se vuelve a retener', async () => {

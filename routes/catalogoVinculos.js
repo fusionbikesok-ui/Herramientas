@@ -5,7 +5,7 @@ import {
 } from '../lib/identidadProductos.js';
 import { liberarPedidoRetenido, bloqueoLiberacionManual } from '../lib/guardiaMl.js';
 import { marcarNoSincronizar, marcarLinkDePago, deshacerNoSincronizar } from '../lib/noSincronizar.js';
-import { solicitarNoSincronizarPausa } from '../lib/pausasIdentidad.js';
+import { confirmarImpactoPausa, solicitarNoSincronizarPausa } from '../lib/pausasIdentidad.js';
 import {
   cancelarVinculo, deshacerNingunoSirve, deshacerSalteo, excepcionSoloMl, ningunoSirve, reabrirCaso, revertirVinculo,
 } from '../lib/catalogoVinculosAcciones.js';
@@ -156,6 +156,9 @@ export function catalogoVinculosRouter(db) {
     reintentarOperacionIdentidad(db, req.params.id, req.body || {}, actor(req))));
   router.post('/operaciones/:id/confirmar-impacto', exigir('write', true), (req, res) => responder(res,
     confirmarImpactoIdentidad(db, req.params.id, req.body || {}, actor(req))));
+  // Pausa bloqueada por impacto en hermanas: confirma con un operation_id nuevo (reemplaza la vieja; ver pausasIdentidad).
+  router.post('/pausas/:id/confirmar-impacto', exigir('write', true), (req, res) => responder(res,
+    confirmarImpactoPausa(db, req.params.id, req.body || {}, actor(req)), true));
   router.post('/operaciones/:id/destrabar', exigir('write', true), (req, res) => responder(res,
     destrabarOperacionIdentidad(db, req.params.id, req.body || {}, actor(req))));
 

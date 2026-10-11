@@ -142,12 +142,14 @@ describe('Guardia ML — ventas retenidas: liberación automática y aviso', () 
 
     it('liberar a mano deja los mismos efectos, registra el evento y resuelve la alerta', async () => {
       retener(db, 'ORD-H', [itemOrden('MLA60')], ['MLA60|']);
-      // Causa activa: 409 con código propio, y la venta sigue retenida.
+      // Causa activa = marca "no sincronizar": 409 con código propio, y la venta sigue retenida.
+      db.prepare("INSERT INTO sku_matcher_decisiones(clave,sku,accion,origen,actualizado_en) VALUES ('MLA60|',NULL,'omitir','no_sincronizar_a',?)").run(now());
       const bloqueada = await request(app()).post('/api/guardia-ml/pedidos-retenidos/ORD-H/liberar').send({ motivo: 'vinculado a mano' });
       expect(bloqueada.status).toBe(409);
       expect(bloqueada.body).toMatchObject({ ok: false, code: 'LIBERAR_BLOQUEADO_POR_MARCA', se_vuelve_a_retener: true });
       expect(pedidoMlRetenido(db, 'ORD-H')).toBeTruthy();
-      catalogo(db, 'FB-60'); cache(db, 'MLA60|', 'FB-60'); decision(db, 'MLA60|', 'FB-60');
+      catalogo(db, 'FB-60'); cache(db, 'MLA60|', 'FB-60');
+      db.prepare("UPDATE sku_matcher_decisiones SET sku='FB-60',accion='confirmar',origen='manual' WHERE clave='MLA60|'").run();
       db.prepare("UPDATE guardia_ml_casos SET bloquea_sync=0 WHERE clave='MLA60|'").run();
       const res = await request(app()).post('/api/guardia-ml/pedidos-retenidos/ORD-H/liberar').send({ motivo: 'vinculado a mano' });
       expect(res.body).toEqual({ ok: true, estado: 'liberado' });
