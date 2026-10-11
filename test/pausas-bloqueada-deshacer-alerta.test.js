@@ -92,7 +92,8 @@ describe('pausa bloqueada_impacto: deshacer, re-marca, confirmación vigente y a
       expect(r.status).toBe(409);
       expect(r.body).toMatchObject({ ok: false, code: 'INVALID_STATE' });
       expect(cuantas(db)).toBe(antes);
-      expect(porId(db, vieja.id).estado).toBe('bloqueada_impacto');
+      // Reemplazar la marca cancela la pausa en el mismo momento (ver no-sincronizar-reemplaza-pausa.test.js).
+      expect(porId(db, vieja.id)).toMatchObject({ estado: 'cancelada', ultimo_error: 'reemplazada por otra marca' });
     });
 
     it('con la marca (b) vigente, confirmar sigue 201 y crea la pausa nueva', async () => {
