@@ -160,13 +160,20 @@
     return 'Error de ML: ' + s.slice(0, 80);
   }
   // Permalink de la publicación en ML: el de la API si viene; si no, la URL del artículo por clave (sin variación ni pipe).
+  // Solo https: cualquier otro esquema (http:, javascript:, data:…) o URL inválida no se linkea (devuelve null).
   function urlML(pub, clave) {
-    if (pub && pub.permalink) return pub.permalink;
-    var item = normClave(clave).split('|')[0];
-    return item ? 'https://articulo.mercadolibre.com.ar/' + encodeURIComponent(item) : null;
+    var url = null;
+    if (pub && pub.permalink) url = String(pub.permalink);
+    else {
+      var item = normClave(clave).split('|')[0];
+      if (item) url = 'https://articulo.mercadolibre.com.ar/' + encodeURIComponent(item);
+    }
+    if (!url) return null;
+    try { var u = new URL(url); return u.protocol === 'https:' ? u.href : null; } catch (e) { return null; }
   }
   var MSG_ERROR_SIN_RED = 'Sin conexión. No se guardó nada.';
   var MSG_SIN_PERMISO = 'No tenés permiso para esto.';
+  var MSG_LIBERAR_MARCA = 'Primero vinculá la publicación o quitá la marca';
   var PUNTO_CORTE_PC = 768;
   var MOTIVO_NINGUNO_TXT = { no_es_ninguno: 'No es ninguno de estos', no_existe_en_woo: 'No existe en Woo' };
   // Fechas para la excepción solo ML: el vencimiento es un día posterior a hoy (hora local) como mínimo.
@@ -224,7 +231,7 @@
     opIds: {}, dlgActivo: null, dlgDisparador: null,
     ejecEstados: null, ejecPoll: null, ejecError: null, ejecMsgs: {}, busyOp: null,
     ejecQ: '', ejecSnap: null, ejecTimer: null, ejecAbiertas: { completadas: false, canceladas: false }, ejecMasBusy: null, ejecMasError: null,
-    retenidas: null, retError: null, retAbierta: null, retAviso: {},
+    retenidas: null, retError: null, retAbierta: null, retAviso: {}, retBloqueo: {},
     vincResultados: null, vincQ: '', vincPanel: null, identMsg: null,
     vincItems: [], vincTotal: 0, vincOffset: 0, vincConteos: null, vincCargandoMas: false,
     conflictos: null, conflictosError: null, conflictoAbierto: null, conflictoDetalle: null, confResolver: null,
@@ -304,7 +311,9 @@
   // Acciones deshabilitadas (aria-disabled, no disabled). Se re-aplica tras cada cambio de estado.
   function aplicarBloqueo() {
     $$('[data-accion]').forEach(function (el) {
-      el.setAttribute('aria-disabled', bloqueado(el.getAttribute('data-accion')) ? 'true' : 'false');
+      // data-bloqueo-fijo: deshabilitado por el estado de la fila (retenida con marca); no lo pisa el bloqueo general.
+      var fijo = el.hasAttribute('data-bloqueo-fijo');
+      el.setAttribute('aria-disabled', (fijo || bloqueado(el.getAttribute('data-accion'))) ? 'true' : 'false');
     });
   }
 
@@ -1120,7 +1129,15 @@
     S.busy = 'deshacer'; renderDetalle();
     api('POST', '/claves/no-sincronizar/deshacer', { clave: d.clave, motivo: d.motivo }).then(function (r) {
       S.busy = null; limpiarDeshacer();
-      if (r.ok) { S.guardado = { caso: d.caso, texto: 'Deshecho. La publicación vuelve a la cola.' }; anunciar('Deshecho.', 'estado'); return abrirCaso(d.caso, { foco: false }).then(cargarCola); }
+      if (r.ok) {
+        // El servidor dice si el vínculo volvió: restaurado:false deja el caso sin vínculo y se avisa en tono atención.
+        var vinc = r.data.vinculo || {};
+        var txt = r.data.aviso || vinc.aviso || (vinc.restaurado ? 'Marca quitada; vínculo restaurado a ' + vinc.sku : 'Marca quitada; el caso queda sin vínculo');
+        var atencion = vinc.restaurado === false;
+        S.guardado = { caso: d.caso, texto: txt, tono: atencion ? 'atencion' : 'ok' };
+        anunciar(txt, atencion ? 'alerta' : 'estado');
+        return abrirCaso(d.caso, { foco: false }).then(cargarCola);
+      }
       if (r.status === 409) { S.guardado = { caso: d.caso, texto: 'Ya se mandó a ML; mirá Ejecución' }; return renderDetalle(); }
       setErrorAccion(mensajeDe(r)); renderDetalle();
     });
@@ -1362,7 +1379,7 @@
         var txt = v === 'b' ? 'En cola para ML · mirá Ejecución' : 'Guardado · No sincronizar: ' + nombre;
         S.guardado = { caso: c.id, texto: txt, titulo: pub.titulo };
         // Deshacer: (a) cualquier operador; (c) solo admin (la spec la trata como decisión compensatoria). (b) no tiene deshacer acá.
-        if (v === 'a' || (v === 'c' && S.isAdmin)) iniciarDeshacer({ caso: c.id, clave: c.ml_key, motivo: motivo, expira: Date.now() + 10000 });
+        if (v === 'a' || (v === 'c' && S.isAdmin)) iniciarDeshacer({ tipo: 'ns', caso: c.id, clave: c.ml_key, motivo: motivo, expira: Date.now() + 10000 });
         S.focoPendiente = '#det-titulo';
         return siguienteCaso();
       }
@@ -2126,10 +2143,14 @@
         ? '<div class="ui-aviso ui-aviso--atencion cv-ret__aviso" role="alert">⚠ Se va a volver a retener.</div> ' : '';
       var liberar = '';
       if (puedeEscribir() && !S.retAviso[f.ml_order_id]) {
-        var avisoRecaida = f.se_vuelve_a_retener
-          ? '<div class="ui-aviso ui-aviso--atencion cv-ret__aviso" role="note"><span aria-hidden="true">⚠</span> Al liberar, en la próxima sincronización se crea el pedido en la web. Si la causa sigue, se vuelve a retener.</div>' : '';
-        liberar = abierta
-          ? '<form class="cv-ret__form" data-accion="liberar-enviar" data-orden="' + esc(f.ml_order_id) + '" novalidate>' + avisoRecaida
+        // Causa sigue (la lista la marca, o el servidor respondió LIBERAR_BLOQUEADO_POR_MARCA): Liberar queda deshabilitado con la explicación visible.
+        var bloqueada = !!f.se_vuelve_a_retener || !!S.retBloqueo[f.ml_order_id];
+        var idBloq = 'ret-bloq-' + esc(f.ml_order_id);
+        if (bloqueada) {
+          liberar = '<button type="button" class="ui-btn" data-accion="liberar-abrir" data-bloqueo-fijo="1" aria-disabled="true" aria-describedby="' + idBloq + '" data-orden="' + esc(f.ml_order_id) + '">Liberar</button>'
+            + '<p id="' + idBloq + '" class="ui-aviso ui-aviso--atencion cv-ret__aviso"' + (S.retBloqueo[f.ml_order_id] ? ' role="alert"' : '') + '><span aria-hidden="true">⚠</span> ' + MSG_LIBERAR_MARCA + '</p>';
+        } else liberar = abierta
+          ? '<form class="cv-ret__form" data-accion="liberar-enviar" data-orden="' + esc(f.ml_order_id) + '" novalidate>'
             + '<label class="ui-label" for="ret-m-' + esc(f.ml_order_id) + '">Motivo <span>(obligatorio)</span></label>'
             + '<textarea id="ret-m-' + esc(f.ml_order_id) + '" class="ui-input" rows="2"></textarea>'
             + '<p class="cv-error" hidden></p>'
@@ -2163,12 +2184,19 @@
     }
     var fila = (S.retenidas || []).find(function (f) { return f.ml_order_id === orden; });
     var sigueCausa = !!(fila && fila.se_vuelve_a_retener);
+    // Causa vigente: no se envía. La fila ya muestra Liberar deshabilitado con la explicación.
+    if (sigueCausa) { S.retAbierta = null; renderRetenidas(); enfocarPorSelector('[data-accion="liberar-abrir"][data-orden="' + orden + '"]'); return; }
     S.busy = 'liberar';
     var boton = form.querySelector('button[type="submit"]');
     if (boton) { boton.setAttribute('aria-disabled', 'true'); boton.textContent = 'Liberando…'; }
     api('POST', '/retenidas/' + enc(orden) + '/liberar', { motivo: motivo }).then(function (r) {
       S.busy = null;
       if (!r.ok) {
+        // Marca vigente sin vincular: el aviso va en la fila (role alert) y el foco vuelve al botón deshabilitado.
+        if (r.status === 409 && r.data.code === 'LIBERAR_BLOQUEADO_POR_MARCA') {
+          S.retAbierta = null; S.retBloqueo[orden] = true; renderRetenidas();
+          enfocarPorSelector('[data-accion="liberar-abrir"][data-orden="' + orden + '"]'); return;
+        }
         if (boton) { boton.setAttribute('aria-disabled', 'false'); boton.textContent = 'Confirmar liberación'; }
         err.textContent = mensajeDe(r); err.hidden = false; return;
       }
@@ -2617,7 +2645,7 @@
     // Las retenidas se guardan acá (no solo al abrir la tab) para que el link del caso aparezca sin visitarla.
     api('GET', '/retenidas').then(function (r) {
       if (!r.ok) return;
-      S.retenidas = r.data.data || [];
+      S.retenidas = r.data.data || []; S.retBloqueo = {};
       $('#cnt-retenidas').textContent = '· ' + S.retenidas.length;
       if (S.detalle) renderDetalle();
     });

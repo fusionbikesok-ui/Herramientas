@@ -225,6 +225,8 @@
 /* Línea de guardado */
 .cv-guardado { color: var(--success); font-weight: 600; display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .cv-guardado::before { content: "✓"; }
+.cv-guardado.ui-aviso--atencion { color: var(--warning); }
+.cv-guardado.ui-aviso--atencion::before { content: "⚠"; }
 
 /* Avisos fijos */
 .cv-aviso-fijo { display: flex; gap: var(--sp-1); align-items: flex-start; }
