@@ -57,7 +57,7 @@ describe('vincular sobre una marca omitir reemplaza la pausa bloqueada_impacto d
       expected_version: f.expected_version, evidence_fingerprint: f.evidencia_fingerprint, override_omitir: true }, 'jose');
     expect(r).toMatchObject({ ok: true, vinculo_actualizado: true });
     expect(db.prepare("SELECT accion FROM sku_matcher_decisiones WHERE clave='MLA1301|'").get().accion).toBe('confirmar');
-    expect(estadoPausa(db, pausa)).toMatchObject({ estado: 'cancelada', ultimo_error: 'reemplazada por otra marca' });
+    expect(estadoPausa(db, pausa)).toMatchObject({ estado: 'cancelada', ultimo_error: 'reemplazada por vínculo' });
     expect(estadoAlerta(db)).toBe('resuelto');
   });
 
@@ -80,7 +80,7 @@ describe('vincular sobre una marca omitir reemplaza la pausa bloqueada_impacto d
     for (let i = 0; i < 8; i++) await procesarPasoOperacionIdentidad(db, op.id, adapter, { allowRemoteWrites: true });
     expect(db.prepare('SELECT estado FROM identidad_operaciones WHERE id=?').get(op.id).estado).toBe('completada');
     expect(db.prepare("SELECT accion FROM sku_matcher_decisiones WHERE clave='MLA1302|'").get().accion).toBe('confirmar');
-    expect(estadoPausa(db, pausa)).toMatchObject({ estado: 'cancelada', ultimo_error: 'reemplazada por otra marca' });
+    expect(estadoPausa(db, pausa)).toMatchObject({ estado: 'cancelada', ultimo_error: 'reemplazada por vínculo' });
     expect(estadoAlerta(db)).toBe('resuelto');
   });
 

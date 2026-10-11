@@ -3807,3 +3807,4 @@ Modo Publicación ML de la pestaña Vínculos. Sin parámetros de paginación la
 - Tamaño y tiempo (medido, 7000 publicaciones sintéticas, caché caliente): página de 50 ≈ 8 KB
   (~12–23 ms); página de 200 no se midió por separado (el test exige < 200 KB); respuesta vieja ≈ 8.8 MB (~140 ms, sin contar el JSON
   real de ~21 MB).
+- Reemplazo por vínculo (2026-10-11): si la marca `omitir` de la clave se reemplaza por un vínculo (saga de `decidirCasoIdentidad` o alineación local), las pausas `bloqueada_impacto` de esa clave pasan a `cancelada` con `ultimo_error` `"reemplazada por vínculo"` (historial con `variante_nueva: 'vinculo'`) y se cierra la alerta si no queda otra bloqueada.
