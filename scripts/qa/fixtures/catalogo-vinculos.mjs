@@ -79,6 +79,11 @@ function limpiarSembrado(db) {
   db.prepare(`UPDATE productos_fusion SET estado='archivado', archivado_en=?, actualizado_en=?
     WHERE creado_por=? AND estado<>'archivado'`).run(new Date().toISOString(), new Date().toISOString(), ORIGEN);
   db.prepare("DELETE FROM catalogo_cache WHERE sku LIKE 'QAFX-%'").run();
+  // Identificadores: NO se borran (trg_identificadores_sin_borrado aborta el DELETE). Se pasan a 'historico', que ni
+  // cuenta como activo (índice único) ni como conflicto (la lista de conflictos mira activo/conflicto).
+  db.prepare(`UPDATE identificadores_producto SET estado='historico', actualizado_en=?
+    WHERE tipo='gtin' AND valor_normalizado=? AND estado<>'historico'
+      AND producto_id IN (SELECT id FROM productos_fusion WHERE creado_por=?)`).run(new Date().toISOString(), GTIN_UNICO_CANONICO, ORIGEN);
 }
 
 // ── Datos ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -100,6 +105,15 @@ const WOO = [
     '<text x="100" y="185" font-size="18" text-anchor="middle" fill="#fff">QAFX foto</text></svg>').toString('base64') },
 ];
 const wooId = (n) => 9900100 + n;
+
+// Conflicto de GTIN para probar "No le corresponde" -> permitir_unico (identidadProductos: marcarIdentificadorIncorrecto).
+// EAN-13 con dígito de control válido. Producto QAFX-6 lo tiene 'activo' y es su único GTIN activo (la condición de
+// permitir_unico); QAFX-7 lo tiene en 'conflicto', así que el valor aparece en conflictosDeIdentificador (>=2 productos).
+// No se usa UNIQUE sobre (tipo,valor) sino el índice parcial de 'activo': por eso el par activo+conflicto es válido.
+const GTIN_UNICO = '7790000000010';
+const GTIN_UNICO_CANONICO = GTIN_UNICO.padStart(14, '0');
+const GTIN_ACTIVO_WOO_N = 6;     // QAFX Candado: GTIN activo único -> dispara permitir_unico
+const GTIN_CONFLICTO_WOO_N = 7;  // QAFX Pedales: mismo valor en conflicto
 
 // Publicaciones ML (cache). clave = item_id|variation_id ('' si no tiene variación).
 const PUBS = [
@@ -152,6 +166,29 @@ function sembrarMasivos(db, n) {
   return n;
 }
 
+/** GTIN de conflicto (ver GTIN_UNICO). Idempotente por (valor, producto): reactiva la fila si existe, si no la inserta.
+ *  Aborta si el valor ya lo usa un producto que no es del fixture (no pisa datos reales). */
+function sembrarGtinConflicto(db, productoDe, ahora) {
+  const ajeno = db.prepare(`SELECT COUNT(*) n FROM identificadores_producto
+    WHERE tipo='gtin' AND valor_normalizado=? AND producto_id NOT IN (SELECT id FROM productos_fusion WHERE creado_por=?)`)
+    .get(GTIN_UNICO_CANONICO, ORIGEN).n;
+  if (ajeno) throw new Error(`ABORTA: el GTIN ${GTIN_UNICO} ya lo usa un producto real`);
+  const poner = (n, estado) => {
+    const pid = productoDe(n);
+    const f = db.prepare("SELECT id FROM identificadores_producto WHERE tipo='gtin' AND valor_normalizado=? AND producto_id=?").get(GTIN_UNICO_CANONICO, pid);
+    if (f) {
+      db.prepare("UPDATE identificadores_producto SET estado=?, actualizado_en=? WHERE id=?").run(estado, ahora, f.id);
+    } else {
+      db.prepare(`INSERT INTO identificadores_producto
+        (tipo,valor_normalizado,valor_crudo,subtipo,fuente,producto_id,estado,creado_en,actualizado_en)
+        VALUES ('gtin',?,?,'ean_13','woo',?,?,?,?)`).run(GTIN_UNICO_CANONICO, GTIN_UNICO, pid, estado, ahora, ahora);
+    }
+  };
+  // El activo primero: el índice único de 'activo' se aplica en cada escritura.
+  poner(GTIN_ACTIVO_WOO_N, 'activo');
+  poner(GTIN_CONFLICTO_WOO_N, 'conflicto');
+}
+
 function sembrar(db, { masivos = 0 } = {}) {
   // Guardia: los ids Woo de fixture no pueden pisar productos reales (solo se reutilizan los del propio fixture).
   const ajenos = db.prepare(`SELECT COUNT(*) n FROM productos_fusion WHERE primary_woo_id BETWEEN ? AND ? AND creado_por IS NOT ?`)
@@ -168,6 +205,7 @@ function sembrar(db, { masivos = 0 } = {}) {
   // El producto con foto usa su nombre Woo como canónico: la búsqueda del panel puntúa sobre nombre_canonico.
   for (const w of WOO) insProd.run(w.img ? w.nombre : `QAFX Producto ${w.n}`, wooId(w.n), ORIGEN, ahora, ahora);
   const productoDe = (n) => db.prepare('SELECT id FROM productos_fusion WHERE primary_woo_id=?').get(wooId(n)).id;
+  sembrarGtinConflicto(db, productoDe, ahora);
 
   const insPub = db.prepare(`INSERT INTO ml_publicaciones_cache
     (clave,item_id,variation_id,titulo,status,es_variante,color,talle,seller_sku,variations_texto,available_quantity,precio,actualizado_en)
@@ -228,7 +266,7 @@ function sembrar(db, { masivos = 0 } = {}) {
   db.prepare(`INSERT INTO sku_matcher_decisiones (clave,sku,wc_nombre,accion,actualizado_en,origen,confirmado_por)
     VALUES ('QAFX-MLA6|',NULL,'QAFX Candado cable 1m','omitir',?,'no_sincronizar_a','Matias')`).run(hace(2));
   const extra = sembrarMasivos(db, masivos);
-  return { casos: Object.keys(casos).length + extra, publicaciones: PUBS.length + extra, operaciones: 3, retenidas: 2, masivos: extra, conFoto: 'QAFX-MLA8|' };
+  return { casos: Object.keys(casos).length + extra, publicaciones: PUBS.length + extra, operaciones: 3, retenidas: 2, masivos: extra, conFoto: 'QAFX-MLA8|', gtinConflicto: GTIN_UNICO };
 }
 
 /** Separa flags, la ruta y --masivos (valor con espacio o con '='). Valida el entero aquí, antes de abrir nada. */

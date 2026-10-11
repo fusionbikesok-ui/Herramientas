@@ -151,6 +151,9 @@ describe('Catálogo y vínculos: acciones de la Fase D', () => {
       expect(db.prepare('SELECT status,available_quantity FROM ml_publicaciones_cache WHERE clave=?').get('MLA3011|')).toEqual(cache);
       const detalle = await request(app(lector)).get(`${BASE}/casos/${c.id}`);
       expect(detalle.body.data.ninguno_sirve).toMatchObject({ motivo: 'no_existe_en_woo', nota: 'Es un accesorio', por: 'ana' });
+      // `desde` es el creado_en del evento 'ninguno_sirve' en el historial (mismo criterio que `cierre.desde` en la cola).
+      const evNinguno = db.prepare("SELECT creado_en FROM identidad_historial WHERE entidad_tipo='caso' AND entidad_id=? AND evento='ninguno_sirve'").get(c.id);
+      expect(detalle.body.data.ninguno_sirve).toEqual({ motivo: 'no_existe_en_woo', nota: 'Es un accesorio', por: 'ana', desde: evNinguno.creado_en });
       expect((await request(app(operador)).post(`${BASE}/casos/${c.id}/ninguno-sirve`).send(body)).body.repetido).toBe(true);
       const otro = await request(app(operador)).post(`${BASE}/casos/${c.id}/ninguno-sirve`).send(cuerpoCaso(c.id, { motivo: 'no_es_ninguno' }));
       expect(otro.status).toBe(409);

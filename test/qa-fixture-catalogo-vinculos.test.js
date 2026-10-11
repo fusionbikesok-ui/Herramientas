@@ -4,7 +4,12 @@ import os from 'os';
 import path from 'path';
 import { openDb } from '../db/index.js';
 import { colaCasos } from '../lib/catalogoVinculos.js';
-import { buscarProductosFusion } from '../lib/identidadProductos.js';
+import express from 'express';
+import request from 'supertest';
+import {
+  buscarProductosFusion, conflictosDeIdentificador, detalleConflictoIdentificador, marcarIdentificadorIncorrecto,
+} from '../lib/identidadProductos.js';
+import { identidadProductosRouter } from '../routes/identidadProductos.js';
 import {
   sembrar, limpiarSembrado, parsearArgs, validarDestino, MASIVOS_MAX,
 } from '../scripts/qa/fixtures/catalogo-vinculos.mjs';
@@ -120,6 +125,66 @@ describe('scripts/qa/fixtures/catalogo-vinculos: caso con foto (tecla f)', () =>
       db.transaction(() => limpiarSembrado(db))();
       expect(db.prepare("SELECT COUNT(*) n FROM catalogo_cache WHERE sku='QAFX-SKU-8'").get().n).toBe(0);
       expect(db.prepare("SELECT COUNT(*) n FROM identidad_casos WHERE ml_key='QAFX-MLA8|'").get().n).toBe(0);
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('scripts/qa/fixtures/catalogo-vinculos: conflicto de GTIN para permitir_unico', () => {
+  const GTIN = '07790000000010';   // canónico de 14 dígitos (EAN-13 7790000000010)
+  const sembrarOk = (db) => db.transaction(() => { limpiarSembrado(db); return sembrar(db); })();
+  const idDe = (db, sku) => db.prepare("SELECT id FROM productos_fusion WHERE primary_woo_id=?").get(9900100 + Number(sku)).id;
+
+  it('el GTIN aparece en conflicto: QAFX-6 activo (único) y QAFX-7 en conflicto', () => {
+    const { dir, db } = baseTemporal();
+    try {
+      const r = sembrarOk(db);
+      expect(r.gtinConflicto).toBe('7790000000010');
+      const lista = conflictosDeIdentificador(db).find((c) => c.valor_normalizado === GTIN);
+      expect(lista).toMatchObject({ productos: 2 });
+      const det = detalleConflictoIdentificador(db, GTIN);
+      expect(det.productos.map((p) => [p.id, p.estado]).sort()).toEqual([[idDe(db, 6), 'activo'], [idDe(db, 7), 'conflicto']].sort());
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('"No le corresponde" sobre el activo único pide permitir_unico (lib y ruta); con permitir_unico se marca', async () => {
+    const { dir, db } = baseTemporal();
+    try {
+      sembrarOk(db);
+      const pid = idDe(db, 6);
+      const sin = marcarIdentificadorIncorrecto(db, pid, GTIN, 'qa');
+      expect(sin).toMatchObject({ ok: false, code: 'INVALID_STATE', requiere_confirmacion: 'permitir_unico' });
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => { req.user = { username: 'jose', is_admin: true, permisos: [] }; next(); });
+      app.use('/api/identidad-productos', identidadProductosRouter(db));
+      const ruta = await request(app).post('/api/identidad-productos/identificadores/incorrecto')
+        .send({ valor_normalizado: GTIN, producto_id: pid, motivo: 'QA' });
+      expect(ruta.status).toBe(409);
+      expect(ruta.body).toMatchObject({ requiere_confirmacion: 'permitir_unico' });
+      const ok = await request(app).post('/api/identidad-productos/identificadores/incorrecto')
+        .send({ valor_normalizado: GTIN, producto_id: pid, motivo: 'QA', permitir_unico: true });
+      expect(ok.status).toBe(200);
+      expect(db.prepare("SELECT estado FROM identificadores_producto WHERE tipo='gtin' AND valor_normalizado=? AND producto_id=?").get(GTIN, pid).estado).toBe('incorrecto');
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('idempotente: sembrar dos veces no duplica filas del GTIN', () => {
+    const { dir, db } = baseTemporal();
+    try {
+      sembrarOk(db);
+      sembrarOk(db);
+      expect(db.prepare("SELECT COUNT(*) n FROM identificadores_producto WHERE tipo='gtin' AND valor_normalizado=?").get(GTIN).n).toBe(2);
+    } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('--limpiar saca el conflicto sin borrar filas (el trigger impide DELETE de identificadores)', () => {
+    const { dir, db } = baseTemporal();
+    try {
+      sembrarOk(db);
+      db.transaction(() => limpiarSembrado(db))();
+      expect(conflictosDeIdentificador(db).find((c) => c.valor_normalizado === GTIN)).toBeUndefined();
+      expect(db.prepare("SELECT COUNT(*) n FROM identificadores_producto WHERE tipo='gtin' AND valor_normalizado=? AND estado IN ('activo','conflicto')").get(GTIN).n).toBe(0);
+      expect(db.prepare("SELECT COUNT(*) n FROM identificadores_producto WHERE tipo='gtin' AND valor_normalizado=?").get(GTIN).n).toBe(2);
     } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

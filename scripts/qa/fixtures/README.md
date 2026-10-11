@@ -34,6 +34,7 @@ Escenarios, con sus claves:
 | 6 Enter | caso `QAFX-MLA7\|` (candidato único `QAFX-SKU-7`) | Enter como atajo de Vincular |
 | 8 foto (tecla `f`) | caso `QAFX-MLA8\|` (candidato Woo `QAFX-SKU-8` con `catalogo_cache.img` SVG data URI, sin red) | Elegir con `1` y luego `f` agranda la foto del candidato. Pasos: abrir el caso, el panel busca con el título ML y trae el candidato primero, pulsar `1` para elegirlo, luego `f` |
 | 7 destrabar | op `QAFX-op-5` `intervencion`, caso `QAFX-MLA5\|` (tomado por `Matias`, versión 1) | Destrabar: `destrabarOperacionIdentidad` con `expected_version` y `evidence_fingerprint` del caso (`qafx-QAFX-MLA5\|`) y motivo. En QA la op vuelve a `shadow` y el caso a `pendiente` |
+| 9 No le corresponde (permitir_unico) | GTIN `7790000000010` (`identificadores_producto`): `QAFX-6` lo tiene `activo` (único GTIN activo del producto) y `QAFX-7` en `conflicto` | En Identidad de productos, abrir el conflicto de ese código en la lista de conflictos ("Ver y resolver") y pulsar "No le corresponde" sobre `QAFX Candado cable 1m` (producto Woo `QAFX-SKU-6`). El backend responde 409 `INVALID_STATE` con `requiere_confirmacion:'permitir_unico'` y la pantalla pide confirmación; al confirmar reenvía con `permitir_unico:true` (200, el GTIN pasa a `incorrecto`). Solo toca el registro local, no ML. `--limpiar` pasa estas filas a `historico` (no se borran: trigger). |
 
 Usuarios sugeridos en QA: admin `Matias`, operador `Miguel` (no admin). Los casos 3, 4 y 7 vienen tomados por `Matias`.
 
