@@ -1228,7 +1228,10 @@
   function marcaNingunoHtml() {
     var n = S.detalle && S.detalle.ninguno_sirve; if (!n) return '';
     var m = MOTIVO_NINGUNO_TXT[n.motivo] || motivoTxt(n.motivo);
-    return '<div class="ui-aviso ui-aviso--info cv-marca-ninguno" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>Ninguno sirve (' + esc(m) + ')</strong> · reaparece si cambia la evidencia.'
+    // Quién y cuándo, igual que la marca de excepción. Si el backend no los trae, se omiten.
+    var quien = n.por ? ' · por ' + esc(n.por) : '';
+    var cuando = n.desde ? ' · desde ' + esc(fechaArgTxt(n.desde)) : '';
+    return '<div class="ui-aviso ui-aviso--info cv-marca-ninguno" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>Ninguno sirve (' + esc(m) + ')</strong>' + quien + cuando + ' · reaparece si cambia la evidencia.'
       + (n.nota ? ' Nota: ' + esc(n.nota) : '') + '</span>'
       + '</div>';
   }
@@ -1315,6 +1318,8 @@
     abrirDialogo($('#dlg-ns'), function () { return $('[data-accion="no-sincronizar"]') || disparador; }, $('#ns-variantes input'));
   }
 
+  var TXT_MOTIVO_FALTA = 'Falta el motivo. Es obligatorio.';
+
   function nsEnviar(ev) {
     ev.preventDefault();
     var c = caso(); if (!c || S.nsEnviando) return;
@@ -1323,13 +1328,12 @@
     var err = $('#ns-motivo-err');
     var estado = $('#ns-estado');
     estado.hidden = true;
+    // Se validan los dos campos: el motivo muestra su error aunque falte también la variante.
+    // El foco va al primero que falta en orden de pantalla (variante, luego motivo).
+    if (!motivo) { err.textContent = TXT_MOTIVO_FALTA; err.hidden = false; $('#ns-motivo').setAttribute('aria-invalid', 'true'); }
+    else { err.hidden = true; $('#ns-motivo').removeAttribute('aria-invalid'); }
     if (!radio) { estado.textContent = 'Elegí una de las tres variantes.'; estado.hidden = false; $('#ns-variantes input').focus(); return; }
-    if (!motivo) {
-      err.textContent = 'Falta el motivo. Es obligatorio.'; err.hidden = false;
-      $('#ns-motivo').setAttribute('aria-invalid', 'true'); $('#ns-motivo').focus();
-      return;
-    }
-    err.hidden = true; $('#ns-motivo').removeAttribute('aria-invalid');
+    if (!motivo) { $('#ns-motivo').focus(); return; }
     var v = radio.value;
     var pub = c.publicacion || {};
     var body = { variante: v, motivo: motivo, expected_sku: vinculoSku() };
@@ -1359,6 +1363,8 @@
         return mostrarAlcance(r.data.sibling_count);
       }
       S.nsOpId = null;
+      // 422 del backend por motivo vacío (lib/noSincronizar.js): el error va al campo, no al aviso general.
+      if (r.status === 422 && r.data && r.data.error === 'motivo requerido') return marcarError($('#ns-motivo'), err, TXT_MOTIVO_FALTA);
       if (r.data && r.data.code === 'vista_vieja') abrirCaso(c.id, { foco: false });
       estado.textContent = mensajeDe(r); estado.hidden = false;
     });
