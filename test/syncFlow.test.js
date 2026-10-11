@@ -334,7 +334,11 @@ describe('syncMlToWc', () => {
     const r2 = await p2;
     expect(r2).toEqual({ omitido: true });
 
-    // Mientras la primera sigue en vuelo, la segunda no disparó otro POST
+    // Mientras la primera sigue en vuelo, la segunda no disparó otro POST. (E-0: antes del POST la primera corrida lee
+    // manage_stock de Woo y toma los candados de la bolsa, así que se espera a que el POST salga.)
+    await vi.waitFor(() => {
+      expect(wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post').length).toBe(1);
+    });
     const postsAntes = wooFetch.mock.calls.filter(c => c[1] === '/orders' && c[2] === 'post').length;
     expect(postsAntes).toBe(1);
 

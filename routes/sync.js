@@ -29,6 +29,11 @@ import { espera } from '../lib/esperas.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
 import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
 import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
+import {
+  buildMlStockUpdate, escribirStockMl, resolverBolsa, conCandados, insertarBarrera, borrarBarreraDeOrden, confirmarBarreraConPedido,
+  intentarLiberarFila, filasBarrera, idBarrera, releerStockGestores, gestoresDeFilas, verificarManageStockWoo, stockWooPausado,
+  leerEstado, guardarEstado, confirmarDescuentoLinea,
+} from '../lib/stockBarrera.js';
 
 const ML_AUTH_URL = 'https://auth.mercadolibre.com.ar/authorization';
 // ML exige un dominio https real (rechaza localhost en el panel de la app).
@@ -42,6 +47,7 @@ const MAX_RETRIES = 5;
 const VERIF_WC_MARGEN_MS = 15 * 60 * 1000;
 // Tope de paginas al barrer pedidos de Woo en la verificacion (100 por pagina).
 const VERIF_WC_MAX_PAGINAS = 20;
+const VERIF_INEXISTENCIA_MAX_PAGINAS = 20;
 // Delay entre llamadas a la API de ML. El límite de ML ronda 1000+ req/min;
 // 500ms (~120/min) es seguro y ~3x más rápido que el valor original de 1500ms,
 // clave para que la sincronización masiva inicial (miles de variaciones) termine.
@@ -204,21 +210,8 @@ function upsertMlStockEstado(db, clave, sku, cantidad) {
   `).run(clave, sku, cantidad, now());
 }
 
-/**
- * Construye path + body para actualizar disponibilidad en ML.
- *
- * Para variaciones se usa el endpoint puntual PUT /items/{id}/variations/{varId}
- * en vez de PUT /items/{id} con { variations: [...] }: este último revalida
- * la publicación ENTERA (incluye reglas no relacionadas al stock, como el
- * límite de fotos por categoría) y puede rechazar el update con HTTP 400 aunque
- * el stock en sí sea válido. El endpoint puntual solo toca esa variación.
- */
-export function buildMlStockUpdate(itemId, variationId, cantidad) {
-  if (variationId) {
-    return { path: `/items/${itemId}/variations/${variationId}`, body: { available_quantity: cantidad } };
-  }
-  return { path: `/items/${itemId}`, body: { available_quantity: cantidad } };
-}
+// buildMlStockUpdate vive en lib/stockBarrera.js (puerta única de escritura de stock); se re-exporta para los callers existentes.
+export { buildMlStockUpdate };
 
 /** Puerta única antes de cualquier PUT de available_quantity hacia ML. */
 export function bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior = null, cache = null } = {}) {
@@ -563,21 +556,36 @@ function _matchMlOrderId(pedidos, orderId) {
  * Devuelve el wc_order_id si aparece, null si la inexistencia se confirma, y LANZA si no
  * se pudo verificar -> fail-closed en el llamador.
  */
-async function _confirmarInexistenciaEnWc(wooCfg, orderId) {
-  // `status=any` en Woo NO incluye `trash`, y esa exclusion importa acá: cuando el sistema
-  // crea un duplicado, el operador lo manda a la papelera a mano (paso lo del incidente
-  // 2026-07-25). Si un pedido en papelera contara como inexistente, el cron lo volveria a
-  // crear y el duplicado reapareceria despues de cada limpieza. Se consultan ambos.
+async function _confirmarInexistenciaEnWc(wooCfg, orderId, desdeIso = null) {
+  // E-0: se pagina por fecha descendente hasta AGOTAR el rango (una página con pedidos anteriores a la reserva menos 24 h,
+  // o sin más páginas). Con 20 páginas sin agotarlo NO se confirma: se lanza y el llamador conserva todo.
+  const limiteMs = desdeIso ? new Date(desdeIso).getTime() - 24 * 3600 * 1000 : null;
+  const fechaMs = (p) => {
+    const g = p?.date_created_gmt;
+    const t = g ? new Date(/Z|[+-]\d\d:?\d\d$/.test(g) ? g : `${g}Z`).getTime() : new Date(p?.date_created).getTime();
+    return Number.isFinite(t) ? t : null;
+  };
   for (const status of ['any', 'trash']) {
-    const resp = await wooFetch(
-      wooCfg,
-      `/orders?per_page=100&status=${status}&orderby=date&order=desc&page=1`
-    );
-    if (!Array.isArray(resp?.data)) {
-      throw new Error('respuesta de Woo con forma inesperada al reverificar sin filtro de fecha');
+    let agotado = false;
+    for (let page = 1; page <= VERIF_INEXISTENCIA_MAX_PAGINAS; page++) {
+      const resp = await wooFetch(
+        wooCfg,
+        `/orders?per_page=100&status=${status}&orderby=date&order=desc&page=${page}`
+      );
+      if (!Array.isArray(resp?.data)) {
+        throw new Error('respuesta de Woo con forma inesperada al reverificar sin filtro de fecha');
+      }
+      const match = _matchMlOrderId(resp.data, orderId);
+      if (match) return match.id;
+      if (resp.data.length < 100) { agotado = true; break; }
+      if (limiteMs != null) {
+        const fechas = resp.data.map(fechaMs).filter((t) => t != null);
+        if (fechas.length && Math.min(...fechas) < limiteMs) { agotado = true; break; }
+      } else {
+        agotado = true; break; // sin fecha de referencia: comportamiento histórico (primera página)
+      }
     }
-    const match = _matchMlOrderId(resp.data, orderId);
-    if (match) return match.id;
+    if (!agotado) throw new Error(`inexistencia no concluyente: ${VERIF_INEXISTENCIA_MAX_PAGINAS} páginas de pedidos (${status}) sin agotar el rango`);
   }
   return null;
 }
@@ -605,7 +613,7 @@ async function buscarPedidoWcPorMlOrderId(wooCfg, orderId, desdeIso) {
         if (pedidos.length < 100) {
           // Rango agotado. NO se concluye inexistencia directo: todo camino que devuelve
           // null pasa antes por la red de seguridad (ver _confirmarInexistenciaEnWc).
-          const idReverificado = await _confirmarInexistenciaEnWc(wooCfg, orderId);
+          const idReverificado = await _confirmarInexistenciaEnWc(wooCfg, orderId, desdeIso);
           return idReverificado ?? null;
         }
       }
@@ -627,7 +635,11 @@ function requiereVerificacionWc(e) {
   const m = /WooCommerce API error (\d+)/.exec(e?.message ?? '');
   if (!m) return true; // error de red o timeout: la request pudo haber llegado igual
   const status = Number(m[1]);
-  return status === 429 || status >= 500;
+  // E-0: solo 400/401/403/404/422 con cuerpo de error de Woo son un rechazo seguro. 408, 409, 423, 425, 429 y 5xx
+  // dejan dudas (el POST pudo haberse procesado). Un cuerpo que no es JSON de Woo (HTML de WAF/proxy) tampoco es certeza.
+  if (![400, 401, 403, 404, 422].includes(status)) return true;
+  if (e?.cuerpo === undefined) return false; // errores sin cuerpo capturado (tests / contratos viejos)
+  return !/"code"\s*:\s*"/.test(String(e.cuerpo)); // cuerpo de error de Woo (REST API): {"code":"...","message":"..."}
 }
 
 async function _procesarOrden(db, wooCfg, mlCfg, orden) {
@@ -649,7 +661,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   db.prepare(`
     DELETE FROM ordenes_ml_wc_pedidos
     WHERE ml_order_id = ? AND wc_order_id = 0 AND retenido_en IS NULL AND creado_en < ?
+      AND NOT EXISTS (SELECT 1 FROM stock_refresco_pendiente b WHERE b.ml_order_id = ordenes_ml_wc_pedidos.ml_order_id)
   `).run(orderId, new Date(Date.now() - 60 * 60 * 1000).toISOString());
+  // E-0: una reserva con filas de barrera NO es abandonada: la barrera prueba que el POST pudo haber salido. La resuelve
+  // el chequeo periódico (procesarBarreraVentas), nunca la limpieza de 60 min ni un segundo POST.
 
   // Idempotencia: si ya se creó el pedido en WC para esta orden ML, no reprocesar.
   // OJO con `retenido_en`: una reserva retenida por fail-closed (wc_order_id=0) NO cuenta
@@ -660,7 +675,8 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   // corta sin sellar nada: la orden queda visible como reserva retenida hasta que un
   // humano la resuelva.
   const yaCreado = db.prepare(
-    'SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND (wc_order_id <> 0 OR retenido_en IS NULL)'
+    `SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND (wc_order_id <> 0 OR retenido_en IS NULL)
+       AND NOT (wc_order_id = 0 AND EXISTS (SELECT 1 FROM stock_refresco_pendiente b WHERE b.ml_order_id = ordenes_ml_wc_pedidos.ml_order_id))`
   ).get(orderId);
   if (yaCreado) {
     db.prepare(`
@@ -820,6 +836,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   }
   const lineItems = [];
   const skusProcesados = new Set(); // Capturar SKUs para resincronizar hermanas después
+  const lineasBarrera = []; // E-0: una entrada por línea del pedido Woo, para la barrera de venta
   for (const item of ov.items) {
     const itemId = item.item_id_ml;
     const varId = item.variation_id_ml;
@@ -932,6 +949,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       });
     }
     skusProcesados.add(sku); // Registrar SKU para resincronizar hermanas después
+    lineasBarrera.push({ idx: lineItems.length, sku, product_id: li.product_id, variation_id: li.variation_id || 0, cantidad: qty });
     lineItems.push(li);
   }
 
@@ -943,6 +961,20 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       INSERT OR IGNORE INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en)
       VALUES (?, ?, ?, 'parcial', ?)
     `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), now());
+    return;
+  }
+
+  // E-0 barrera de venta: antes del POST se guardan las obligaciones (una fila por SKU y venta) bajo los candados de la
+  // bolsa. Si no se pueden tomar los candados o la bolsa no se resuelve, NO se envía nada y se libera la reserva.
+  try {
+    await enriquecerLineasBarrera(db, wooCfg, lineasBarrera);
+    const bolsa = resolverBolsa(db, { skus: [...skusProcesados] });
+    const r = await conCandados(db, bolsa.skus, () => insertarBarrera(db, { mlOrderId: orderId, vendidoEn: orden.date_created ?? now(), lineas: lineasBarrera }));
+    if (r.ocupado) throw new Error('candados de stock ocupados');
+  } catch (eBarrera) {
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(orderId);
+    borrarBarreraDeOrden(db, orderId);
+    logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: `barrera de venta no pudo armarse, se reintenta en el próximo ciclo: ${eBarrera.message}`.slice(0, 400) });
     return;
   }
 
@@ -1017,10 +1049,13 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     // solo hace falta completarla con el id real. Esa reserva atómica (INSERT sobre la PK
     // ml_order_id, hecha antes de cualquier llamada a Woo) es la protección real contra
     // pedidos duplicados, incluso entre procesos distintos.
-    db.prepare(`
-      UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, comprador_json = ?
-      WHERE ml_order_id = ?
-    `).run(wcOrderId, JSON.stringify(orden.buyer ?? null), orderId);
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, comprador_json = ?
+        WHERE ml_order_id = ?
+      `).run(wcOrderId, JSON.stringify(orden.buyer ?? null), orderId);
+      confirmarBarreraConPedido(db, orderId, resp.data); // woo_confirmado=1 + line_item_id/name
+    })();
 
     logSync(db, { direccion: 'ml_wc', clave: orderId, cantNueva: wcOrderId, estado: 'ok' });
 
@@ -1029,25 +1064,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
       VALUES (?, ?, ?, ?, ?)
     `).run(orderId, orden.date_created ?? now(), JSON.stringify(items), algunSinMapeo ? 'parcial' : 'ok', now());
 
-    // Resincronizar stock de SKUs compartidos (hermanas): cuando se vende en una publicación,
-    // todas las hermanas que comparten el SKU reciben la actualización automáticamente.
-    // FAIL-OPEN: errores aquí NO bloquean la orden. Corren en background sin await.
-    for (const sku of skusProcesados) {
-      // Llamada asíncrona sin await (fire-and-forget) para no bloquear. Los errores se logean
-      // en sync_log por syncSkuPuntual. El cooldown de ML puede omitir el resync (estado='omitido'),
-      // que es normal — el cron siguiente lo retomará.
-      (async () => {
-        try {
-          await syncSkuPuntual(db, { ml: mlCfg }, sku);
-        } catch (eResync) {
-          console.error(`[sync] Error resincronizando SKU ${sku} tras venta ML ${orderId}:`, eResync.message);
-          logSync(db, {
-            direccion: 'wc_ml', sku, estado: 'error',
-            error: `Resync de hermanas tras venta: ${eResync.message}`.slice(0, 500),
-          });
-        }
-      })();
-    }
+    // E-0: el stock NO se empuja acá. Hasta que haya evidencia de que Woo descontó ESTE pedido, la barrera bloquea toda
+    // escritura de la bolsa; el job libera (con reintento) y hace la corrección dueña. Si no alcanza, lo retoma el cron
+    // de procesarBarreraVentas. FAIL-OPEN: nunca bloquea la orden.
+    void liberarYCorregirTrasVenta(db, { ml: mlCfg, woo: wooCfg }, [...skusProcesados], orderId);
 
     // Nota PRIVADA del pedido (decisión del usuario, 2026-08-03): customer_note del POST de
     // creación la ve el cliente en la web y en los mails — se pasa a un recurso separado
@@ -1072,8 +1092,12 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     // DUPLICADO real. Antes de liberar, se verifica contra la API de Woo si ya existe un
     // pedido con meta _ml_order_id.
     if (!requiereVerificacionWc(e)) {
-      // Woo rechazo la request (4xx): no hay pedido creado, se libera sin verificar.
-      db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(orderId);
+      // Woo rechazo la request (400/401/403/404/422 con cuerpo de validación): no hay pedido creado. Se libera la
+      // reserva y se borran las filas de barrera en la misma transacción.
+      db.transaction(() => {
+        db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(orderId);
+        borrarBarreraDeOrden(db, orderId);
+      })();
       logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: e.message });
       return;
     }
@@ -1102,10 +1126,16 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     if (wcExistente) {
       // El pedido SI se habia creado en Woo: se completa la reserva con el id real (mismo
       // camino que el exito) en vez de dejar que el proximo ciclo cree un duplicado.
-      db.prepare(`
-        UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, comprador_json = ?, retenido_en = NULL
-        WHERE ml_order_id = ?
-      `).run(wcExistente, JSON.stringify(orden.buyer ?? null), orderId);
+      let pedidoExistente = null;
+      try { pedidoExistente = (await wooFetch(wooCfg, `/orders/${wcExistente}`))?.data ?? null; } catch { /* las líneas se completan después */ }
+      db.transaction(() => {
+        db.prepare(`
+          UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, comprador_json = ?, retenido_en = NULL
+          WHERE ml_order_id = ?
+        `).run(wcExistente, JSON.stringify(orden.buyer ?? null), orderId);
+        confirmarBarreraConPedido(db, orderId, pedidoExistente ?? { id: wcExistente, line_items: [] });
+      })();
+      void liberarYCorregirTrasVenta(db, { ml: mlCfg, woo: wooCfg }, [...skusProcesados], orderId);
       console.warn(`syncMlToWc: orden ML ${orderId}: el POST a Woo fallo (${e.message}) pero el pedido ${wcExistente} SI existe - reserva completada, sin duplicado.`);
       logSync(db, { direccion: 'ml_wc', clave: orderId, cantNueva: wcExistente, estado: 'ok', error: `respuesta perdida (${e.message}), pedido verificado en Woo` });
       db.prepare(`
@@ -1116,8 +1146,11 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     }
 
     // Verificacion concluyente: el pedido NO existe en Woo -> falla real. Se libera la
-    // reserva y el proximo ciclo puede reintentar sin riesgo de duplicado.
-    db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(orderId);
+    // reserva y el proximo ciclo puede reintentar sin riesgo de duplicado. Se borran también las filas de barrera.
+    db.transaction(() => {
+      db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(orderId);
+      borrarBarreraDeOrden(db, orderId);
+    })();
     logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: e.message });
   }
 }
@@ -1198,7 +1231,7 @@ const SYNC_SKU_PUNTUAL_BACKOFF_MS = [800];
  * publicación (igual que _syncWcToMl: se loguea y se sigue, no es recuperable
  * reintentando el mismo GET).
  */
-async function _empujarClaveMl(db, mlCfg, sku, diff) {
+async function _empujarClaveMl(db, mlCfg, sku, diff, { barreraId = null, candadoToken = null } = {}) {
   const { clave, stock_disponible_ml, cantidad_ml } = diff;
   const { itemId, variationId } = partirClaveMl(clave);
   const cantidad = Math.max(0, Math.round(stock_disponible_ml));
@@ -1236,8 +1269,9 @@ async function _empujarClaveMl(db, mlCfg, sku, diff) {
 
       const bloqueo = bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior: cantidad_ml });
       if (bloqueo.bloqueado) return { clave, estado: 'bloqueado_contradiccion', bloqueado: true, motivos: bloqueo.contradiccion.motivos };
-      const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
-      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+      const esc = await escribirStockMl(db, mlCfg, { clave, sku, cantidad, barreraId, candadoToken });
+      if (esc.omitido) return { clave, estado: 'omitido', detalle: `Escritura de stock omitida (${esc.motivo}), la retoma el cron`, barrera: true };
+      const resp = esc.resp;
 
       if (resp.status === 429) {
         return { clave, estado: 'omitido', detalle: 'Cooldown activo en ML (429) durante PUT, lo retoma el cron' };
@@ -1294,8 +1328,11 @@ async function _empujarClaveMl(db, mlCfg, sku, diff) {
  *
  * @returns {Promise<{sku, estado: 'sincronizado'|'sin_cambios'|'error'|'omitido', detalle}>}
  */
-export async function syncSkuPuntual(db, cfg, sku) {
+export async function syncSkuPuntual(db, cfg, sku, { barrera_id: barreraId = null } = {}) {
   const { ml: mlCfg } = cfg;
+  // E-0: la llamada que lleva el barrera_id de una fila `liberable` es la corrección dueña (única escritura permitida
+  // con la barrera liberada): relee Woo y ML, empuja lo que difiera y cierra las filas de la bolsa.
+  if (barreraId) return _corregirBolsaDuena(db, cfg, sku, barreraId);
 
   if (!sku || typeof sku !== 'string') {
     return { sku, estado: 'error', detalle: 'SKU inválido' };
@@ -1346,6 +1383,207 @@ export async function syncSkuPuntual(db, cfg, sku) {
   }
   return { sku, estado: 'sincronizado', detalle: `${sincronizadas}/${resultados.length} publicaciones actualizadas` };
 }
+
+// ─── E-0: barrera de venta ───────────────────────────────────────────────────
+
+/** Completa manage_stock y el gestor de stock de cada línea leyendo Woo (antes del POST). Fail-safe: si no se lee, 'desconocido'. */
+async function enriquecerLineasBarrera(db, wooCfg, lineas) {
+  for (const l of lineas) {
+    let ms = 'desconocido';
+    try {
+      const path = l.variation_id ? `/products/${l.product_id}/variations/${l.variation_id}` : `/products/${l.product_id}`;
+      const d = (await wooFetch(wooCfg, path))?.data;
+      if (d?.manage_stock === 'parent') ms = 'parent';
+      else if (d?.manage_stock === true) ms = 'true';
+      else if (d?.manage_stock === false) ms = 'false';
+    } catch { /* queda 'desconocido': exige la nota como cualquier otra línea */ }
+    l.manage_stock = ms;
+    if (ms === 'parent') { l.stock_gestor_id = l.product_id; l.stock_gestor_padre = null; }
+    else if (ms === 'false') { l.stock_gestor_id = null; l.stock_gestor_padre = null; }
+    else { l.stock_gestor_id = l.variation_id || l.product_id; l.stock_gestor_padre = l.variation_id ? l.product_id : null; }
+  }
+}
+
+/** Relee de ML (`/items/bulk`) la cantidad publicada de cada clave. Lanza si algún elemento no se pudo leer (5xx / respuesta rota). */
+async function leerCantidadesMl(db, mlCfg, claves) {
+  const porItem = new Map();
+  for (const c of claves) {
+    const { itemId } = partirClaveMl(c);
+    if (!porItem.has(itemId)) porItem.set(itemId, []);
+    porItem.get(itemId).push(c);
+  }
+  const out = new Map();
+  const ids = [...porItem.keys()];
+  for (let i = 0; i < ids.length; i += 20) {
+    const chunk = ids.slice(i, i + 20);
+    const resp = await mlFetch(db, mlCfg, 'get', `/items/bulk?ids=${chunk.join(',')}&attributes=status_code,id,body.id,body.status,body.available_quantity,body.variations`, null, { manual: true });
+    if (resp.status !== 200 || !Array.isArray(resp.data)) throw new Error(`ML /items/bulk respondió ${resp.status}`);
+    const porId = new Map(resp.data.map((e) => [e?.body?.id ?? e?.id, e]));
+    for (const itemId of chunk) {
+      const e = porId.get(itemId);
+      const code = e ? (e.status_code ?? e.code) : null;
+      if (code === 404) { for (const c of porItem.get(itemId)) out.set(c, { status: 'inexistente', cantidad: null }); continue; }
+      if (code !== 200 || !e?.body) throw new Error(`ML no devolvió ${itemId} (${code ?? 'sin elemento'})`);
+      for (const c of porItem.get(itemId)) {
+        const { variationId } = partirClaveMl(c);
+        if (!variationId) { out.set(c, { status: e.body.status, cantidad: Number(e.body.available_quantity) }); continue; }
+        const v = (e.body.variations || []).find((x) => String(x.id) === String(variationId));
+        out.set(c, v ? { status: e.body.status, cantidad: Number(v.available_quantity) } : { status: 'variacion_inexistente', cantidad: null });
+      }
+    }
+  }
+  return out;
+}
+
+function persistirCantidadMl(db, clave, sku, cantidad) {
+  db.prepare('UPDATE ml_publicaciones_cache SET available_quantity = ? WHERE clave = ?').run(cantidad, clave);
+  if (sku && cantidad != null) upsertMlStockEstado(db, clave, sku, cantidad);
+}
+
+/**
+ * Corrección dueña (spec E-0): bajo los candados de TODA la bolsa, relee Woo (gestores) y ML (todas las claves), empuja
+ * cada clave cuyo remoto difiera del deseado y cierra juntas las filas `liberable` de la bolsa solo si una relectura
+ * remota confirma que todas publican lo deseado. No usa el `sin_cambios` del caché. Si algo falla, reintenta (no cierra).
+ */
+async function _corregirBolsaDuena(db, cfg, sku, barreraId) {
+  const { woo: wooCfg } = cfg;
+  const mlCfg = cfg.ml;
+  if (!mlCfgOk(cfg) || !wooCfg) return { sku, estado: 'omitido', detalle: 'ML/Woo no configurado' };
+  let bolsa;
+  try { bolsa = resolverBolsa(db, { skus: [sku] }); } catch (e) { return { sku, estado: 'error', detalle: `bolsa no resuelta: ${e.message}` }; }
+  const r = await conCandados(db, bolsa.skus, async (candado) => {
+    const filas = filasBarrera(db, bolsa.skus);
+    if (filas.some((f) => f.estado === 'bloqueante')) return { sku, estado: 'omitido', detalle: 'la bolsa tiene una venta sin confirmar el descuento' };
+    const liberables = filas.filter((f) => f.estado === 'liberable');
+    if (!liberables.length) return { sku, estado: 'sin_cambios', detalle: 'no hay barrera liberable' };
+    if (!liberables.some((f) => idBarrera(f.sku, f.ml_order_id) === barreraId)) return { sku, estado: 'omitido', detalle: 'barrera_id no corresponde a una fila liberable de la bolsa' };
+    try {
+      // 1) Woo: stock actual de todos los gestores de la bolsa → catalogo_cache
+      const cat = db.prepare(`SELECT id_woo, tipo, id_padre FROM catalogo_cache WHERE sku IN (${bolsa.skus.map(() => '?').join(',')})`).all(...bolsa.skus);
+      await releerStockGestores(db, wooCfg, [...cat.map((c) => ({ id: c.id_woo, padre: c.tipo === 'variation' ? c.id_padre : null })), ...gestoresDeFilas(liberables)], { estricto: false });
+      // 2) ML: lectura de toda la bolsa; 3) empuje de lo que difiera del deseado
+      const claves = bolsa.claves;
+      const remoto = await leerCantidadesMl(db, mlCfg, claves);
+      const computada = (clave) => db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
+      const pendientes = [];
+      for (const clave of claves) {
+        const row = computada(clave);
+        const rem = remoto.get(clave);
+        if (!row || !rem) continue; // fuera del conjunto que nuestro sync escribe
+        persistirCantidadMl(db, clave, row.sku, rem.cantidad);
+        if (rem.status !== 'active' || rem.cantidad == null) continue;
+        const deseado = Math.max(0, Math.round(row.stock_disponible_ml));
+        if (rem.cantidad !== deseado) pendientes.push({ row, rem });
+      }
+      for (const { row, rem } of pendientes) {
+        const res = await _empujarClaveMl(db, mlCfg, row.sku, { clave: row.clave, stock_disponible_ml: row.stock_disponible_ml, cantidad_ml: rem.cantidad }, { barreraId, candadoToken: candado.token });
+        if (res.estado !== 'sincronizado') return { sku, estado: 'reintentar', detalle: `${row.clave}: ${res.detalle}` };
+      }
+      // 4) Relectura de confirmación: TODAS las claves deben publicar lo deseado
+      const remoto2 = await leerCantidadesMl(db, mlCfg, claves);
+      for (const clave of claves) {
+        const row = computada(clave);
+        if (!row) continue;
+        const rem = remoto2.get(clave);
+        if (!rem) return { sku, estado: 'reintentar', detalle: `${clave}: sin lectura de ML` };
+        if (rem.status !== 'active' || rem.cantidad == null) continue;
+        if (rem.cantidad !== Math.max(0, Math.round(row.stock_disponible_ml))) return { sku, estado: 'reintentar', detalle: `${clave}: ML publica ${rem.cantidad}` };
+      }
+      const del = db.prepare('DELETE FROM stock_refresco_pendiente WHERE sku = ? AND ml_order_id = ? AND estado = ?');
+      db.transaction(() => { for (const f of liberables) del.run(f.sku, f.ml_order_id, 'liberable'); })();
+      return { sku, estado: 'sincronizado', detalle: `barrera cerrada (${liberables.length} fila(s))` };
+    } catch (e) {
+      return { sku, estado: 'reintentar', detalle: String(e.message).slice(0, 300) };
+    }
+  });
+  if (r.ocupado) return { sku, estado: 'omitido', detalle: 'candados de stock ocupados' };
+  return r.valor;
+}
+
+/** Tras crear el pedido: intenta liberar las filas de la venta (con reintentos) y corregir. Lo que no alcance lo retoma el cron. */
+async function liberarYCorregirTrasVenta(db, cfg, skus, orderId) {
+  // Intentos tras la venta (ms de espera previa); el cron de procesarBarreraVentas retoma lo que no alcance. Configurable para tests.
+  const esperas = String(process.env.STOCK_BARRERA_REINTENTOS_MS || '0,10000,30000').split(',').map(Number).filter(Number.isFinite);
+  for (const ms of esperas) {
+    if (ms) await sleep(ms);
+    try {
+      const pend = db.prepare('SELECT * FROM stock_refresco_pendiente WHERE ml_order_id = ?').all(String(orderId));
+      if (!pend.length) return;
+      for (const f of pend.filter((x) => x.estado === 'bloqueante')) await intentarLiberarFila(db, cfg.woo, f);
+      const lib = db.prepare("SELECT * FROM stock_refresco_pendiente WHERE ml_order_id = ? AND estado = 'liberable'").all(String(orderId));
+      for (const f of lib) await _corregirBolsaDuena(db, cfg, f.sku, idBarrera(f.sku, f.ml_order_id));
+      if (!db.prepare('SELECT 1 FROM stock_refresco_pendiente WHERE ml_order_id = ?').get(String(orderId))) return;
+    } catch (e) {
+      logSync(db, { direccion: 'wc_ml', sku: skus[0], estado: 'error', error: `Barrera tras venta ML ${orderId}: ${e.message}`.slice(0, 400) });
+    }
+  }
+}
+
+/**
+ * Chequeo periódico (cada 10 min): reservas wc_order_id=0 con barrera de más de 15 min. Busca el pedido por el Nº de orden
+ * ML: si existe completa reserva y barrera; si se confirma que no existe borra ambas; si Woo no responde no toca nada.
+ */
+export async function chequearReservasConBarrera(db, wooCfg) {
+  const corte = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  const reservas = db.prepare(`SELECT ml_order_id, creado_en FROM ordenes_ml_wc_pedidos p
+    WHERE wc_order_id = 0 AND creado_en < ? AND EXISTS (SELECT 1 FROM stock_refresco_pendiente b WHERE b.ml_order_id = p.ml_order_id)`).all(corte);
+  const out = { encontradas: 0, borradas: 0, pendientes: 0 };
+  for (const r of reservas) {
+    try {
+      const wcId = await buscarPedidoWcPorMlOrderId(wooCfg, r.ml_order_id, r.creado_en);
+      if (wcId) {
+        const pedido = (await wooFetch(wooCfg, `/orders/${wcId}`))?.data ?? { id: wcId, line_items: [] };
+        db.transaction(() => {
+          db.prepare('UPDATE ordenes_ml_wc_pedidos SET wc_order_id = ?, retenido_en = NULL WHERE ml_order_id = ? AND wc_order_id = 0').run(wcId, r.ml_order_id);
+          confirmarBarreraConPedido(db, r.ml_order_id, pedido);
+        })();
+        out.encontradas++;
+      } else {
+        db.transaction(() => {
+          db.prepare('DELETE FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ? AND wc_order_id = 0').run(r.ml_order_id);
+          borrarBarreraDeOrden(db, r.ml_order_id);
+        })();
+        out.borradas++;
+      }
+    } catch (e) {
+      out.pendientes++; // Woo no respondió o la verificación no fue concluyente: no se toca nada
+    }
+  }
+  return out;
+}
+
+let _barreraEnCurso = false;
+/** Job de la barrera (cron cada 2 min): manage_stock diario, chequeo periódico de reservas, liberación y corrección dueña. */
+export async function procesarBarreraVentas(db, cfg) {
+  if (_barreraEnCurso) return { omitido: true };
+  _barreraEnCurso = true;
+  try {
+    const wooCfg = cfg.woo;
+    if (!wooCfg) return { omitido: true };
+    try { await verificarManageStockWoo(db, wooCfg); } catch (e) { console.error('[barrera] manage_stock:', e.message); }
+    if (!db.prepare('SELECT 1 FROM stock_refresco_pendiente LIMIT 1').get()) return { omitido: false, filas: 0 };
+    const ultimo = leerEstado(db, 'chequeo_reservas');
+    if (!ultimo || Date.now() - new Date(ultimo.actualizado_en).getTime() >= 10 * 60 * 1000) {
+      await chequearReservasConBarrera(db, wooCfg);
+      guardarEstado(db, 'chequeo_reservas', 'ok');
+    }
+    const bloqueantes = db.prepare("SELECT * FROM stock_refresco_pendiente WHERE estado = 'bloqueante' AND woo_confirmado = 1 ORDER BY creado_en LIMIT 50").all();
+    for (const f of bloqueantes) await intentarLiberarFila(db, wooCfg, f);
+    const liberables = db.prepare("SELECT * FROM stock_refresco_pendiente WHERE estado = 'liberable' ORDER BY creado_en").all();
+    const hechas = new Set();
+    for (const f of liberables) {
+      if (hechas.has(idBarrera(f.sku, f.ml_order_id))) continue;
+      const res = await _corregirBolsaDuena(db, cfg, f.sku, idBarrera(f.sku, f.ml_order_id));
+      if (res.estado === 'sincronizado') for (const g of liberables) hechas.add(idBarrera(g.sku, g.ml_order_id));
+    }
+    return { omitido: false, filas: bloqueantes.length + liberables.length };
+  } finally {
+    _barreraEnCurso = false;
+  }
+}
+
+/** Acción admin "Confirmar descuento" de UNA línea (ver lib/stockBarrera.js). */
+export { confirmarDescuentoLinea };
 
 // ─── syncWcToMl ──────────────────────────────────────────────────────────────
 
@@ -1511,9 +1749,10 @@ async function _syncWcToMl(db, cfg, opts = {}) {
         continue;
       }
 
-      const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
+      const esc = await escribirStockMl(db, mlCfg, { clave, sku, cantidad });
+      if (esc.omitido) continue; // barrera de venta / Woo sin gestión de stock: no es un error, lo retoma el próximo ciclo
       llamadasMl++;
-      const resp = await mlFetch(db, mlCfg, 'put', path, body);
+      const resp = esc.resp;
 
       if (resp.status === 429) {
         // Mismo cooldown detectado durante el PUT de stock (camino real: la mayoría de
@@ -2486,8 +2725,9 @@ export async function reactivarItems(db, mlCfg, itemIds, opts = {}) {
       // 1) Empujar stock de cada variación con stock web disponible (en orden dentro del item)
       for (const v of variaciones) {
         const cantidad = Math.max(0, Math.round(v.stock_disponible_ml));
-        const { path, body } = buildMlStockUpdate(itemId, v.variation_id || '', cantidad);
-        const resp = await mlFetch(db, mlCfg, 'put', path, body, opts);
+        const esc = await escribirStockMl(db, mlCfg, { clave: v.clave, sku: v.sku, cantidad, opts });
+        if (esc.omitido) throw new Error(`stock ${v.clave}: escritura omitida por la barrera de venta (${esc.motivo})`);
+        const resp = esc.resp;
         if (resp.status !== 200) {
           throw new Error(`stock ${v.clave}: ${extraerErrorMl(resp)}`);
         }
@@ -3541,6 +3781,23 @@ export function syncRouter(db, cfg) {
     }
   });
 
+  // E-0: "Confirmar descuento" (solo admin): evidencia de UNA línea cuando Woo la descontó (`_reduced_stock` igual a la cantidad
+  // vendida) pero la nota no se reconoce. No libera por sí sola: la fila pasa a liberable cuando todas sus líneas tienen evidencia.
+  router.post('/barrera/confirmar-descuento', requireAdmin, async (req, res) => {
+    try {
+      const { sku, ml_order_id: mlOrderId, linea, motivo } = req.body || {};
+      if (!sku || !mlOrderId || linea === undefined) return res.status(400).json({ ok: false, error: 'sku, ml_order_id y linea requeridos' });
+      const r = await confirmarDescuentoLinea(db, cfg.woo, { sku, mlOrderId, idx: Number(linea), motivo, actor: req.user?.username || 'desconocido' });
+      return res.status(r.ok ? 200 : r.code).json(r.ok ? { ok: true } : { ok: false, error: r.error });
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/barrera', requireAdmin, (_req, res) => {
+    res.json({ ok: true, filas: db.prepare('SELECT sku, ml_order_id, estado, woo_confirmado, wc_order_id, incidente_motivo, creado_en FROM stock_refresco_pendiente ORDER BY creado_en').all() });
+  });
+
   // Fase C: reporte de sombra para José (solo admin). Solo lectura.
   router.get('/fase-c/sombra', requireAdmin, (_req, res) => {
     try { res.json({ ok: true, data: reporteSombraFaseC(db) }); }
@@ -3741,9 +3998,10 @@ export function syncRouter(db, cfg) {
       if (bloqueo.bloqueado) {
         return res.status(409).json({ ok: false, bloqueado: true, error: 'contradiccion_titulo', motivos: bloqueo.contradiccion.motivos });
       }
-      const { path, body } = buildMlStockUpdate(itemId, variationId, cantidad);
       // manual: true — reintento puntual disparado a mano desde el panel.
-      const resp = await mlFetch(db, mlCfg, 'put', path, body, { manual: true });
+      const esc = await escribirStockMl(db, mlCfg, { clave, sku: row.sku, cantidad, opts: { manual: true } });
+      if (esc.omitido) return res.status(409).json({ ok: false, error: `barrera de venta: ${esc.motivo}` });
+      const resp = esc.resp;
       if (resp.status === 200) {
         upsertMlStockEstado(db, clave, row.sku, cantidad);
         logSync(db, { direccion: 'wc_ml', clave, sku: row.sku, cantNueva: cantidad, estado: 'ok' });

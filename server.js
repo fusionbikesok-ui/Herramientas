@@ -25,7 +25,7 @@ import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
 import { bandejaIdentidadRouter } from './routes/bandejaIdentidad.js';
 import { matcherRouter, dispararRefrescoMl, estadoRefrescoMl } from './routes/matcher.js';
-import { syncRouter, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
+import { syncRouter, procesarBarreraVentas, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
@@ -894,6 +894,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('3-59/10 * * * *', () => {          // ML
         syncMlToWc(app._db, syncCfg)
           .catch(err => console.error('ML→WC error:', err.message));
+      });
+
+      // E-0: barrera de venta. Cada 2 min libera las ventas cuyo descuento Woo ya está confirmado y hace la corrección dueña;
+      // cada 10 min resuelve las reservas con POST incierto; una vez por día verifica woocommerce_manage_stock.
+      cron.schedule('*/2 * * * *', () => {
+        procesarBarreraVentas(app._db, syncCfg)
+          .catch(err => console.error('barrera de venta error:', err.message));
       });
 
       // UM1 — Guardia ML: refresco completo de publicaciones cada 15 min. El candado

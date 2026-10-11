@@ -971,6 +971,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('identidad_pausas_125')").run();
     })();
   }
+  const stockBarreraMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='stock_barrera_126'").get();
+  if (!stockBarreraMigration) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '126_stock_barrera.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('stock_barrera_126')").run();
+    })();
+  }
   const devolucionesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_devoluciones_102'").get();
   if (!devolucionesMigration) {
     db.transaction(() => {
