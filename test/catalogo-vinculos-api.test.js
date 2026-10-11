@@ -289,6 +289,14 @@ describe('API de Catálogo y vínculos', () => {
       expect(l.body.data).toMatchObject([{ ml_order_id: 'ORD-R1', se_vuelve_a_retener: true }]);
       expect((await request(app(lector)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({ motivo: 'x' })).status).toBe(403);
       expect((await request(app(operador)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({})).status).toBe(422);
+      // Causa activa (sin vínculo): liberar no sirve, el sync la retendría de nuevo. 409 con código propio.
+      const bloqueada = await request(app(operador)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({ motivo: 'Cliente avisó' });
+      expect(bloqueada.status).toBe(409);
+      expect(bloqueada.body).toMatchObject({ ok: false, code: 'LIBERAR_BLOQUEADO_POR_MARCA',
+        error: 'Primero vinculá la publicación o quitá la marca', se_vuelve_a_retener: true, claves: ['MLA2201|'] });
+      expect(db.prepare("SELECT estado FROM guardia_ml_pedidos_retenidos WHERE ml_order_id='ORD-R1'").get().estado).toBe('retenido');
+      // Vinculada la publicación (causa resuelta): sí se libera.
+      db.prepare("INSERT INTO sku_matcher_decisiones (clave,sku,accion,origen,actualizado_en) VALUES ('MLA2201|','FB-2201','confirmar','manual',?)").run(ISO);
       expect((await request(app(operador)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({ motivo: 'Cliente avisó' })).status).toBe(200);
       expect((await request(app(operador)).post(`${BASE}/retenidas/ORD-R1/liberar`).send({ motivo: 'otra vez' })).status).toBe(404);
     });

@@ -66,6 +66,22 @@ describe('no sincronizar vs link de pago', () => {
     expect(ignoraVentas(db, 'MLA5|')).toBe(true);
   });
 
+  it('un operador sin admin no pisa un link de pago ni una marca (c): 403 y la marca queda', () => {
+    cache(db, 'MLA5|'); cache(db, 'MLA6|');
+    expect(marcarLinkDePago(db, { clave: 'MLA5|', motivo: 'm', actor: 'jose', esAdmin: true, expectedSku: null }).ok).toBe(true);
+    expect(marcarNoSincronizar(db, { clave: 'MLA5|', variante: 'a', motivo: 'm', actor: 'ana', expectedSku: null, esAdmin: false }))
+      .toMatchObject({ ok: false, status: 403, code: 'FORBIDDEN' });
+    expect(decision(db, 'MLA5|').origen).toBe('link_de_pago');
+    expect(marcarNoSincronizar(db, { clave: 'MLA6|', variante: 'c', motivo: 'm', actor: 'jose', expectedSku: null, esAdmin: true }).ok).toBe(true);
+    expect(marcarNoSincronizar(db, { clave: 'MLA6|', variante: 'a', motivo: 'm', actor: 'ana', expectedSku: null, esAdmin: false }))
+      .toMatchObject({ ok: false, status: 403 });
+    expect(decision(db, 'MLA6|').origen).toBe('no_sincronizar_c');
+    // Sin indicar admin, también se rechaza (fail-closed).
+    expect(marcarNoSincronizar(db, { clave: 'MLA6|', variante: 'a', motivo: 'm', actor: 'ana', expectedSku: null }).status).toBe(403);
+    expect(marcarNoSincronizar(db, { clave: 'MLA6|', variante: 'a', motivo: 'm', actor: 'jose', expectedSku: null, esAdmin: true }).ok).toBe(true);
+    expect(decision(db, 'MLA6|').origen).toBe('no_sincronizar_a');
+  });
+
   it('link de pago es solo de administración', () => {
     cache(db, 'MLA6|');
     expect(marcarLinkDePago(db, { clave: 'MLA6|', motivo: 'm', actor: 'ana', esAdmin: false, expectedSku: null }))

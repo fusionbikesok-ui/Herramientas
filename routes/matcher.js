@@ -987,7 +987,7 @@ export function matcherRouter(db, cfg) {
       return res.status(400).json({ ok: false, error: 'expected_sku debe ser null explícito cuando no hay vínculo activo' });
     }
 
-    const resultado = marcarClaveNoSincroniza(db, { clave, actor: usuario, expectedSku: req.body?.expected_sku, expectedSkuProvided });
+    const resultado = marcarClaveNoSincroniza(db, { clave, actor: usuario, expectedSku: req.body?.expected_sku, expectedSkuProvided, esAdmin: !!req.user?.is_admin });
     if (!resultado.ok) return res.status(resultado.status || 400).json(resultado);
     return res.json(resultado);
   });

@@ -3,7 +3,7 @@ import {
   agregarNotaIdentidad, asignarCasoIdentidad, confirmarImpactoIdentidad, decidirCasoIdentidad,
   destrabarOperacionIdentidad, reintentarOperacionIdentidad,
 } from '../lib/identidadProductos.js';
-import { liberarPedidoRetenido } from '../lib/guardiaMl.js';
+import { liberarPedidoRetenido, bloqueoLiberacionManual } from '../lib/guardiaMl.js';
 import { marcarNoSincronizar, marcarLinkDePago, deshacerNoSincronizar } from '../lib/noSincronizar.js';
 import { solicitarNoSincronizarPausa } from '../lib/pausasIdentidad.js';
 import {
@@ -127,7 +127,7 @@ export function catalogoVinculosRouter(db) {
   router.post('/operaciones/:id/revertir', exigir('write'), (req, res) => {
     const b = req.body || {};
     if ((b.override_contradiccion === true || b.override_omitir === true) && !esAdmin(req)) return res.status(403).json(FORBIDDEN);
-    return responder(res, revertirVinculo(db, req.params.id, b, actor(req)), true);
+    return responder(res, revertirVinculo(db, req.params.id, b, actor(req), { esAdmin: esAdmin(req) }), true);
   });
 
   // No sincronizar (a/b/c). La (b) pausa el ítem completo en ML como operación durable.
@@ -136,7 +136,7 @@ export function catalogoVinculosRouter(db) {
     if (!caso?.ml_key) return res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'caso no encontrado' });
     const b = req.body || {};
     const base = { clave: caso.ml_key, motivo: b.motivo, actor: actor(req),
-      expectedSku: b.expected_sku, expectedSkuProvided: Object.prototype.hasOwnProperty.call(b, 'expected_sku') };
+      expectedSku: b.expected_sku, expectedSkuProvided: Object.prototype.hasOwnProperty.call(b, 'expected_sku'), esAdmin: esAdmin(req) };
     return responder(res, b.variante === 'b'
       ? solicitarNoSincronizarPausa(db, { ...base, variante: 'b', operation_id: b.operation_id, confirm_sibling_impact: b.confirm_sibling_impact })
       : marcarNoSincronizar(db, { ...base, variante: b.variante }), true);
@@ -164,6 +164,9 @@ export function catalogoVinculosRouter(db) {
     if (!puedeLiberar(req)) return res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'solo Ventas, Supervisor o Admin puede liberar una venta retenida' });
     const motivo = String(req.body?.motivo || '').trim();
     if (!motivo) return res.status(422).json({ ok: false, code: 'INVALID_INPUT', error: 'motivo obligatorio' });
+    // Causa activa: el sync volvería a retenerla. Se responde 409 con código propio y no se libera.
+    const bloqueo = bloqueoLiberacionManual(db, req.params.orderId);
+    if (bloqueo) return res.status(409).json({ ok: false, ...bloqueo });
     if (!liberarPedidoRetenido(db, req.params.orderId, { actor: actor(req), motivo })) {
       return res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'retención no encontrada o ya resuelta' });
     }

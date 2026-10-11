@@ -125,4 +125,26 @@ describe('no sincronizar (b): pausa durable', () => {
       .toMatchObject({ ok: false, code: 'INVALID_STATE' });
     expect(db.prepare("SELECT 1 FROM sku_matcher_decisiones WHERE clave='MLA11|'").get()).toBeTruthy();
   });
+
+  it('un operation_id ya usado para otra clave no se repite: 409 OPERATION_ID_REUSED y no crea nada', () => {
+    cache(db, 'MLA12|'); cache(db, 'MLA13|');
+    expect(solicitarNoSincronizarPausa(db, { clave: 'MLA12|', ...base, operation_id: 'p-12' }).ok).toBe(true);
+    expect(solicitarNoSincronizarPausa(db, { clave: 'MLA13|', ...base, operation_id: 'p-12' }))
+      .toMatchObject({ ok: false, code: 'OPERATION_ID_REUSED', status: 409 });
+    expect(db.prepare('SELECT COUNT(*) n FROM identidad_pausas').get().n).toBe(1);
+    expect(db.prepare("SELECT 1 FROM sku_matcher_decisiones WHERE clave='MLA13|'").get()).toBeUndefined();
+  });
+
+  it('si aparecen hermanas activas entre la solicitud y la pausa, no pausa: pasa a bloqueada_impacto', async () => {
+    config(db, 'enforced', 1);
+    cache(db, 'MLA14|');
+    solicitarNoSincronizarPausa(db, { clave: 'MLA14|', ...base, operation_id: 'p-14' });
+    expect(pausa(db, 'MLA14|').impacto_hermanas).toBe(0);
+    cache(db, 'MLA14|2');
+    const a = adaptador();
+    await procesarPausasIdentidad(db, a);
+    expect(a.llamadas.filter(([op]) => op === 'pausar')).toHaveLength(0);
+    expect(pausa(db, 'MLA14|')).toMatchObject({ estado: 'bloqueada_impacto', intentos: 0 });
+    expect(db.prepare("SELECT status FROM ml_publicaciones_cache WHERE clave='MLA14|'").get().status).toBe('active');
+  });
 });
