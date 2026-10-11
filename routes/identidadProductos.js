@@ -8,6 +8,7 @@ import {
   buscarProductosFusion,
   crearTareaPublicacion,
   decidirCasoIdentidad,
+  destrabarOperacionIdentidad,
   estadoIdentidadProductos,
   listarCasosIdentidad,
   listarColasIdentidad,
@@ -109,14 +110,23 @@ export function identidadProductosRouter(db) {
   // Agregar evidencia narrativa es deliberadamente una capacidad de matcher:read.
   router.post('/casos/:id/notas', exigir('read'), (req, res) => responder(res,
     agregarNotaIdentidad(db, req.params.id, req.body || {}, actor(req)), true));
-  router.post('/casos/:id/decisiones', exigir('write'), (req, res) => responder(res,
-    decidirCasoIdentidad(db, req.params.id, req.body || {}, actor(req)), true));
+  router.post('/casos/:id/decisiones', exigir('write'), (req, res) => {
+    // "Confirmar igual" acepta vincular contra una contradicción de atributos: solo administración, validado acá
+    // y no en la pantalla. Lo mismo vale para saltear el "omitir" (link de pago).
+    const pideAdmin = req.body?.override_contradiccion === true || req.body?.override_omitir === true;
+    if (pideAdmin && !req.user?.is_admin) {
+      return res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Acceso no autorizado' });
+    }
+    return responder(res, decidirCasoIdentidad(db, req.params.id, req.body || {}, actor(req)), true);
+  });
   router.post('/casos/:id/excepciones', exigir('write'), (req, res) => responder(res,
     decidirCasoIdentidad(db, req.params.id, { ...req.body, tipo: 'solo_ml' }, actor(req)), true));
   router.post('/operaciones/:id/reintentar', exigir('write', true), (req, res) => responder(res,
     reintentarOperacionIdentidad(db, req.params.id, req.body || {}, actor(req))));
   // Confirmar impacto en hermanas es una decisión humana con consecuencia remota: mismo
   // nivel que reintentar, sólo Administración.
+  router.post('/operaciones/:id/destrabar', exigir('write', true), (req, res) => responder(res,
+    destrabarOperacionIdentidad(db, req.params.id, req.body || {}, actor(req))));
   router.post('/operaciones/:id/confirmar-impacto', exigir('write', true), (req, res) => responder(res,
     confirmarImpactoIdentidad(db, req.params.id, req.body || {}, actor(req))));
   router.post('/productos/:id/tareas-publicacion', exigir('write'), (req, res) => responder(res,

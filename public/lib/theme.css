@@ -98,6 +98,8 @@
   --success:     var(--green);
   --success-bg:  var(--green-bg);
   --success-bd:  var(--green-bd);
+  /* Fondo de diálogos (scrim). Alias semántico: cualquier pantalla que abra un diálogo lo usa. */
+  --overlay:     rgba(6, 8, 13, .72);
 
   /* Contador de Inventario — herramienta de depósito, celular en mano, luz variable. */
   --tap-min: 44px;

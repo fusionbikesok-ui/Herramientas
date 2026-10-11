@@ -33,8 +33,10 @@ import { guardiaMlRouter } from './routes/guardiaMl.js';
 import { procesarOperacionesGuardia, liberarRetenidasResueltas } from './lib/guardiaMl.js';
 import { modoProteccion } from './lib/proteccionIdentidad.js';
 import { procesarOperacionesIdentidad } from './lib/identidadProductos.js';
+import { procesarPausasIdentidad } from './lib/pausasIdentidad.js';
 import { adaptadorMlIdentidad } from './lib/identidadMl.js';
 import { identidadProductosRouter } from './routes/identidadProductos.js';
+import { catalogoVinculosRouter } from './routes/catalogoVinculos.js';
 import { preciosRouter } from './routes/precios.js';
 import { configurarAuditoriaPrecios, dispararAuditoriaPrecios } from './lib/auditoriaPrecios.js';
 import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking, reconciliarPreparacionesAbiertas } from './routes/preparacion.js';
@@ -729,8 +731,10 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   app.use('/api/cobertura', coberturaRouter(db, syncCfg));
   app.use('/api/guardia-ml', guardiaMlRouter(db, syncCfg));
   app.use('/api/identidad-productos', identidadProductosRouter(db));
+  app.use('/api/catalogo-vinculos', catalogoVinculosRouter(db));
   app.use('/guardia-ml', express.static(path.join(__dirname, 'public/guardia-ml')));
   app.use('/identidad-productos', express.static(path.join(__dirname, 'public/identidad-productos')));
+  app.use('/catalogo-vinculos', express.static(path.join(__dirname, 'public/catalogo-vinculos')));
   // Matcher unificado, entrega 1 (2026-08-14): Cobertura dejó de ser una pantalla propia,
   // pasó a ser la dirección Woo→ML del Matcher. `/cobertura` no puede dar 404 (puede haber
   // accesos directos guardados) — redirige con `?aviso=unificado` para que el frontend del
@@ -949,6 +953,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             if (r?.procesadas) console.log(`identidad: ${r.procesadas} operación(es)${r.canario ? ` [canario ${r.canario}]` : ''}`);
           })
           .catch(err => console.error('identidad operaciones:', err.message));
+      });
+      // "No sincronizar" (b): pausas durables en ML, con los mismos frenos que la saga.
+      cron.schedule('* * * * *', () => {
+        procesarPausasIdentidad(app._db, adaptadorMlIdentidad(app._db, syncCfg.ml))
+          .then((r) => { if (r?.procesadas) console.log(`identidad pausas: ${r.procesadas}`); })
+          .catch(err => console.error('identidad pausas:', err.message));
       });
 
       cron.schedule('2-59/10 * * * *', () => {          // ML

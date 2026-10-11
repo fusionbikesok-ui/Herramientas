@@ -131,12 +131,14 @@ describe('Sincronización ML rediseñada', () => {
     expect(sync).toContain('encoladas sin ejecutar');
     expect(sync).toContain('trabadas en proceso');
   });
-  it('el chip del home usa n + procesando_vencidas y apunta al mismo destino que el ítem', () => {
+  // Fase D, paso 6: Identidad de productos se retiró. Su contador pasa a Catálogo y vínculos
+  // (estado: operaciones_pendientes) y el ítem de Sincronización apunta a la pantalla nueva.
+  it('el chip del home sale del estado de Catálogo y vínculos y apunta a la pantalla nueva, igual que el ítem', () => {
     const home = fs.readFileSync('./public/home/index.html', 'utf8');
-    expect(home).toContain('idq.procesando_vencidas');
-    expect(home).toContain('peChip(idEnc + idTrab, idEtiqueta');
-    expect(home).toContain("'/herramientas/identidad-productos/', 'matcher'");
-    expect(home).not.toContain("encoladas sin ejecutar (más de 2 h)', 'warn', '/herramientas/sync-ml/'");
-    expect(sync).toContain("href:'/herramientas/identidad-productos/'");
+    expect(home).toContain("fetch('/api/catalogo-vinculos/estado')");
+    expect(home).toContain('salud.operaciones_pendientes');
+    expect(home).toContain("'/herramientas/catalogo-vinculos/', 'matcher'");
+    expect(home).not.toContain('identidad-productos');
+    expect(sync).toContain("href:'/herramientas/catalogo-vinculos/'");
   });
 });
