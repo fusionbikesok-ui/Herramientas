@@ -1245,8 +1245,15 @@
   }
   function marcaExcepcionHtml() {
     var x = S.detalle && S.detalle.excepcion; if (!x) return '';
-    return '<div class="ui-aviso ui-aviso--info cv-marca-excepcion" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>Excepción solo ML hasta ' + esc(fechaArgTxt(x.vence_en)) + '</strong>'
-      + ' · motivo: ' + esc(x.motivo || '') + ' · por ' + esc(x.creada_por || '') + '</span></div>';
+    // vence_en puede ser null (excepción sin vencimiento): solo entonces va "hasta <fecha>".
+    // El actor se muestra una sola vez: si ya está dentro del motivo (p. ej. "No sincronizar por Matias"), no se repite.
+    var motivo = String(x.motivo || '').trim(), por = String(x.creada_por || '').trim();
+    var detalle = [];
+    if (motivo) detalle.push('motivo: ' + motivo);
+    if (por && motivo.indexOf(por) === -1) detalle.push('por ' + por);
+    var titulo = 'Excepción solo ML' + (x.vence_en ? ' hasta ' + fechaArgTxt(x.vence_en) : '');
+    return '<div class="ui-aviso ui-aviso--info cv-marca-excepcion" role="status"><span aria-hidden="true">ⓘ</span> <span><strong>' + esc(titulo) + '</strong>'
+      + (detalle.length ? ' · ' + esc(detalle.join(' · ')) : '') + '</span></div>';
   }
 
   // Botón Reabrir: solo si el detalle trae un cierre vigente (excepción o "ninguno sirve"). Lo decide el servidor al mandar.
@@ -2561,10 +2568,23 @@
         if (!r.ok) { var e2 = $('#conf-err'); if (e2) { e2.textContent = mensajeDe(r); e2.hidden = false; } return; }
         S.conflictoAbierto = null; S.conflictoDetalle = null; S.confResolver = null; S.confMotivo = null;
         anunciar('Código resuelto: ' + valor, 'estado');
-        cargarConflictos();
+        var posPrevia = (S.conflictos || []).map(function (x) { return x.valor_normalizado; }).indexOf(valor);
+        cargarConflictos().then(function () { enfocarTrasResolver(valor, posPrevia); });
       });
     };
     return enviar();
+  }
+
+  // Tras resolver, la fila (y el botón que tenía el foco) puede desaparecer: el foco va al mismo código si sigue en la lista,
+  // si no al que ocupaba su lugar, y si la lista quedó vacía, al resumen "Códigos en conflicto". Nunca queda en body.
+  function enfocarTrasResolver(valor, pos) {
+    var botones = $$('[data-accion="ver-conflicto"]');
+    var valores = botones.map(function (b) { return b.getAttribute('data-valor'); });
+    var i = valores.indexOf(valor);
+    if (i === -1 && botones.length) i = Math.min(Math.max(pos, 0), botones.length - 1);
+    if (i !== -1 && botones[i]) { botones[i].focus(); return; }
+    var resumen = $('#conflictos .cv-conflictos__sum');
+    if (resumen) resumen.focus();
   }
 
   // ── Tabs ─────────────────────────────────────────────────────────────────────────────────────
