@@ -1813,8 +1813,8 @@
       cancelada: ['cv-chip-estado cv-chip-estado--cancelada', '—', cancelacionTxt(o)],
       encolada: ['cv-chip-estado', '↻', 'En cola para ML'],
       aplicada: ['cv-chip-estado cv-chip-estado--aplicada', '✓', 'Aplicada en ML'],
-      fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', errMlTxt(o.ultimo_error) + '. ' + reintentaTxt()],
-      frenada: ['cv-chip-estado cv-chip-estado--frenada', '⏸', 'Frenada: ' + sinNombres(motivoRegla(o.ultimo_error) || 'regla de protección') + '. Stock en 0 hasta resolver.'],
+      fallida: ['cv-chip-estado cv-chip-estado--fallida', '✗', errMlTxt(o && o.ultimo_error) + '. ' + reintentaTxt()],
+      frenada: ['cv-chip-estado cv-chip-estado--frenada', '⏸', 'Frenada: ' + sinNombres(motivoRegla(o && o.ultimo_error) || 'regla de protección') + '. Stock en 0 hasta resolver.'],
       espera: ['cv-chip-estado cv-chip-estado--espera', '⏳', 'Espera tu confirmación']
     }[k];
     if (!m) return '<span class="cv-chip-estado">' + esc(estado) + '</span>';
