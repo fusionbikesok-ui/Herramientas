@@ -21,6 +21,7 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 ## Mapa de contexto
 
 - Precio de contado y pedidos creados desde ventas ML: `CLAUDE.md` y `lib/mlPrecios.js`.
+- **Invariante de precios (verificado en vivo 2026-10-08):** en Woo se carga el precio de CONTADO; un plugin expone por la API `regular_price` = contado × 1,5 ("lista"). Por eso `precioContado()` aplica 2/3 sobre `catalogo_cache.regular_price` y vuelve al contado. Ej.: escribir 1500000 en la variación 70763 quedó como 2250000 en la API (contado $1.500.000). No quitar el 2/3 (PR #14 cerrado por eso).
 - Contratos HTTP relacionados: `docs/api-contrato.md`.
 - Diseño o intención histórica: buscar primero en `docs/superpowers/plans/` por el nombre
   concreto de la función, sin cargar todos los planes.

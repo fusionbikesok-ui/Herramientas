@@ -69,6 +69,18 @@ describe('encolar corrección de identidad: validación y deduplicación', () =>
     expect(db.prepare("SELECT COUNT(*) n FROM identidad_operaciones WHERE ml_key='MLA903|'").get().n).toBe(0);
   });
 
+  it('ML ya tiene el SKU pero el vínculo local es viejo: alinea el vínculo y cierra el caso, sin operación (también pausada)', () => {
+    const c = caso(db, { id: 907, clave: 'MLA907|' });
+    db.prepare("UPDATE ml_publicaciones_cache SET seller_sku='FB-907',seller_sku_presente=1,status='paused',available_quantity=0 WHERE clave='MLA907|'").run();
+    db.prepare("INSERT OR REPLACE INTO sku_matcher_decisiones (clave,sku,accion,actualizado_en) VALUES ('MLA907|','FB-VIEJO','confirmar',?)").run(ISO);
+    const r = vincular(db, c, 'op-alinea');
+    expect(r).toMatchObject({ ok: true, vinculo_actualizado: true });
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA907|'").get().sku).toBe('FB-907');
+    expect(c.fila().estado).toBe('resuelto');
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_operaciones WHERE ml_key='MLA907|'").get().n).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_historial WHERE evento='vinculo_alineado_sin_operacion'").get().n).toBe(1);
+  });
+
   it('tolera espacios al comparar los SKU', () => {
     const c = caso(db, { id: 904, clave: 'MLA904|' });
     db.prepare("UPDATE ml_publicaciones_cache SET seller_sku=' FB-904 ',seller_sku_presente=1 WHERE clave='MLA904|'").run();
@@ -89,5 +101,88 @@ describe('encolar corrección de identidad: validación y deduplicación', () =>
     const primera = vincular(db, c, 'op-a');
     db.prepare("UPDATE identidad_operaciones SET estado='completada' WHERE id=?").run(primera.operacion.id);
     expect(vincular(db, c, 'op-b').ok).toBe(true);
+  });
+});
+
+describe('alinear el vínculo local cuando ML ya lleva el SKU objetivo', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya cerrada */ }
+    for (const suffix of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${suffix}`)) fs.unlinkSync(`${FILE}${suffix}`);
+  });
+
+  // Caso abierto + ML ya con el SKU nuevo (pausada) + vínculo local viejo.
+  function alineable(id, clave = `MLA${id}|`) {
+    const c = caso(db, { id, clave });
+    db.prepare("UPDATE ml_publicaciones_cache SET seller_sku=?,seller_sku_presente=1,status='paused',available_quantity=0 WHERE clave=?").run(`FB-${id}`, clave);
+    db.prepare("INSERT OR REPLACE INTO sku_matcher_decisiones (clave,sku,accion,actualizado_en) VALUES (?,'FB-VIEJO','confirmar',?)").run(clave, ISO);
+    return c;
+  }
+  const vinc = (c, op, extra = {}) => { const f = c.fila(); return decidirCasoIdentidad(db, f.id, { tipo: 'vincular', product_id: c.producto.id, operation_id: op,
+    expected_version: f.expected_version, evidence_fingerprint: f.evidencia_fingerprint, ...extra }, 'ana'); };
+
+  it('es idempotente por operation_id', () => {
+    const c = alineable(910);
+    expect(vinc(c, 'op-i').ok).toBe(true);
+    const otra = vinc(c, 'op-i');
+    expect(otra).toMatchObject({ ok: true, repetido: true });
+    expect(db.prepare("SELECT COUNT(*) n FROM identidad_decisiones WHERE operation_id='op-i'").get().n).toBe(1);
+  });
+
+  it('deja identidades_canal apuntando al producto nuevo (archiva la vieja)', () => {
+    const c = alineable(911);
+    const otro = caso(db, { id: 9110, clave: 'MLA9110|' }).producto.id; // otro producto Fusion (el viejo)
+    db.prepare("INSERT INTO identidades_canal (producto_id,canal,external_key,activa,creado_en,actualizado_en) VALUES (?,'ml','MLA911|',1,?,?)").run(otro, ISO, ISO);
+    expect(vinc(c, 'op-ic').ok).toBe(true);
+    const activas = db.prepare("SELECT producto_id FROM identidades_canal WHERE canal='ml' AND external_key='MLA911|' AND activa=1").all();
+    expect(activas).toEqual([{ producto_id: c.producto.id }]);
+  });
+
+  it('con una operación abierta sobre la clave: OPERACION_DUPLICADA y el caso no se toca', () => {
+    const c = alineable(912);
+    const dec = db.prepare(`INSERT INTO identidad_decisiones (caso_id,producto_id,tipo,operation_id,expected_version,evidencia_fingerprint,decidida_por,decidida_en)
+      VALUES (?,?,'vincular','op-previa',1,'fp','ana',?)`).run(c.fila().id, c.producto.id, ISO).lastInsertRowid;
+    db.prepare(`INSERT INTO identidad_operaciones (operation_id,tipo,caso_id,decision_id,producto_id,ml_key,sku_anterior,sku_objetivo,stock_objetivo,estado,paso_actual,iniciada_en,actualizada_en)
+      VALUES ('op-x','correccion_sku',?,?,?,'MLA912|','A','B',1,'pendiente','zero',?,?)`).run(c.fila().id, dec, c.producto.id, ISO, ISO);
+    expect(vinc(c, 'op-dup')).toMatchObject({ ok: false, code: 'OPERACION_DUPLICADA' });
+    expect(c.fila().estado).not.toBe('resuelto');
+  });
+
+  it('un caso en intervencion NO se cierra por este camino (lo destraba un admin)', () => {
+    const c = alineable(913);
+    db.prepare("UPDATE identidad_casos SET estado='intervencion' WHERE ml_key='MLA913|'").run();
+    expect(vinc(c, 'op-int')).toMatchObject({ ok: false, code: 'INVALID_STATE' });
+    expect(c.fila().estado).toBe('intervencion');
+  });
+
+  it('un caso ya resuelto o exceptuado tampoco', () => {
+    const c = alineable(914);
+    db.prepare("UPDATE identidad_casos SET estado='exceptuado' WHERE ml_key='MLA914|'").run();
+    expect(vinc(c, 'op-exc')).toMatchObject({ ok: false, code: 'INVALID_STATE' });
+  });
+
+  it('con hermanas activas pide confirmación; con confirmación alinea', () => {
+    const c = alineable(915, 'MLA915|a');
+    db.prepare(`INSERT INTO ml_publicaciones_cache (clave,item_id,variation_id,titulo,status,seller_sku,seller_sku_presente,available_quantity,atributos_json,actualizado_en)
+      VALUES ('MLA915|b','MLA915','b','Otra','active','FB-OTRO',1,2,'[]',?)`).run(ISO);
+    expect(vinc(c, 'op-h1')).toMatchObject({ ok: false, code: 'SIBLING_IMPACT_CONFIRMATION_REQUIRED', sibling_count: 1 });
+    expect(vinc(c, 'op-h2', { confirm_sibling_impact: true }).ok).toBe(true);
+  });
+
+  it('una publicación en omitir exige override_omitir', () => {
+    const c = alineable(916);
+    db.prepare("UPDATE sku_matcher_decisiones SET accion='omitir' WHERE clave='MLA916|'").run();
+    expect(vinc(c, 'op-o1')).toMatchObject({ ok: false, code: 'omitir_requiere_override' });
+    expect(vinc(c, 'op-o2', { override_omitir: true }).ok).toBe(true);
+    expect(db.prepare("SELECT sku,accion FROM sku_matcher_decisiones WHERE clave='MLA916|'").get()).toEqual({ sku: 'FB-916', accion: 'confirmar' });
+  });
+
+  it('fusion_sku igual al de ML pero distinto del SKU de Woo: SKU_INCONSISTENTE y no se graba nada', () => {
+    const c = alineable(917);
+    db.prepare("UPDATE catalogo_cache SET sku='FB-OTRO-917' WHERE id_woo=917").run();
+    expect(vinc(c, 'op-inc')).toMatchObject({ ok: false, code: 'SKU_INCONSISTENTE' });
+    expect(db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave='MLA917|'").get().sku).toBe('FB-VIEJO');
+    expect(c.fila().estado).not.toBe('resuelto');
   });
 });
