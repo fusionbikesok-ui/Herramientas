@@ -186,6 +186,21 @@ export function anonimizarBase(db, { claveQa }) {
   const tx = db.transaction(() => {
     for (const t of TABLAS_SECRETOS) if (tablaExiste(db, t)) db.prepare(`DELETE FROM "${t}"`).run();
 
+    // Barrera contra escrituras remotas (ML/Woo) por diseño: la copia QA NUNCA debe poder escribir
+    // en los marketplaces, aunque la base de origen esté en `enforced` con escrituras habilitadas.
+    // Se fuerza, en la copia y no en el origen:
+    //  - identidad_config.modo = 'shadow': la saga de Identidad sólo registra lo que haría.
+    //  - identidad_config.escrituras_remotas_habilitadas = 0: freno principal (lib/pausasIdentidad.js,
+    //    lib/identidadProductos.js leen este flag para decidir 'pendiente' vs 'shadow').
+    //  - identidad_config.canario_ml_key = NULL: sin claves canario, el lote de pausas queda vacío.
+    //  - identidad_config.lote_max = 1: tope mínimo por si alguien vuelve a habilitar escrituras.
+    //  - identidad_pausas: las pausas en 'pendiente'/'procesando' se cancelan (el lote las tomaría al
+    //    abrir el freno); 'shadow' y el historial quedan como registro.
+    // No hay otra bandera de escritura en lib/ ni migrations/ (grep 2026-10-10). Si aparece una nueva,
+    // agregarla acá. actualizarSi no falla si la tabla no existe (bases anteriores a la migración 082).
+    actualizarSi(db, 'identidad_config', `UPDATE identidad_config SET modo = 'shadow', escrituras_remotas_habilitadas = 0, canario_ml_key = NULL, lote_max = 1`);
+    actualizarSi(db, 'identidad_pausas', `UPDATE identidad_pausas SET estado = 'cancelada', claim_hasta = NULL, ultimo_error = 'copia QA: escrituras remotas deshabilitadas', actualizada_en = datetime('now') WHERE estado IN ('pendiente', 'procesando')`);
+
     // Usuarios internos: se conservan username, roles y permisos (la auditoría los referencia por
     // nombre); se reemplazan email y clave.
     actualizarSi(db, 'users', `UPDATE users SET email = CASE WHEN email IS NULL OR email = '' THEN email ELSE 'usuario' || id || '@qa.invalid' END, pass_hash = hash_qa()`);

@@ -34,6 +34,9 @@ No expresan orden operativo ni estado actual.
 | E3 antiguo | E24 | Impresión |
 | E22 antiguo | E25 | Métricas/reposición |
 | E24 antiguo y resto de E23 | E26 | Consolidación final |
+| Consolidación 2026-10-03 (spec `specs/2026-10-03-consolidacion-herramientas.md`) Fases A–B | Registro de correcciones del legado (`plan-maestro.md`) y PM-189 | Corrección del legado, no entrega nueva |
+| Consolidación 2026-10-03 Fases C–D | E3 (protección y cola únicas, log de decisiones) y E4 (pantalla única) | Requisitos adicionales de las fichas |
+| Consolidación 2026-10-03 Fase E | E1 (webhooks primero, barrido de control) y E14 (inventario de crons y herramientas) | Requisitos adicionales de las fichas |
 
 ## Planes archivados
 

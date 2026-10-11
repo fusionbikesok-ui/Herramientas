@@ -287,7 +287,7 @@ function incidencias(){
   return [
     {k:'err',sev:'crit',n:at.errores_reales||0,t:'Errores que no se resolvieron solos',d:'ML rechazó la actualización de stock y no se arregló con el reintento automático.',go:'Ver y reintentar',href:'/herramientas/sync-detalle/?cat=errores'},
     {k:'foto',sev:'crit',n:at.requiere_atencion_ml||0,t:'Exceso de fotos en ML',d:'ML no deja actualizar estas publicaciones hasta bajar la cantidad de fotos en tu cuenta de ML.',go:'Ver detalle',href:'/herramientas/sync-detalle/?cat=requiere_atencion_ml'},
-    {k:'idq',sev:'warn',n:nIdq,t:'Correcciones de SKU encoladas o trabadas',d:nIdqD,go:'Ver',href:'/herramientas/identidad-productos/'},
+    {k:'idq',sev:'warn',n:nIdq,t:'Correcciones de SKU encoladas o trabadas',d:nIdqD,go:'Ver',href:'/herramientas/catalogo-vinculos/'},
     {k:'paus',sev:'warn',n:nPaus,t:'Pausadas con stock en la web',d:'Pausadas en ML con stock para vender.',go:'Revisar',href:'/herramientas/sync-ml/pausadas/'},
     {k:'map',sev:'warn',n:at.sin_mapeo||0,t:'Ventas sin producto de la web',d:'Se vendieron en ML sin estar unidas a un producto: el stock no se descontó.',go:'Resolver',href:'/herramientas/sync-detalle/?cat=sin_mapeo'},
     {k:'remap',sev:'warn',n:at.remapeo_requerido||0,t:'Variaciones a re-mapear',d:'Cambiaron en ML (se editó la publicación). Volvé a asignarles el producto.',go:'Resolver',href:'/herramientas/sync-detalle/?cat=remapeo_requerido'},

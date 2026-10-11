@@ -569,17 +569,14 @@ describe('bandeja: visor comparativo', () => {
     expect(L.tamanoZoom(99)).toEqual({ nivel: 1, porcentaje: 100 });
 
     const css = readFileSync(new URL('../public/bandeja-identidad/bandeja.css', import.meta.url), 'utf8');
-    const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
     expect(css).toMatch(/\.visor-pares\[data-zoom="2"\][\s\S]*?width:\s*200%[\s\S]*?max-inline-size:\s*none/);
     expect(css).toMatch(/\.visor-pares\[data-zoom="3"\][\s\S]*?width:\s*300%[\s\S]*?max-inline-size:\s*none/);
-    expect(html).toMatch(/\.visor-foto-imagen[\s\S]*?max-inline-size:\s*100%/);
   });
 });
 
 describe('bandeja: contrato estático de accesibilidad y responsive', () => {
   const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../public/bandeja-identidad/bandeja.css', import.meta.url), 'utf8');
-  const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
 
   it('enuncia el caso y enfoca su título al cambiar de caso', () => {
     expect(js).toMatch(/el\('h1',[\s\S]*?tabindex: '-1', id: 'caso-focus'/);
@@ -592,13 +589,12 @@ describe('bandeja: contrato estático de accesibilidad y responsive', () => {
     expect(js).toMatch(/role: 'listitem'/);
     expect(js).toMatch(/aria-activedescendant/);
     expect(js).toMatch(/role: 'option'/);
-    expect(html).toMatch(/id="aviso-deshacer"[^>]*role="status"/);
   });
 
   it('declara foco visible, reduce movimiento y no permite overflow horizontal al zoom', () => {
-    expect(css + html).toMatch(/:focus-visible[\s\S]*outline/);
-    expect(css + html).toMatch(/prefers-reduced-motion/);
-    expect(css + html).toMatch(/overflow-x:\s*(hidden|clip)/);
+    expect(css).toMatch(/:focus-visible[\s\S]*outline/);
+    expect(css).toMatch(/prefers-reduced-motion/);
+    expect(css).toMatch(/overflow-x:\s*(hidden|clip)/);
     expect(css).toMatch(/\.barra-decision[\s\S]*max-inline-size:\s*100%/);
     expect(css).toMatch(/min-inline-size:\s*0/);
   });
@@ -733,12 +729,10 @@ describe('bandeja: regresiones de concurrencia y decisiones contextuales', () =>
 
 describe('bandeja: objetivos táctiles', () => {
   const css = readFileSync(new URL('../public/bandeja-identidad/bandeja.css', import.meta.url), 'utf8');
-  const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
 
   it('chips de filtro y candidato respetan el mínimo táctil de 44px', () => {
     expect(css).toMatch(/\.candidato-chip\s*\{[\s\S]*min-height:\s*var\(--tap-min\)/);
     expect(css).toMatch(/\.chip-pri\s*\{[\s\S]*min-height:\s*var\(--tap-min\)/);
-    expect(html).toMatch(/\.chip-pri\s*\{[\s\S]*min-height:\s*var\(--tap-min\)/);
   });
 });
 
@@ -907,7 +901,6 @@ describe('bandeja: aria-keyshortcuts (chequeo estático sobre bandeja.js, patró
 
 describe('bandeja: teclado fase 1 y deshacer visible', () => {
   const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
-  const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
 
   it('al seleccionar por número o chip renderiza el candidato grande y anuncia posición y diferencias', () => {
     expect(js).toMatch(/function seleccionarPorNumero\(n\)[\s\S]*?S\.sel = o\.variant_id;[\s\S]*?render\(\);[\s\S]*?Candidato .*?de .*?diferencia/);
@@ -926,17 +919,6 @@ describe('bandeja: teclado fase 1 y deshacer visible', () => {
     expect(js).toMatch(/window\.addEventListener\('pagehide'/);
   });
 
-  it('el aviso de deshacer queda sobre la barra sin sumar altura al documento', () => {
-    expect(html).toMatch(/\.aviso-deshacer\s*\{[\s\S]*position:\s*fixed[\s\S]*bottom:\s*4\.5rem[\s\S]*z-index:\s*60/);
-  });
-
-  it('la ayuda enumera los atajos vigentes de la fase 1', () => {
-    for (const texto of ['1', '2', '3', 'Enter', 'X', '?', 'O', 'N', 'Z', 'F', '/', 'j', 'k', '←', '→']) {
-      expect(html).toContain('<kbd>' + texto + '</kbd>');
-    }
-    expect(html).not.toContain('<kbd>D</kbd>');
-    expect(html).not.toContain('<kbd>H</kbd>');
-  });
 });
 
 describe('bandeja: renderMatriz — fila «Por qué» y fila «Iguales» colapsada (T4, chequeo estático)', () => {
@@ -986,11 +968,9 @@ describe('bandeja: renderMatriz — fila «Por qué» y fila «Iguales» colapsa
 
 describe('bandeja: estación compacta y confirmación por SKU', () => {
   const css = readFileSync(new URL('../public/bandeja-identidad/bandeja.css', import.meta.url), 'utf8');
-  const html = readFileSync(new URL('../public/bandeja-identidad/index.html', import.meta.url), 'utf8');
   const js = readFileSync(new URL('../public/bandeja-identidad/bandeja.js', import.meta.url), 'utf8');
 
   it('usa el viewport como layout y deja el scroll sólo a diferencias', () => {
-    expect(html).toMatch(/body\s*\{[\s\S]*height:\s*100dvh[\s\S]*overflow:\s*hidden/);
     expect(css).toMatch(/\.bandeja-wrap\s*\{[\s\S]*min-height:\s*0[\s\S]*flex:\s*1/);
     expect(css).toMatch(/\.caso\s*\{[\s\S]*min-height:\s*0[\s\S]*overflow:\s*hidden/);
     expect(css).toMatch(/\.diferencias\s*\{[\s\S]*overflow-y:\s*auto/);
@@ -1026,8 +1006,6 @@ describe('bandeja: estación compacta y confirmación por SKU', () => {
   });
 
   it('el visor compara las dos fotos, mantiene el espacio sin foto y conserva foco/aria', () => {
-    expect(html).toMatch(/id="visor-foto-dialog"[^>]*aria-modal="true"/);
-    expect(html).toMatch(/id="visor-pares"/);
     expect(js).toMatch(/L\.paresParaVisor\(S\.detalle, opcion\)/);
     expect(js).toMatch(/function cerrarVisor\(\)/);
     expect(js).toMatch(/v\.opener\.focus\(\)/);

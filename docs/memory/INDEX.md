@@ -11,6 +11,7 @@ módulos cuyo disparador coincida con la tarea.
 | Pantallas, navegación, responsive, accesibilidad, pruebas en navegador | `/opt/fusionbikes/herramientas/docs/memory/modules/ui-ux.md` |
 | Preparación, depósito, stock, recepción, conteos y despacho | `/opt/fusionbikes/herramientas/docs/memory/modules/warehouse-operations.md` |
 | App móvil, ramas, contrato móvil y sincronización entre repositorios | `/opt/fusionbikes/herramientas/docs/memory/modules/mobile-app.md` |
+| Mapa de herramientas de `public/`: qué hace cada una, ruta, endpoints, doc y estado (vigente, se fusiona, retirada) | `/opt/fusionbikes/herramientas/docs/memory/modules/herramientas.md` |
 | Coordinación entre agentes, worktrees, handoffs, fichas y gates | `/opt/fusionbikes/herramientas/docs/agent-coordination.md` |
 | Especificación canónica, decisiones, archivo, fichas y SOP | `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md` |
 

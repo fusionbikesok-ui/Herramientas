@@ -3666,3 +3666,145 @@ Reactivación manual de publicaciones de la lista anterior. Nunca corre sola.
 - `GET /api/sync/cambios-formato` devuelve además `nota` (texto informativo de un aviso sin pausa) y los avisos con `solo_aviso=1` no bloquean al reactivador.
 - `POST /api/sync/cambios-formato/:id/revisar` con `reactivar:true` verifica antes del PUT: si la publicación sigue pausada y no hay stock en Woo, hay otro aviso trabante, o su causa es `solo_local`/`sin_vinculo`, cierra el aviso sin llamar a ML y responde `pendiente_stock:true` con `motivo_pendiente` (`sin_stock_woo` | `otro_aviso` | `solo_local` | `sin_vinculo` | `ml_sin_stock`). Además puede devolver `oferta_reactivar: { item_id, stock_woo }` cuando se cierra un aviso y hay stock: la pantalla la ofrece en línea («Reactivar ahora» llama al POST de arriba).
 - La pantalla ya no llama a `GET /api/sync/reactivables` ni a `/reactivables/conteo` (siguen existiendo; los cubre Pausadas). Siguen en uso `/frenadas`, `/frenadas/forzar`, `/reactivar`, `/api/precios/objetivo`, `/api/precios/actualizar-precio`, `/ml-wc`, `/wc-ml`, `/ml-cancelaciones` y `/limpiar-variaciones-muertas`.
+
+## Catálogo y vínculos (Fase D, 2026-10-10)
+
+Base: `/api/catalogo-vinculos`. Pantalla: `/catalogo-vinculos`. Permisos: lecturas `matcher:read`; escrituras `matcher:write`; las marcadas **admin** exigen administrador (403 `FORBIDDEN` si no). Errores: `{ ok:false, code, error }`. Códigos de estado: `NOT_FOUND` 404; `VERSION_CONFLICT`, `EVIDENCE_CONFLICT`, `CLAIM_CONFLICT`, `SIBLING_IMPACT_CONFIRMATION_REQUIRED`, `ALREADY_EXISTS`, `INVALID_STATE`, `OPERACION_DUPLICADA`, `SIN_CAMBIO_SKU`, `contradiccion_titulo`, `omitir_requiere_override` 409; `INVALID_INPUT` 422; `FORBIDDEN` 403.
+
+### Lecturas
+- `GET /cola?filtro=&q=&limit=&offset=` → `{ ok, filtro, total, limit, offset, data:[caso] }` (`total` es el de antes de paginar).
+  - **Filtro `cerrados` (H2, 2026-10-10):** `filtro=cerrados` lista los casos con excepción `solo_ml` vigente o "ninguno sirve" vigente (incluye los de `estado='exceptuado'`). Cada fila trae `cierre`: `{ tipo:'excepcion'|'ninguno_sirve', motivo, nota, vence_en, por, desde }`. `motivo` es el de la excepción o el enum de "ninguno sirve" (`no_es_ninguno`|`no_existe_en_woo`); `nota` solo en "ninguno sirve" (si no, `null`); `vence_en` es la fecha de la excepción (`null` si no vence o es "ninguno sirve"); `por` = quién lo cerró; `desde` = cuándo (ISO). Los demás filtros traen `cierre: null` y no listan casos cerrados. `total` cuenta los cerrados y pagina con `limit`/`offset`. No hay objeto `conteos` en la cola: el conteo es el `total` del filtro.
+  - Forma de cada fila en cualquier filtro: `{ caso_id, ml_key, titulo, motivo (clasificación del caso), estado, responsable, plata, unidades_30d, stock_woo, primera_deteccion_en, salteado_por, chips:{pausada,hermanas,intervencion}, cierre }`. Filtros válidos: `abiertos`, `salteados`, `intervencion`, `pausadas`, `cerrados`; otro valor → 422.
+- `GET /casos/:id?sku=` → detalle del caso. Incluye `excepcion` (aditivo, Fase D): la excepción "solo ML" vigente del caso o `null`. Vigente = `activa=1`, `invalidada_en IS NULL` y (`vence_en IS NULL` o `vence_en` > ahora); lo mismo que usa el motor. Forma: `{ tipo:'solo_ml', motivo, vence_en, creada_por, creada_en }` (`vence_en`/`creada_en` ISO tal como están en `identidad_excepciones`). Una excepción vencida o invalidada deja `excepcion: null`. Incluye `vinculo_vigente` (`{sku,accion,desde}|null`), `marca` (`{tipo,variante,por,desde}|null`), `hermanas_item` (`[{clave,variation_id,titulo,status,available_quantity}]`) y `notas` (historial del caso, máx. 100, más reciente primero: `[{evento,actor,creado_en,detalle}]`; en `evento:'nota_agregada'` suma `nota_texto` con el texto de la nota, `null` si ya no existe). 404 si no existe.
+- `GET /claves/:clave` → `{ ok, data:{ clave, vinculo_vigente, marca, hermanas_item } }` (sin necesidad de caso abierto).
+- `GET /productos/:id/publicaciones` → `{ ok, data:[{clave,titulo,status}] }` ordenado por clave; `[]` sin vínculo; 404 si el producto no existe.
+- `GET /estado` → resumen de salud. `salud.operaciones_pendientes` excluye canceladas; `salud.operaciones_canceladas` es nuevo. Franja Estado (Fase D H5, aditivo): `salud.ultima_lectura_confiable` (ISO|null), `salud.error_lectura` (string|null), `salud.modo` (`shadow`|`enforced`), `salud.escrituras_remotas` (bool). `salud.observacion_incompleta` (**bool**, fail-closed: `true` también si no se puede determinar; `false` solo con todas las claves activas con stock observadas con atributos), `salud.observacion_incompleta_detalle` (string corto|null), `salud.observacion_incompleta_cantidad` (número|null; `null` si no se pudo determinar). **Breaking (2026-10-10)**: `salud.observacion_incompleta` pasó de número a bool; el conteo está en `observacion_incompleta_cantidad`. `salud.sano` es `false` si hay observación incompleta.
+- `GET /ejecucion` — query opcionales: `q` (texto; case-insensitive; busca en SKU `sku_anterior`/`sku_objetivo`/`fusion_sku`, clave/MLA `ml_key`/`item_id` y título; aplica a todas las secciones), `limite` (1..200, default 50; inválido o <1 → 50; >200 → 200), `completadas_offset` y `canceladas_offset` (>=0, default 0). Respuesta `data`:
+  - `operaciones[]`: **solo accionables** (estado real `fallida` no cancelada, `intervencion`, `bloqueada_impacto`, `pendiente`, `procesando`, `verificando`, `shadow`), sin límite. Cada una con todos los campos de `identidad_operaciones` más `estado` derivado, `estado_db`, `motivo_cancelacion`, `impacto_hermanas` numérico y `variaciones:[{clave,titulo,status}]`.
+  - `completadas`: `{ total, items[] }`, `items` con el mismo shape que `operaciones[]`; más recientes primero (`actualizada_en` desc, luego `id` desc); paginado con `limite` y `completadas_offset`.
+  - `canceladas`: `{ total, items[] }`, mismo orden y paginación con `canceladas_offset`. Una operación **cancelada** se guarda como `estado='fallida'` con `ultimo_error` que empieza con `cancelada:` (el CHECK de `identidad_operaciones` no admite `cancelada`); la API la expone como `estado:'cancelada'`, `estado_db:'fallida'` y `motivo_cancelacion` (`sin_cambio_sku` si `sku_anterior == sku_objetivo`, si no el texto tras el prefijo).
+  - `total` de `completadas`/`canceladas`: cantidad antes de paginar y ya filtrada por `q`.
+  - `pausas[]`: cada pausa suma `titulo` (string de la publicación en caché, `null` si no hay caché) y `variaciones` (`[{clave,titulo,status}]`, hermanas del mismo ítem; `[]` si no tiene). `q` también filtra por clave/MLA, `item_id` y título.
+  - `fallidas` (numérico): fallidas reales de operaciones y pausas. **Contadores globales, no dependen de `q`.**
+  - `canceladas_total` (numérico, **renombrado** desde `canceladas`, que ahora es la sección `{total, items}`): operaciones canceladas + pausas `cancelada`. Global, no depende de `q`.
+  - `pausas_con_riesgo` (numérico): sin cambio.
+  - **Breaking (2026-10-10)**: `operaciones[]` ya no incluye completadas ni canceladas; `canceladas` pasó de número a objeto y el número está en `canceladas_total`.
+- `GET /retenidas` → `data:[{...fila, claves, titulo, importe, se_vuelve_a_retener}]` (sin `items_json`); `titulo` de la caché de publicaciones o del ítem del pedido, `importe` = suma de `unit_price × quantity` o `null`. `se_vuelve_a_retener` (2026-10-11) es `true` solo si la causa es la marca "no sincronizar" de alguna clave: es exactamente la condición del 409 de liberar. Sin vínculo, sin claves (ítems sin `id`) o retenida por otra causa: `false` y el botón Liberar funciona (200).
+
+### Escrituras (operador)
+- `POST /casos/:id/tomar` (200; body igual que relevar; con caso de otro → 409 `CLAIM_CONFLICT`, usar relevar), `POST /casos/:id/relevar` (200; `responsable` = usuario autenticado, el body no lo puede cambiar; si el caso es de otro, exige `motivo` → 422 `INVALID_INPUT`; queda en `identidad_historial`; body `{ operation_id, expected_version, evidence_fingerprint }` obligatorios (422 `INVALID_INPUT` si faltan), 409 `VERSION_CONFLICT` / `EVIDENCE_CONFLICT`; sin operaciones remotas), `POST /casos/:id/notas` (`matcher:write`: una nota es una escritura; con `matcher:read` responde 403 `FORBIDDEN` y no se guarda nada).
+- `POST /casos/:id/decisiones` — vincular. `override_contradiccion` y `override_omitir` son **admin**.
+- `POST /casos/:id/saltear` — `{ expected_version }`; 409 `VERSION_CONFLICT` si el caso cambió.
+- `POST /casos/:id/no-sincronizar` — `{ variante:'a'|'b'|'c', motivo, expected_sku?, operation_id?, confirm_sibling_impact? }`. La (b) pausa el ítem en ML como operación durable (`identidad_pausas`).
+- `POST /claves/no-sincronizar/deshacer` — `{ clave, motivo }`; deshacer la (c) es solo **admin**.
+  - Respuesta 200 (2026-10-11, aditivo): `{ ok:true, clave, variante, vinculo:{ restaurado, sku, motivo, aviso, operacion_id? }, aviso }`. Deshacer intenta **restaurar el SKU anterior** (`sku_anterior` de la última marca) por la saga de Identidad, con sus barreras (contradicción, hermanas, modo). Si `restaurado:true`, queda una operación nueva (`operacion_id`) y no un vínculo escrito a mano. Si no, la publicación queda **sin vínculo** y `aviso` lo dice: `motivo` = `sku_no_existe_en_woo` (el SKU ya no está en Woo o no es un producto Fusion activo), `sin_vinculo_previo`, `sin_caso`, o el código de la saga (p. ej. `contradiccion_titulo`, `SIBLING_IMPACT_CONFIRMATION_REQUIRED`). `aviso` es `null` si se restauró.
+  - Los `POST /casos/:id/no-sincronizar` (variantes a/b/c) y `POST /api/matcher/vinculos/no-sincronizar`: **403 `FORBIDDEN`** si la publicación ya tiene un link de pago o una marca (c) y quien llama no es admin (fail-closed: sin admin explícito, no se reemplaza).
+- `POST /retenidas/:orderId/liberar` — `{ motivo }`; Ventas, Supervisor o Admin. La venta se reprocesa en la próxima sincronización y, si la causa sigue, se vuelve a retener.
+  - **409 `LIBERAR_BLOQUEADO_POR_MARCA`** (fail-closed, 2026-10-11): mientras `se_vuelve_a_retener` sea `true` (una clave de la venta tiene la marca "no sincronizar") no se libera, porque el sync la volvería a retener. Solo bloquea esa causa: una venta sin vínculo (o con ítems sin `id`) se libera a mano con 200, como antes. Forma exacta: `{ ok:false, code:'LIBERAR_BLOQUEADO_POR_MARCA', error:'Primero vinculá la publicación o quitá la marca', se_vuelve_a_retener:true, claves:["MLA…|…"] }`. La venta queda `retenido`. Se libera cuando `se_vuelve_a_retener` pasa a `false`.
+  - Si la venta se liberó y después se volvió a marcar y el sync la retiene de nuevo, vuelve a aparecer en `GET /retenidas` como `retenido` (antes quedaba `liberado` y fuera de la lista).
+  - Mismo 409 en `POST /api/guardia-ml/pedidos-retenidos/:orderId/liberar`.
+
+- `GET /casos/:id` (aditivo, Fase D H5): `link_de_pago_sin_marketplace` (bool, true si `publicacion.es_marketplace === false`: mostrar el aviso al elegir Link de pago) y `ninguno_sirve` (`{motivo,nota,por,desde}` | null, vigente solo con la evidencia actual; `por` = actor del evento `ninguno_sirve` y `desde` = su `creado_en` en el historial, el mismo criterio que `cierre.por`/`cierre.desde` de la cola).
+
+**Acciones de Fase D H1-H4 (2026-10-10).** Ninguna crea operación remota salvo `POST /operaciones/:id/revertir`, que encola por el mismo camino que Vincular. Todas las escrituras piden `operation_id` (idempotencia: repetido = 200 con `repetido:true`; nuevo = 201 si crea algo), `expected_version` y `evidence_fingerprint` salvo donde se indica.
+
+- `POST /casos/:id/excepcion` — **operador** (`matcher:write`, como la vieja). Body: `{operation_id, expected_version, evidence_fingerprint, motivo, expires_at}`. `motivo` y `expires_at` obligatorios; `expires_at` ISO 8601 futuro (422 si no). Caso → `exceptuado` con excepción `solo_ml` que vence; sin operación. 201. Caso cerrado sin repetido: 409 `INVALID_STATE`.
+- `POST /casos/:id/ninguno-sirve` — **operador**. Body: `{operation_id, expected_version, evidence_fingerprint, motivo:no_es_ninguno|no_existe_en_woo, nota?}` (nota ≤ 500). Saca el caso de la cola mientras `evidence_fingerprint` no cambie (si cambia, vuelve sola). Sin operación remota. 201. Ya vigente con otra operación: 409 `INVALID_STATE`. Motivo fuera de enum: 422.
+- `POST /casos/:id/ninguno-sirve/deshacer` — **operador**. Body: `{operation_id, expected_version, evidence_fingerprint}`. Vuelve el caso a la cola. 409 `INVALID_STATE` si no hay marca vigente.
+- `POST /casos/:id/decisiones` — **operador** (`matcher:write`); `override_contradiccion` y `override_omitir` son **admin** (403 si no). Ruta real: `/api/catalogo-vinculos/casos/:id/decisiones` (no existe `/api/catalogo-vinculos/decisiones`: eso da 404 sin cuerpo JSON). Body: `{operation_id, expected_version, evidence_fingerprint, tipo:'vincular'|'solo_ml'|'investigar', product_id (vincular), motivo?, confirm_sibling_impact?, override_contradiccion?, override_omitir?}`.
+  - 201 `{ok:true, decision}`; repetido con el mismo `operation_id`: 200 `{ok:true, repetido:true, decision}`.
+  - 409 `{ok:false, code:'SIBLING_IMPACT_CONFIRMATION_REQUIRED', error, sibling_count:n}` — vincular con hermanas activas (`n` = otras publicaciones `active` del mismo ítem) sin `confirm_sibling_impact:true`. Es el paso esperado: la pantalla muestra el bloque de hermanas y reenvía con la confirmación. Con la fixture QAFX-MLA2|11 devuelve `sibling_count:2`.
+  - 409 `{ok:false, code:'VERSION_CONFLICT', error}` — `expected_version` distinto al del caso (refrescar).
+  - 409 `{ok:false, code:'EVIDENCE_CONFLICT', error}` — `evidence_fingerprint` distinto (la evidencia cambió).
+  - 409 `{ok:false, code:'contradiccion_titulo', error, motivos}` — título ML contradice el Woo; sin `override_contradiccion` no se confirma.
+  - 409 `{ok:false, code:'omitir_requiere_override', error}`, `SIN_CAMBIO_SKU`, `OPERACION_DUPLICADA` (con `operacion_id`).
+  - 422 `INVALID_INPUT` (faltan campos, `tipo` inválido, `motivo` requerido en `solo_ml`/confirmar igual); 404 `NOT_FOUND` (caso u observación ML inexistente).
+- `POST /casos/:id/reabrir` — **operador** (`matcher:write`). Body: `{operation_id, expected_version, evidence_fingerprint, motivo}` (`motivo` obligatorio, no vacío). Revierte el cierre vigente: la excepción `solo_ml` (se invalida: `activa=0`, `invalidada_en`) y/o "ninguno sirve" (se registra `ninguno_sirve_deshecho` en el historial). Si el caso estaba `exceptuado` pasa a `urgente`; vuelve a la cola abierta y sale de `cerrados`. Historial `caso_reabierto` con `motivo`, `revertidos`, `excepcion_id`, `estado_previo` y el actor. Sin operación remota; no crea tipos de decisión nuevos.
+  - 200 `{ ok:true, caso_id, estado, expected_version, revertidos:['excepcion'|'ninguno_sirve'][], motivo }` (`expected_version` ya incrementado). Repetido con el mismo `operation_id`: 200 con `repetido:true` y el mismo resultado guardado, sin nuevo evento.
+  - 422 `INVALID_INPUT`: falta `operation_id`, `expected_version`, `evidence_fingerprint` o `motivo` vacío.
+  - 403 `FORBIDDEN`: usuario sin `matcher:write`.
+  - 404 `NOT_FOUND`: caso inexistente.
+  - 409 `VERSION_CONFLICT` / `EVIDENCE_CONFLICT`: versión o evidencia vieja (como el resto de las mutaciones).
+  - 409 `INVALID_STATE`: el caso no está cerrado (no hay excepción ni "ninguno sirve" vigente), o el cierre es una marca de "no sincronizar" / "link de pago" (hay decisión `omitir` para la clave): esas se deshacen en su propia acción (`POST /claves/no-sincronizar/deshacer`).
+- `POST /casos/:id/deshacer-salteo` — **operador**. Body: `{expected_version}`. Saca el salteo; sin operación. 200. 409 `INVALID_STATE` si no está salteado; 409 `VERSION_CONFLICT`.
+- `POST /operaciones/:id/deshacer` — **operador** (solo su propia decisión; admin cualquiera; otro operador 403, **también al repetir un `operation_id` ajeno**: el permiso se valida antes del replay). Body: `{operation_id, expected_version, evidence_fingerprint}`. Cancela un Vincular que **no empezó** (estados `shadow`, `pendiente`, `bloqueada_impacto`): la operación queda `fallida` con `ultimo_error` `cancelada: …` (la API la expone como `estado:cancelada`), el caso vuelve a su estado previo (responsable y `tomado_en` incluidos) y queda historial. Sin llamada a ML. 200. Si ya empezó (`procesando`, `verificando`, `completada`, `fallida`, `intervencion`): **409 `OPERACION_YA_INICIADA`**, usar Ejecución o Revertir. Ya cancelada o estado no admitido: 409 `INVALID_STATE`.
+- `POST /operaciones/:id/revertir` — **operador** con las mismas barreras que Vincular. Los `override_*` se validan antes del replay (403 también si el `operation_id` ya existe). Body: `{operation_id, expected_version, evidence_fingerprint, motivo (obligatorio), confirm_sibling_impact?, override_contradiccion? (admin)}`. Solo sobre operaciones `completada`: encola un vínculo nuevo hacia el `sku_anterior` de la operación (debe existir como producto Fusion activo). 201 con `operacion` nueva y `revierte_operacion_id`. Responde las mismas respuestas que `POST /casos/:id/decisiones` (`SIBLING_IMPACT_CONFIRMATION_REQUIRED`, `contradiccion_titulo`, `OPERACION_DUPLICADA`, `VERSION_CONFLICT`…). Operación no completada: 409 `INVALID_STATE`; sin motivo, sin SKU anterior o sin producto: 422; `override_*` sin admin: 403.
+- `POST /casos/:id/decisiones` (sin cambio de forma): `vincular` ahora deja en el historial de la operación `caso_previo` (estado, responsable, tomado_en) que usa el deshacer.
+
+**Códigos de conflicto por identificador (H2).** No hay ruta nueva: "No le corresponde" es `POST /api/identidad-productos/identificadores/incorrecto` con `{producto_id, valor_normalizado, motivo, permitir_unico}`. Si el producto tiene un único GTIN activo y no viene `permitir_unico:true`, responde 409 `{code:INVALID_STATE, requiere_confirmacion:permitir_unico, error}`: la pantalla pide confirmación y reenvía con `permitir_unico:true`. (`POST …/identificadores/conflictos/resolver` no usa esta bandera.) Si al descartar el titular único queda **un solo** reclamante en `conflicto` y ningún `activo`, ese reclamante pasa a `activo` en la misma operación (2026-10-11): ya no hay disputa. Con dos o más reclamantes en `conflicto` no se promueve nadie.
+
+**Vencimiento de `solo_ml` (aditivo a la ruta vieja).** `POST /api/identidad-productos/casos/:id/excepciones` sigue admitiendo `expires_at` vacío; si viene, debe ser ISO 8601 futuro (422 `INVALID_INPUT`).
+
+### Escrituras (admin)
+- `POST /claves/link-de-pago`, `POST /operaciones/:id/confirmar-impacto`, `POST /operaciones/:id/destrabar`.
+- `POST /operaciones/:id/reintentar` (2026-10-11): **409 `INVALID_STATE`** si la operación fue cancelada por Deshacer (`ultimo_error` empieza con `cancelada:`): no se reactiva, hay que decidir de nuevo. La cancelada por una marca "no sincronizar" (`cancelada por omitir`, sin prefijo) sigue admitiendo reintento como antes.
+- Pausas de "no sincronizar (b)" (`identidad_pausas`, migración 125): `estado` puede ser `bloqueada_impacto` (2026-10-11) cuando las hermanas activas cambiaron entre la solicitud y la pausa; no se pausa en ML hasta confirmación humana. `POST /casos/:id/no-sincronizar` con variante `b` reusando un `operation_id` de **otra** publicación responde **409 `OPERATION_ID_REUSED`** (no devuelve la pausa ajena).
+- Reemplazo de la marca (b) bloqueada (2026-10-11): si una pausa de la clave está en `bloqueada_impacto` y la clave recibe OTRA marca (`POST /casos/:id/no-sincronizar` con variante `a` o `c`, o `POST /claves/link-de-pago`), la pausa pasa en la **misma transacción** a `cancelada` con `ultimo_error` `"reemplazada por otra marca"` (historial `pausa`/`cancelada`). Si era la última bloqueada, se cierra la alerta `pausa_bloqueada_impacto`. Después, `POST /pausas/:id/confirmar-impacto` da **409 `INVALID_STATE`**. Re-marcar la MISMA variante (b) no cancela la pausa bloqueada (`POST /casos/:id/no-sincronizar` con b crea una pausa nueva y la vieja queda igual).
+- Deshacer la marca (b) (`POST /claves/no-sincronizar/deshacer`) con la pausa en `bloqueada_impacto` (2026-10-11): la pausa pasa a `estado:'cancelada'` con `ultimo_error` "deshecha por una persona" (antes quedaba esperando una confirmación). Si la pausa ya empezó o terminó: 409 `INVALID_STATE`, sin cambios. Al cancelar, la alerta `pausa_bloqueada_impacto` se cierra si no queda otra pausa bloqueada.
+- Alerta de incidentes (2026-10-11): el worker, al bloquear una pausa por impacto, abre un incidente `integracion=mercadolibre`, `proceso=identidad_pausa`, `tipo_error=pausa_bloqueada_impacto`, severidad `advertencia` (dedupe: una sola alerta abierta para todas las pausas bloqueadas). No es un endpoint nuevo; se ve en la pantalla de incidentes.
+- `POST /pausas/:id/confirmar-impacto` (2026-10-11, **admin**; 403 `FORBIDDEN` si no). Body: `{operation_id}` (obligatorio, nuevo; 422 `INVALID_INPUT` si falta). Solo sobre pausas `bloqueada_impacto`:
+  - 201 `{ok:true, reemplaza:<id pausa vieja>, pausa:{...pausa nueva, estado:'pendiente' (o 'shadow' fuera de escrituras), impacto_hermanas:N, impacto_confirmado:1, operation_id}, hermanas:N, hermanas_activas:[{clave,titulo,status}]}`. Recalcula las hermanas activas AHORA (no las de la solicitud).
+  - La pausa vieja NO se reactiva: queda `estado:'cancelada'` con `ultimo_error` "reemplazada por confirmación de impacto (operation_id …)". La marca "no sincronizar" se mantiene.
+  - Repetido (mismo `operation_id` sobre la misma pausa): 200 `{ok:true, repetido:true, reemplaza, pausa, hermanas, hermanas_activas}`, sin filas nuevas.
+  - 409 `OPERATION_ID_REUSED`: el `operation_id` ya existe y no es el resultado de una confirmación sobre esta pausa (p. ej. el de la pausa original).
+  - 409 `INVALID_STATE`: la pausa no está `bloqueada_impacto` (no reactiva una cancelada/reemplazada), **o** la marca "no sincronizar (b)" ya no es vigente para la clave (se reemplazó por otra variante o se deshizo): en ese caso no se crea nada. Mensaje distinto según el caso. 404 `NOT_FOUND`: pausa inexistente.
+  - Al confirmar, la alerta `pausa_bloqueada_impacto` (incidentes) se cierra si no queda ninguna pausa bloqueada.
+- `GET /ejecucion` (aditivo, 2026-10-11): cada elemento de `pausas[]` trae además `hermanas_activas:[{clave,titulo,status}]` y `n_hermanas_activas:N` (impacto ACTUAL: publicaciones `active` del mismo ítem, distintas de la pausa). Es lo que el diálogo muestra como "Esto pausa N variaciones en ML: [lista]". `variaciones` (cualquier status) queda igual.
+
+## Matcher: GET /api/matcher/candidatos paginado (Fase D, 2026-10-10)
+
+Modo Publicación ML de la pestaña Vínculos. Sin parámetros de paginación la respuesta es la vieja
+(`{ok, data, total, actualizado, scope, cache}` con TODA la lista, ~21 MB; la usan `scope=all` de
+`test/matcher-rendimiento.test.js` y otros consumidores). Con **cualquiera** de `q`, `filtro`,
+`limit` u `offset` la respuesta es la paginada de abajo.
+
+- Request: `GET /api/matcher/candidatos?scope=all&q=&filtro=&limit=&offset=`
+  - `scope`: `all` (default) o `atencion`, igual que antes.
+  - `q` (opcional): texto libre. **Cambio de semántica (2026-10-10, aprobado por el responsable):**
+    antes era subcadena exacta sobre `ml_title + " " + clave`; ahora es **AND por palabras**:
+    1. Se normaliza (sin acentos ni mayúsculas, `trim`) y se parte por espacios (dobles espacios y
+       tabs se ignoran). Vacío o solo espacios = sin filtro de texto (igual que antes).
+    2. TODAS las palabras deben aparecer como subcadena en `ml_title + " " + clave` normalizados;
+       el orden no importa y cada palabra puede caer en el título o en la clave.
+    3. Una sola palabra se comporta como subcadena (`q=casco` encuentra "Casco…" y "…CASCO…").
+    Ejemplos: `q=maza shimano` encuentra "Shimano Deore Maza Delantera" (orden distinto);
+    `q=ñandú` = `q=nandu` = `q=NANDU`; `q=ruta rodado` no encuentra una publicación que tenga
+    "ruta" en el título y "rodado" solo en otra publicación (el AND es por publicación).
+    `conteos` y `total` se calculan con este `q` ya aplicado. Orden y paginación: el de la caché
+    (estable entre páginas mientras no cambie la caché).
+  - `filtro` (default `all`): `all` | `asignar` | `verificar` | `conf-baja` | `color-talle`.
+    Otro valor → 400. Mismos criterios que `filtroMatcher` del cliente (`conf-baja` =
+    `verificar` con `score_confianza < 0.7`; `color-talle` = `candidatos[0].color_ok && talle_ok`).
+  - `limit` (default 50): entero ≥ 1. Por encima de 200 se recorta a 200 (ver `limit` en la respuesta).
+    No entero o < 1 → 400.
+  - `offset` (default 0): entero ≥ 0. Fuera de rango → `items: []`.
+  - `peek=1` sigue funcionando: sin caché devuelve `items: []`, `total: 0`, `cache: false`.
+- Response 200 (paginada):
+  ```
+  {
+    ok: true,
+    total: number,          // cuántos cumplen q + filtro (lo que se pagina)
+    items: [                // hasta `limit` ítems, desde `offset`
+      { clave: "MLA123|456", ml_item_id: "MLA123", ml_variation_id: "456",
+        ml_title: string, modo: "asignar"|"verificar", score_confianza: number|null }
+    ],
+    limit: number,          // valor efectivo (default 50, máx 200)
+    offset: number,
+    conteos: { all, asignar, verificar, "conf-baja", "color-talle" },  // con q aplicado, para los chips
+    total_todas: number,    // publicaciones del cruce sin filtrar
+    filtro: string,         // eco del filtro efectivo
+    q: string,              // eco del q recibido
+    actualizado: string|null,
+    scope: "all"|"atencion",
+    cache: boolean
+  }
+  ```
+  `clave` es el valor que devuelve la pantalla (`clave` o `ml_item_id|ml_variation_id`). Los
+  `candidatos` y el resto del cruce NO viajan en la lista: el detalle del vínculo se pide aparte.
+- Response 202 cuando el cruce está frío: `{ ok: true, computing: true, scope }` (igual que antes;
+  el frontend reintenta).
+- Errores: 400 `{ ok: false, error }` por parámetros inválidos; 500 `{ ok: false, error }` como antes.
+- Tamaño y tiempo (medido, 7000 publicaciones sintéticas, caché caliente): página de 50 ≈ 8 KB
+  (~12–23 ms); página de 200 no se midió por separado (el test exige < 200 KB); respuesta vieja ≈ 8.8 MB (~140 ms, sin contar el JSON
+  real de ~21 MB).
+- Reemplazo por vínculo (2026-10-11): si la marca `omitir` de la clave se reemplaza por un vínculo (saga de `decidirCasoIdentidad` o alineación local), las pausas `bloqueada_impacto` de esa clave pasan a `cancelada` con `ultimo_error` `"reemplazada por vínculo"` (historial con `variante_nueva: 'vinculo'`) y se cierra la alerta si no queda otra bloqueada.

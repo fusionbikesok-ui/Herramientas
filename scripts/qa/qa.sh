@@ -67,6 +67,7 @@ generar_env() {
     echo "WOO_CK=ck_qa_$(openssl rand -hex 12)"
     echo "WOO_CS=cs_qa_$(openssl rand -hex 12)"
     echo "APP_URL=http://127.0.0.1:3101"
+    echo "INBOX_PUBLIC_ORIGIN=http://127.0.0.1:3101"
     echo "SOMBRA_PLATAFORMA_URL=http://qa-plataforma:3300"
     echo "SOMBRA_KEYRING_FILE=/run/qa/keyring.json"
   } > "$f"
@@ -115,8 +116,10 @@ cmd_up() {
   log "código: rama $rama ($(git -C "$REPO" rev-parse --short "$rama"))"
   git -C "$REPO" archive "$rama" | tar -x -C "$QA_BUILD_DIR"
 
+  # El anonimizador viaja con este script (no con el checkout de producción): así la barrera contra
+  # escrituras remotas de la copia QA vale aunque el checkout de $REPO esté en otra rama.
   log "snapshot anonimizado (~80 s)"
-  QA_CLAVE="$(cat "$CLAVE_QA")" nice -n 10 node "$REPO/scripts/qa/snapshot-anonimizado.mjs" "$PROD_DB" "$QA_DIR/data/fusion.sqlite"
+  QA_CLAVE="$(cat "$CLAVE_QA")" nice -n 10 node "$SCRIPT_DIR/snapshot-anonimizado.mjs" "$PROD_DB" "$QA_DIR/data/fusion.sqlite"
 
   # El snapshot deja ml_oauth_token vacío (el token real nunca sale de producción). Sin fila, la
   # app no llega a llamar a ML y los flujos de ML no se pueden probar: se siembra un token falso

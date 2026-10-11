@@ -95,6 +95,13 @@ Ticket pendiente, anterior a Fase B (no lo introdujo): quedan `onclick` inline e
 
 ## Deuda: targets táctiles < 44 px en móvil (2026-10-06)
 Detectada en el E2E de Fase B; no es de esa rama. Controles por debajo de 44 px en móvil: «Salir» y «Abrir bandeja en Mercado…» (home), «← Home», y el link MLA de la tabla del matcher. Llevarlos a ≥ 44 px (criterio de aceptación de arriba).
+- La portada `/herramientas/home/` ofrece primero a administradores la tarjeta «Gestión VPS — POS, Facturador y Taller», enlazada a `/herramientas/gestion-vps/`. Indica «solo consulta» y que el historial copiado no se actualiza automáticamente; la operación sigue en la web habitual. Reutiliza tarjetas/estados y responsive de Home, sin alterar permisos ni el Taller previo.
+
+- Gestión VPS usa los tokens `theme.css`/`components.css` de Herramientas y `integrations/management-migration/assets/management.css` para entrada y envoltorios. Resultados de catálogo son tarjetas de consulta con cantidad registrada, SKU/GTIN, fecha por fila y precio web de referencia. Los JS adaptados existen sólo en el VPS; no se habilita agregar estos datos incompletos a ventas/facturas.
+
+- Gestión VPS tiene directorio compartido `/herramientas/gestion-vps/directory/`: búsqueda local de clientes registrados/invitados y pedidos históricos, origen Woo/espejo ML, fecha y cobertura de sincronización. Usa tokens existentes y controles de 44 px. Accesos desde inicio de Gestión y banners POS/ARCA/Taller. Los GET de clientes POS/Taller usan IDs de la tienda; no habilitar escrituras hasta mapearlos con las identidades del runtime.
+
+- Directorio: carga histórica y actualización incremental verificadas el 2026-10-05. La carga inicial concilió 1.593 cuentas customer y 13.888 pedidos desde 2023-03-09; el primer delta incorporó dos pedidos (13.890), con dos GET. 434 pedidos tienen marca de copia ML. UI probada: clientes POS, búsquedas por SKU y pedido exacto (#6115), detalle histórico y compras por ID de cliente. No hay mapeo de escritura ni selector fiscal ARCA; directorio compartido de consulta. No interpretar las fichas por pedido sin cuenta sincronizada como clientes únicos. El importador legado que acumula contactos repetidos no se modificó ni alimenta este índice.
 
 - 2026-10-05: Panel de ventas 1.1.0 trasladado a `/herramientas/gestion-vps/ventas/`, bajo sesión/admin vigente y acceso desde Gestión/Directorio. Consultas, filtros, gráficos y CSV calculados sólo en caché VPS `metrics.sqlite`; usa pedidos del directorio (dp=8 explícito y checkpoint versionado), catálogo analítico diario y devoluciones por ítem del puente 0.3.0. Dos timers de 15 min; desfase combinado hasta aproximadamente 30 min, fecha real y alertas visibles. Paridad exacta de 452 líneas de septiembre 2026 (295 pedidos, 497 unidades, ARS 346.975.881) y 23 líneas de marzo 2023 (22 pedidos, 33 unidades, ARS 1.441.599,80), incluidos productos eliminados/reembolsos sin asignar. CSV descargado idéntico byte a byte al origen. 22 pruebas Node, 10 Python, 87 aserciones PHP. Snapshot/generación evita páginas o CSV mezclados; no se exponen contactos en analítica. Respaldo inicial metrics-20261005T154728Z, final metrics-20261005T160049Z; importador precision-20261005T155348Z. Sólo se reinició gateway; Master Control, precios/checkout/emisores originales intactos. POS/ARCA/Taller siguen consulta y Chat productivo pendiente. Usuario agregó migrar generador Andreani funcional: auditoría del plugin 1.1.2 iniciada, aún no publicado en esta etapa.
 
@@ -167,3 +174,10 @@ de número y fuera de horario; la pausa del chat sigue separada. Supervisor pued
 cada número independientemente y abrir los horarios en WordPress. Administrador general
 con rol agente/lector puede recuperar sólo su propia supervisión mediante acción explícita,
 autenticada y auditada. No puede autoexcluirse de Mensajería.
+## Mensajería (2026-10-07)
+
+- Home agrega Atención al cliente → Mensajería, visible según permiso también para no administradores. UI con tokens compartidos, controles táctiles de 44 px y bandeja/detalle adaptable a 390/768/1440 px.
+- Sesión identifica al agente; filtros sin asignar/mías/cerradas, notas privadas, transferencia y pausa/retorno explícito IA. Matías consulta sin compositor habilitado. Teléfono con copiar y contexto de chat web conservado.
+- Historial cronológico por fecha+ID, paginación y reinicio de página tras desconexión sin solapamiento; borrador se conserva. IA se informa según estado local y habilitación/conexión efectiva del número.
+
+- Los números pendientes se muestran en el panel de estado; el filtro de conversaciones sólo habilita IDs configurados y se deshabilita si no hay ninguno.

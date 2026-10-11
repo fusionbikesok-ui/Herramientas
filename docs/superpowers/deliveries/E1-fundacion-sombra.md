@@ -427,7 +427,18 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 **Decisiones abiertas:** ninguna.
 
+## Requisitos adicionales de la consolidación (2026-10-05)
+
+Origen: `specs/2026-10-03-consolidacion-herramientas.md` (Fase E) y PM-189. Se agregan; no reemplazan PM-179, PM-183 ni PM-188.
+
+- **Webhooks primero, crons reducidos (no eliminados).** Un evento `items` de ML relee ese ítem, actualiza la caché, corre el Vigía y sincroniza el stock de esa clave; un evento `product` de Woo sincroniza ese SKU; ambos idempotentes. La relectura cumple `specs/ml-api-guia.md` y PM-179 (el webhook sólo crea la señal).
+- **Cada proceso conserva un barrido de control más espaciado** (p. ej. stock 10 min → 1 h; refresco de ML 15 min → 2 h más conciliación nocturna completa). El barrido **verifica y mide**: cuenta las diferencias que el webhook no cubrió, las corrige y avisa («se perdieron N avisos de ML hoy»); si son muchas, sube solo su frecuencia. Nunca se apaga un barrido de control.
+- **Cada cambio de frecuencia, de a uno:** evento en paralelo, una semana comparando evento contra barrido, recién entonces se baja la frecuencia. Verificación: por cada frecuencia que se baja, una semana con «diferencias encontradas» en 0 o explicada, y la alarma de avisos perdidos probada.
+- **Decisión de José pendiente en E1:** para las corrientes en sombra que la plataforma no consume (pedidos, envíos, preguntas; unos 4.800 `pending` desde el 17–18/09), consumirlas o dejar de guardarlas.
+- Contexto verificado el 2026-10-03: 31 crons (6 por minuto, «missed execution», 55 reinicios de pm2); en 7 días 8.273 webhooks de ml.items y 652 de woo.products en `integrations.inbox_messages`; el legado los usa sólo para pedidos.
+- **Alternativa descartada:** implementar el flujo de eventos como función nueva del legado: queda como requisito de E1 y de las entregas de stock, por PM-160.
+
 ## Decisiones PM asignadas
 
 - **Dueña:** PM-049, PM-051, PM-052, PM-074, PM-083, PM-101, PM-111, PM-112, PM-128, PM-136, PM-137, PM-138, PM-139, PM-140, PM-141, PM-142, PM-143, PM-146, PM-147, PM-152, PM-154, PM-155, PM-156, PM-157, PM-158, PM-170, PM-171, PM-172, PM-173, PM-174, PM-175, PM-176, PM-178, PM-179, PM-180, PM-181, PM-182, PM-183
-- **Consumidora:** PM-003, PM-006, PM-008, PM-017, PM-046, PM-048, PM-085, PM-086, PM-087, PM-094, PM-105, PM-107, PM-125, PM-127, PM-129, PM-149, PM-160
+- **Consumidora:** PM-003, PM-006, PM-008, PM-017, PM-046, PM-048, PM-085, PM-086, PM-087, PM-094, PM-105, PM-107, PM-125, PM-127, PM-129, PM-149, PM-160, PM-189

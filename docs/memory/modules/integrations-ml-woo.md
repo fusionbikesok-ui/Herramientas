@@ -21,6 +21,7 @@ ML/Woo; no hace falta para tareas ajenas a esas integraciones.
 ## Mapa de contexto
 
 - Precio de contado y pedidos creados desde ventas ML: `CLAUDE.md` y `lib/mlPrecios.js`.
+- **Invariante de precios (verificado en vivo 2026-10-08):** en Woo se carga el precio de CONTADO; un plugin expone por la API `regular_price` = contado × 1,5 ("lista"). Por eso `precioContado()` aplica 2/3 sobre `catalogo_cache.regular_price` y vuelve al contado. Ej.: escribir 1500000 en la variación 70763 quedó como 2250000 en la API (contado $1.500.000). No quitar el 2/3 (PR #14 cerrado por eso).
 - Contratos HTTP relacionados: `docs/api-contrato.md`.
 - Diseño o intención histórica: buscar primero en `docs/superpowers/plans/` por el nombre
   concreto de la función, sin cargar todos los planes.
@@ -146,9 +147,43 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
   sagas de Guardia/Identidad. La saga revalida contradicción antes de restaurar stock o activar una
   identidad; en conflicto deja el caso abierto y registra historial.
 
+## Una sola protección: Identidad (Fase C, 2026-10-07)
+
+Spec `docs/superpowers/specs/2026-10-07-fase-c-una-proteccion.md`. Variable `IDENTIDAD_PROTECCION` = `apagado` | `sombra` (default; valor inválido = sombra) | `activo`. En `sombra`/`apagado` todo se comporta como antes; el código nuevo vive en `lib/proteccionIdentidad.js`.
+
+- **R1** `omitir` (links de pago) queda fuera de todo; la migración 120 cierra los casos `sin_cobertura` de Guardia de esas claves (evento `cerrado_omitida_link_pago`).
+- **R2** el SKU manda: publicación vinculada con caso abierto → stock 0 (sin pausar ni tocar precio) solo si el caso está en `intervencion` o hay contradicción (`gtin_contradictorio`/`contradiccion_titulo`) con `seller_sku` ausente o distinto del vinculado. Con SKU igual la severidad baja a `normal` y el sync sigue. `computedStockCte()` en `routes/sync.js` elige la CTE por modo.
+- **R3** autovínculo por SKU exacto y único (`autoVincularPorSellerSku`); el GTIN no veta.
+- **R4** publicación activa sin decisión con caso abierto `sku_ausente`/`sku_vacio`/`sku_inexistente`/`sku_no_unico`/`contradiccion_titulo` → stock 0 en activo (no hay clase `sin_vinculo` nueva). `stock_no_verificado` no frena.
+- **R5** retención de ventas ML: cobertura = decisión asignar/confirmar y sin freno R2; `omitir` nunca retiene (`claveCubiertaParaVenta`, `claveFrenadaParaVenta`, `esOmitir` en `lib/guardiaMl.js`).
+- **Invariante: el stock de ML es por `user_product`.** Publicaciones con el mismo `user_product_id` comparten UNA cantidad. Si una frena por R2, su hermana también (`frenaIdentidad` / `sqlFrenaIdentidad`, motivo `hermana_user_product:<clave>`): un stock > 0 en la hermana (sync o reactivador) subiría y reactivaría a la frenada. Medido en prod 2026-10-08: FB-5966 (`MLA1446723717|`, intervención) volvía a 1 cada ~3 h porque su hermana `MLA1446733297|` se reactivaba con el stock de Woo. R5 hereda (la hermana se retiene). Migración 121: índice por `user_product_id` (sin él la CTE tardaba ~10 s). Solo en `activo`.
+- `claveBloqueadaGuardia` y la guarda de escritura de `lib/matcherPush.js` NO se tocan: delegarlas en Identidad bloquearía la saga de Identidad.
+- **Guardia en activo:** no corren el escaneo ni el worker de operaciones (sí la liberación de ventas retenidas), las escrituras de `/api/guardia-ml` responden 409 y la página muestra el aviso. Tablas en solo lectura 30 días.
+- **Reporte de sombra:** `GET /api/sync/fase-c/sombra` (admin, solo lectura): stock hoy vs activo por clave, regla, autovínculos simulados y R4 por clasificación.
+- **Frenos R4 (revisión PR #12):** los frenos van primero en la cola del sync (el tope de llamadas no los deja sin ejecutar); R4 no aplica con catálogo vacío ni con audit no confiable (>6 h); si hay más de `R4_MAX_POR_CORRIDA` (20) claves no se aplica ninguna y se abre incidente crítico `mercadolibre/fase_c_r4`. Se reenvía el 0 si el cache de ML es más nuevo que nuestro último 0.
+- **Antes de pasar a `activo`, José revisa `a_cero_por_r4.total` del reporte de sombra** (si supera el tope, R4 no se aplicaría).
+- **Despliegue:** backup, migración 120 con `sombra`, leer el reporte, OK de José, `activo` + `pm2 restart`. Vuelta atrás: `sombra` + restart.
+
+## Catálogo y vínculos (Fase D, 2026-10-11)
+
+Spec/plan/diseño: `docs/superpowers/specs|plans/2026-10-09-fase-d-*`. Una sola pantalla `/catalogo-vinculos/` (`public/catalogo-vinculos/`) con un único escritor: el motor de Identidad. `/matcher/`, `/identidad-productos/`, `/guardia-ml/` y `/bandeja-identidad/` son stubs que redirigen (`?aviso=unificado`); el Home tiene la tarjeta con chip vía `/api/catalogo-vinculos/estado`. Contrato de la API en `docs/api-contrato.md`.
+
+- **Modelo:** cola de casos (`GET /cola`, filtros incl. `cerrados` con `cierre:{tipo,motivo,por,desde,vence_en}`), detalle `GET /casos/:id` (`data.caso` + en `data`: `vinculo_vigente`, `hermanas_item`, `marca`, `notas`, `excepcion`, `ninguno_sirve{motivo,nota,por,desde}`, `link_de_pago_sin_marketplace`), Ejecución, Retenidas, Vínculos. Toda mutación exige `operation_id`, `expected_version` y `evidence_fingerprint`; el replay por `operation_id` es idempotente.
+- **Cerrar / reabrir:** excepción con vencimiento y «Ninguno sirve» sacan el caso de la cola; filtro «Cerrados» + `POST /casos/:id/reabrir` (write, motivo obligatorio; una marca de no sincronizar o link de pago no se reabre por ahí, 409). Un caso cerrado se ve solo lectura con Reabrir como única acción.
+- **Deshacer / revertir:** `/operaciones/:id/deshacer` solo en shadow/pendiente/bloqueada_impacto (si no, 409 `OPERACION_YA_INICIADA`); `/operaciones/:id/revertir` solo `completada`. Una operación `cancelada:` no se reintenta (409). Deshacer «No sincronizar» restaura `sku_anterior` por la saga normal o avisa que quedó sin vínculo.
+- **Retenidas:** liberar una venta cuya causa es una clave con marca «no sincronizar» da 409 `LIBERAR_BLOQUEADO_POR_MARCA` (también en `/api/guardia-ml/pedidos-retenidos/:id/liberar`); `retenerPedidoMl` repone `retenido` desde `liberado` mientras la marca siga. Sin marca (o ítems sin id) se libera a mano.
+- **Pausas (migraciones 124-125):** `identidad_pausas`; una pausa que cambia las hermanas activas pasa a `bloqueada_impacto` y abre el incidente `pausa_bloqueada_impacto` (advertencia). Salida: `POST /pausas/:id/confirmar-impacto` (solo admin; vieja `cancelada`, nueva con `operation_id` nuevo); exige la marca (b) vigente. Se cancela sola al deshacer la marca, al cambiar de variante («reemplazada por otra marca») o al vincular («reemplazada por vínculo»).
+- **Permisos:** notas y Reabrir exigen `matcher:write`; pisar una marca `link_de_pago`/`no_sincronizar_c` exige admin (403). En celular (<768 px) la pantalla es solo consulta por decisión de José.
+- **Matcher:** `GET /api/matcher/candidatos` paginado en servidor (`q` AND por palabras sin acentos, `filtro`, `limit` 50/200, `offset`); frío ~15 s cediendo el loop (202 `computing` con reintento), caliente p95 0,33 s.
+- **Otros arreglos durables:** `alinearVinculoLocal` propaga «confirmar igual» (override_contradiccion + evento); el único reclamante de un GTIN pasa de `conflicto` a `activo` al descartar al titular; `urlML` solo acepta https.
+- **Migraciones 122-125:** 122 `ml_key` en ítems de pedidos, 123 override de contradicción, 124 `identidad_pausas`, 125 `identidad_pausas` admite `bloqueada_impacto`.
+- **Desplegar:** backup + `integrity_check`, merge, `pm2 restart` inmediato con migraciones en logs, queda en shadow, smoke con auditor/home/redirecciones, verificar gzip de `catalogo-vinculos.js` (~191 KB sin comprimir), backfill de 30 días si sigue en el plan; vuelta atrás con el backup y el commit previo.
+- **QA:** `scripts/qa/qa.sh up <rama>` (pasar la rama explícita) y fixtures `scripts/qa/fixtures/catalogo-vinculos.mjs` (`--masivos N`, GTIN único `7790000000010`); base anonimizada, nunca la de producción.
+
 ## Pausas con sentido (Fase A, 2026-10-05)
 
 - **Vigía de formato** (`lib/vigiaPausado.js`): sólo pausa cambios reales. **Vacío → producto no pausa**: casi siempre es ML asignando catálogo; queda como aviso abierto (`aviso_catalogo`, `solo_aviso=1`) para que una persona lo mire y **no bloquea al reactivador**. Tampoco pausan `desaparece`, `oscila`, `alta_reciente` ni `migracion` (migración de ML). El texto informativo de un aviso sin pausa va en `ml_publicacion_cambios.nota`; `pausada=1` sólo si el vigía pausó de verdad.
+- **Vigía de formato, incidente y ruido (2026-10-07, decisión de José)**: `oscila` = valor ya visto en los últimos **30 días** (antes 7; MLA820556361 volvió a MLA46017608 a los 12). El incidente `vigia_formato` (crítico) sólo se abre o actualiza si el vigía **pausó** (`pausadas>0`), **falló** al pausar (`errores>0`) o **frenó por el tope** (corrida o 24 h). Sin stock, ya pausadas, migraciones y avisos se asientan en `ml_publicacion_cambios` para revisar y no tocan incidentes (antes un cambio en una publicación ya pausada con 0 unidades mantuvo «Crítico ×236» abierto desde el 12/09: incidente 29). El mensaje va agrupado por publicación+campo+par de valores («MLA… (6 variaciones): campo pasó de X a Y») y el encabezado cuenta las publicaciones reales, incluidas las sin stock.
 - **Tope**: `UMBRAL_PAUSA_MASIVA` (5) por corrida y también en una ventana de 24 h; si se supera, el vigía no pausa más y deja avisos.
 - **`ml_pausas_log`** (migración 119) registra quién y desde dónde pausó cada publicación (`actor`, `origen`, fecha): permite decir «pausada por Fernando desde Cobertura hace 3 días».
 - **Pausadas con stock** (`lib/pausadasConStock.js`, `GET /api/sync/pausadas-con-stock`): lista las publicaciones pausadas en ML con stock en Woo, agrupadas por causa (`vigia`, `solo_local`, `sin_vinculo`, `pausa_app`, `paused_by_seller`, `pausa_vieja`, `out_of_stock`, `otra`). Cada una trae `reactivable` y `motivo_no_reactivable` (`solo_local`, `sin_vinculo`, `aviso_abierto`, `sin_stock_disponible`), stock Woo/ML (`stock_ml` es `null` si ML no informó, nunca 0 inventado), precio de contado por variación y `en_juego` (plata); el orden lo define el servidor.
@@ -157,6 +192,37 @@ canónicas de esta integración. No dupliques reglas normativas: enlazalas a su 
 - Permiso: la vista y sus endpoints cuelgan de `sync-ml` (no hay herramienta nueva).
 
 - 2026-10-06: «Calcular precio y reactivar» (Sync ML > Pausadas con stock) reusa `POST /api/precios/objetivo` (≤100 claves, calcula el precio ML que iguala el neto al precio de contado), `POST /api/precios/actualizar-precio-item` (precio único para todas las variaciones; ya borra `ml_reactivacion_frenada` y refresca el caché) y la reactivación existente `POST /api/sync/pausadas-con-stock/reactivar` (sigue pasando por el control de neto, no se toca). Las claves a calcular salen de `bloqueos[].clave` del resultado de la reactivación frenada por neto.
+## Puente de lectura WordPress (2026-10-04)
+
+- Master Control queda expresamente fuera de la migración: conservar su código,
+  configuración, administración y lógica de precios en la tienda. POS y Taller
+  deben consumir ese motor; no publicar reglas nuevas ni reemplazarlo.
+- Plugin `fusion-herramientas-bridge` activo en WordPress (actualizado a 0.2.0, ver abajo). Fuente:
+  `integrations/wordpress/fusion-herramientas-bridge/`. Dos GET autenticados bajo
+  `/wc/v3/fusion-herramientas`: `status` y `commercial-products?ids=...` (máximo 25).
+- Reutiliza autenticación Woo, HTTPS y `manage_woocommerce`; no crea credenciales,
+  tablas, cron ni escrituras comerciales. Usa DataService/PricingEngine originales.
+- No usar los precios REST estándar como base del POS: Master Control transforma
+  esa representación con `forceApiPrices`. La lectura comercial tiene contrato propio.
+- El snapshot cubre contado y financiación de una unidad; excluye carrito, cupón,
+  envío, impuestos, USD y reserva de stock. Revalidar la operación en checkout;
+  no multiplicar unidades ya redondeadas para cotizar varias cantidades.
+- POS, Chat, Taller y Facturador aún no fueron migrados. El puente solo es preparación;
+  no se ha medido reducción de carga. El checkout permanece en WooCommerce.
+
+## Copia de consulta de módulos en VPS (2026-10-04)
+
+- Puente de lectura actualizado a 0.2.0; agrega inventario/exportación por recursos permitidos y páginas de 50 filas con permiso adicional de administrador. No exporta claves fiscales, contraseñas ni sales. Código y 61 comprobaciones en `integrations/wordpress/`.
+- POS, ARCA y Taller conservan sus paquetes originales en un WordPress/Woo privado del VPS. Consulta autenticada en `/herramientas/gestion-vps/`; historial importado y conciliado, con escrituras/emisión/envíos bloqueados. Detalle y límites en `integrations/management-migration/README.md` y memoria `operations-vps.md`.
+- El catálogo, clientes, pedidos, precios/dólares, checkout e identidades no están conectados todavía. Cinco borradores POS se conservan sin asignar; no equiparar usuarios locales con IDs WordPress. Credenciales fiscales y OAuth/WhatsApp pendientes de transferencia segura.
+- Master Control y checkout siguen íntegros en la tienda. Originales activos como autoridad; no duplicar escritores, stock ni emisor ARCA al completar el corte. Esta copia no acredita migración operativa ni ahorro medido de carga.
+
+
+- Gestión VPS consulta `catalogo_cache` por `/api/woo/catalogo` y el contado por el lector local existente `/api/consulta-precios/buscar`, con identidad de producto validada, caché RAM 5 s y sesión/admin en cada solicitud. No usa listas ML ni consulta Woo por búsqueda. `precio` REST es proyectado: para FB-70394 era 6.675.000 (18 cuotas), mientras contado era 4.450.000, comprobado contra web y puente Master Control el 2026-10-04. Se reutiliza el criterio de Consulta de Precios (oferta vigente incluida), sin copiar coeficientes. Si no hay precio local válido se muestra faltante; no fallback a precio REST ni vencido. Sigue pendiente la paridad comercial completa del POS antes de cobrar. Imágenes HTTPS del catálogo, con fallback a padre; solicitudes estáticas, sin API Woo. Archivo ML visible en modo consulta, acotado a entorno/CUIT y único seller importado; OAuth y sincronización activa aún pendientes.
+
+- Índice reconstruible `directory-cache/directory.sqlite` en el runtime privado de migración: clientes Woo con rol customer y pedidos Woo, JSON con lista explícita de campos, sin contraseñas/roles/credenciales ni metadatos arbitrarios. Invitados vinculados por pedido, nunca por nombre. Una copia Woo de ML queda marcada con `_ml_order_id`; no sumar como segunda venta. Consentimiento comercial desconocido. Las consultas no llaman a Woo. POS/Taller comparten GET clientes; ARCA accede al directorio. Esto no sustituye los escritores originales, los leads del chat ni la captura de carritos. Panel de ventas requiere detalle de devoluciones por ítem y taxonomías para equivalencia completa.
+
+- Directorio: carga histórica y actualización incremental verificadas el 2026-10-05. La carga inicial concilió 1.593 cuentas customer y 13.888 pedidos desde 2023-03-09; el primer delta incorporó dos pedidos (13.890), con dos GET. 434 pedidos tienen marca de copia ML. UI probada: clientes POS, búsquedas por SKU y pedido exacto (#6115), detalle histórico y compras por ID de cliente. No hay mapeo de escritura ni selector fiscal ARCA; directorio compartido de consulta. No interpretar las fichas por pedido sin cuenta sincronizada como clientes únicos. El importador legado que acumula contactos repetidos no se modificó ni alimenta este índice.
 
 - 2026-10-05: Panel de ventas 1.1.0 trasladado a `/herramientas/gestion-vps/ventas/`, bajo sesión/admin vigente y acceso desde Gestión/Directorio. Consultas, filtros, gráficos y CSV calculados sólo en caché VPS `metrics.sqlite`; usa pedidos del directorio (dp=8 explícito y checkpoint versionado), catálogo analítico diario y devoluciones por ítem del puente 0.3.0. Dos timers de 15 min; desfase combinado hasta aproximadamente 30 min, fecha real y alertas visibles. Paridad exacta de 452 líneas de septiembre 2026 (295 pedidos, 497 unidades, ARS 346.975.881) y 23 líneas de marzo 2023 (22 pedidos, 33 unidades, ARS 1.441.599,80), incluidos productos eliminados/reembolsos sin asignar. CSV descargado idéntico byte a byte al origen. 22 pruebas Node, 10 Python, 87 aserciones PHP. Snapshot/generación evita páginas o CSV mezclados; no se exponen contactos en analítica. Respaldo inicial metrics-20261005T154728Z, final metrics-20261005T160049Z; importador precision-20261005T155348Z. Sólo se reinició gateway; Master Control, precios/checkout/emisores originales intactos. POS/ARCA/Taller siguen consulta y Chat productivo pendiente. Usuario agregó migrar generador Andreani funcional: auditoría del plugin 1.1.2 iniciada, aún no publicado en esta etapa.
 
@@ -175,3 +241,5 @@ El VPS es el emisor manual del punto 15 y la tienda quedó bloqueada fiscalmente
 - 2026-10-06: POS VPS activado con puente seguro 0.2.0 en tienda. Catálogo/directorio locales y borrador SQLite por operador; checkout, precio final y pedido en origen, Master Control intacto. HMAC de cuerpo/tiempo, CSRF y operación idempotente; no liberar pedidos existentes. Recorrido FB-70394 ARS 4.450.000 comprobado hasta checkout, luego preparación liberada/tablero limpio; ningún pedido/pago/factura de prueba. 20 pruebas Node y controles PHP aprobados. ARCA continúa en producción punto15; restauradas sus rutas antes de activar POS. Presupuestos nuevos, conversión y cobros manuales siguen pendientes de traslado. Fuente y límites: integrations/management-migration/README-POS.md. Backup de activación pos-active-20261006T104541Z.
 
 - 2026-10-06: POS VPS 0.3.0 restaura comparación previa de cuotas, checkout completo con plan seleccionado y cobro manual/entrega delegados al POS original antes del facturador ARCA integrado. Master Control intacto; búsquedas locales, cotización HMAC por canasta con caché 60s y revalidación al preparar. Recuperación de pedidos vinculada a actor. Renovación CSRF autenticada y reintento solo si pos_csrf. Ver integrations/management-migration/README-POS.md para contratos, validación y límites.
+
+- 2026-10-10: Matcher `GET /api/matcher/candidatos?scope=all` bloqueaba el event loop (LCS en `getCandidatos`, 68 % de CPU; copia QA de 5311 productos WC y 7019 publicaciones ML). `lcsLen`/`tsr`/`topCandidatosPorTokens` optimizados y el cruce cede el loop (`computarCandidatosApiAsync`, commit 29031706). Frío 83,2 s sincrónicos → ~15 s cediendo; caliente p95 0,33 s; lag máximo 181 ms frío y 112 ms caliente (aceptado, no bajar sin pedido); equivalencia 0 diferencias en 7019 ítems. Test: `test/matcher-rendimiento.test.js`. La respuesta de 21 MB se resuelve paginando en servidor (ver `docs/api-contrato.md`).

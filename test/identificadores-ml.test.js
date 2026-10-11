@@ -549,3 +549,24 @@ describe('detalle de un conflicto para poder decidir', () => {
     expect(detalleConflictoIdentificador(db, '')).toBeNull();
   });
 });
+
+describe('Fase D H2: "No le corresponde" sobre el único identificador', () => {
+  let db;
+  beforeEach(() => { db = openDb(FILE); });
+  afterEach(() => {
+    try { db.close(); } catch { /* ya estaba cerrada */ }
+    for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
+  });
+
+  it('sin permitir_unico responde INVALID_STATE con requiere_confirmacion; con permitir_unico lo marca', () => {
+    woo(db, { id: 150, sku: 'FB-150', gtin: '602883701731' });
+    bootstrapProductosFusion(db);
+    const id = idDe(db, 150);
+    const sin = marcarIdentificadorIncorrecto(db, id, '00602883701731', 'ana', 'no corresponde');
+    expect(sin).toMatchObject({ ok: false, code: 'INVALID_STATE', requiere_confirmacion: 'permitir_unico' });
+    expect(gtinDe(db, id)).toMatchObject([{ estado: 'activo' }]);
+    const con = marcarIdentificadorIncorrecto(db, id, '00602883701731', 'ana', 'no corresponde', { permitirUnico: true });
+    expect(con).toMatchObject({ ok: true });
+    expect(gtinDe(db, id)).toMatchObject([{ estado: 'incorrecto' }]);
+  });
+});

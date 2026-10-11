@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Catálogo y vínculos — Fusion Bikes</title>
+  <link rel="stylesheet" href="../lib/theme.css">
+  <link rel="stylesheet" href="../lib/components.css">
+  <link rel="stylesheet" href="catalogo-vinculos.css">
+</head>
+<body class="cv-body">
+  <a class="cv-saltar" href="#cv-main">Ir al contenido</a>
+
+  <div id="cv-offline" class="cv-offline" role="alert" hidden>
+    <span aria-hidden="true">✗</span> <strong>Sin conexión.</strong> No se guardó nada.
+  </div>
+
+  <header class="cv-top">
+    <h1 class="cv-titulo">Catálogo y vínculos</h1>
+    <div class="cv-top__acciones">
+      <button type="button" id="cv-btn-ayuda" class="ui-btn cv-solo-pc" hidden>Atajos <span aria-hidden="true">?</span></button>
+      <label class="cv-switch cv-solo-pc" hidden id="cv-switch-wrap">
+        <input type="checkbox" id="cv-atajos-on" role="switch" aria-describedby="cv-atajos-estado">
+        <span id="cv-atajos-estado">Atajos activados</span>
+      </label>
+    </div>
+  </header>
+
+  <main id="cv-main" class="cv-main">
+    <p id="cv-leyenda-pc" class="cv-leyenda-pc" hidden>Solo consulta en el celular. Para cambiar, usá la PC.</p>
+    <div class="ui-tabs cv-tabs" role="tablist" aria-label="Secciones de Catálogo y vínculos">
+      <button type="button" role="tab" id="tab-casos" class="ui-btn" aria-selected="true" aria-controls="panel-casos" tabindex="0" data-tab="casos">Casos <span id="cnt-casos"></span></button>
+      <button type="button" role="tab" id="tab-vinculos" class="ui-btn" aria-selected="false" aria-controls="panel-vinculos" tabindex="-1" data-tab="vinculos">Vínculos</button>
+      <button type="button" role="tab" id="tab-ejecucion" class="ui-btn" aria-selected="false" aria-controls="panel-ejecucion" tabindex="-1" data-tab="ejecucion">Ejecución <span id="cnt-ejecucion"></span></button>
+      <button type="button" role="tab" id="tab-retenidas" class="ui-btn" aria-selected="false" aria-controls="panel-retenidas" tabindex="-1" data-tab="retenidas">Retenidas <span id="cnt-retenidas"></span></button>
+    </div>
+
+    <!-- ── Casos ── -->
+    <section role="tabpanel" id="panel-casos" aria-labelledby="tab-casos" class="cv-panel">
+      <div id="cv-estado" class="cv-franja" aria-busy="true" aria-label="Estado de la identidad de productos"></div>
+      <div id="cv-estado-detalle" class="cv-franja-detalle"></div>
+      <div id="cv-franja-lista"></div>
+      <div id="cv-filtros" class="cv-filtros" role="group" aria-label="Filtrar casos"></div>
+      <div class="cv-layout">
+        <div class="cv-cola-wrap">
+          <h2 class="cv-h2" id="cola-titulo">Cola</h2>
+          <div id="cv-cola" class="cv-cola" aria-busy="true"></div>
+          <div id="cv-cola-mas" class="cv-cola-mas"></div>
+        </div>
+        <article id="cv-detalle" class="cv-detalle ui-card" aria-labelledby="det-titulo" aria-busy="false" tabindex="-1">
+          <p class="cv-vacio-det">Elegí un caso de la cola.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ── Vínculos ── -->
+    <section role="tabpanel" id="panel-vinculos" aria-labelledby="tab-vinculos" class="cv-panel" hidden>
+      <form id="vinc-form" class="cv-buscador" role="search">
+        <fieldset class="cv-modo">
+          <legend class="ui-label">Buscar en</legend>
+          <label><input type="radio" name="vinc-modo" value="producto" checked> Producto Woo</label>
+          <label><input type="radio" name="vinc-modo" value="ml"> Publicación ML</label>
+        </fieldset>
+        <label class="ui-label" for="vinc-q">Nombre, SKU o GTIN <kbd class="cv-kbd cv-kbd-pc">/</kbd></label>
+        <div class="cv-buscador__fila">
+          <input id="vinc-q" class="ui-input" type="search" autocomplete="off" placeholder="Nombre, SKU o GTIN">
+          <button type="submit" class="ui-btn">Buscar</button>
+        </div>
+        <div id="vinc-filtros" class="cv-chips" role="group" aria-label="Filtros del Matcher" hidden></div>
+      </form>
+      <div id="vinc-resultados" aria-busy="false"></div>
+      <div id="vinc-vinculo"></div>
+
+      <details id="conflictos" class="cv-conflictos ui-card" open>
+        <summary class="cv-conflictos__sum">Códigos en conflicto <span id="cnt-conflictos"></span></summary>
+        <div id="conflictos-cuerpo"></div>
+      </details>
+    </section>
+
+    <!-- ── Ejecución ── -->
+    <section role="tabpanel" id="panel-ejecucion" aria-labelledby="tab-ejecucion" class="cv-panel" hidden>
+      <div class="cv-ejec-filtro">
+        <label class="ui-label" for="ejec-q">Buscar por SKU, MLA o título</label>
+        <input id="ejec-q" class="ui-input" type="search" autocomplete="off" placeholder="SKU, MLA o título">
+      </div>
+      <div id="ejec-cabecera" aria-busy="true"></div>
+      <div id="ejec-cuerpo"></div>
+    </section>
+
+    <!-- ── Retenidas ── -->
+    <section role="tabpanel" id="panel-retenidas" aria-labelledby="tab-retenidas" class="cv-panel" hidden>
+      <div id="ret-cuerpo" aria-busy="true"></div>
+    </section>
+  </main>
+
+  <!-- Diálogo: No sincronizar -->
+  <div id="dlg-ns" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-ns-titulo">
+      <h2 id="dlg-ns-titulo" class="cv-h2">No sincronizar</h2>
+      <form id="ns-form" novalidate>
+        <fieldset class="cv-fieldset">
+          <legend class="ui-label">Qué hacemos con esta publicación</legend>
+          <div id="ns-variantes"></div>
+        </fieldset>
+        <p class="ui-resumen">En las tres, las ventas de esta publicación se retienen.</p>
+        <div class="cv-campo">
+          <label for="ns-motivo" class="ui-label">Motivo <span>(obligatorio)</span></label>
+          <textarea id="ns-motivo" class="ui-input" rows="3" aria-describedby="ns-motivo-err"></textarea>
+          <p id="ns-motivo-err" class="cv-error" hidden></p>
+        </div>
+        <div id="ns-alcance" hidden></div>
+        <p id="ns-estado" class="cv-error" role="alert" hidden></p>
+        <div class="cv-dialogo__pie">
+          <button type="button" class="ui-btn" id="ns-volver">Volver</button>
+          <button type="submit" class="ui-btn ui-btn--primario" id="ns-enviar">Marcar no sincronizar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Diálogo: confirmar impacto de una operación (admin). La pausa va como operación durable en Identidad. -->
+  <div id="dlg-impacto" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-imp-titulo">
+      <h2 id="dlg-imp-titulo" class="cv-h2">Confirmar impacto</h2>
+      <div id="dlg-imp-cuerpo"></div>
+      <div class="cv-dialogo__pie">
+        <button type="button" class="ui-btn" id="dlg-imp-volver">Volver</button>
+        <button type="button" class="ui-btn ui-btn--peligro" id="dlg-imp-ok">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diálogo genérico de confirmación (reemplaza el confirm nativo). Texto y botones los pone el JS. Foco inicial en Volver. -->
+  <div id="dlg-confirmar" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-conf-titulo" aria-describedby="dlg-conf-texto">
+      <h2 id="dlg-conf-titulo" class="cv-h2"></h2>
+      <p id="dlg-conf-texto" class="ui-resumen"></p>
+      <div class="cv-dialogo__pie">
+        <button type="button" class="ui-btn" id="dlg-conf-volver">Volver</button>
+        <button type="button" class="ui-btn ui-btn--peligro" id="dlg-conf-ok">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diálogo: fotos del candidato (tecla f, solo PC). Foto ML y Woo lado a lado; apiladas en 360 px. -->
+  <div id="dlg-foto" class="cv-dialogo-fondo cv-dialogo-fondo--centro" hidden>
+    <div class="cv-dialogo cv-dialogo--foto" role="dialog" aria-modal="true" aria-labelledby="dlg-foto-titulo">
+      <h2 id="dlg-foto-titulo" class="cv-h2">Fotos del candidato</h2>
+      <div id="dlg-foto-cuerpo"></div>
+      <div class="cv-dialogo__pie">
+        <button type="button" class="ui-btn" id="dlg-foto-cerrar">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diálogo: excepción solo ML (operador). Sale de la cola hasta la fecha de vencimiento; sin operación remota. -->
+  <div id="dlg-exc" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-exc-titulo">
+      <h2 id="dlg-exc-titulo" class="cv-h2">Excepción solo ML</h2>
+      <p class="ui-resumen">El caso sale de la cola hasta la fecha que elijas. No se escribe nada en ML.</p>
+      <form id="exc-form" novalidate>
+        <div class="cv-campo">
+          <label for="exc-motivo" class="ui-label">Motivo <span>(obligatorio)</span></label>
+          <textarea id="exc-motivo" class="ui-input" rows="2" aria-describedby="exc-motivo-err"></textarea>
+          <p id="exc-motivo-err" class="cv-error" hidden></p>
+        </div>
+        <div class="cv-campo">
+          <label for="exc-vence" class="ui-label">Vence el <span>(obligatorio, posterior a hoy)</span></label>
+          <input id="exc-vence" class="ui-input" type="date" aria-describedby="exc-vence-err">
+          <p id="exc-vence-err" class="cv-error" hidden></p>
+        </div>
+        <p id="exc-estado" class="cv-error" role="alert" hidden></p>
+        <div class="cv-dialogo__pie">
+          <button type="button" class="ui-btn" id="exc-volver">Volver</button>
+          <button type="submit" class="ui-btn ui-btn--primario" id="exc-enviar">Guardar excepción</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Diálogo: ninguno sirve (tecla x). Saca el caso de la cola mientras no cambie la evidencia; sin operación remota. -->
+  <div id="dlg-ning" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-ning-titulo">
+      <h2 id="dlg-ning-titulo" class="cv-h2">Ninguno sirve</h2>
+      <form id="ning-form" novalidate>
+        <fieldset class="cv-fieldset">
+          <legend class="ui-label">Motivo <span>(obligatorio)</span></legend>
+          <div id="ning-motivo">
+            <label class="cv-variante"><input type="radio" name="ning-motivo" value="no_es_ninguno"> <span class="cv-variante__titulo">No es ninguno de estos</span></label>
+            <label class="cv-variante"><input type="radio" name="ning-motivo" value="no_existe_en_woo"> <span class="cv-variante__titulo">No existe en Woo</span></label>
+          </div>
+        </fieldset>
+        <p id="ning-motivo-err" class="cv-error" hidden></p>
+        <div class="cv-campo">
+          <label for="ning-nota" class="ui-label">Nota <span>(opcional, hasta 500 caracteres)</span></label>
+          <textarea id="ning-nota" class="ui-input" rows="2" aria-describedby="ning-nota-err"></textarea>
+          <p id="ning-nota-err" class="cv-error" hidden></p>
+        </div>
+        <p id="ning-estado" class="cv-error" role="alert" hidden></p>
+        <div class="cv-dialogo__pie">
+          <button type="button" class="ui-btn" id="ning-volver">Volver</button>
+          <button type="submit" class="ui-btn ui-btn--primario" id="ning-enviar">Marcar ninguno sirve</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Diálogo: revertir un vínculo completado (motivo obligatorio; confirmaciones solo si el backend las pide). -->
+  <div id="dlg-revertir" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-rev-titulo">
+      <h2 id="dlg-rev-titulo" class="cv-h2">Revertir vínculo</h2>
+      <p class="ui-resumen">Encola un vínculo nuevo hacia el SKU anterior, con las mismas reglas que Vincular.</p>
+      <form id="rev-form" novalidate>
+        <div class="cv-campo">
+          <label for="rev-motivo" class="ui-label">Motivo <span>(obligatorio)</span></label>
+          <textarea id="rev-motivo" class="ui-input" rows="2" aria-describedby="rev-motivo-err"></textarea>
+          <p id="rev-motivo-err" class="cv-error" hidden></p>
+        </div>
+        <div id="rev-alcance" class="ui-aviso ui-aviso--atencion" hidden>
+          <p id="rev-alcance-txt"></p>
+          <label class="cv-switch"><input type="checkbox" id="rev-conf-sib"> <span>Entiendo, revertir también las hermanas</span></label>
+        </div>
+        <div id="rev-veto" class="ui-aviso ui-aviso--atencion" hidden>
+          <label class="cv-switch"><input type="checkbox" id="rev-override"> <span>Confirmar igual (solo admin): revierte pese a la contradicción de título</span></label>
+        </div>
+        <p id="rev-estado" class="cv-error" role="alert" hidden></p>
+        <div class="cv-dialogo__pie">
+          <button type="button" class="ui-btn" id="rev-volver">Volver</button>
+          <button type="submit" class="ui-btn ui-btn--peligro" id="rev-enviar">Revertir</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Diálogo: reabrir un caso cerrado (motivo obligatorio). POST /casos/:id/reabrir; sin operación en ML. -->
+  <div id="dlg-reabrir" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-reab-titulo">
+      <h2 id="dlg-reab-titulo" class="cv-h2">Reabrir caso</h2>
+      <p class="ui-resumen">El caso vuelve a la cola abierta. Se levanta la excepción solo ML o el "ninguno sirve" vigente. No se escribe nada en ML.</p>
+      <form id="reab-form" novalidate>
+        <div class="cv-campo">
+          <label for="reab-motivo" class="ui-label">Motivo <span>(obligatorio)</span></label>
+          <textarea id="reab-motivo" class="ui-input" rows="2" aria-describedby="reab-motivo-err"></textarea>
+          <p id="reab-motivo-err" class="cv-error" hidden></p>
+        </div>
+        <p id="reab-estado" class="cv-error" role="alert" hidden></p>
+        <div class="cv-dialogo__pie">
+          <button type="button" class="ui-btn" id="reab-volver">Volver</button>
+          <button type="submit" class="ui-btn ui-btn--primario" id="reab-enviar">Reabrir</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Diálogo: atajos (solo PC) -->
+  <div id="dlg-atajos" class="cv-dialogo-fondo" hidden>
+    <div class="cv-dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-atajos-titulo">
+      <h2 id="dlg-atajos-titulo" class="cv-h2">Atajos de teclado</h2>
+      <label class="cv-switch"><input type="checkbox" id="dlg-atajos-on" role="switch"> <span id="dlg-atajos-txt">Activados</span></label>
+      <table class="ui-table cv-hoja-atajos">
+        <caption class="sr-only">Teclas disponibles</caption>
+        <thead><tr><th scope="col">Tecla</th><th scope="col">Acción</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>Elegir candidato</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Vincular</td></tr>
+          <tr><td><kbd>s</kbd></td><td>Saltear</td></tr>
+          <tr><td><kbd>n</kbd></td><td>No sincronizar</td></tr>
+          <tr><td><kbd>x</kbd></td><td>Ninguno sirve</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Buscar otra variante</td></tr>
+          <tr><td><kbd>z</kbd></td><td>Deshacer el último cambio (si el botón Deshacer está visible)</td></tr>
+          <tr><td><kbd>d</kbd></td><td>Solo diferencias</td></tr>
+          <tr><td><kbd>f</kbd></td><td>Ver fotos (ML y Woo)</td></tr>
+          <tr><td><kbd>h</kbd></td><td>Historial (abre y cierra)</td></tr>
+          <tr><td><kbd>?</kbd></td><td>Esta ayuda</td></tr>
+        </tbody>
+      </table>
+      <div class="cv-dialogo__pie">
+        <button type="button" class="ui-btn" id="dlg-atajos-cerrar">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../lib/api.js"></script>
+  <script src="../lib/format.js"></script>
+  <script src="foto-ml.js"></script>
+  <script src="catalogo-vinculos.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import express from 'express';
-import { escanearGuardiaMl, estadoGuardiaMl, listarGuardiaMl, registrarEventoGuardia, encolarOperacionGuardia, liberarPedidoRetenido, cerrarAvisoVentaRetenida } from '../lib/guardiaMl.js';
+import { escanearGuardiaMl, estadoGuardiaMl, listarGuardiaMl, registrarEventoGuardia, encolarOperacionGuardia, liberarPedidoRetenido, cerrarAvisoVentaRetenida, bloqueoLiberacionManual } from '../lib/guardiaMl.js';
 import { requireAdmin } from '../lib/auth.js';
 import { modoProteccion } from '../lib/proteccionIdentidad.js';
 import { perfilPublicacionMl } from '../lib/guardiaMlAprendizaje.js';
@@ -17,6 +17,13 @@ function motivoValido(m) { return ['sin_sku_woo','producto_inexistente','vinculo
 export function guardiaMlRouter(db, _cfg) {
   const router = express.Router();
   // Fase C: en modo `activo` Guardia se retira y sus tablas quedan en solo lectura (30 días). La protección vive en Identidad.
+  // Saltear un `omitir` (link de pago o "no sincronizar") es solo de administración, en cualquier ruta de este router.
+  router.use((req, res, next) => {
+    if (req.method === 'POST' && req.body?.override_omitir === true && !req.user?.is_admin) {
+      return res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Acceso no autorizado' });
+    }
+    next();
+  });
   router.use((req, res, next) => {
     if (modoProteccion() === 'activo' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       return res.status(409).json({ ok: false, error: 'Guardia se retiró: la protección vive en Identidad (solo lectura).' });
@@ -161,6 +168,8 @@ export function guardiaMlRouter(db, _cfg) {
   router.post('/pedidos-retenidos/:orderId/liberar', (req, res) => {
     if (!puedeResolver(req)) return res.status(403).json({ok:false,error:'solo Ventas, Supervisor o Admin puede liberar una venta retenida'});
     const motivo=String(req.body?.motivo||'').trim(); if(!motivo)return res.status(400).json({ok:false,error:'motivo obligatorio'});
+    // Causa activa: el sync volvería a retenerla. 409 con código propio (mismo contrato que /api/catalogo-vinculos).
+    const bloqueo=bloqueoLiberacionManual(db,req.params.orderId); if(bloqueo)return res.status(409).json({ok:false,...bloqueo});
     // Mismo camino que la liberación automática (lib/guardiaMl.js): un único lugar con los efectos.
     const ok=liberarPedidoRetenido(db,req.params.orderId,{actor:actor(req),motivo});
     if(!ok)return res.status(404).json({ok:false,error:'retención no encontrada o ya resuelta'});

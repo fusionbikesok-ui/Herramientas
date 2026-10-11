@@ -239,7 +239,20 @@ o compensación; demostrar conciliación; sólo entonces reanudar.
 
 **Decisiones abiertas que mantienen la ficha en borrador:** umbrales de scoring tras calibración; vocabulario final de causas; SLA operativo por severidad.
 
+## Requisitos adicionales de la consolidación (2026-10-05)
+
+Origen: `specs/2026-10-03-consolidacion-herramientas.md` (Fase C) y PM-189. Se agregan; no reemplazan ningún requisito vigente.
+
+- **Una sola protección.** El bloqueo de sync pasa de `guardia_ml_casos.bloquea_sync` a «caso abierto de Identidad que bloquea» (más la contradicción de título); se comparan los conteos de la CTE de stock antes y después, y deben coincidir salvo diferencias explicadas.
+- **Una sola cola.** Los casos de Guardia (`guardia_ml_casos`), de Identidad (`identidad_casos`) y de plataforma (`identity_cases`) convergen en una cola; las ventas retenidas (`guardia_ml_pedidos_retenidos`) pasan a Sincronización. El escaneo y el worker de Guardia se apagan y sus tablas quedan 30 días en sólo lectura.
+- **El GTIN compartido por una familia es señal débil**: deja de abrir casos urgentes (hoy 16 de 26). Sigue vigente que GTIN nunca auto-vincula.
+- **Log de decisiones que sólo agrega**, con método, actor y motivo; deshacer es un evento nuevo. De ahí sale el set dorado para medir aciertos (53 % primer candidato y 3,8 % auto-SKU son la línea base).
+- **El orquestador del refresco de ML** sale de `routes/matcher.js:69-140` a un módulo propio.
+- **Relación con PM-189 / Fase A:** que el Vigía no pause por vacío→producto es un refinamiento, no una contradicción, del invariante «un cambio estructural pausa de forma durable»: vacío→producto es aviso. El motor de E3 debe heredar ese criterio.
+
+**Línea base 2026-10-03 (sólo lectura):** 75 pausadas con vínculo y stock en Woo, 22 sin vínculo con SKU con stock, 21 operaciones trabadas del canario, Guardia en `modo=lectura`, ~4.800 pending en el inbox de plataforma. **Alternativa descartada:** llevar la UX de la Bandeja a una pantalla nueva del legado (José, 2026-10-05); la UX de la Bandeja se construye aquí y en E4.
+
 ## Decisiones PM asignadas
 
-- **Dueña:** PM-037, PM-038, PM-039, PM-042, PM-053, PM-055, PM-057, PM-058, PM-061, PM-075, PM-077, PM-085, PM-087, PM-092, PM-100, PM-116, PM-117, PM-118, PM-124, PM-126, PM-131
+- **Dueña:** PM-037, PM-038, PM-039, PM-042, PM-053, PM-055, PM-057, PM-058, PM-061, PM-075, PM-077, PM-085, PM-087, PM-092, PM-100, PM-116, PM-117, PM-118, PM-124, PM-126, PM-131, PM-189
 - **Consumidora:** PM-004, PM-029, PM-031, PM-032, PM-033, PM-034, PM-040, PM-044, PM-045, PM-046, PM-048, PM-049, PM-054, PM-059, PM-060, PM-064, PM-068, PM-069, PM-070, PM-073, PM-074, PM-076, PM-078, PM-080, PM-081, PM-083, PM-084, PM-089, PM-090, PM-093, PM-094, PM-095, PM-096, PM-097, PM-098, PM-099, PM-101, PM-103, PM-105, PM-106, PM-107, PM-108, PM-110, PM-111, PM-113, PM-114, PM-115, PM-119, PM-120, PM-121, PM-122, PM-123, PM-125, PM-128, PM-129, PM-130, PM-132, PM-133, PM-134, PM-135, PM-136, PM-139, PM-140, PM-141, PM-142, PM-143, PM-144, PM-148, PM-149, PM-150, PM-151, PM-153, PM-154, PM-156, PM-158, PM-159, PM-160, PM-164

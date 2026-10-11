@@ -68,6 +68,7 @@ describe('db schema', () => {
       'identidad_notas',
       'identidad_operacion_pasos',
       'identidad_operaciones',
+      'identidad_pausas',
       'identidad_reglas_familia',
       'identidad_tareas_publicacion',
       'identidades_canal',
