@@ -679,6 +679,23 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE tipo_error = 'orden_ml_cancelada_luego_pagada_ORD-1'").get().n).toBe(1);
   });
 
+  it('MEDIO: descuento completo → cancelación (1 reposición) → paid (1 cancelada_luego_pagada), 0 PUT y 0 POST nuevos', async () => {
+    ml.orden = conCantidad(1);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    const putsAntes = woo.productPuts.length;
+    ml.orden = { ...conCantidad(1), status: 'cancelled' };
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE tipo_error = 'orden_ml_descontada_cancelada_ORD-1'").get().n).toBe(1);
+    expect(fila().cancelada_en).toBeTruthy();
+    expect(fila().estado).toBe('completo');
+    ml.orden = conCantidad(1);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    await syncMlToWc(db, CFG);
+    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE tipo_error = 'orden_ml_cancelada_luego_pagada_ORD-1'").get().n).toBe(1);
+    expect(woo.productPuts.length).toBe(putsAntes);
+    expect(woo.posts).toBe(0);
+  });
+
   it('si el aviso cancelada-luego-pagada lanza, el flujo no se corta (job hecho, polling sigue)', async () => {
     const { cerrarYAvisarCancelacion } = await import('../lib/descuentoOrdenVieja.js');
     cerrarYAvisarCancelacion(db, { id: 'ORD-1' });

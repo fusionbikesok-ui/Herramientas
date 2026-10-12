@@ -1684,7 +1684,8 @@ async function tratarOrdenFueraDeVentana(db, cfg, orden, { reencolarSiPendiente 
  */
 export function descontarOrdenViejaSinPedido(db, cfg, orden, opts = {}) {
   return descontarOrdenVieja(db, cfg, orden, {
-    enriquecer: enriquecerLineasBarrera, encolarBolsas: encolarBolsasDeSkus, vinculos: ACCIONES_VINCULO, diasVentana: ventanaOrdenMlMs() / 86400000,
+    enriquecer: enriquecerLineasBarrera, encolarBolsas: encolarBolsasDeSkus,
+    log: (msg, id) => logSync(db, { direccion: 'ml_wc', clave: id, estado: 'aviso_cancelada_luego_pagada_fallo', error: String(msg).slice(0, 300) }), vinculos: ACCIONES_VINCULO, diasVentana: ventanaOrdenMlMs() / 86400000,
   }, opts);
 }
 
