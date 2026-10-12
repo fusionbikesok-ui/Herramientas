@@ -46,6 +46,8 @@ export const COLUMNAS_JSON = new Set([
   'stock_refresco_pendiente.lineas_json', 'stock_refresco_pendiente.confirmaciones_json',
   // E-1a: contexto_json de trabajos_recurso = SKUs de la orden (sin personas, se conserva).
   'trabajos_recurso.contexto_json',
+  // E-1a: lineas_json de ordenes_ml_descuento_sin_pedido = SKU, nombre, cantidades y stock antes/después (sin personas).
+  'ordenes_ml_descuento_sin_pedido.lineas_json',
 ]);
 // Coinciden por nombre pero no contienen JSON.
 export const COLUMNAS_NO_JSON = new Set(['integration_events.payload_version']);

@@ -12,6 +12,7 @@ import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { requireAdmin } from '../lib/auth.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
+import { descontarOrdenVieja } from '../lib/descuentoOrdenVieja.js';
 import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
@@ -1629,23 +1630,15 @@ function ordenFueraDeVentana(orden) {
 const ordenYaTratada = (db, id) => Boolean(db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(id))
   || db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(String(id)));
 
-function skusYCantidadesDeOrdenMl(db, orden) {
-  return (orden?.order_items || []).map((it) => {
-    const clave = `${it?.item?.id}|${it?.item?.variation_id || ''}`;
-    const sku = db.prepare(`SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion IN ${ACCIONES_VINCULO} AND sku IS NOT NULL AND sku <> ''`).get(clave)?.sku
-      || db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = ?').get(clave)?.seller_sku || null;
-    return { item: it?.item?.id ?? null, sku, cantidad: it?.quantity ?? null };
-  });
-}
-
-function abrirIncidenteOrdenVieja(db, mlOrderId, orden, lineas) {
-  const detalle = lineas.map((l) => `${l.sku || l.item || '?'} x${l.cantidad ?? '?'}`).join(', ') || 'sin líneas';
-  abrirOActualizarIncidente(db, {
-    integracion: 'mercadolibre', proceso: 'orden_ml_tardia', tipoError: `orden_ml_vieja_sin_pedido_${mlOrderId}`.slice(0, 120), severidad: 'critico',
-    mensajeTecnico: `Orden ML ${mlOrderId} (${orden.status}, creada ${orden.date_created}) llegó por aviso fuera de la ventana de ${Math.round(ventanaOrdenMlMs() / 86400000)} días y no tiene pedido en Woo: no se creó. Líneas: ${detalle}`,
-    mensajeHumano: `La venta de MercadoLibre ${mlOrderId} (${String(orden.date_created).slice(0, 10)}, ${orden.status}) no tiene pedido en la web y es demasiado vieja para crearlo sola: ${detalle}. Revisala a mano: si corresponde, creá el pedido y ajustá el stock.`,
-    contexto: { ml_order_id: String(mlOrderId), fecha: orden.date_created, estado: orden.status, lineas },
-  });
+/**
+ * Orden ML pagada y vieja sin pedido: descuenta en Woo la cantidad vendida (idempotente por orden, bajo los candados de
+ * E-0), encola `stock.bolsa` y avisa (incidente crítico → mail + push). `dryRun` no escribe nada. Lo usa el job y el script
+ * `scripts/ops/descontar-ordenes-viejas.mjs`.
+ */
+export function descontarOrdenViejaSinPedido(db, cfg, orden, opts = {}) {
+  return descontarOrdenVieja(db, cfg, orden, {
+    enriquecer: enriquecerLineasBarrera, encolarBolsas: encolarBolsasDeSkus, vinculos: ACCIONES_VINCULO, diasVentana: ventanaOrdenMlMs() / 86400000,
+  }, opts);
 }
 
 /**
@@ -1685,8 +1678,10 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
   // pedido Woo semanas después (descontaría stock de algo ya despachado). Sin POST ni reserva: incidente para revisión humana.
   // Una orden ya sellada o con reserva en curso sigue su camino de siempre (no crea nada nuevo).
   if (ordenFueraDeVentana(orden) && !ordenYaTratada(db, mlOrderId)) {
-    abrirIncidenteOrdenVieja(db, mlOrderId, orden, skusYCantidadesDeOrdenMl(db, orden));
+    // Decisión de José: no se crea el pedido, pero sí se descuenta lo vendido (una vez por orden) y se avisa.
+    const d = await descontarOrdenViejaSinPedido(db, cfg, orden, { origen: 'job' });
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // Preparación sigue igual
+    if (d.estado === 'reintentar') return { estado: 'reencolar', motivo: d.motivo };
     return { estado: 'hecho', motivo: 'orden_vieja_sin_pedido' };
   }
   // Efecto 1: pedido Woo. `syncOrdenMlPuntual` no duplica: la reserva atómica de `_procesarOrden` impide un segundo POST.

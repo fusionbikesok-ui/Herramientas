@@ -23,3 +23,15 @@ CREATE TABLE IF NOT EXISTS trabajos_recurso (
   PRIMARY KEY (tipo, recurso)
 );
 CREATE INDEX IF NOT EXISTS idx_trabajos_recurso_cola ON trabajos_recurso(estado, run_after);
+
+-- Orden ML pagada que llegó por aviso fuera de la ventana y nunca tuvo pedido en Woo: se descuenta el stock vendido SIN
+-- crear el pedido, una sola vez por orden. `completo` corta los reintentos; `parcial` guarda el estado por línea.
+CREATE TABLE IF NOT EXISTS ordenes_ml_descuento_sin_pedido (
+  ml_order_id TEXT PRIMARY KEY,
+  lineas_json TEXT NOT NULL,
+  estado TEXT NOT NULL DEFAULT 'parcial' CHECK (estado IN ('parcial', 'completo')),
+  actor TEXT NOT NULL DEFAULT 'sistema',
+  origen TEXT NOT NULL DEFAULT 'job',
+  creado_en TEXT NOT NULL,
+  actualizado_en TEXT NOT NULL
+);

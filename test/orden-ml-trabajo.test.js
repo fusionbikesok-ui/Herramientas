@@ -39,7 +39,7 @@ function seed(dbx, { stockCache = 5, userProductId = null } = {}) {
 const ordenMl = (id = 'ORD-1', status = 'paid') => ({ id, status, date_created: new Date().toISOString(), order_items: [{ item: { id: 'MLA100', variation_id: '' }, quantity: 1, unit_price: 150 }] });
 
 function instalarMocks() {
-  woo = { stock: { 100: 5 }, posts: 0, puts: [], nextId: 7001, pedidos: {}, notas: {}, postError: null, busquedaError: null, ordenes: [] };
+  woo = { stock: { 100: 5 }, manage: {}, productPuts: [], putError: null, posts: 0, puts: [], nextId: 7001, pedidos: {}, notas: {}, postError: null, busquedaError: null, ordenes: [] };
   ml = { qty: 5, puts: [], orden: ordenMl(), ordenHttp: 200, usuario: { tags: [] }, usuarioHttp: 200, gets: [] };
   wooFetch.mockImplementation(async (cfg, p, method = 'get', body = null) => {
     if (p === '/orders' && method === 'post') {
@@ -57,7 +57,14 @@ function instalarMocks() {
     let m;
     if ((m = /^\/orders\/(\d+)$/.exec(p)) && method === 'put') { woo.puts.push({ id: m[1], body }); woo.pedidos[m[1]].status = body.status; return { status: 200, data: woo.pedidos[m[1]], headers: {} }; }
     if (p === '/settings/products/woocommerce_manage_stock') return { status: 200, data: { value: 'yes' }, headers: {} };
-    if ((m = /^\/products\/(\d+)$/.exec(p))) return { status: 200, data: { manage_stock: true, stock_quantity: woo.stock[m[1]] }, headers: {} };
+    if ((m = /^\/products\/(\d+)$/.exec(p)) && method === 'put') {
+      woo.productPuts.push({ id: m[1], body });
+      if (woo.putError) throw woo.putError;
+      woo.stock[m[1]] = body.stock_quantity;
+      return { status: 200, data: {}, headers: {} };
+    }
+    if ((m = /^\/products\/(\d+)$/.exec(p))) return { status: 200, data: { manage_stock: woo.manage[m[1]] ?? true, stock_quantity: woo.manage[m[1]] === false ? null : woo.stock[m[1]] }, headers: {} };
+    if ((m = /^\/products\/\d+\/variations\/(\d+)$/.exec(p))) return { status: 200, data: { manage_stock: woo.manage[m[1]] ?? true, stock_quantity: woo.stock[m[1]] }, headers: {} };
     if ((m = /^\/orders\/(\d+)\/notes\?type=internal/.exec(p))) return { status: 200, data: woo.notas[m[1]] ?? [], headers: {} };
     if ((m = /^\/orders\/(\d+)\/notes$/.exec(p))) return { status: 201, data: {}, headers: {} };
     if ((m = /^\/orders\/(\d+)$/.exec(p))) return { status: 200, data: woo.pedidos[m[1]], headers: {} };
@@ -135,7 +142,7 @@ describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
   const incidenteVieja = () => db.prepare("SELECT severidad, mensaje_humano, contexto_json FROM incidentes_operativos WHERE tipo_error = 'orden_ml_vieja_sin_pedido_ORD-1'").get();
   afterEach(() => { delete process.env.ML_ORDEN_VENTANA_DIAS; });
 
-  it('una orden de hace 4 días sin sellar: sin POST ni reserva, incidente por orden, trabajo hecho y Preparación sigue', async () => {
+  it('una orden de hace 4 días sin sellar: sin POST ni reserva, descuenta lo vendido, incidente por orden, trabajo hecho y Preparación sigue', async () => {
     ml.orden = conFecha(4 * DIA);
     encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
     await procesarTrabajosRecurso(db, CFG);
@@ -143,11 +150,10 @@ describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
     expect(reserva('ORD-1')).toBeUndefined();
     expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'hecho' });
     expect(preparacion.syncPedidoMlPuntual).toHaveBeenCalledTimes(1);
-    expect(trabajo('stock.bolsa', 'sku:BIKE-001')).toBeUndefined(); // y no se toca el stock
-    expect(ml.puts).toHaveLength(0);
+    expect(woo.productPuts).toEqual([{ id: '100', body: { stock_quantity: 4 } }]);
     const inc = incidenteVieja();
     expect(inc.severidad).toBe('critico');
-    expect(JSON.parse(inc.contexto_json)).toMatchObject({ ml_order_id: 'ORD-1', estado: 'paid', lineas: [{ item: 'MLA100', sku: 'BIKE-001', cantidad: 1 }] });
+    expect(JSON.parse(inc.contexto_json)).toMatchObject({ ml_order_id: 'ORD-1', estado: 'paid', descontado: true, lineas: [{ sku: 'BIKE-001', cantidad: 1, antes: 5, despues: 4, estado: 'descontada' }] });
   });
 
   it('una orden de hace 2 días se crea', async () => {
@@ -194,6 +200,153 @@ describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
     await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(woo.posts).toBe(1);
     expect(incidenteVieja()).toBeUndefined();
+  });
+});
+
+describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
+  const DIA = 24 * 3600 * 1000;
+  const vieja = (over = {}, status = 'paid') => ({ ...ordenMl('ORD-1', status), date_created: new Date(Date.now() - 20 * DIA).toISOString(), ...over });
+  const fila = () => db.prepare("SELECT * FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = 'ORD-1'").get();
+  const inc = () => db.prepare("SELECT * FROM incidentes_operativos WHERE tipo_error = 'orden_ml_vieja_sin_pedido_ORD-1'").get();
+  const outbox = () => db.prepare('SELECT o.* FROM incidentes_email_outbox o JOIN incidentes_operativos i ON i.id = o.incidente_id WHERE i.tipo_error = ?').all('orden_ml_vieja_sin_pedido_ORD-1');
+  const conCantidad = (q) => vieja({ order_items: [{ item: { id: 'MLA100', variation_id: '', title: 'Bici Simple ML' }, quantity: q, unit_price: 150 }] });
+  const seedVariacion = () => {
+    const t = new Date().toISOString();
+    db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES ('MLA200|', 'VAR-1', 'Variación', 'confirmar', ?)").run(t);
+    db.prepare("INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (101, 'Variación', 'VAR-1', 'variation', 100, 5, 300, 300, ?)").run(t);
+  };
+  const ordenVar = () => vieja({ order_items: [{ item: { id: 'MLA200', variation_id: '', title: 'Var ML' }, quantity: 1, unit_price: 150 }] });
+
+  it('cantidad 2: descuenta 2 sobre el stock releído de Woo, sin POST, y encola stock.bolsa', async () => {
+    ml.orden = conCantidad(2);
+    const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(r).toMatchObject({ estado: 'hecho', motivo: 'orden_vieja_sin_pedido' });
+    expect(woo.posts).toBe(0);
+    expect(woo.productPuts).toEqual([{ id: '100', body: { stock_quantity: 3 } }]);
+    expect(woo.stock[100]).toBe(3);
+    expect(fila()).toMatchObject({ estado: 'completo', origen: 'job' });
+    expect(trabajo('stock.bolsa', 'sku:BIKE-001')).toMatchObject({ estado: 'pendiente' });
+    expect(reserva('ORD-1')).toBeUndefined();
+  });
+
+  it('idempotente: dos avisos de la misma orden descuentan UNA vez y el aviso no se repite', async () => {
+    ml.orden = conCantidad(2);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    const aviso = inc();
+    await procesarOrdenMl(db, CFG, 'ORD-1'); // orders + orders_v2
+    expect(woo.productPuts).toHaveLength(1);
+    expect(woo.stock[100]).toBe(3);
+    expect(outbox()).toHaveLength(1);
+    expect(inc().ocurrencias ?? 1).toBe(aviso.ocurrencias ?? 1);
+  });
+
+  it('manage_stock=false: no toca nada, pero la orden queda tratada y se avisa que no se descontó', async () => {
+    woo.manage[100] = false;
+    ml.orden = conCantidad(1);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.productPuts).toHaveLength(0);
+    expect(fila().estado).toBe('completo');
+    expect(inc().mensaje_humano).toMatch(/manage_stock=false/);
+  });
+
+  it('gestor padre (manage_stock=parent): descuenta en el producto padre, no en la variación', async () => {
+    seedVariacion();
+    woo.manage[101] = 'parent';
+    ml.orden = ordenVar();
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.productPuts).toEqual([{ id: '100', body: { stock_quantity: 4 } }]);
+  });
+
+  it('Woo 5xx: reintenta con backoff, NO registra como hecho y el reintento descuenta una vez', async () => {
+    woo.putError = Object.assign(new Error('Woo 503'), { status: 503 });
+    ml.orden = conCantidad(1);
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    await procesarTrabajosRecurso(db, CFG);
+    expect(fila()).toBeUndefined();
+    expect(inc()).toBeUndefined();
+    expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'pendiente' });
+    expect(trabajo('order.ml', 'ORD-1').intentos).toBeGreaterThan(0);
+    woo.putError = null;
+    db.prepare("UPDATE trabajos_recurso SET run_after = '2000-01-01T00:00:00.000Z' WHERE tipo = 'order.ml'").run();
+    await procesarTrabajosRecurso(db, CFG);
+    expect(woo.stock[100]).toBe(4);
+    expect(fila().estado).toBe('completo');
+  });
+
+  it('varias líneas y fallo en la segunda: la primera no se vuelve a descontar al reintentar', async () => {
+    seedVariacion();
+    ml.orden = vieja({ order_items: [
+      { item: { id: 'MLA100', variation_id: '', title: 'A' }, quantity: 1 },
+      { item: { id: 'MLA200', variation_id: '', title: 'B' }, quantity: 1 },
+    ] });
+    woo.putError = null;
+    woo.manage[101] = true;
+    woo.stock[101] = 7;
+    let n = 0;
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      if (m === 'put' && p === '/products/100/variations/101' && n++ === 0) throw Object.assign(new Error('Woo 502'), { status: 502 });
+      if (m === 'put' && p.startsWith('/products/100/variations/')) { woo.stock[101] = b.stock_quantity; return { status: 200, data: {}, headers: {} }; }
+      return base(c, p, m, b);
+    });
+    const r1 = await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(r1.estado).toBe('reencolar');
+    expect(fila().estado).toBe('parcial');
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.stock[100]).toBe(4); // una sola vez
+    expect(woo.stock[101]).toBe(6);
+    expect(fila().estado).toBe('completo');
+  });
+
+  it('stock negativo: se escribe igual y el aviso lo marca', async () => {
+    woo.stock[100] = 1;
+    ml.orden = conCantidad(3);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.stock[100]).toBe(-2);
+    expect(inc().mensaje_humano).toMatch(/NEGATIVO/);
+  });
+
+  it('línea sin SKU resoluble: no se descuenta y va en el aviso', async () => {
+    ml.orden = vieja({ order_items: [{ item: { id: 'MLA999', variation_id: '', title: 'Cosa rara' }, quantity: 1 }, { item: { id: 'MLA100', variation_id: '', title: 'Bici' }, quantity: 1 }] });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.stock[100]).toBe(4);
+    expect(inc().mensaje_humano).toMatch(/SIN SKU.*Cosa rara/);
+  });
+
+  it('orden cancelada: no descuenta (solo aviso) — vía la función directa', async () => {
+    const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+    const r = await descontarOrdenViejaSinPedido(db, CFG, vieja({}, 'cancelled'));
+    expect(r.estado).toBe('no_aplica');
+    expect(woo.productPuts).toHaveLength(0);
+    expect(fila()).toBeUndefined();
+    expect(inc().mensaje_humano).toMatch(/cancelled.*NO se descontó/);
+  });
+
+  it('dry-run: calcula antes → después, no escribe nada, no registra ni avisa', async () => {
+    const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+    const r = await descontarOrdenViejaSinPedido(db, CFG, conCantidad(2), { dryRun: true });
+    expect(r.estado).toBe('simulado');
+    expect(r.lineas[0]).toMatchObject({ sku: 'BIKE-001', antes: 5, despues: 3 });
+    expect(woo.productPuts).toHaveLength(0);
+    expect(fila()).toBeUndefined();
+    expect(inc()).toBeUndefined();
+    expect(trabajo('stock.bolsa', 'sku:BIKE-001')).toBeUndefined();
+  });
+
+  it('aviso: crítico, un solo mail en el outbox, con orden, fecha, producto, antes → después y motivo; el script usa la misma función', async () => {
+    const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+    const o = conCantidad(2);
+    const r = await descontarOrdenViejaSinPedido(db, CFG, o, { origen: 'script', actor: 'script:descontar-ordenes-viejas' });
+    expect(r.estado).toBe('descontada');
+    const i = inc();
+    expect(i.severidad).toBe('critico');
+    for (const frag of ['ORD-1', o.date_created.slice(0, 10), 'BIKE-001', 'x2', 'stock 5 → 3', 'NO se creó']) expect(i.mensaje_humano).toContain(frag);
+    expect(outbox()).toHaveLength(1);
+    expect(fila()).toMatchObject({ origen: 'script', actor: 'script:descontar-ordenes-viejas' });
+    const otra = await descontarOrdenViejaSinPedido(db, CFG, o); // el job después: nada
+    expect(otra.estado).toBe('ya_descontada');
+    expect(woo.productPuts).toHaveLength(1);
+    expect(outbox()).toHaveLength(1);
   });
 });
 
