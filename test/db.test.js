@@ -157,6 +157,7 @@ describe('db schema', () => {
       'stock_tasks',
       'sync_estado',
       'sync_log',
+      'trabajos_recurso',
       'user_notifications',
       'user_permisos',
       'users',

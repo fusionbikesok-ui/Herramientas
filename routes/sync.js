@@ -12,6 +12,7 @@ import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { requireAdmin } from '../lib/auth.js';
 import { abrirOActualizarIncidente } from '../lib/incidentes.js';
+import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, hayTrabajoPendiente } from '../lib/trabajosRecurso.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
@@ -446,7 +447,7 @@ async function _syncMlToWc(db, cfg) {
  * Fail-open: nunca tira, solo loguea — un error acá no debe tirar abajo el handler del
  * webhook (que ya respondió 200 antes de llamar a esto).
  */
-export async function syncOrdenMlPuntual(db, cfg, mlOrderId) {
+export async function syncOrdenMlPuntual(db, cfg, mlOrderId, { orden: ordenLeida = null } = {}) {
   const { ml: mlCfg, woo: wooCfg } = cfg;
   if (!mlCfgOk(cfg)) return { omitido: true };
   if (!mlOrderId) return { omitido: true, motivo: 'sin_order_id' };
@@ -455,12 +456,15 @@ export async function syncOrdenMlPuntual(db, cfg, mlOrderId) {
   if (yaProc) return { omitido: true, motivo: 'ya_procesada' };
 
   try {
-    const resp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
-    if (resp.status !== 200) {
-      console.error(`syncOrdenMlPuntual: error API ML ${resp.status} para orden ${mlOrderId} — la retoma el cron`);
-      return { omitido: true, motivo: `http_${resp.status}` };
+    let orden = ordenLeida;
+    if (!orden) {
+      const resp = await mlFetch(db, mlCfg, 'get', `/orders/${mlOrderId}`);
+      if (resp.status !== 200) {
+        console.error(`syncOrdenMlPuntual: error API ML ${resp.status} para orden ${mlOrderId} — la retoma el cron`);
+        return { omitido: true, motivo: `http_${resp.status}` };
+      }
+      orden = resp.data;
     }
-    const orden = resp.data;
     // Mismo filtro que el barrido paginado (`order.status=paid` en el query string de
     // _syncMlToWc, línea ~271) y que el camino puntual hermano de A.1
     // (syncPedidoMlPuntual, routes/preparacion.js:2229). El barrido lo aplicaba en el query
@@ -1170,6 +1174,26 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
  * por date_created; solo se revisan pedidos que creamos nosotros (ordenes_ml_wc_pedidos)
  * y que todavía no fueron cancelados.
  */
+/**
+ * Cancelación PUNTUAL e idempotente del pedido Woo de una orden ML cancelada (misma lógica que el barrido, por orden).
+ * - sin pedido nuestro → nada que cancelar; reserva en curso (`wc_order_id=0`) → no se toca nada y el llamador reencola;
+ * - ya cancelado → no se vuelve a tocar el pedido;
+ * - devuelve los SKUs del pedido (Woo devolvió el stock) para refrescar sus bolsas.
+ * Lanza ante un fallo de Woo: el llamador reencola, nunca da la cancelación por hecha.
+ */
+export async function cancelarPedidoWooDeOrden(db, wooCfg, orderId) {
+  const registro = db.prepare('SELECT wc_order_id, cancelado_en FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(String(orderId));
+  if (!registro) return { estado: 'sin_pedido', skus: [] };
+  if (registro.wc_order_id === 0) return { estado: 'reserva_en_curso', skus: [] };
+  const pedido = (await wooFetch(wooCfg, `/orders/${registro.wc_order_id}`))?.data;
+  const skus = [...new Set((pedido?.line_items || []).map((l) => l.sku).filter(Boolean))];
+  if (registro.cancelado_en) return { estado: 'ya_cancelado', skus };
+  if (pedido?.status !== 'cancelled') await wooFetch(wooCfg, `/orders/${registro.wc_order_id}`, 'put', { status: 'cancelled' });
+  db.prepare('UPDATE ordenes_ml_wc_pedidos SET cancelado_en = ? WHERE ml_order_id = ?').run(now(), String(orderId));
+  logSync(db, { direccion: 'ml_wc', clave: String(orderId), cantNueva: registro.wc_order_id, estado: 'ok' });
+  return { estado: 'cancelado', skus };
+}
+
 export async function procesarCancelacionesMl(db, cfg) {
   if (!mlCfgOk(cfg)) return;
 
@@ -1207,10 +1231,8 @@ export async function procesarCancelacionesMl(db, cfg) {
       if (!registro || registro.cancelado_en || registro.wc_order_id === 0) continue;
 
       try {
-        await wooFetch(wooCfg, `/orders/${registro.wc_order_id}`, 'put', { status: 'cancelled' });
-        db.prepare('UPDATE ordenes_ml_wc_pedidos SET cancelado_en = ? WHERE ml_order_id = ?')
-          .run(now(), orderId);
-        logSync(db, { direccion: 'ml_wc', clave: orderId, cantNueva: registro.wc_order_id, estado: 'ok' });
+        const r = await cancelarPedidoWooDeOrden(db, wooCfg, orderId);
+        if (r.skus?.length) encolarBolsasDeSkus(db, r.skus);
       } catch (e) {
         logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: `cancelar WC: ${e.message}` });
       }
@@ -1444,6 +1466,47 @@ function persistirCantidadMl(db, clave, sku, cantidad) {
 }
 
 /**
+ * Conciliación de una bolsa BAJO SUS CANDADOS (los toma el llamador): relee Woo (gestores) y ML (todas las claves), empuja
+ * cada clave activa cuyo remoto difiera del deseado y relee ML para confirmar que TODAS publican lo deseado. No usa el
+ * `sin_cambios` del caché. `{ok:true, empujadas}` o `{ok:false, motivo, bloqueado?}` (reintentar; nunca da nada por hecho).
+ */
+async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = null, gestoresExtra = [] } = {}) {
+  const { woo: wooCfg, ml: mlCfg } = cfg;
+  // 1) Woo: stock actual de todos los gestores de la bolsa → catalogo_cache
+  const cat = db.prepare(`SELECT id_woo, tipo, id_padre FROM catalogo_cache WHERE sku IN (${bolsa.skus.map(() => '?').join(',')})`).all(...bolsa.skus);
+  await releerStockGestores(db, wooCfg, [...cat.map((c) => ({ id: c.id_woo, padre: c.tipo === 'variation' ? c.id_padre : null })), ...gestoresExtra], { estricto: false });
+  // 2) ML: lectura de toda la bolsa; 3) empuje de lo que difiera del deseado
+  const claves = bolsa.claves;
+  const remoto = await leerCantidadesMl(db, mlCfg, claves);
+  const computada = (clave) => db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
+  const pendientes = [];
+  for (const clave of claves) {
+    const row = computada(clave);
+    const rem = remoto.get(clave);
+    if (!row || !rem) continue; // fuera del conjunto que nuestro sync escribe
+    persistirCantidadMl(db, clave, row.sku, rem.cantidad);
+    if (rem.status !== 'active' || rem.cantidad == null) continue;
+    const deseado = Math.max(0, Math.round(row.stock_disponible_ml));
+    if (rem.cantidad !== deseado) pendientes.push({ row, rem });
+  }
+  for (const { row, rem } of pendientes) {
+    const res = await _empujarClaveMl(db, mlCfg, row.sku, { clave: row.clave, stock_disponible_ml: row.stock_disponible_ml, cantidad_ml: rem.cantidad }, { barreraId, candadoToken: candado.token });
+    if (res.estado !== 'sincronizado') return { ok: false, motivo: `${row.clave}: ${res.detalle}`, bloqueado: Boolean(res.bloqueado) };
+  }
+  // 4) Relectura de confirmación: TODAS las claves deben publicar lo deseado
+  const remoto2 = await leerCantidadesMl(db, mlCfg, claves);
+  for (const clave of claves) {
+    const row = computada(clave);
+    if (!row) continue;
+    const rem = remoto2.get(clave);
+    if (!rem) return { ok: false, motivo: `${clave}: sin lectura de ML` };
+    if (rem.status !== 'active' || rem.cantidad == null) continue;
+    if (rem.cantidad !== Math.max(0, Math.round(row.stock_disponible_ml))) return { ok: false, motivo: `${clave}: ML publica ${rem.cantidad}` };
+  }
+  return { ok: true, empujadas: pendientes.length };
+}
+
+/**
  * Corrección dueña (spec E-0): bajo los candados de TODA la bolsa, relee Woo (gestores) y ML (todas las claves), empuja
  * cada clave cuyo remoto difiera del deseado y cierra juntas las filas `liberable` de la bolsa solo si una relectura
  * remota confirma que todas publican lo deseado. No usa el `sin_cambios` del caché. Si algo falla, reintenta (no cierra).
@@ -1461,37 +1524,8 @@ async function _corregirBolsaDuena(db, cfg, sku, barreraId) {
     if (!liberables.length) return { sku, estado: 'sin_cambios', detalle: 'no hay barrera liberable' };
     if (!liberables.some((f) => idBarrera(f.sku, f.ml_order_id) === barreraId)) return { sku, estado: 'omitido', detalle: 'barrera_id no corresponde a una fila liberable de la bolsa' };
     try {
-      // 1) Woo: stock actual de todos los gestores de la bolsa → catalogo_cache
-      const cat = db.prepare(`SELECT id_woo, tipo, id_padre FROM catalogo_cache WHERE sku IN (${bolsa.skus.map(() => '?').join(',')})`).all(...bolsa.skus);
-      await releerStockGestores(db, wooCfg, [...cat.map((c) => ({ id: c.id_woo, padre: c.tipo === 'variation' ? c.id_padre : null })), ...gestoresDeFilas(liberables)], { estricto: false });
-      // 2) ML: lectura de toda la bolsa; 3) empuje de lo que difiera del deseado
-      const claves = bolsa.claves;
-      const remoto = await leerCantidadesMl(db, mlCfg, claves);
-      const computada = (clave) => db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
-      const pendientes = [];
-      for (const clave of claves) {
-        const row = computada(clave);
-        const rem = remoto.get(clave);
-        if (!row || !rem) continue; // fuera del conjunto que nuestro sync escribe
-        persistirCantidadMl(db, clave, row.sku, rem.cantidad);
-        if (rem.status !== 'active' || rem.cantidad == null) continue;
-        const deseado = Math.max(0, Math.round(row.stock_disponible_ml));
-        if (rem.cantidad !== deseado) pendientes.push({ row, rem });
-      }
-      for (const { row, rem } of pendientes) {
-        const res = await _empujarClaveMl(db, mlCfg, row.sku, { clave: row.clave, stock_disponible_ml: row.stock_disponible_ml, cantidad_ml: rem.cantidad }, { barreraId, candadoToken: candado.token });
-        if (res.estado !== 'sincronizado') return { sku, estado: 'reintentar', detalle: `${row.clave}: ${res.detalle}` };
-      }
-      // 4) Relectura de confirmación: TODAS las claves deben publicar lo deseado
-      const remoto2 = await leerCantidadesMl(db, mlCfg, claves);
-      for (const clave of claves) {
-        const row = computada(clave);
-        if (!row) continue;
-        const rem = remoto2.get(clave);
-        if (!rem) return { sku, estado: 'reintentar', detalle: `${clave}: sin lectura de ML` };
-        if (rem.status !== 'active' || rem.cantidad == null) continue;
-        if (rem.cantidad !== Math.max(0, Math.round(row.stock_disponible_ml))) return { sku, estado: 'reintentar', detalle: `${clave}: ML publica ${rem.cantidad}` };
-      }
+      const c = await _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId, gestoresExtra: gestoresDeFilas(liberables) });
+      if (!c.ok) return { sku, estado: 'reintentar', detalle: c.motivo };
       const del = db.prepare('DELETE FROM stock_refresco_pendiente WHERE sku = ? AND ml_order_id = ? AND estado = ?');
       db.transaction(() => { for (const f of liberables) del.run(f.sku, f.ml_order_id, 'liberable'); })();
       return { sku, estado: 'sincronizado', detalle: `barrera cerrada (${liberables.length} fila(s))` };
@@ -1554,6 +1588,123 @@ export async function chequearReservasConBarrera(db, wooCfg) {
     }
   }
   return out;
+}
+
+// ─── E-1a: trabajos durables por recurso (order.ml, stock.bolsa) ─────────────
+
+/** Encola el `stock.bolsa` de la bolsa de cada SKU (recurso = primer SKU de la bolsa, en orden alfabético). */
+export function encolarBolsasDeSkus(db, skus, { demoraMs = 0 } = {}) {
+  const recursos = new Set();
+  for (const sku of [...new Set((skus || []).filter(Boolean))]) {
+    let canon = sku;
+    try { canon = resolverBolsa(db, { skus: [sku] }).skus[0] || sku; } catch { /* bolsa no resuelta: se encola por el propio SKU */ }
+    recursos.add(`sku:${canon}`);
+  }
+  for (const recurso of recursos) encolarTrabajo(db, { tipo: 'stock.bolsa', recurso, demoraMs });
+  return [...recursos];
+}
+
+/**
+ * Trabajo `order.ml` (un job por orden, llegue por `orders` u `orders_v2`). Relee la orden y:
+ *  - cancelada → cancelación puntual idempotente del pedido Woo (reserva en curso → reencola sin tocar nada) y refresco de bolsas;
+ *  - pagada → pedido Woo (nunca un segundo POST: la reserva persiste mientras sea incierta) + Preparación, y encola las bolsas;
+ *  - otro estado → solo Preparación (invalida su caché).
+ * @returns {{estado:'hecho'}|{estado:'reencolar', motivo:string}}
+ */
+export async function procesarOrdenMl(db, cfg, mlOrderId) {
+  if (!mlCfgOk(cfg) || !cfg.woo) return { estado: 'reencolar', motivo: 'ml_o_woo_sin_configurar' };
+  const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${mlOrderId}`);
+  if (resp.status !== 200 || !resp.data) return { estado: 'reencolar', motivo: `ml_orders_http_${resp.status}` };
+  const orden = resp.data;
+  const { syncPedidoMlPuntual } = await import('./preparacion.js');
+  const skusDelPedido = async () => {
+    const reg = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(String(mlOrderId));
+    if (!reg || !reg.wc_order_id) return [];
+    const p = (await wooFetch(cfg.woo, `/orders/${reg.wc_order_id}`))?.data;
+    if (!p || !Array.isArray(p.line_items)) throw new Error(`Woo no devolvió las líneas del pedido ${reg.wc_order_id}`);
+    return [...new Set(p.line_items.map((l) => l.sku).filter(Boolean))];
+  };
+  if (orden.status === 'cancelled') {
+    const c = await cancelarPedidoWooDeOrden(db, cfg.woo, mlOrderId);
+    if (c.estado === 'reserva_en_curso') return { estado: 'reencolar', motivo: 'reserva_en_curso', demoraMs: 30_000 };
+    await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // saca la orden de la cola de Preparación
+    encolarBolsasDeSkus(db, c.skus);
+    return { estado: 'hecho' };
+  }
+  if (orden.status !== 'paid') {
+    await syncPedidoMlPuntual(db, cfg.ml, mlOrderId);
+    return { estado: 'hecho' };
+  }
+  // Efecto 1: pedido Woo. `syncOrdenMlPuntual` no duplica: la reserva atómica de `_procesarOrden` impide un segundo POST.
+  await syncOrdenMlPuntual(db, cfg, mlOrderId, { orden });
+  const sellada = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(mlOrderId));
+  // Efecto 2: Preparación (corre aunque el pedido Woo todavía esté pendiente: son independientes).
+  await syncPedidoMlPuntual(db, cfg.ml, mlOrderId);
+  if (!sellada) return { estado: 'reencolar', motivo: 'pedido_woo_sin_confirmar', demoraMs: 30_000 };
+  encolarBolsasDeSkus(db, await skusDelPedido());
+  return { estado: 'hecho' };
+}
+
+/**
+ * Trabajo `stock.bolsa`: ÚNICO camino de escritura de stock desde eventos. No escribe (y reencola, sin cerrarse como
+ * hecho) si hay una venta ML en vuelo, una barrera de E-0 o un fallo de lectura; SKUs distintos en una bolsa son una
+ * contradicción (no escribe y abre un incidente). Todo push pasa por `escribirStockMl`.
+ */
+export async function procesarStockBolsa(db, cfg, sku) {
+  if (!mlCfgOk(cfg) || !cfg.woo) return { estado: 'reencolar', motivo: 'ml_o_woo_sin_configurar' };
+  let bolsa;
+  try { bolsa = resolverBolsa(db, { skus: [sku] }); } catch (e) { return { estado: 'reencolar', motivo: `bolsa_no_resuelta: ${e.message}` }; }
+  if (!bolsa.skus.length) bolsa.skus = [sku];
+  // Una venta ML que todavía no impactó en Woo: empujar ahora devolvería a ML la unidad vendida.
+  if (hayTrabajoPendiente(db, 'order.ml') || db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE wc_order_id = 0 LIMIT 1').get()) {
+    return { estado: 'reencolar', motivo: 'orden_ml_pendiente', demoraMs: 30_000 };
+  }
+  if (bolsa.skus.length > 1) {
+    abrirOActualizarIncidente(db, {
+      integracion: 'mercadolibre', proceso: 'stock_bolsa', tipoError: `bolsa_con_skus_distintos_${bolsa.skus[0]}`.slice(0, 120), severidad: 'critico',
+      mensajeTecnico: `Bolsa con SKUs distintos: ${bolsa.skus.join(', ')}`,
+      mensajeHumano: `Publicaciones hermanas (mismo producto de catálogo de ML) están vinculadas a SKUs distintos (${bolsa.skus.join(', ')}). No se les escribe stock hasta corregir el vínculo en Catálogo/Vínculos.`,
+      contexto: { skus: bolsa.skus, claves: bolsa.claves },
+    });
+    return { estado: 'hecho', motivo: 'contradiccion_skus' };
+  }
+  const r = await conCandados(db, bolsa.skus, async (candado) => {
+    if (filasBarrera(db, bolsa.skus).length) return { estado: 'reencolar', motivo: 'barrera', demoraMs: 20_000 };
+    const c = await _conciliarClavesDeBolsa(db, cfg, bolsa, candado, {});
+    if (c.ok) return { estado: 'hecho', empujadas: c.empujadas };
+    return c.bloqueado ? { estado: 'hecho', motivo: 'bloqueado_por_identidad' } : { estado: 'reencolar', motivo: c.motivo };
+  });
+  if (r.ocupado) return { estado: 'reencolar', motivo: 'candados_ocupados', demoraMs: 15_000 };
+  return r.valor;
+}
+
+let _trabajosRecursoEnCurso = false;
+/** Worker de los trabajos por recurso. Lo llaman el cron (cada minuto) y, como acelerador no durable, el handler del aviso. */
+export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
+  if (_trabajosRecursoEnCurso) return { omitido: true };
+  _trabajosRecursoEnCurso = true;
+  let procesados = 0;
+  try {
+    for (const tipo of ['order.ml', 'stock.bolsa']) {
+      for (const t of reclamarTrabajos(db, [tipo], { limit })) {
+        try {
+          const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso) : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
+          if (r.estado === 'reencolar') {
+            const q = reencolarTrabajo(db, t, { demoraMs: r.demoraMs ?? null, motivo: r.motivo });
+            if (q.muerto) abrirOActualizarIncidente(db, { integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: `trabajo_muerto_${tipo}_${t.recurso}`.slice(0, 120), severidad: 'critico', mensajeTecnico: `${tipo} ${t.recurso}: ${r.motivo}`, mensajeHumano: `El trabajo ${tipo} del recurso ${t.recurso} agotó sus reintentos (${r.motivo}). Hay que revisarlo a mano.`, contexto: { tipo, recurso: t.recurso } });
+          } else {
+            cerrarTrabajo(db, t);
+          }
+          procesados++;
+        } catch (e) {
+          reencolarTrabajo(db, t, { motivo: String(e.message).slice(0, 200) });
+        }
+      }
+    }
+    return { omitido: false, procesados };
+  } finally {
+    _trabajosRecursoEnCurso = false;
+  }
 }
 
 let _barreraEnCurso = false;
