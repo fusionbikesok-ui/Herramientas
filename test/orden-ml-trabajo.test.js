@@ -594,6 +594,49 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(inc()).toBeUndefined(); // y no sale el aviso de "descuento completado"
   });
 
+  it('ALTO lápida: la cancelación llega SIN fila mientras un descuento ya leyó paid → 0 PUT, lápida completo y sin aviso', async () => {
+    const { cerrarYAvisarCancelacion } = await import('../lib/descuentoOrdenVieja.js');
+    const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      const r = await base(c, p, m, b);
+      if ((m === undefined || m === 'get') && p === '/products/100') cerrarYAvisarCancelacion(db, { id: 'ORD-1' }); // cancelación real, aún sin fila
+      return r;
+    });
+    const r = await descontarOrdenViejaSinPedido(db, CFG, conCantidad(1), { origen: 'script' });
+    expect(r.estado).toBe('cancelada');
+    expect(woo.productPuts).toHaveLength(0);
+    expect(woo.stock[100]).toBe(5);
+    expect(fila()).toMatchObject({ estado: 'completo', origen: 'cancelada', lineas_json: '[]' });
+    expect(inc()).toBeUndefined();
+  });
+
+  it('ALTO lápida: cancelación procesada ANTES de que el descuento (script) tome el reclamo → 0 PUT', async () => {
+    const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+    ml.orden = vieja({}, 'cancelled');
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(fila()).toMatchObject({ estado: 'completo', origen: 'cancelada' });
+    const r = await descontarOrdenViejaSinPedido(db, CFG, conCantidad(1), { origen: 'script' }); // leyó 'paid' antes
+    expect(['ya_descontada', 'cancelada']).toContain(r.estado);
+    expect(woo.productPuts).toHaveLength(0);
+  });
+
+  it('exclusión real: con los candados tomados, la cancelación devuelve ocupado (fila intacta) y el job se reencola', async () => {
+    const { avisarCancelacionDescontada } = await import('../lib/descuentoOrdenVieja.js');
+    const { tomarCandados, liberarCandados } = await import('../lib/stockBarrera.js');
+    ml.orden = conCantidad(1);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    const antes = fila();
+    const c = tomarCandados(db, ['BIKE-001']);
+    try {
+      expect(await avisarCancelacionDescontada(db, { id: 'ORD-1' })).toBe('ocupado');
+      expect(fila()).toEqual(antes);
+      ml.orden = { ...conCantidad(1), status: 'cancelled' };
+      expect(await procesarOrdenMl(db, CFG, 'ORD-1')).toMatchObject({ estado: 'reencolar', diferido: true, motivo: 'descuento_en_curso' });
+    } finally { liberarCandados(db, c.token); }
+    expect(await procesarOrdenMl(db, CFG, 'ORD-1')).toMatchObject({ estado: 'hecho' }); // sin candados ocupados avisa
+  });
+
   it('MEDIO: una cancelación sobre una fila completo no la reescribe ni reavisa', async () => {
     const { avisarCancelacionDescontada } = await import('../lib/descuentoOrdenVieja.js');
     ml.orden = conCantidad(1);
