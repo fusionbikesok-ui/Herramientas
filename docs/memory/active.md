@@ -1,6 +1,6 @@
 # Estado activo
 
-Actualizado: 2026-09-20.
+Actualizado: 2026-10-12.
 
 ## Fuente de verdad
 
@@ -1333,6 +1333,7 @@ Fuente: `docs/superpowers/specs/2026-10-03-consolidacion-herramientas.md` (hecho
 ## Atención WhatsApp (2026-10-07)
 
 Bandeja preparada en `/herramientas/mensajeria/`; contrato operativo en `integrations/mensajeria/README.md`. José supervisa, Santi/Miguel/Fabri atienden y Matías consulta. El chat web continúa. Coexistencia con teléfonos y publicación Meta pendientes; sin números reales habilitados para envío.
-- 2026-10-07: `npm test` vuelve a ser solo `vitest run` (para correr archivos sueltos); los tests node de `integrations/management-migration` van en `npm run test:migration` y ambos en `npm run test:all`. QA define `INBOX_PUBLIC_ORIGIN` para que Mensajería acepte escrituras.
-- 2026-10-07: Fase C (una sola protección, Identidad) implementada en `feat/fase-c-proteccion`; modo `IDENTIDAD_PROTECCION` (default sombra), reporte `GET /api/sync/fase-c/sombra`. Detalle en `modules/integrations-ml-woo.md`.
-- 2026-10-11: Fase D (Catálogo y vínculos) lista en `feat/fase-d-catalogo-vinculos` (migraciones 122-125, shadow, 3 revisiones + E2E + auditor verde; suite 3859/0 fallos): una pantalla `/catalogo-vinculos/` sobre el motor de Identidad, filtro Cerrados/Reabrir, pausas con confirmación de impacto, Liberar bloqueado por marca. NO desplegada; plan en `modules/integrations-ml-woo.md`.
+- 2026-10-07: los tests node de `integrations/management-migration` tienen `npm run test:migration`. Verificado 2026-10-12: `npm test` corre `vitest run` **y** esos tests node (`node --test`); para archivos sueltos, `npx vitest run <archivo>`. QA define `INBOX_PUBLIC_ORIGIN` para que Mensajería acepte escrituras.
+- 2026-10-07: Fase C (una sola protección, Identidad), reporte `GET /api/sync/fase-c/sombra`. **En prod está `IDENTIDAD_PROTECCION=activo`** (verificado 2026-10-11 en `.env` y en el proceso vivo; el default del código sigue siendo sombra). Detalle en `modules/integrations-ml-woo.md`.
+- 2026-10-11: Fase D (Catálogo y vínculos) **desplegada** (PR #18, migraciones 122-125): una pantalla `/catalogo-vinculos/` sobre el motor de Identidad. `identidad_config` está en `enforced` con escrituras remotas habilitadas y `lote_max=1`, pero el worker solo procesa la clave canario y esa clave no tiene operación: en la práctica, ninguna escritura de Identidad sale hasta elegir un canario con operación (decisión pendiente de José).
+- 2026-10-12: **Fase E-0 (barrera de venta ML) desplegada**: PR #20, prod = master `8eb68568`, migración 126 aplicada, cron `procesarBarreraVentas` cada 2 min (`woocommerce_manage_stock=yes` leído al arrancar). Backup `/opt/fusionbikes/backups/fusion-20261012T124806Z-predeploy-e0.sqlite` (`integrity_check` ok). Rollback: tag `rollback/prod-pre-e0-2026-10-12` (04953db1) + `pm2 restart herramientas`; la migración es aditiva y el código viejo ignora las tablas. Detalle en `modules/integrations-ml-woo.md`. E-1 en adelante (webhooks) sigue en `spec/fase-e-webhooks`.
