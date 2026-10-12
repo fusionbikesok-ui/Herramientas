@@ -35,6 +35,11 @@ function sembrar() {
 describe('scripts/qa/snapshot-anonimizado', () => {
   afterEach(limpiar);
 
+  it('limpiarJson anonimiza actor y motivo de las confirmaciones de la barrera (E-0)', () => {
+    const r = limpiarJson([{ idx: 0, actor: 'maria', motivo: 'llamó el cliente Juan Pérez', reduced_stock: 1 }]);
+    expect(r[0]).toMatchObject({ idx: 0, actor: '[anonimizado]', motivo: '[anonimizado]', reduced_stock: 1 });
+  });
+
   it('limpiarJson borra datos de personas y conserva datos de producto', () => {
     const r = limpiarJson({
       buyer: { id: 5, nickname: NICK, email: EMAIL },

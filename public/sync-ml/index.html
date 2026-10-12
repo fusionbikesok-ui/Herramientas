@@ -104,6 +104,19 @@ h2.sec{font-size:var(--fs-label);text-transform:uppercase;letter-spacing:.06em;c
 .comp .tw{overflow-x:auto;max-width:100%}
 .comp table{border-collapse:collapse;width:100%;min-width:420px;margin-top:6px}
 .comp th,.comp td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+.barr{padding:.6rem 0;border-top:1px solid var(--border);min-width:0}
+.barr:first-of-type{border-top:0}
+.barr .cab{display:flex;flex-wrap:wrap;gap:.3rem .75rem;align-items:baseline}
+.barr .cab b{overflow-wrap:anywhere}
+.barr .when{color:var(--muted);font-size:var(--fs-meta)}
+.barr .mot{color:var(--amber);font-size:var(--fs-meta);overflow-wrap:anywhere;margin:.15rem 0 0}
+.barr .lin{display:flex;flex-wrap:wrap;gap:.4rem .75rem;align-items:center;justify-content:space-between;margin-top:.4rem;font-size:var(--fs-meta);min-width:0}
+.barr .lin>span{min-width:0;overflow-wrap:anywhere}
+.cfm{margin-top:.4rem;padding:.6rem;border:1px solid var(--border2);border-radius:8px;background:var(--surface2);min-width:0}
+.cfm label{display:block;font-size:var(--fs-meta);color:var(--muted);margin-bottom:.3rem}
+.cfm textarea{width:100%;box-sizing:border-box;min-height:64px;padding:.5rem;background:var(--surface);color:var(--txt);border:1px solid var(--border2);border-radius:6px;font:inherit}
+.tag.bloq{color:var(--red);border-color:var(--red-bd);background:var(--red-bg)}
+.tag.lib{color:var(--amber);border-color:var(--amber-bd);background:var(--amber-bg)}
 .cf-ok{color:var(--green);font-weight:700}.cf-mal{color:var(--red);font-weight:700}
 
 .sales{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:.75rem;margin-bottom:.75rem}
@@ -139,6 +152,7 @@ details.orders summary::-webkit-details-marker{display:none}
 .errbox{padding:1rem;display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;justify-content:space-between;color:var(--red)}
 
 @media (max-width:640px){
+  .barr .lin .btn{flex:1 1 100%}
   .iconbtn .lbl,.iconbtn .car{display:none}
   .ih{grid-template-columns:4px 40px minmax(0,1fr) auto;column-gap:.6rem;padding-right:.75rem}
   .ih .n{font-size:1.2rem}
@@ -211,7 +225,7 @@ var $=function(s){return document.querySelector(s)};
 var SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="16" r="4"/><circle cx="18" cy="16" r="4"/><path d="M6 16l4-8h5l3 8M10 8l-1-2H7"/></svg>';
 var CHEV='<svg class="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" fill="none"/></svg>';
 var SEV={crit:0,warn:1,info:2};
-var D=null, frenadas=[], formato=[], estado='cargando', sinPermiso=false, cargaOk={fren:false,form:false};
+var D=null, frenadas=[], formato=[], barreras=[], esAdmin=true, confAbierta=null, confMotivo='', confError='', estado='cargando', sinPermiso=false, cargaOk={fren:false,form:false};
 var open=new Set(), selFr=new Set(), planPrecios=null, corriendo=false, confirmaForzar=false;
 
 /* ---------- helpers ---------- */
@@ -265,9 +279,10 @@ async function cargar(){
   }catch(e){ sinPermiso=!!e.permiso; if(!D)estado='error'; }
   var res=await Promise.all([
     fetch('/api/sync/frenadas').then(leerJson).then(function(d){frenadas=d.data||[];return true},function(){return false}),
-    fetch('/api/sync/cambios-formato').then(leerJson).then(function(d){formato=d.data||[];return true},function(){return false})
+    fetch('/api/sync/cambios-formato').then(leerJson).then(function(d){formato=d.data||[];return true},function(){return false}),
+    fetch('/api/sync/barrera').then(leerJson).then(function(d){barreras=d.filas||[];esAdmin=true;return true},function(e){barreras=[];esAdmin=!(e&&e.permiso);return false})
   ]);
-  cargaOk.fren=res[0]; cargaOk.form=res[1];
+  cargaOk.fren=res[0]; cargaOk.form=res[1]; cargaOk.barr=res[2];
   var ids=new Set(frenadas.map(function(p){return p.item_id}));
   selFr.forEach(function(x){if(!ids.has(x))selFr.delete(x)});
   $('#refresh').disabled=false;
@@ -284,9 +299,11 @@ function incidencias(){
     nTrab?nTrab+' trabadas en proceso (el paso quedó a medias y venció)':''].filter(Boolean).join(' · ')+'.';
   var nFren=cargaOk.fren?frenadas.length:((D&&D.frenadas)||0);
   var nForm=cargaOk.form?formato.length:0;
+  var nBarr=cargaOk.barr?barreras.length:0, barrCrit=barreras.some(function(b){return !!b.incidente_motivo});
   return [
     {k:'err',sev:'crit',n:at.errores_reales||0,t:'Errores que no se resolvieron solos',d:'ML rechazó la actualización de stock y no se arregló con el reintento automático.',go:'Ver y reintentar',href:'/herramientas/sync-detalle/?cat=errores'},
     {k:'foto',sev:'crit',n:at.requiere_atencion_ml||0,t:'Exceso de fotos en ML',d:'ML no deja actualizar estas publicaciones hasta bajar la cantidad de fotos en tu cuenta de ML.',go:'Ver detalle',href:'/herramientas/sync-detalle/?cat=requiere_atencion_ml'},
+    {k:'barr',sev:barrCrit?'crit':'warn',n:nBarr,t:'Ventas esperando el descuento de stock en la web',d:barrCrit?'El stock de estos SKUs no se empuja a ML porque no hay evidencia de que Woo haya descontado. Revisalo.':'Se vendieron en ML y se espera que Woo descuente antes de empujar el stock.',go:'Ver',exp:true},
     {k:'idq',sev:'warn',n:nIdq,t:'Correcciones de SKU encoladas o trabadas',d:nIdqD,go:'Ver',href:'/herramientas/catalogo-vinculos/'},
     {k:'paus',sev:'warn',n:nPaus,t:'Pausadas con stock en la web',d:'Pausadas en ML con stock para vender.',go:'Revisar',href:'/herramientas/sync-ml/pausadas/'},
     {k:'map',sev:'warn',n:at.sin_mapeo||0,t:'Ventas sin producto de la web',d:'Se vendieron en ML sin estar unidas a un producto: el stock no se descontó.',go:'Resolver',href:'/herramientas/sync-detalle/?cat=sin_mapeo'},
@@ -299,7 +316,8 @@ function oks(I){
   var hay={};I.forEach(function(i){hay[i.k]=1});
   if(!cargaOk.fren)hay.fren=1;
   if(!cargaOk.form)hay.form=1;
-  var t=[['err','Errores'],['foto','Exceso de fotos'],['idq','Correcciones encoladas'],['paus','Pausadas con stock'],['map','Ventas sin producto'],['remap','Variaciones a re-mapear'],['fren','Frenadas por precio'],['form','Cambios de producto']];
+  if(!cargaOk.barr)hay.barr=1; // no admin o consulta fallida: no se afirma que esté al día
+  var t=[['barr','Ventas esperando descuento'],['err','Errores'],['foto','Exceso de fotos'],['idq','Correcciones encoladas'],['paus','Pausadas con stock'],['map','Ventas sin producto'],['remap','Variaciones a re-mapear'],['fren','Frenadas por precio'],['form','Cambios de producto']];
   return t.filter(function(x){return !hay[x[0]]}).map(function(x){return x[1]});
 }
 
@@ -340,8 +358,41 @@ function renderInc(){
     var inner='<span class="bar"></span><span class="n">'+n(i.n)+'</span><span class="tx"><span class="t">'+esc(i.t)+'</span><span class="d">'+esc(i.d)+'</span></span><span class="go"><span class="txt">'+esc(i.go)+'</span> '+(i.exp?CHEV:'→')+'</span>';
     var head=i.exp?'<button class="ih" type="button" aria-expanded="'+o+'" data-k="'+i.k+'" id="ih-'+i.k+'">'+inner+'</button>'
       :'<a class="ih" href="'+esc(i.href)+'" aria-label="'+esc(i.t)+': '+i.n+'. '+esc(i.go)+'">'+inner+'</a>';
-    return '<div class="it sev-'+i.sev+'">'+head+(o&&i.exp?'<div class="ib" id="ib-'+i.k+'">'+(i.k==='fren'?bodyFren():bodyForm())+'</div>':'')+'</div>';
+    return '<div class="it sev-'+i.sev+'">'+head+(o&&i.exp?'<div class="ib" id="ib-'+i.k+'">'+(i.k==='fren'?bodyFren():i.k==='barr'?bodyBarr():bodyForm())+'</div>':'')+'</div>';
   }).join('')+fallo+(oks(I).length?'<div class="ok-line">'+oks(I).map(function(x){return '<span>'+x+'</span>'}).join('')+'</div>':'');
+}
+
+/* ---------- barrera de venta (E-0) ---------- */
+var MOTIVOS_BARR={nombre_ambiguo:'El nombre de la línea es ambiguo (hay más de un producto con ese nombre): no se puede asociar la nota de Woo.',unable_to_reduce:'Woo avisó que no pudo reducir el stock del pedido.',sin_nota_30min:'Pasaron más de 30 minutos y Woo no dejó la nota de descuento.'};
+function bodyBarr(){
+  var h='<p class="note">Mientras una venta espera, no se empuja a ML el stock de ese SKU (ni de sus publicaciones hermanas). Se libera sola cuando Woo deja la nota de descuento.</p>';
+  h+=barreras.map(function(b){
+    var bloq=b.estado==='bloqueante', mot=b.incidente_motivo?(MOTIVOS_BARR[b.incidente_motivo]||b.incidente_motivo):'';
+    var lin=(b.lineas||[]).map(function(l){
+      var key=b.sku+'|'+b.ml_order_id+'|'+l.idx, abierta=confAbierta===key;
+      var accion=l.confirmada?'<span class="cf-ok">Descuento confirmado</span>'
+        :(l.puede_confirmar&&esAdmin?'<button class="btn" type="button" data-conf-abrir="'+esc(key)+'" aria-expanded="'+abierta+'">Confirmar descuento</button>':'');
+      var f=abierta?'<div class="cfm"><label for="cfm-t">Motivo (obligatorio): por qué se da por descontada esta línea</label><textarea id="cfm-t" data-conf-motivo maxlength="300">'+esc(confMotivo)+'</textarea>'
+        +(confError?'<p class="res bad" role="alert">'+esc(confError)+'</p>':'')
+        +'<div class="acts"><button class="btn btn--pri" type="button" data-conf-ok data-sku="'+esc(b.sku)+'" data-ord="'+esc(b.ml_order_id)+'" data-idx="'+l.idx+'">Confirmar</button><button class="btn" type="button" data-conf-no>Cancelar</button></div></div>':'';
+      return '<div class="lin"><span>'+esc(l.nombre||('Línea '+(l.idx+1)))+' × '+n(l.cantidad)+(l.reduced_stock!=null?' · Woo descontó '+n(l.reduced_stock):'')+'</span>'+accion+'</div>'+f;
+    }).join('');
+    return '<div class="barr"><div class="cab"><b>'+esc(b.sku)+'</b><span class="num">venta ML '+esc(b.ml_order_id)+(b.wc_order_id?' · pedido web #'+esc(b.wc_order_id):' · pedido web sin crear')+'</span><span class="tag '+(bloq?'bloq':'lib')+'">'+(bloq?'Esperando a Woo':'Por corregir en ML')+'</span><span class="when">'+hace(b.creado_en)+'</span></div>'
+      +(mot?'<p class="mot">'+esc(mot)+'</p>':'')+(b.orden_error?'<p class="mot">'+esc(b.orden_error)+'</p>':'')+lin+'</div>';
+  }).join('');
+  return h;
+}
+async function confirmarDescuento(btn){
+  var m=(confMotivo||'').trim();
+  if(!m){confError='Escribí el motivo.';renderInc();var t0=document.getElementById('cfm-t');if(t0)t0.focus();return}
+  if(corriendo)return; corriendo=true; btn.disabled=true; confError=''; renderInc();
+  try{
+    await leerJson(await fetch('/api/sync/barrera/confirmar-descuento',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku:btn.dataset.sku,ml_order_id:btn.dataset.ord,linea:Number(btn.dataset.idx),motivo:m})}));
+    confAbierta=null; confMotivo='';
+    band('ok','Descuento confirmado. La venta se libera en el próximo ciclo (hasta 2 minutos).');
+  }catch(e){confError=e.message; band('bad','No se pudo confirmar: '+esc(e.message))}
+  corriendo=false; renderInc(); // el formulario refleja el resultado ya, sin esperar el recargado
+  await cargar();
 }
 
 /* ---------- frenadas por precio ---------- */
@@ -579,12 +630,15 @@ document.addEventListener('click',function(e){
   if(d.run){cerrarMenu();correr(d.run);return}
   if(t.id==='refresh'||d.reload!==undefined){cargar();return}
   if(t.id==='bandx'){$('#band').hidden=true;return}
-  if(d.k){open.has(d.k)?open.delete(d.k):open.add(d.k);renderInc();return}
+  if(d.k){open.has(d.k)?open.delete(d.k):open.add(d.k);renderInc();var cab=document.getElementById('ih-'+d.k);if(cab)cab.focus();return}
   if(d.frTodas!==undefined){
     var ids=frenadas.map(function(p){return p.item_id}).filter(Boolean);
     if(selFr.size===ids.length)selFr.clear();else ids.forEach(function(x){selFr.add(x)});
     planHtml='';planPrecios=null;confirmaForzar=false;renderInc();return;
   }
+  if(d.confAbrir!==undefined){confAbierta=confAbierta===d.confAbrir?null:d.confAbrir;confMotivo='';confError='';renderInc();var tx=document.getElementById('cfm-t');if(tx)tx.focus();return}
+  if(d.confNo!==undefined){confAbierta=null;confMotivo='';confError='';renderInc();return}
+  if(d.confOk!==undefined){confirmarDescuento(t);return}
   if(d.plan!==undefined){verPlan();return}
   if(d.cancelplan!==undefined){planHtml='';planPrecios=null;renderInc();return}
   if(d.apply!==undefined){aplicarPlan();return}
@@ -596,6 +650,7 @@ document.addEventListener('click',function(e){
   if(d.comp){comparar(d.comp,t);return}
   if(d.cfReactivar!==undefined){reactivarAhora(t,d.id);return}
 });
+document.addEventListener('input',function(e){if(e.target&&e.target.dataset&&e.target.dataset.confMotivo!==undefined)confMotivo=e.target.value});
 document.addEventListener('change',function(e){
   var c=e.target;
   if(c.dataset&&c.dataset.fr!==undefined){
