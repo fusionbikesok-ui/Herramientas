@@ -96,6 +96,29 @@ describe('sync-ml: formulario "Confirmar descuento" de la barrera', () => {
     expect(t.inc()).toContain('<textarea');
   });
 
+  it('no-admin (403): no se afirma "✓ Ventas esperando descuento" en la línea de al día', async () => {
+    const t = await montar({ barreraStatus: 403 });
+    expect(t.inc()).not.toContain('Ventas esperando descuento');
+  });
+
+  it('con la consulta sana y sin barreras sí figura al día', async () => {
+    const t = await montar({ filas: [] });
+    expect(t.inc()).toContain('Ventas esperando descuento');
+  });
+
+  it('tras confirmar con éxito el formulario se cierra y el error viejo se limpia antes del recargado', async () => {
+    const t = await montar();
+    await t.click({ confAbrir: 'BIKE-001|ORD-1|0' });
+    await t.click({ confOk: '', sku: 'BIKE-001', ord: 'ORD-1', idx: '0' }); // vacío → error
+    expect(t.inc()).toContain('Escribí el motivo');
+    t.escribir('motivo');
+    // el recargado queda colgado: el estado visible debe estar ya actualizado
+    t.sandbox.fetch = async (u, o) => (o?.method === 'POST' ? { status: 200, text: async () => '{"ok":true}' } : new Promise(() => {}));
+    await t.click({ confOk: '', sku: 'BIKE-001', ord: 'ORD-1', idx: '0' });
+    expect(t.inc()).not.toContain('<textarea');
+    expect(t.inc()).not.toContain('Escribí el motivo');
+  });
+
   it('el copy de orden_error es el humano del servidor, sin "WooCommerce API error"', async () => {
     const t = await montar({ filas: [FILA({ orden_error: 'El pedido ya no existe en la web.' })] });
     expect(t.inc()).toContain('El pedido ya no existe en la web.');

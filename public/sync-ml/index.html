@@ -316,6 +316,7 @@ function oks(I){
   var hay={};I.forEach(function(i){hay[i.k]=1});
   if(!cargaOk.fren)hay.fren=1;
   if(!cargaOk.form)hay.form=1;
+  if(!cargaOk.barr)hay.barr=1; // no admin o consulta fallida: no se afirma que esté al día
   var t=[['barr','Ventas esperando descuento'],['err','Errores'],['foto','Exceso de fotos'],['idq','Correcciones encoladas'],['paus','Pausadas con stock'],['map','Ventas sin producto'],['remap','Variaciones a re-mapear'],['fren','Frenadas por precio'],['form','Cambios de producto']];
   return t.filter(function(x){return !hay[x[0]]}).map(function(x){return x[1]});
 }
@@ -384,13 +385,14 @@ function bodyBarr(){
 async function confirmarDescuento(btn){
   var m=(confMotivo||'').trim();
   if(!m){confError='Escribí el motivo.';renderInc();var t0=document.getElementById('cfm-t');if(t0)t0.focus();return}
-  if(corriendo)return; corriendo=true; btn.disabled=true; confError='';
+  if(corriendo)return; corriendo=true; btn.disabled=true; confError=''; renderInc();
   try{
     await leerJson(await fetch('/api/sync/barrera/confirmar-descuento',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sku:btn.dataset.sku,ml_order_id:btn.dataset.ord,linea:Number(btn.dataset.idx),motivo:m})}));
     confAbierta=null; confMotivo='';
     band('ok','Descuento confirmado. La venta se libera en el próximo ciclo (hasta 2 minutos).');
   }catch(e){confError=e.message; band('bad','No se pudo confirmar: '+esc(e.message))}
-  corriendo=false; await cargar();
+  corriendo=false; renderInc(); // el formulario refleja el resultado ya, sin esperar el recargado
+  await cargar();
 }
 
 /* ---------- frenadas por precio ---------- */
