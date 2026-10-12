@@ -1708,7 +1708,8 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
     return [...new Set(p.line_items.map((l) => l.sku).filter(Boolean))];
   };
   if (orden.status === 'cancelled') {
-    avisarCancelacionDescontada(db, orden); // si ya se había descontado sin pedido: aviso para reponer a mano (no se repone solo)
+    // Si ya se había descontado sin pedido: aviso para reponer a mano (no se repone solo). Toma los candados del descuento.
+    if (await avisarCancelacionDescontada(db, orden) === 'ocupado') return { estado: 'reencolar', diferido: true, motivo: 'descuento_en_curso' };
     const c = await cancelarPedidoWooDeOrden(db, cfg.woo, mlOrderId);
     if (c.estado === 'reserva_en_curso') return { estado: 'reencolar', diferido: true, motivo: 'reserva_en_curso' };
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // saca la orden de la cola de Preparación

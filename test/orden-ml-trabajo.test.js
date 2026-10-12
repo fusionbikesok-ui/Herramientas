@@ -566,6 +566,45 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(woo.stock[101]).toBe(7);
   });
 
+  it('ALTO carrera: la cancelación cierra la fila entre el GET y el PUT del descuento → 0 PUT, fila completo y aviso correcto', async () => {
+    const { cerrarYAvisarCancelacion } = await import('../lib/descuentoOrdenVieja.js');
+    seedVariacion();
+    woo.manage[101] = true;
+    woo.stock[101] = 7;
+    const items = [{ item: { id: 'MLA100', variation_id: '', title: 'A' }, quantity: 1 }, { item: { id: 'MLA200', variation_id: '', title: 'B' }, quantity: 1 }];
+    ml.orden = vieja({ order_items: items });
+    const base = wooFetch.getMockImplementation();
+    let modo = 'falla';
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      if (modo === 'falla' && m === 'put' && p.startsWith('/products/100/variations/')) throw Object.assign(new Error('Woo 400'), { status: 400 });
+      const r = await base(c, p, m, b);
+      if (modo === 'carrera' && (m === undefined || m === 'get') && p.startsWith('/products/100/variations/')) cerrarYAvisarCancelacion(db, { id: 'ORD-1' }); // cancelación entre GET y PUT
+      return r;
+    });
+    await procesarOrdenMl(db, CFG, 'ORD-1'); // BIKE-001 descontada, VAR-1 pendiente
+    modo = 'carrera';
+    const putsAntes = woo.productPuts.length;
+    const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.productPuts.length).toBe(putsAntes); // 0 PUT nuevos
+    expect(woo.stock[101]).toBe(7);
+    expect(fila().estado).toBe('completo');
+    expect(JSON.parse(fila().lineas_json).find((l) => l.sku === 'VAR-1').estado).toBe('omitida');
+    expect(r.estado).toBe('hecho');
+    expect(db.prepare("SELECT mensaje_humano FROM incidentes_operativos WHERE tipo_error = 'orden_ml_descontada_cancelada_ORD-1'").get().mensaje_humano).toMatch(/BIKE-001 x1.*NO se descontó.*VAR-1 x1/);
+    expect(inc()).toBeUndefined(); // y no sale el aviso de "descuento completado"
+  });
+
+  it('MEDIO: una cancelación sobre una fila completo no la reescribe ni reavisa', async () => {
+    const { avisarCancelacionDescontada } = await import('../lib/descuentoOrdenVieja.js');
+    ml.orden = conCantidad(1);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(await avisarCancelacionDescontada(db, { id: 'ORD-1' })).toBe(true); // primera cancelación: avisa
+    const antes = fila();
+    expect(await avisarCancelacionDescontada(db, { id: 'ORD-1' })).toBe(false);
+    expect(fila()).toEqual(antes);
+    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE tipo_error = 'orden_ml_descontada_cancelada_ORD-1'").get().n).toBe(1);
+  });
+
   it('B2: un 4xx en el PUT es definitivo (vuelve a pendiente y no deja fila); un 408 queda incierta', async () => {
     ml.orden = conCantidad(1);
     const base = wooFetch.getMockImplementation();
