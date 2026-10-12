@@ -20,3 +20,8 @@ CREATE TABLE IF NOT EXISTS ordenes_ml_destino (
   destino TEXT NOT NULL CHECK (destino IN ('pedido', 'descuento')),
   creado_en TEXT NOT NULL
 );
+
+-- Contador de fallos consecutivos del trabajo, independiente de la generación: un aviso nuevo NO lo reinicia, solo un éxito.
+-- Gobierna el backoff y el incidente de falla persistente aunque lleguen avisos durante cada intento.
+ALTER TABLE trabajos_recurso ADD COLUMN fallos_consecutivos INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE trabajos_recurso ADD COLUMN primer_fallo_en TEXT;

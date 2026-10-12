@@ -806,6 +806,43 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
   });
 });
 
+describe('order.ml: falla persistente con avisos durante cada intento', () => {
+  it('20 ciclos con aviso a mitad de camino y fallo: backoff creciente y topeado, 1 incidente, nunca muerto; un éxito resetea', async () => {
+    const base = mlFetch.getMockImplementation();
+    mlFetch.mockImplementation(async (d, c, m, p, b) => {
+      if (/^\/orders\/[^/?]+$/.test(p)) encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' }); // orders_v2 avisa en cada intento
+      return base(d, c, m, p, b);
+    });
+    ml.ordenHttp = 500;
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    const esperas = [];
+    for (let i = 0; i < 20; i++) {
+      db.prepare("UPDATE trabajos_recurso SET run_after = '2000-01-01T00:00:00.000Z' WHERE tipo = 'order.ml'").run(); // pasa el tiempo
+      await procesarTrabajosRecurso(db, CFG);
+      const t = trabajo('order.ml', 'ORD-1');
+      expect(t.estado).toBe('pendiente'); // nunca muerto
+      esperas.push(Date.parse(t.run_after) - Date.now());
+      encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' }); // y otro aviso entre ciclos: no adelanta el backoff
+      expect(Date.parse(trabajo('order.ml', 'ORD-1').run_after) - Date.now()).toBeGreaterThan(esperas[i] - 2000);
+    }
+    expect(esperas[5]).toBeGreaterThan(esperas[1]);
+    expect(Math.max(...esperas)).toBeLessThanOrEqual(10 * 60 * 1000 + 2000);
+    expect(esperas[19]).toBeGreaterThan(9 * 60 * 1000); // topeado en 10 min, no en "ya"
+    expect(trabajo('order.ml', 'ORD-1').fallos_consecutivos).toBe(20);
+    const incs = db.prepare("SELECT estado FROM incidentes_operativos WHERE tipo_error = 'trabajo_falla_persistente_order.ml_ORD-1'").all();
+    expect(incs).toHaveLength(1);
+    // un éxito resetea el contador y cierra el incidente
+    ml.ordenHttp = 200;
+    ml.orden = ordenMl('ORD-1', 'payment_required');
+    db.prepare("UPDATE trabajos_recurso SET run_after = '2000-01-01T00:00:00.000Z' WHERE tipo = 'order.ml'").run();
+    await procesarTrabajosRecurso(db, CFG);
+    await procesarTrabajosRecurso(db, CFG); // la generación dirty del propio éxito se repite una vez más
+    const t = trabajo('order.ml', 'ORD-1');
+    expect(t.fallos_consecutivos).toBe(0);
+    expect(t.primer_fallo_en).toBeNull();
+  });
+});
+
 describe('order.ml: otros estados', () => {
   it('una orden no pagada solo pasa por Preparación', async () => {
     ml.orden = ordenMl('ORD-1', 'payment_required');

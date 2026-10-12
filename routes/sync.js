@@ -1782,7 +1782,7 @@ const tipoErrorTrabajo = (prefijo, t) => `${prefijo}_${t.tipo}_${t.recurso}`.sli
 
 /** Cierra los incidentes del trabajo (muerto / espera larga) cuando el recurso por fin se completa. */
 function cerrarIncidentesDeTrabajo(db, t) {
-  for (const prefijo of ['trabajo_muerto', 'trabajo_diferido_largo']) {
+  for (const prefijo of ['trabajo_muerto', 'trabajo_diferido_largo', 'trabajo_falla_persistente']) {
     confirmarCicloSano(db, { integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: tipoErrorTrabajo(prefijo, t) });
   }
 }
@@ -1794,6 +1794,16 @@ function incidenteTrabajoMuerto(db, t, motivo) {
     mensajeTecnico: `${t.tipo} ${t.recurso}: ${motivo}`,
     mensajeHumano: `El trabajo ${t.tipo} del recurso ${t.recurso} agotó sus reintentos (${motivo}). Hay que revisarlo a mano.`,
     contexto: { tipo: t.tipo, recurso: t.recurso },
+  });
+}
+
+/** Un trabajo que sigue fallando (con avisos nuevos que impiden matarlo) no queda en silencio: incidente crítico con dedupe. */
+function incidenteTrabajoFallaPersistente(db, t, motivo, fallos) {
+  abrirOActualizarIncidente(db, {
+    integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: tipoErrorTrabajo('trabajo_falla_persistente', t), severidad: 'critico',
+    mensajeTecnico: `${t.tipo} ${t.recurso} falla hace ${fallos} intentos seguidos (último: ${motivo})`,
+    mensajeHumano: `El trabajo ${t.tipo} del recurso ${t.recurso} sigue fallando (${fallos} veces seguidas): ${motivo}. Revisalo a mano: puede ser una venta sin pedido en la web.`,
+    contexto: { tipo: t.tipo, recurso: t.recurso, fallos },
   });
 }
 
@@ -1816,6 +1826,7 @@ function resolverReintento(db, t, { diferido = false, motivo, demoraMs = null })
   }
   const q = reencolarTrabajo(db, t, { demoraMs, motivo });
   if (q.muerto) incidenteTrabajoMuerto(db, t, motivo);
+  else if (q.persistente) incidenteTrabajoFallaPersistente(db, t, motivo, q.fallos);
 }
 
 /** Worker de los trabajos por recurso. Lo llaman el cron (cada minuto) y, como acelerador no durable, el handler del aviso. */

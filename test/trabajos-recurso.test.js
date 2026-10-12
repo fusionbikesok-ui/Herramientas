@@ -40,7 +40,9 @@ describe('trabajos durables por recurso', () => {
     expect(t.intentos).toBe(12);
     encolarTrabajo(db, { tipo: 'order.ml', recurso: '1' }); // aviso a mitad del intento
     expect(reencolarTrabajo(db, t, { motivo: 'falla' })).toMatchObject({ muerto: false, repite_por_aviso_nuevo: true });
-    expect(fila()).toMatchObject({ estado: 'pendiente', intentos: 0, dirty: 0 });
+    expect(fila()).toMatchObject({ estado: 'pendiente', dirty: 0, fallos_consecutivos: 1 });
+    expect(fila().run_after > new Date().toISOString()).toBe(true); // con backoff, no "ya"
+    db.prepare("UPDATE trabajos_recurso SET run_after = '2000-01-01T00:00:00.000Z'").run(); // pasa el backoff
     const [t2] = reclamarTrabajos(db, ['order.ml']);
     expect(t2.generacion_tomada).toBe(2);
     // con la MISMA generación el intento 12 sí lo mata
