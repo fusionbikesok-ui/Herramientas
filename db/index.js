@@ -992,6 +992,11 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('descuento_orden_vieja_128')").run();
     })();
   }
+  // Columnas de trabajos_recurso agregadas después de la 127/128 (contador de fallos consecutivos, independiente de la generación).
+  // Con guarda por PRAGMA: sirve para bases que ya registraron la 128 sin ellas y es idempotente.
+  const colsTrabajos = new Set(db.prepare('PRAGMA table_info(trabajos_recurso)').all().map((c) => c.name));
+  if (!colsTrabajos.has('fallos_consecutivos')) db.exec('ALTER TABLE trabajos_recurso ADD COLUMN fallos_consecutivos INTEGER NOT NULL DEFAULT 0');
+  if (!colsTrabajos.has('primer_fallo_en')) db.exec('ALTER TABLE trabajos_recurso ADD COLUMN primer_fallo_en TEXT');
   const devolucionesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_devoluciones_102'").get();
   if (!devolucionesMigration) {
     db.transaction(() => {

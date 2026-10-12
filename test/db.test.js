@@ -10,6 +10,20 @@ describe('db schema', () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
   });
 
+  it('trabajos_recurso recibe las columnas de fallos aunque la 128 ya estuviera registrada, y reabrir dos veces no falla', () => {
+    let db = openDb(TEST_DB);
+    db.exec('ALTER TABLE trabajos_recurso DROP COLUMN fallos_consecutivos');
+    db.exec('ALTER TABLE trabajos_recurso DROP COLUMN primer_fallo_en');
+    expect(db.prepare("SELECT 1 FROM _schema_migrations WHERE key='descuento_orden_vieja_128'").get()).toBeDefined();
+    db.close();
+    for (let i = 0; i < 2; i++) {
+      db = openDb(TEST_DB);
+      const cols = db.prepare('PRAGMA table_info(trabajos_recurso)').all().map((c) => c.name);
+      expect(cols).toEqual(expect.arrayContaining(['fallos_consecutivos', 'primer_fallo_en']));
+      db.close();
+    }
+  });
+
   it('creates all required tables', () => {
     const db = openDb(TEST_DB);
     const tables = db.prepare(
