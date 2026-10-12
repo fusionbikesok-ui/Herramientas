@@ -128,6 +128,75 @@ describe('order.ml: orden pagada', () => {
   });
 });
 
+describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
+  const haceMs = (ms) => new Date(Date.now() - ms).toISOString();
+  const DIA = 24 * 3600 * 1000;
+  const conFecha = (ms, status = 'paid') => ({ ...ordenMl('ORD-1', status), date_created: haceMs(ms) });
+  const incidenteVieja = () => db.prepare("SELECT severidad, mensaje_humano, contexto_json FROM incidentes_operativos WHERE tipo_error = 'orden_ml_vieja_sin_pedido_ORD-1'").get();
+  afterEach(() => { delete process.env.ML_ORDEN_VENTANA_DIAS; });
+
+  it('una orden de hace 4 días sin sellar: sin POST ni reserva, incidente por orden, trabajo hecho y Preparación sigue', async () => {
+    ml.orden = conFecha(4 * DIA);
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    await procesarTrabajosRecurso(db, CFG);
+    expect(woo.posts).toBe(0);
+    expect(reserva('ORD-1')).toBeUndefined();
+    expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'hecho' });
+    expect(preparacion.syncPedidoMlPuntual).toHaveBeenCalledTimes(1);
+    expect(trabajo('stock.bolsa', 'sku:BIKE-001')).toBeUndefined(); // y no se toca el stock
+    expect(ml.puts).toHaveLength(0);
+    const inc = incidenteVieja();
+    expect(inc.severidad).toBe('critico');
+    expect(JSON.parse(inc.contexto_json)).toMatchObject({ ml_order_id: 'ORD-1', estado: 'paid', lineas: [{ item: 'MLA100', sku: 'BIKE-001', cantidad: 1 }] });
+  });
+
+  it('una orden de hace 2 días se crea', async () => {
+    ml.orden = conFecha(2 * DIA);
+    expect((await procesarOrdenMl(db, CFG, 'ORD-1')).estado).toBe('hecho');
+    expect(woo.posts).toBe(1);
+    expect(incidenteVieja()).toBeUndefined();
+  });
+
+  it('borde de 3 días: un minuto antes crea, un minuto después no', async () => {
+    ml.orden = conFecha(3 * DIA - 60_000);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1);
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos').run();
+    db.prepare('DELETE FROM ordenes_ml_procesadas').run();
+    ml.orden = conFecha(3 * DIA + 60_000);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1); // no hubo un segundo POST
+    expect(incidenteVieja()).toBeDefined();
+  });
+
+  it('la ventana es configurable (ML_ORDEN_VENTANA_DIAS)', async () => {
+    process.env.ML_ORDEN_VENTANA_DIAS = '1';
+    ml.orden = conFecha(2 * DIA);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(0);
+    process.env.ML_ORDEN_VENTANA_DIAS = '10';
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1);
+  });
+
+  it('una orden vieja ya sellada que llega cancelada se cancela como hoy', async () => {
+    await procesarOrdenMl(db, CFG, 'ORD-1'); // fresca: crea el pedido 7001 y la sella
+    ml.orden = conFecha(10 * DIA, 'cancelled');
+    const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(r.estado).toBe('hecho');
+    expect(woo.puts).toEqual([{ id: '7001', body: { status: 'cancelled' } }]);
+    expect(incidenteVieja()).toBeUndefined();
+  });
+
+  it('una orden vieja ya sellada que llega pagada otra vez no abre incidente ni duplica', async () => {
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    ml.orden = conFecha(10 * DIA);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1);
+    expect(incidenteVieja()).toBeUndefined();
+  });
+});
+
 describe('order.ml: otros estados', () => {
   it('una orden no pagada solo pasa por Preparación', async () => {
     ml.orden = ordenMl('ORD-1', 'payment_required');
