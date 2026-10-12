@@ -35,3 +35,11 @@ CREATE TABLE IF NOT EXISTS ordenes_ml_descuento_sin_pedido (
   creado_en TEXT NOT NULL,
   actualizado_en TEXT NOT NULL
 );
+
+-- Destino excluyente por orden ML: 'pedido' (se crea el pedido Woo) o 'descuento' (orden vieja: solo se descuenta stock).
+-- Se reclama en una transacción antes de cualquier efecto en Woo; el primero gana.
+CREATE TABLE IF NOT EXISTS ordenes_ml_destino (
+  ml_order_id TEXT PRIMARY KEY,
+  destino TEXT NOT NULL CHECK (destino IN ('pedido', 'descuento')),
+  creado_en TEXT NOT NULL
+);

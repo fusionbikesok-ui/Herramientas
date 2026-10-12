@@ -12,7 +12,7 @@ import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { requireAdmin } from '../lib/auth.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
-import { descontarOrdenVieja } from '../lib/descuentoOrdenVieja.js';
+import { descontarOrdenVieja, reclamarDestino, destinoActual, fechaOrdenMs } from '../lib/descuentoOrdenVieja.js';
 import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
@@ -662,6 +662,8 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     }
     return;
   }
+  // La ventana rige para TODOS los orígenes (job, polling legacy, puntual, manual): una orden vieja sin tratar no crea pedido.
+  if ((await tratarOrdenFueraDeVentana(db, { woo: wooCfg, ml: mlCfg }, orden)).tratada) return;
   let algunSinMapeo = false;
 
   // Reservas abandonadas (proceso murió entre reservar y confirmar/liberar, ej: kill -9)
@@ -791,6 +793,8 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   // arriba antes de que ninguno insertara, y ambos terminaban creando un pedido duplicado en
   // WooCommerce. Reservar la fila ahora, antes de cualquier llamada a Woo, hace que el
   // segundo proceso pierda la carrera acá (INSERT falla por PK) en vez de después.
+  // Destino excluyente (pedido vs descuento): se reclama en una transacción ANTES de reservar y de cualquier efecto en Woo.
+  if (reclamarDestino(db, orderId, 'pedido') !== 'pedido') return;
   const reservaCreadaEn = now();
   try {
     db.prepare(`
@@ -1631,13 +1635,33 @@ export function ventanaOrdenMlMs() {
   const d = Number(process.env.ML_ORDEN_VENTANA_DIAS);
   return (Number.isFinite(d) && d > 0 ? d : 3) * 24 * 3600 * 1000;
 }
-/** Una orden sin `date_created` legible no se considera vieja (comportamiento previo). */
-function ordenFueraDeVentana(orden) {
-  const t = Date.parse(orden?.date_created);
-  return Number.isFinite(t) && Date.now() - t > ventanaOrdenMlMs();
+/** 'dentro' | 'fuera' | 'sin_fecha'. Fecha en UTC (sin offset se asume UTC). Sin fecha legible es fail-safe: no se crea pedido. */
+function estadoVentana(orden) {
+  const t = fechaOrdenMs(orden);
+  if (t === null) return 'sin_fecha';
+  return Date.now() - t > ventanaOrdenMlMs() ? 'fuera' : 'dentro';
 }
-const ordenYaTratada = (db, id) => Boolean(db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(id))
-  || db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(String(id)));
+/** Orden ya sellada, con reserva o con destino 'pedido' reclamado: sigue su camino de siempre (no crea nada nuevo). */
+const ordenYaTratada = (db, id) => destinoActual(db, id) === 'pedido';
+
+/**
+ * Corte por fecha común a todos los orígenes. Orden pagada, no tratada y fuera de ventana → descuento sin pedido + aviso;
+ * sin fecha legible → ni pedido ni descuento, solo incidente. `{tratada:true}` = el llamador NO debe crear pedido.
+ */
+async function tratarOrdenFueraDeVentana(db, cfg, orden) {
+  if (orden?.status !== 'paid' || ordenYaTratada(db, orden.id)) return { tratada: false };
+  const v = estadoVentana(orden);
+  if (v === 'dentro') return { tratada: false };
+  if (v === 'sin_fecha') {
+    const txt = `La venta de MercadoLibre ${orden.id} no trae fecha de creación legible (${JSON.stringify(orden.date_created ?? null)}): no se creó el pedido ni se descontó stock. Revisala a mano.`;
+    abrirOActualizarIncidente(db, {
+      integracion: 'mercadolibre', proceso: 'orden_ml_tardia', tipoError: `orden_ml_sin_fecha_${orden.id}`.slice(0, 120), severidad: 'critico',
+      mensajeTecnico: txt, mensajeHumano: txt, contexto: { ml_order_id: String(orden.id), fecha: orden.date_created ?? null },
+    });
+    return { tratada: true, d: { estado: 'sin_fecha' } };
+  }
+  return { tratada: true, d: await descontarOrdenViejaSinPedido(db, cfg, orden, { origen: 'job' }) };
+}
 
 /**
  * Orden ML pagada y vieja sin pedido: descuenta en Woo la cantidad vendida (idempotente por orden, bajo los candados de
@@ -1686,12 +1710,12 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
   // Corte por fecha: un aviso tardío (calificación, reclamo, mediación) de una orden vieja que nunca se selló NO crea el
   // pedido Woo semanas después (descontaría stock de algo ya despachado). Sin POST ni reserva: incidente para revisión humana.
   // Una orden ya sellada o con reserva en curso sigue su camino de siempre (no crea nada nuevo).
-  if (ordenFueraDeVentana(orden) && !ordenYaTratada(db, mlOrderId)) {
+  const corte = await tratarOrdenFueraDeVentana(db, cfg, orden);
+  if (corte.tratada) {
     // Decisión de José: no se crea el pedido, pero sí se descuenta lo vendido (una vez por orden) y se avisa.
-    const d = await descontarOrdenViejaSinPedido(db, cfg, orden, { origen: 'job' });
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // Preparación sigue igual
-    if (d.estado === 'reintentar') return { estado: 'reencolar', motivo: d.motivo };
-    return { estado: 'hecho', motivo: 'orden_vieja_sin_pedido' };
+    if (corte.d?.estado === 'reintentar') return { estado: 'reencolar', motivo: corte.d.motivo };
+    return { estado: 'hecho', motivo: corte.d?.estado === 'sin_fecha' ? 'orden_sin_fecha' : 'orden_vieja_sin_pedido' };
   }
   // Efecto 1: pedido Woo. `syncOrdenMlPuntual` no duplica: la reserva atómica de `_procesarOrden` impide un segundo POST.
   await syncOrdenMlPuntual(db, cfg, mlOrderId, { orden });

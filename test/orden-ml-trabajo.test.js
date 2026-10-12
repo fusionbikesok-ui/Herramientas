@@ -170,6 +170,7 @@ describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
     expect(woo.posts).toBe(1);
     db.prepare('DELETE FROM ordenes_ml_wc_pedidos').run();
     db.prepare('DELETE FROM ordenes_ml_procesadas').run();
+    db.prepare('DELETE FROM ordenes_ml_destino').run();
     ml.orden = conFecha(3 * DIA + 60_000);
     await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(woo.posts).toBe(1); // no hubo un segundo POST
@@ -181,6 +182,7 @@ describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
     ml.orden = conFecha(2 * DIA);
     await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(woo.posts).toBe(0);
+    db.prepare('DELETE FROM ordenes_ml_destino').run();
     db.prepare('DELETE FROM ordenes_ml_descuento_sin_pedido').run(); // con la fila presente nunca se crea el pedido (anti doble descuento)
     process.env.ML_ORDEN_VENTANA_DIAS = '10';
     await procesarOrdenMl(db, CFG, 'ORD-1');
@@ -420,6 +422,85 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(inc().mensaje_humano).toMatch(/AMBIGUAS/);
   });
 
+  it('ALTO A: el polling legacy con una orden de 10 días NO crea pedido: descuenta una vez y avisa', async () => {
+    ml.orden = vieja({ date_created: new Date(Date.now() - 10 * DIA).toISOString() });
+    await syncMlToWc(db, CFG);
+    await syncMlToWc(db, CFG); // otro ciclo del cron
+    expect(woo.posts).toBe(0);
+    expect(reserva('ORD-1')).toBeUndefined();
+    expect(woo.productPuts).toHaveLength(1);
+    expect(woo.stock[100]).toBe(4);
+    expect(inc()).toBeDefined();
+  });
+
+  it('ALTO A: el sync puntual con una orden vieja tampoco crea pedido', async () => {
+    ml.orden = vieja();
+    await syncOrdenMlPuntual(db, CFG, 'ORD-1', { orden: ml.orden });
+    expect(woo.posts).toBe(0);
+    expect(woo.stock[100]).toBe(4);
+  });
+
+  it('fechas: con offset explícito, sin offset (se asume UTC) y ausente (fail-safe: ni pedido ni descuento, con aviso)', async () => {
+    const hace = (ms) => new Date(Date.now() - ms);
+    const conOffset = (d) => d.toISOString().replace('Z', '-03:00'); // mismo reloj de pared, corrido 3 h
+    const sinOffset = (d) => d.toISOString().replace('Z', '');
+    // 2 días 23 h según UTC → dentro; con offset -03:00 el instante real es 3 h MÁS TARDE → sigue dentro
+    ml.orden = vieja({ date_created: conOffset(hace(2.9 * DIA)) });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1);
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos').run(); db.prepare('DELETE FROM ordenes_ml_procesadas').run(); db.prepare('DELETE FROM ordenes_ml_destino').run();
+    ml.orden = vieja({ date_created: sinOffset(hace(3.1 * DIA)) });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1); // 3,1 días UTC → fuera: descuenta
+    expect(woo.stock[100]).toBeLessThan(5);
+    db.prepare('DELETE FROM ordenes_ml_descuento_sin_pedido').run(); db.prepare('DELETE FROM ordenes_ml_destino').run();
+    const antes = woo.stock[100];
+    ml.orden = vieja({ date_created: undefined });
+    const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(r.motivo).toBe('orden_sin_fecha');
+    expect(woo.posts).toBe(1);
+    expect(woo.stock[100]).toBe(antes);
+    expect(db.prepare("SELECT severidad FROM incidentes_operativos WHERE tipo_error = 'orden_ml_sin_fecha_ORD-1'").get()).toMatchObject({ severidad: 'critico' });
+  });
+
+  it('ALTO B: si el pedido ya reservó, el descuento no corre; si el descuento reclamó, el pedido no se crea (mismo reclamo para el script)', async () => {
+    const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+    db.prepare("INSERT INTO ordenes_ml_destino (ml_order_id, destino, creado_en) VALUES ('ORD-1', 'pedido', 'x')").run();
+    const r = await descontarOrdenViejaSinPedido(db, CFG, conCantidad(1), { origen: 'script' });
+    expect(r.estado).toBe('no_aplica');
+    expect(woo.productPuts).toHaveLength(0);
+    expect(fila()).toBeUndefined();
+    db.prepare('DELETE FROM ordenes_ml_destino').run();
+    db.prepare("INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en) VALUES ('ORD-1', 0, NULL, 'x')").run(); // reserva en curso
+    const r2 = await descontarOrdenViejaSinPedido(db, CFG, conCantidad(1));
+    expect(r2.estado).toBe('no_aplica');
+    expect(woo.productPuts).toHaveLength(0);
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos').run();
+    const r3 = await descontarOrdenViejaSinPedido(db, CFG, conCantidad(1)); // el descuento gana el reclamo
+    expect(r3.estado).toBe('descontada');
+    ml.orden = ordenMl('ORD-1'); // y ahora una ventana "fresca" no puede crear pedido
+    await syncOrdenMlPuntual(db, CFG, 'ORD-1', { orden: ml.orden });
+    expect(woo.posts).toBe(0);
+  });
+
+  it('ALTO C: write-ahead — si el proceso muere entre el PUT y el registro, el reintento no resta dos veces', async () => {
+    ml.orden = conCantidad(1);
+    const base = wooFetch.getMockImplementation();
+    let muerto = true;
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      const r = await base(c, p, m, b);
+      if (m === 'put' && p === '/products/100' && muerto) throw new Error('proceso muerto tras el PUT'); // el PUT sí se aplicó
+      return r;
+    });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.stock[100]).toBe(4);
+    expect(JSON.parse(fila().lineas_json)[0]).toMatchObject({ estado: 'incierta', antes: 5, despues: 4 });
+    muerto = false;
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.stock[100]).toBe(4); // no volvió a restar
+    expect(JSON.parse(fila().lineas_json)[0].estado).toBe('ambigua');
+  });
+
   it('fila parcial que no avanza: incidente crítico con lo descontado y lo pendiente, y encola la bolsa de lo ya descontado', async () => {
     seedVariacion();
     woo.manage[101] = true;
@@ -458,7 +539,7 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(r.estado).toBe('descontada');
     const i = inc();
     expect(i.severidad).toBe('critico');
-    for (const frag of ['ORD-1', o.date_created.slice(0, 10), 'BIKE-001', 'x2', 'stock 5 → 3', 'NO se creó']) expect(i.mensaje_humano).toContain(frag);
+    for (const frag of ['ORD-1', o.date_created.slice(0, 10), 'BIKE-001', 'x2', 'leído 5, escrito 3, releído 3', 'NO se creó']) expect(i.mensaje_humano).toContain(frag);
     expect(outbox()).toHaveLength(1);
     expect(fila()).toMatchObject({ origen: 'script', actor: 'script:descontar-ordenes-viejas' });
     const otra = await descontarOrdenViejaSinPedido(db, CFG, o); // el job después: nada

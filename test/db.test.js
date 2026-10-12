@@ -113,6 +113,7 @@ describe('db schema', () => {
       'operational_day_events',
       'operational_days',
       'ordenes_ml_descuento_sin_pedido',
+      'ordenes_ml_destino',
       'ordenes_ml_procesadas',
       'ordenes_ml_wc_pedidos',
       'outbox_config',
