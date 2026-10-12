@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS ordenes_ml_descuento_sin_pedido (
   actor TEXT NOT NULL DEFAULT 'sistema',
   origen TEXT NOT NULL DEFAULT 'job',
   creado_en TEXT NOT NULL,
-  actualizado_en TEXT NOT NULL
+  actualizado_en TEXT NOT NULL,
+  cancelada_en TEXT                -- se setea en CUALQUIER camino que cierra la fila por cancelación (job, script, lápida)
 );
 
 -- Reclamo 'descuento' por orden ML (orden vieja: solo se descuenta stock). Se toma en una transacción IMMEDIATE antes de

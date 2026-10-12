@@ -655,10 +655,12 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   if (pedidoMlRetenido(db, orderId)) return;
   // E-1a: una orden vieja con descuento de stock registrado (cualquier estado, también `parcial`) NO puede terminar con
   // pedido Woo: Woo descontaría otra vez. Vale para el polling legacy, el sync puntual y el manual (todos pasan por acá).
-  const filaDescuento = db.prepare('SELECT estado, origen FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(orderId);
+  const filaDescuento = db.prepare('SELECT estado, origen, cancelada_en FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(orderId);
   if (filaDescuento) {
     // Descuento a medias (p. ej. el proceso cayó tras persistir la línea y antes de encolar): este camino no reintenta, lo hace el job.
-    if (orden.status === 'paid') avisarCanceladaLuegoPagada(db, orden, filaDescuento); // lápida + 'paid': revisión manual
+    if (orden.status === 'paid') { // lápida + 'paid': revisión manual; una falla del aviso no corta el flujo
+      try { avisarCanceladaLuegoPagada(db, orden, filaDescuento); } catch (e) { logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'aviso_cancelada_luego_pagada_fallo', error: String(e.message).slice(0, 300) }); }
+    }
     if (filaDescuento.estado !== 'completo') encolarTrabajo(db, { tipo: 'order.ml', recurso: orderId });
     // El polling pasa por acá en cada ciclo: se registra una sola vez por orden.
     if (!db.prepare("SELECT 1 FROM sync_log WHERE clave = ? AND estado = 'omitida_descuento_sin_pedido'").get(orderId)) {

@@ -652,6 +652,43 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(mails).toBe(1);
   });
 
+  it('MEDIO: cancelada por el script (descontarOrdenViejaSinPedido) y luego paid → 1 incidente, 0 POST, 0 PUT', async () => {
+    const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+    const r = await descontarOrdenViejaSinPedido(db, CFG, vieja({}, 'cancelled'), { origen: 'script' });
+    expect(r.estado).toBe('no_aplica');
+    expect(fila()).toMatchObject({ estado: 'completo', origen: 'script' });
+    expect(fila().cancelada_en).toBeTruthy();
+    ml.orden = conCantidad(1); // vuelve paid
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    await syncMlToWc(db, CFG);
+    expect(woo.posts).toBe(0);
+    expect(woo.productPuts).toHaveLength(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE tipo_error = 'orden_ml_cancelada_luego_pagada_ORD-1'").get().n).toBe(1);
+  });
+
+  it('MEDIO: descuento a medias cerrado por la cancelación (job) y luego paid → también avisa', async () => {
+    const { cerrarYAvisarCancelacion } = await import('../lib/descuentoOrdenVieja.js');
+    ml.orden = conCantidad(1);
+    woo.putError = Object.assign(new Error('Woo 503'), { status: 503 });
+    await procesarOrdenMl(db, CFG, 'ORD-1'); // línea incierta, fila parcial
+    cerrarYAvisarCancelacion(db, { id: 'ORD-1' });
+    expect(fila().cancelada_en).toBeTruthy();
+    woo.putError = null;
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.productPuts.length).toBeLessThanOrEqual(1); // no reescribe
+    expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE tipo_error = 'orden_ml_cancelada_luego_pagada_ORD-1'").get().n).toBe(1);
+  });
+
+  it('si el aviso cancelada-luego-pagada lanza, el flujo no se corta (job hecho, polling sigue)', async () => {
+    const { cerrarYAvisarCancelacion } = await import('../lib/descuentoOrdenVieja.js');
+    cerrarYAvisarCancelacion(db, { id: 'ORD-1' });
+    db.prepare('DROP TABLE incidentes_operativos').run(); // fuerza el error dentro del aviso
+    ml.orden = conCantidad(1);
+    await expect(procesarOrdenMl(db, CFG, 'ORD-1')).resolves.toMatchObject({ estado: 'hecho' });
+    await expect(syncMlToWc(db, CFG)).resolves.toBeDefined();
+    expect(db.prepare("SELECT 1 FROM sync_log WHERE estado = 'aviso_cancelada_luego_pagada_fallo'").get()).toBeDefined();
+  });
+
   it('BAJO: cancelación de una orden sin ningún SKU resoluble (lista vacía de candados) graba la lápida sin colgarse', async () => {
     const { avisarCancelacionDescontada } = await import('../lib/descuentoOrdenVieja.js');
     const huerfana = { id: 'ORD-1', status: 'cancelled', order_items: [{ item: { id: 'MLA-NADA', variation_id: '' }, quantity: 1 }] };
