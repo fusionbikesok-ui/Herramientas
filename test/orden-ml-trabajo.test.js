@@ -543,6 +543,29 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(mails).toBe(1);
   });
 
+  it('ALTO 2b: cancelación con descuento a medias → avisa lo hecho y lo pendiente, y frena el resto', async () => {
+    seedVariacion();
+    woo.manage[101] = true;
+    woo.stock[101] = 7;
+    const items = [{ item: { id: 'MLA100', variation_id: '', title: 'A' }, quantity: 1 }, { item: { id: 'MLA200', variation_id: '', title: 'B' }, quantity: 1 }];
+    ml.orden = vieja({ order_items: items });
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      if (m === 'put' && p.startsWith('/products/100/variations/')) throw Object.assign(new Error('Woo 400'), { status: 400 });
+      return base(c, p, m, b);
+    });
+    await procesarOrdenMl(db, CFG, 'ORD-1'); // BIKE-001 descontada, VAR-1 pendiente
+    ml.orden = vieja({ order_items: items }, 'cancelled');
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    const c = db.prepare("SELECT mensaje_humano FROM incidentes_operativos WHERE tipo_error = 'orden_ml_descontada_cancelada_ORD-1'").get();
+    expect(c.mensaje_humano).toMatch(/BIKE-001 x1.*NO se descontó.*VAR-1 x1/);
+    expect(fila().estado).toBe('completo');
+    wooFetch.mockImplementation(base);
+    ml.orden = vieja({ order_items: items });
+    await procesarOrdenMl(db, CFG, 'ORD-1'); // un aviso viejo "paid" no sigue restando
+    expect(woo.stock[101]).toBe(7);
+  });
+
   it('B2: un 4xx en el PUT es definitivo (vuelve a pendiente y no deja fila); un 408 queda incierta', async () => {
     ml.orden = conCantidad(1);
     const base = wooFetch.getMockImplementation();
@@ -563,6 +586,18 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     woo.putError = Object.assign(new Error('Woo 503'), { status: 503 });
     await syncMlToWc(db, CFG);
     expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'pendiente' });
+  });
+
+  it('fila parcial sin job (caída antes de encolar): una pasada del polling encola el order.ml; una completa no', async () => {
+    db.prepare("INSERT INTO ordenes_ml_descuento_sin_pedido (ml_order_id, lineas_json, estado, creado_en, actualizado_en) VALUES ('ORD-1', '[]', 'parcial', 'x', 'x')").run();
+    ml.orden = conCantidad(1);
+    expect(trabajo('order.ml', 'ORD-1')).toBeUndefined();
+    await syncMlToWc(db, CFG);
+    expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'pendiente' });
+    db.prepare('DELETE FROM trabajos_recurso').run();
+    db.prepare("UPDATE ordenes_ml_descuento_sin_pedido SET estado = 'completo'").run();
+    await syncMlToWc(db, CFG);
+    expect(trabajo('order.ml', 'ORD-1')).toBeUndefined();
   });
 
   it('fila parcial que no avanza: incidente crítico con lo descontado y lo pendiente, y encola la bolsa de lo ya descontado', async () => {
