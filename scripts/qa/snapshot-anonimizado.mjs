@@ -41,6 +41,9 @@ export const COLUMNAS_JSON = new Set([
   'producto_fusion_atributos.valor_json', 'recepcion_items.ficha_json', 'recepcion_altas_woo.respuesta_json',
   'stock_exception_events.antes_json', 'stock_exception_events.despues_json',
   'stock_supplier_return_events.antes_json', 'stock_supplier_return_events.despues_json',
+  // E-0 barrera de venta: lineas_json = nombres de producto, SKUs, cantidades e ids (sin personas, se conserva);
+  // confirmaciones_json = actor (usuario interno) y motivo libre → se anonimizan por clave.
+  'stock_refresco_pendiente.lineas_json', 'stock_refresco_pendiente.confirmaciones_json',
 ]);
 // Coinciden por nombre pero no contienen JSON.
 export const COLUMNAS_NO_JSON = new Set(['integration_events.payload_version']);
@@ -53,6 +56,8 @@ const CLAVES_SENSIBLES = new Set([
   'nombre_receptor', 'comprador', 'nota', 'notas', 'telefono', 'documento', 'direccion_envio',
   // Outbox hacia la plataforma (E2 T1): quién confirmó una decisión del matcher es un usuario interno.
   'confirmado_por',
+  // E-0 barrera de venta (confirmaciones_json): quién confirmó el descuento y el motivo que escribió (texto libre).
+  'actor', 'motivo',
 ]);
 
 export const TABLAS_SECRETOS = ['ml_oauth_token', 'device_tokens', 'mobile_refresh_tokens', 'password_reset_tokens'];
