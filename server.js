@@ -25,7 +25,8 @@ import { mapeoRouter } from './routes/mapeo.js';
 import { csvRouter } from './routes/csv.js';
 import { bandejaIdentidadRouter } from './routes/bandejaIdentidad.js';
 import { matcherRouter, dispararRefrescoMl, estadoRefrescoMl } from './routes/matcher.js';
-import { syncRouter, procesarBarreraVentas, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
+import { verificarWebhookWoo } from './lib/wooWebhookAuth.js';
+import { syncRouter, procesarBarreraVentas, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, procesarTrabajosRecurso, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
@@ -316,20 +317,12 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   // Responde 200 inmediatamente y dispara syncWcToMl en background para no
   // bloquear el reintento de WC (WC reintenta si no recibe 200 en < 5s).
   app.post('/api/woo/webhook/order',
-    express.raw({ type: 'application/json', limit: '1mb' }),
-    (req, res) => {
-      const whSecret = process.env.WOO_WEBHOOK_SECRET || '';
-      if (whSecret) {
-        const sig = req.headers['x-wc-webhook-signature'];
-        if (!sig) return res.status(401).json({ ok: false, error: 'sin firma' });
-        const expected = crypto.createHmac('sha256', whSecret)
-          .update(req.body).digest('base64');
-        const received = Buffer.from(String(sig));
-        const expectedBuffer = Buffer.from(expected);
-        if (received.length !== expectedBuffer.length || !crypto.timingSafeEqual(received, expectedBuffer)) {
-          return res.status(401).json({ ok: false, error: 'firma inválida' });
-        }
-      }
+    express.raw({ type: ['application/json', 'application/x-www-form-urlencoded'], limit: '1mb' }),
+    async (req, res) => {
+      // E-1a: fail-closed (sin secreto 503, firma 401), ping de Woo, ID de webhook conocido y topic de pedido.
+      const guardia = await verificarWebhookWoo(app._db, wooCfg, req, 'order');
+      if (!guardia.ok) return res.status(guardia.status).json({ ok: false, error: guardia.error });
+      if (guardia.ping) return res.json({ ok: true, ping: true });
       let order;
       try { order = JSON.parse(req.body.toString('utf8')); }
       catch { return res.status(400).json({ ok: false, error: 'payload inválido' }); }
@@ -381,19 +374,11 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   // esta ruta. El ACK solo se emite tras persistir evento+job: un reinicio posterior no pierde
   // el cambio y el worker relee Woo como fuente de verdad.
   app.post('/api/woo/webhook/product',
-    express.raw({ type: 'application/json', limit: '1mb' }),
-    (req, res) => {
-      const whSecret = process.env.WOO_WEBHOOK_SECRET || '';
-      if (whSecret) {
-        const sig = req.headers['x-wc-webhook-signature'];
-        if (!sig) return res.status(401).json({ ok: false, error: 'sin firma' });
-        const expected = crypto.createHmac('sha256', whSecret).update(req.body).digest('base64');
-        const received = Buffer.from(String(sig));
-        const expectedBuffer = Buffer.from(expected);
-        if (received.length !== expectedBuffer.length || !crypto.timingSafeEqual(received, expectedBuffer)) {
-          return res.status(401).json({ ok: false, error: 'firma inválida' });
-        }
-      }
+    express.raw({ type: ['application/json', 'application/x-www-form-urlencoded'], limit: '1mb' }),
+    async (req, res) => {
+      const guardia = await verificarWebhookWoo(app._db, wooCfg, req, 'product');
+      if (!guardia.ok) return res.status(guardia.status).json({ ok: false, error: guardia.error });
+      if (guardia.ping) return res.json({ ok: true, ping: true });
       let producto;
       try { producto = JSON.parse(req.body.toString('utf8')); }
       catch { return res.status(400).json({ ok: false, error: 'payload inválido' }); }
@@ -512,30 +497,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   const syncCfg = { woo: wooCfg, ml: mlCfg };
   configurarAuditoriaPrecios({ mlCfg });
 
-  // Deduplicación corta de webhooks `orders`/`orders_v2` de la misma orden ML (2026-09-20): ML manda
-  // varias notificaciones del mismo pedido en ráfaga (cambios de estado, envío, pago) y cada una
-  // disparaba su propia llamada a ML, hasta 17 veces para un solo pedido en producción — compite por un
-  // cupo que ya sabemos escaso (ver el 429 del bootstrap del catálogo). El ACK a ML nunca cambia por
-  // esto: sigue siendo 200 siempre: la ventana sólo decide si se llama a ML de nuevo, no si el webhook
-  // se acepta. Ventana corta (15 s) a propósito: alcanza para matar la ráfaga de notificaciones del
-  // mismo evento sin perder un cambio de estado real y posterior del mismo pedido. Clave por función
-  // (`syncOrdenMlPuntual`/`syncPedidoMlPuntual`) + `mlOrderId`, no sólo por pedido: son sincronizaciones
-  // distintas (stock por venta vs. pedidos_cache) y compartir la ventana dejaría que una consuma la
-  // dedup de la otra y la salte sin haber corrido nunca. Fail-open preexistente intacto: si la dedup
-  // saltea un pedido que sí cambió, `syncPedidosCache` (cron cada 10 min) lo agarra igual por
-  // `pendientesMl` — por eso una ventana corta es segura.
-  const VENTANA_DEDUP_NOTIF_ML_MS = 15_000;
-  const notifMlVistos = new Map(); // clave `${funcion}:${mlOrderId}` → timestamp del último disparo.
-  function deberiaSincronizarNotifMl(funcion, mlOrderId) {
-    const clave = `${funcion}:${mlOrderId}`;
-    const ahora = Date.now();
-    // Purga perezosa de vencidos en cada llamada: sin tabla ni temporizador aparte, y el tráfico real
-    // que se quiere deduplicar es justamente lo que dispara esta función seguido.
-    for (const [k, t] of notifMlVistos) if (ahora - t > VENTANA_DEDUP_NOTIF_ML_MS) notifMlVistos.delete(k);
-    if (notifMlVistos.has(clave)) return false;
-    notifMlVistos.set(clave, ahora);
-    return true;
-  }
+  // E-1a: la deduplicación en memoria de 15 s de `orders`/`orders_v2` se reemplazó por el trabajo durable `order.ml`
+  // (una fila por orden en `trabajos_recurso`, creada en la misma transacción que el recibo): las ráfagas de avisos
+  // de una misma orden suben su generación y se procesan juntas, sin perder un cambio posterior.
 
   // ── Notificaciones ML ────────────────────────────────────────────────────────
   // POST /api/ml/notificacion
@@ -546,11 +510,9 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   // ML espera un ACK rápido — persistimos el evento+job en una transacción y respondemos siempre 200 (ver nota junto al res.status más abajo).
   // Docs: https://developers.mercadolibre.com.ar/es_ar/recibir-notificaciones
   //
-  // Topics soportados hoy: 'orders' (sync puntual a WC de ESA orden vía syncOrdenMlPuntual,
-  // A.3, + camino puntual a pedidos_cache, A.1 — el barrido paginado completo, syncMlToWc,
-  // ya no se dispara acá, queda solo como respaldo del cron), 'orders_v2' (solo camino
-  // puntual a pedidos_cache — no dispara syncOrdenMlPuntual, mismo comportamiento
-  // preexistente de 'orders' respecto de eso), 'questions', 'messages', 'claims' y
+  // Topics soportados hoy: 'orders' y 'orders_v2' (E-1a: ambos encolan el MISMO trabajo durable `order.ml`
+  // por orden; el worker relee la orden y hace pedido Woo + Preparación, o la cancelación puntual; el barrido
+  // paginado completo, syncMlToWc, queda solo como respaldo del cron), 'questions', 'messages', 'claims' y
   // 'post_purchase' con acción 'claims'
   // (preguntas/mensajes/reclamos sin resolver, guardados para el aviso del Home — ver
   // routes/notificacionesMl.js). El resto de los topics que ML manda (shipments,
@@ -631,31 +593,11 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     res.status(200).json({ ok: true, duplicate: persisted.duplicate });
 
     if (topic === 'orders' || topic === 'orders_v2') {
-      console.log(`[notif-ml] topic=${topic} resource=${resource} → ${topic === 'orders' ? 'syncOrdenMlPuntual' : 'syncPedidoMlPuntual'}`);
-      // `resource` viene como "/orders/{id}" -- se toma el último segmento.
-      const recursoPedido = String(resource || '').match(/^\/orders\/([^/]+)\/?$/);
-      const mlOrderId = recursoPedido?.[1];
-
-      // A.3 (2026-08-27): syncMlToWc ya NO se dispara acá — hacía un barrido paginado
-      // completo de /orders/search por cada webhook, cuando el propio webhook ya trae el id
-      // puntual de la orden. syncOrdenMlPuntual procesa SOLO esa orden (GET /orders/{id}).
-      // El barrido paginado completo sigue de respaldo vía el cron ('3-59/10 * * * *', más
-      // abajo) — si esto falla o no llega, el cron la termina agarrando igual. Comportamiento
-      // preexistente (solo 'orders', no 'orders_v2') sin tocar: syncMlToWc/syncOrdenMlPuntual
-      // ajustan stock por venta, no aplica a 'orders_v2' hasta que se defina esa función.
-      if (topic === 'orders' && mlOrderId && deberiaSincronizarNotifMl('syncOrdenMlPuntual', mlOrderId)) {
-        syncOrdenMlPuntual(app._db, syncCfg, mlOrderId)
-          .catch(err => console.error('[notif-ml] syncOrdenMlPuntual error:', err.message));
-      }
-
-      // A.1 (2026-08-26): camino rápido a la cola de Preparación, para 'orders' y 'orders_v2'
-      // por igual. Fail-open: si falla o el order id no se puede extraer, no se pierde nada --
-      // el pedido igual va a aparecer en la próxima corrida de syncPedidosCache (cron cada 10
-      // min) vía pendientesMl, que no depende de este camino puntual.
-      if (mlOrderId && deberiaSincronizarNotifMl('syncPedidoMlPuntual', mlOrderId)) {
-        syncPedidoMlPuntual(app._db, mlCfg, mlOrderId)
-          .catch(err => console.error('[notif-ml] syncPedidoMlPuntual error:', err.message));
-      }
+      // E-1a: el recibo y el trabajo `order.ml` (uno por orden, durable) ya quedaron persistidos antes del ACK
+      // (registrarWebhookMl). Esto es solo un acelerador no durable: si el proceso muere, el cron de cada minuto lo toma.
+      console.log(`[notif-ml] topic=${topic} resource=${resource} → trabajo order.ml`);
+      procesarTrabajosRecurso(app._db, syncCfg)
+        .catch(err => console.error('[notif-ml] procesarTrabajosRecurso error:', err.message));
       return;
     }
 
@@ -894,6 +836,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('3-59/10 * * * *', () => {          // ML
         syncMlToWc(app._db, syncCfg)
           .catch(err => console.error('ML→WC error:', err.message));
+      });
+
+      // E-1a: trabajos durables por recurso (order.ml, stock.bolsa). Cada minuto toma los vencidos; el aviso solo acelera.
+      cron.schedule('* * * * *', () => {
+        procesarTrabajosRecurso(app._db, syncCfg)
+          .catch(err => console.error('trabajos por recurso error:', err.message));
       });
 
       // E-0: barrera de venta. Cada 2 min libera las ventas cuyo descuento Woo ya está confirmado y hace la corrección dueña;

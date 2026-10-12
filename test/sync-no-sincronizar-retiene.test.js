@@ -40,7 +40,7 @@ describe('_procesarOrden con "no sincronizar"', () => {
     it(`variante ${variante}: la venta con seller_sku único queda retenida y no crea pedido en Woo`, async () => {
       db.prepare(`INSERT INTO sku_matcher_decisiones (clave,sku,accion,origen,actualizado_en) VALUES ('MLA300|',NULL,'omitir',?,?)`)
         .run(`no_sincronizar_${variante}`, now());
-      const orden = { id: `ORD-NS-${variante}`, date_created: '2026-10-01T00:00:00Z', status: 'paid',
+      const orden = { id: `ORD-NS-${variante}`, date_created: new Date().toISOString(), status: 'paid',
         buyer: { first_name: 'A', last_name: 'B', nickname: 'ab', email: 'a@b.c' },
         order_items: [{ item: { id: 'MLA300', variation_id: '', seller_sku: 'BIKE-UNICO' }, quantity: 1, unit_price: 100 }] };
       mlFetch.mockResolvedValue({ status: 200, data: { results: [orden] } });
