@@ -33,6 +33,22 @@ describe('trabajos durables por recurso', () => {
     expect(fila().estado).toBe('hecho');
   });
 
+  it('intento 12 que falla con un aviso nuevo a mitad de camino: queda pendiente (no muerto) y la generación nueva lo procesa', () => {
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: '1' });
+    db.prepare('UPDATE trabajos_recurso SET intentos = 11').run();
+    const [t] = reclamarTrabajos(db, ['order.ml']);
+    expect(t.intentos).toBe(12);
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: '1' }); // aviso a mitad del intento
+    expect(reencolarTrabajo(db, t, { motivo: 'falla' })).toMatchObject({ muerto: false, repite_por_aviso_nuevo: true });
+    expect(fila()).toMatchObject({ estado: 'pendiente', intentos: 0, dirty: 0 });
+    const [t2] = reclamarTrabajos(db, ['order.ml']);
+    expect(t2.generacion_tomada).toBe(2);
+    // con la MISMA generación el intento 12 sí lo mata
+    db.prepare('UPDATE trabajos_recurso SET intentos = 11, estado = \'tomado\' WHERE 1').run();
+    expect(reencolarTrabajo(db, { ...t2, intentos: 12 }, { motivo: 'falla' })).toMatchObject({ muerto: true });
+    expect(fila().estado).toBe('muerto');
+  });
+
   it('un trabajo tomado con el lease vencido (worker caído) lo toma otro; el token viejo ya no cierra', () => {
     encolarTrabajo(db, { tipo: 'order.ml', recurso: '1' });
     const [viejo] = reclamarTrabajos(db, ['order.ml'], { leaseMs: -1000 });
