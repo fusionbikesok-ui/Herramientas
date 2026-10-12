@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
-import { procesarOrdenMl, procesarStockBolsa, procesarTrabajosRecurso, encolarBolsasDeSkus } from '../routes/sync.js';
+import { syncMlToWc, syncOrdenMlPuntual, procesarOrdenMl, procesarStockBolsa, procesarTrabajosRecurso, encolarBolsasDeSkus } from '../routes/sync.js';
 import { encolarTrabajo, reclamarTrabajos, guardarContextoTrabajo } from '../lib/trabajosRecurso.js';
 import { escribirStockMl } from '../lib/stockBarrera.js';
 
@@ -77,6 +77,7 @@ function instalarMocks() {
   mlFetch.mockImplementation(async (dbx, cfg, method, p, body) => {
     ml.gets.push(p);
     if (method === 'put') { ml.puts.push({ p, body }); ml.qty = body.available_quantity; return { status: 200, data: {} }; }
+    if (p.startsWith('/orders/search')) return { status: 200, data: { results: [ml.orden] } };
     if (/^\/orders\/[^/?]+$/.test(p)) return ml.ordenHttp === 200 ? { status: 200, data: ml.orden } : { status: ml.ordenHttp, data: null };
     if (p.startsWith('/users/')) return ml.usuarioHttp === 200 ? { status: 200, data: ml.usuario } : { status: ml.usuarioHttp, data: null };
     if (p.startsWith('/items/bulk')) return { status: 200, data: [{ code: 200, body: { id: 'MLA100', status: 'active', available_quantity: ml.qty } }] };
@@ -180,6 +181,7 @@ describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
     ml.orden = conFecha(2 * DIA);
     await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(woo.posts).toBe(0);
+    db.prepare('DELETE FROM ordenes_ml_descuento_sin_pedido').run(); // con la fila presente nunca se crea el pedido (anti doble descuento)
     process.env.ML_ORDEN_VENTANA_DIAS = '10';
     await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(woo.posts).toBe(1);
@@ -318,8 +320,124 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     const r = await descontarOrdenViejaSinPedido(db, CFG, vieja({}, 'cancelled'));
     expect(r.estado).toBe('no_aplica');
     expect(woo.productPuts).toHaveLength(0);
-    expect(fila()).toBeUndefined();
+    expect(fila()).toMatchObject({ estado: 'completo' });
     expect(inc().mensaje_humano).toMatch(/cancelled.*NO se descontó/);
+    const otra = await descontarOrdenViejaSinPedido(db, CFG, vieja({}, 'cancelled')); // otro orders_v2: sin reaviso
+    expect(otra.estado).toBe('ya_descontada');
+    expect(outbox()).toHaveLength(1);
+  });
+
+  it('no_pagada no cancelada (p. ej. payment_required) no graba fila ni avisa', async () => {
+    const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+    const r = await descontarOrdenViejaSinPedido(db, CFG, vieja({}, 'payment_required'));
+    expect(r.estado).toBe('no_aplica');
+    expect(fila()).toBeUndefined();
+    expect(inc()).toBeUndefined();
+  });
+
+  it('DOBLE DESCUENTO: tras descontar, el polling legacy (syncMlToWc) no crea el pedido Woo', async () => {
+    ml.orden = conCantidad(1);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.stock[100]).toBe(4);
+    await syncMlToWc(db, CFG);
+    expect(woo.posts).toBe(0);
+    expect(reserva('ORD-1')).toBeUndefined();
+    expect(woo.stock[100]).toBe(4);
+  });
+
+  it('DOBLE DESCUENTO: tras descontar, el sync puntual tampoco crea el pedido Woo', async () => {
+    ml.orden = conCantidad(1);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    await syncOrdenMlPuntual(db, CFG, 'ORD-1', { orden: ml.orden });
+    expect(woo.posts).toBe(0);
+    expect(reserva('ORD-1')).toBeUndefined();
+  });
+
+  it('DOBLE DESCUENTO: con la fila en estado parcial el polling tampoco crea el pedido', async () => {
+    db.prepare("INSERT INTO ordenes_ml_descuento_sin_pedido (ml_order_id, lineas_json, estado, creado_en, actualizado_en) VALUES ('ORD-1', '[]', 'parcial', 'x', 'x')").run();
+    ml.orden = conCantidad(1);
+    await syncMlToWc(db, CFG);
+    expect(woo.posts).toBe(0);
+  });
+
+  it('línea incierta (error de red): si el stock sigue igual reescribe; si cambió va a ambigua sin escribir y avisa con antes/esperado/actual', async () => {
+    ml.orden = conCantidad(1);
+    let falla = true;
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      if (m === 'put' && p === '/products/100' && falla) throw new Error('socket hang up'); // sin status: pudo haber salido
+      return base(c, p, m, b);
+    });
+    const r1 = await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(r1.estado).toBe('reencolar');
+    expect(JSON.parse(fila().lineas_json)[0]).toMatchObject({ estado: 'incierta', antes: 5, despues: 4 });
+    expect(db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = 'orden_ml_descuento_parcial_ORD-1'").get()).toBeDefined();
+    // el stock cambió por una venta web mientras tanto → nunca autorresuelve, ni siquiera si coincidiera con lo esperado
+    woo.stock[100] = 4;
+    falla = false;
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.productPuts).toHaveLength(0);
+    expect(JSON.parse(fila().lineas_json)[0]).toMatchObject({ estado: 'ambigua', antes: 5, esperado: 4, actual: 4 });
+    expect(inc().mensaje_humano).toMatch(/AMBIGUAS.*antes 5, esperado 4, actual 4/);
+  });
+
+  it('línea incierta con el stock igual que antes: reescribe una vez', async () => {
+    ml.orden = conCantidad(1);
+    let falla = true;
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      if (m === 'put' && p === '/products/100' && falla) throw new Error('timeout');
+      return base(c, p, m, b);
+    });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    falla = false;
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.stock[100]).toBe(4);
+    expect(fila().estado).toBe('completo');
+  });
+
+  it('error de configuración (sin request enviado) es definitivo: no deja línea incierta', async () => {
+    ml.orden = conCantidad(1);
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      if (m === 'put' && p === '/products/100') throw Object.assign(new Error('WooCommerce URL debe usar HTTPS'), { categoria: 'config' });
+      return base(c, p, m, b);
+    });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(fila()).toBeUndefined();
+  });
+
+  it('carrera lectura→PUT: si al releer no está lo escrito, línea ambigua y aviso', async () => {
+    ml.orden = conCantidad(1);
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      const r = await base(c, p, m, b);
+      if (m === 'put' && p === '/products/100') woo.stock[100] = 2; // una venta web pisó el valor
+      return r;
+    });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(JSON.parse(fila().lineas_json)[0]).toMatchObject({ estado: 'ambigua', esperado: 4, actual: 2 });
+    expect(inc().mensaje_humano).toMatch(/AMBIGUAS/);
+  });
+
+  it('fila parcial que no avanza: incidente crítico con lo descontado y lo pendiente, y encola la bolsa de lo ya descontado', async () => {
+    seedVariacion();
+    woo.manage[101] = true;
+    woo.stock[101] = 7;
+    ml.orden = vieja({ order_items: [
+      { item: { id: 'MLA100', variation_id: '', title: 'A' }, quantity: 1 },
+      { item: { id: 'MLA200', variation_id: '', title: 'B' }, quantity: 1 },
+    ] });
+    const base = wooFetch.getMockImplementation();
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      if (m === 'put' && p.startsWith('/products/100/variations/')) throw Object.assign(new Error('Woo 502'), { status: 502 });
+      return base(c, p, m, b);
+    });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    const parcial = db.prepare("SELECT mensaje_humano, severidad FROM incidentes_operativos WHERE tipo_error = 'orden_ml_descuento_parcial_ORD-1'").get();
+    expect(parcial.severidad).toBe('critico');
+    expect(parcial.mensaje_humano).toMatch(/A MEDIAS.*BIKE-001 x1 \(5 → 4\).*VAR-1 x1/);
+    expect(trabajo('stock.bolsa', 'sku:BIKE-001')).toBeDefined();
   });
 
   it('dry-run: calcula antes → después, no escribe nada, no registra ni avisa', async () => {

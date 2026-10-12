@@ -653,6 +653,15 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   // La Guardia ya conserva esta venta; esperar una liberación humana evita
   // reintentos, reservas o efectos laterales en Woo en cada ciclo.
   if (pedidoMlRetenido(db, orderId)) return;
+  // E-1a: una orden vieja con descuento de stock registrado (cualquier estado, también `parcial`) NO puede terminar con
+  // pedido Woo: Woo descontaría otra vez. Vale para el polling legacy, el sync puntual y el manual (todos pasan por acá).
+  if (db.prepare('SELECT 1 FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(orderId)) {
+    // El polling pasa por acá en cada ciclo: se registra una sola vez por orden.
+    if (!db.prepare("SELECT 1 FROM sync_log WHERE clave = ? AND estado = 'omitida_descuento_sin_pedido'").get(orderId)) {
+      logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'omitida_descuento_sin_pedido', error: 'orden vieja ya descontada sin pedido: no se crea el pedido Woo' });
+    }
+    return;
+  }
   let algunSinMapeo = false;
 
   // Reservas abandonadas (proceso murió entre reservar y confirmar/liberar, ej: kill -9)

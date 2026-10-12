@@ -13,6 +13,11 @@ import { descontarOrdenViejaSinPedido } from '../../routes/sync.js';
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const ids = args.filter((a) => !a.startsWith('--'));
+const malos = ids.filter((i) => !/^\d+$/.test(i));
+if (malos.length) {
+  console.error(`ids inválidos (deben ser numéricos): ${malos.join(', ')}`);
+  process.exit(2);
+}
 if (!ids.length) {
   console.error('Uso: descontar-ordenes-viejas.mjs [--dry-run] <ml_order_id> [...]');
   process.exit(2);
@@ -30,6 +35,11 @@ for (const id of ids) {
   try {
     const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${id}`);
     if (resp.status !== 200 || !resp.data) { console.log(`${id}: ML respondió ${resp.status}, se omite`); fallos++; continue; }
+    if (!dryRun && resp.data.status === 'cancelled') {
+      console.log(`${id}: está CANCELADA, no se procesa en modo real (no se descuenta ni se avisa). Revisala a mano.`);
+      fallos++;
+      continue;
+    }
     const r = await descontarOrdenViejaSinPedido(db, cfg, resp.data, { dryRun, actor: 'script:descontar-ordenes-viejas', origen: 'script' });
     console.log(`${id} (${String(resp.data.date_created).slice(0, 10)}, ${resp.data.status}): ${r.estado}${r.motivo ? ` — ${r.motivo}` : ''}`);
     for (const l of r.lineas) {
