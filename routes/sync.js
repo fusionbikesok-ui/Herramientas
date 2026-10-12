@@ -11,7 +11,7 @@ import { Router } from 'express';
 import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { requireAdmin } from '../lib/auth.js';
-import { abrirOActualizarIncidente } from '../lib/incidentes.js';
+import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
@@ -31,7 +31,7 @@ import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from
 import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
 import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
 import {
-  buildMlStockUpdate, escribirStockMl, resolverBolsa, conCandados, insertarBarrera, borrarBarreraDeOrden, confirmarBarreraConPedido,
+  buildMlStockUpdate, escribirStockMl, ACCIONES_VINCULO, resolverBolsa, conCandados, insertarBarrera, borrarBarreraDeOrden, confirmarBarreraConPedido,
   intentarLiberarFila, filasBarrera, idBarrera, releerStockGestores, gestoresDeFilas, verificarManageStockWoo, stockWooPausado,
   leerEstado, guardarEstado, confirmarDescuentoLinea,
 } from '../lib/stockBarrera.js';
@@ -1609,7 +1609,7 @@ function skusDeOrdenMl(db, orden) {
   const skus = new Set();
   for (const it of orden?.order_items || []) {
     const clave = `${it?.item?.id}|${it?.item?.variation_id || ''}`;
-    const sku = db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion = 'confirmar'").get(clave)?.sku
+    const sku = db.prepare(`SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion IN ${ACCIONES_VINCULO} AND sku IS NOT NULL AND sku <> ''`).get(clave)?.sku
       || db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = ?').get(clave)?.seller_sku;
     if (sku) skus.add(sku);
   }
@@ -1693,10 +1693,19 @@ export async function procesarStockBolsa(db, cfg, sku) {
 
 let _trabajosRecursoEnCurso = false;
 
+const tipoErrorTrabajo = (prefijo, t) => `${prefijo}_${t.tipo}_${t.recurso}`.slice(0, 120);
+
+/** Cierra los incidentes del trabajo (muerto / espera larga) cuando el recurso por fin se completa. */
+function cerrarIncidentesDeTrabajo(db, t) {
+  for (const prefijo of ['trabajo_muerto', 'trabajo_diferido_largo']) {
+    confirmarCicloSano(db, { integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: tipoErrorTrabajo(prefijo, t) });
+  }
+}
+
 /** Incidente crítico de un trabajo que agotó sus reintentos (por resultado o por excepción): la venta no queda muerta en silencio. */
 function incidenteTrabajoMuerto(db, t, motivo) {
   abrirOActualizarIncidente(db, {
-    integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: `trabajo_muerto_${t.tipo}_${t.recurso}`.slice(0, 120), severidad: 'critico',
+    integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: tipoErrorTrabajo('trabajo_muerto', t), severidad: 'critico',
     mensajeTecnico: `${t.tipo} ${t.recurso}: ${motivo}`,
     mensajeHumano: `El trabajo ${t.tipo} del recurso ${t.recurso} agotó sus reintentos (${motivo}). Hay que revisarlo a mano.`,
     contexto: { tipo: t.tipo, recurso: t.recurso },
@@ -1706,7 +1715,7 @@ function incidenteTrabajoMuerto(db, t, motivo) {
 /** Una espera legítima que dura demasiado no mata el trabajo: abre un incidente visible. */
 function incidenteTrabajoDiferidoLargo(db, t, motivo, desde) {
   abrirOActualizarIncidente(db, {
-    integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: `trabajo_diferido_largo_${t.tipo}_${t.recurso}`.slice(0, 120), severidad: 'critico',
+    integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: tipoErrorTrabajo('trabajo_diferido_largo', t), severidad: 'critico',
     mensajeTecnico: `${t.tipo} ${t.recurso} espera hace más de 2 h (${motivo}) desde ${desde}`,
     mensajeHumano: `El trabajo ${t.tipo} del recurso ${t.recurso} lleva más de 2 horas esperando (${motivo}). Revisalo: puede ser una venta sin pedido en la web.`,
     contexto: { tipo: t.tipo, recurso: t.recurso, desde },
@@ -1735,7 +1744,7 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
         try {
           const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso) : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
           if (r.estado === 'reencolar') resolverReintento(db, t, r);
-          else cerrarTrabajo(db, t);
+          else if (cerrarTrabajo(db, t).cerrado) cerrarIncidentesDeTrabajo(db, t);
           procesados++;
         } catch (e) {
           // Una excepción es un fallo real: cuenta como intento y, al agotarse, abre el mismo incidente crítico.

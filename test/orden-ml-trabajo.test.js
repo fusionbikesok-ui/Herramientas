@@ -81,6 +81,8 @@ beforeEach(() => {
   limpiarDb();
   db = openDb(TEST_DB);
   vi.clearAllMocks();
+  preparacion.syncPedidoMlPuntual.mockReset();
+  preparacion.syncPedidoMlPuntual.mockResolvedValue(undefined);
   process.env.STOCK_BARRERA_REINTENTOS_MS = '0';
   process.env.STOCK_LOCK_ESPERA_MS = '300';
   instalarMocks();
@@ -198,6 +200,18 @@ describe('stock.bolsa: único escritor de stock por eventos', () => {
     expect(ml.puts).toHaveLength(1);
   });
 
+  it('un vínculo con acción "asignar" también resuelve el SKU de la orden y frena su bolsa', async () => {
+    woo.stock[100] = 3;
+    db.prepare("UPDATE sku_matcher_decisiones SET accion = 'asignar' WHERE clave = 'MLA100|'").run();
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    ml.orden = ordenMl('ORD-1', 'payment_required');
+    preparacion.syncPedidoMlPuntual.mockRejectedValueOnce(new Error('falla transitoria'));
+    await procesarTrabajosRecurso(db, CFG); // lee la orden, guarda sus SKUs y falla: queda en backoff con intentos > 0
+    expect(JSON.parse(trabajo('order.ml', 'ORD-1').contexto_json)).toEqual({ skus: ['BIKE-001'] });
+    expect((await procesarStockBolsa(db, CFG, 'BIKE-001')).motivo).toBe('orden_ml_pendiente');
+    expect(ml.puts).toHaveLength(0);
+  });
+
   it('un order.ml en backoff cuyos SKUs no se pudieron leer tampoco frena bolsas ajenas; uno recién llegado sí', async () => {
     woo.stock[100] = 3;
     encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-VIEJA' });
@@ -264,6 +278,33 @@ describe('worker: job muerto y esperas largas', () => {
     expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'muerto', ultimo_error: 'Preparación caída' });
     expect(incidenteCritico('trabajo_muerto_order.ml_ORD-1')).toMatchObject({ severidad: 'critico' });
     preparacion.syncPedidoMlPuntual.mockResolvedValue(undefined);
+  });
+
+  it('los incidentes de espera larga y de job muerto se cierran cuando el recurso se completa', async () => {
+    const activo = (tipo) => db.prepare("SELECT estado FROM incidentes_operativos WHERE tipo_error = ? ORDER BY id DESC").get(tipo)?.estado;
+    // 1) muerto por excepción
+    preparacion.syncPedidoMlPuntual.mockRejectedValue(new Error('Preparación caída'));
+    ml.orden = ordenMl('ORD-1', 'payment_required');
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    for (let i = 0; i < 12; i++) { vencer(); await procesarTrabajosRecurso(db, CFG); }
+    expect(activo('trabajo_muerto_order.ml_ORD-1')).toBe('activo');
+    // 2) espera larga abierta a mano sobre el mismo recurso
+    preparacion.syncPedidoMlPuntual.mockResolvedValue(undefined);
+    db.prepare("UPDATE trabajos_recurso SET diferido_desde = ?, estado = 'pendiente', intentos = 0, run_after = '2000-01-01T00:00:00.000Z' WHERE tipo = 'order.ml'").run(new Date(Date.now() - 3 * 3600 * 1000).toISOString());
+    woo.postError = new Error('timeout'); woo.busquedaError = new Error('woo caído');
+    ml.orden = ordenMl('ORD-1', 'paid');
+    await procesarTrabajosRecurso(db, CFG);
+    expect(activo('trabajo_diferido_largo_order.ml_ORD-1')).toBe('activo');
+    // 3) el recurso vuelve a encolarse y se completa: ambos incidentes se resuelven
+    preparacion.syncPedidoMlPuntual.mockResolvedValue(undefined);
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos').run();
+    woo.postError = null; woo.busquedaError = null;
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    vencer();
+    await procesarTrabajosRecurso(db, CFG);
+    expect(trabajo('order.ml', 'ORD-1').estado).toBe('hecho');
+    expect(activo('trabajo_muerto_order.ml_ORD-1')).not.toBe('activo');
+    expect(activo('trabajo_diferido_largo_order.ml_ORD-1')).not.toBe('activo');
   });
 
   it('una reserva en curso durante mucho más de 6 minutos NO mata el job: sigue pendiente, sin sumar intentos', async () => {
