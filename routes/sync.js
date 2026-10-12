@@ -12,7 +12,7 @@ import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { requireAdmin } from '../lib/auth.js';
 import { abrirOActualizarIncidente } from '../lib/incidentes.js';
-import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, hayTrabajoPendiente } from '../lib/trabajosRecurso.js';
+import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch } from './woo.js';
@@ -1604,6 +1604,18 @@ export function encolarBolsasDeSkus(db, skus, { demoraMs = 0 } = {}) {
   return [...recursos];
 }
 
+/** SKUs vinculados a las publicaciones de una orden ML (clave `item|variación`); las que no se resuelven se omiten. */
+function skusDeOrdenMl(db, orden) {
+  const skus = new Set();
+  for (const it of orden?.order_items || []) {
+    const clave = `${it?.item?.id}|${it?.item?.variation_id || ''}`;
+    const sku = db.prepare("SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion = 'confirmar'").get(clave)?.sku
+      || db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = ?').get(clave)?.seller_sku;
+    if (sku) skus.add(sku);
+  }
+  return [...skus];
+}
+
 /**
  * Trabajo `order.ml` (un job por orden, llegue por `orders` u `orders_v2`). Relee la orden y:
  *  - cancelada → cancelación puntual idempotente del pedido Woo (reserva en curso → reencola sin tocar nada) y refresco de bolsas;
@@ -1616,6 +1628,8 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
   const resp = await mlFetch(db, cfg.ml, 'get', `/orders/${mlOrderId}`);
   if (resp.status !== 200 || !resp.data) return { estado: 'reencolar', motivo: `ml_orders_http_${resp.status}` };
   const orden = resp.data;
+  // SKUs de la orden: permiten que stock.bolsa bloquee solo las bolsas que esta venta toca.
+  try { guardarContextoTrabajo(db, 'order.ml', String(mlOrderId), { skus: skusDeOrdenMl(db, orden) }); } catch { /* el contexto es una optimización */ }
   const { syncPedidoMlPuntual } = await import('./preparacion.js');
   const skusDelPedido = async () => {
     const reg = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(String(mlOrderId));
@@ -1626,7 +1640,7 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
   };
   if (orden.status === 'cancelled') {
     const c = await cancelarPedidoWooDeOrden(db, cfg.woo, mlOrderId);
-    if (c.estado === 'reserva_en_curso') return { estado: 'reencolar', motivo: 'reserva_en_curso', demoraMs: 30_000 };
+    if (c.estado === 'reserva_en_curso') return { estado: 'reencolar', diferido: true, motivo: 'reserva_en_curso' };
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // saca la orden de la cola de Preparación
     encolarBolsasDeSkus(db, c.skus);
     return { estado: 'hecho' };
@@ -1640,7 +1654,7 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
   const sellada = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(mlOrderId));
   // Efecto 2: Preparación (corre aunque el pedido Woo todavía esté pendiente: son independientes).
   await syncPedidoMlPuntual(db, cfg.ml, mlOrderId);
-  if (!sellada) return { estado: 'reencolar', motivo: 'pedido_woo_sin_confirmar', demoraMs: 30_000 };
+  if (!sellada) return { estado: 'reencolar', diferido: true, motivo: 'pedido_woo_sin_confirmar' };
   encolarBolsasDeSkus(db, await skusDelPedido());
   return { estado: 'hecho' };
 }
@@ -1655,10 +1669,9 @@ export async function procesarStockBolsa(db, cfg, sku) {
   let bolsa;
   try { bolsa = resolverBolsa(db, { skus: [sku] }); } catch (e) { return { estado: 'reencolar', motivo: `bolsa_no_resuelta: ${e.message}` }; }
   if (!bolsa.skus.length) bolsa.skus = [sku];
-  // Una venta ML que todavía no impactó en Woo: empujar ahora devolvería a ML la unidad vendida.
-  if (hayTrabajoPendiente(db, 'order.ml') || db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE wc_order_id = 0 LIMIT 1').get()) {
-    return { estado: 'reencolar', motivo: 'orden_ml_pendiente', demoraMs: 30_000 };
-  }
+  // Una venta ML que todavía no impactó en Woo: empujar ahora devolvería a ML la unidad vendida. Solo frena si esa
+  // venta toca esta bolsa (SKUs de la orden) o si todavía no se la leyó; una orden ajena en backoff no bloquea.
+  if (ordenMlAfectaASkus(db, bolsa.skus)) return { estado: 'reencolar', diferido: true, motivo: 'orden_ml_pendiente' };
   if (bolsa.skus.length > 1) {
     abrirOActualizarIncidente(db, {
       integracion: 'mercadolibre', proceso: 'stock_bolsa', tipoError: `bolsa_con_skus_distintos_${bolsa.skus[0]}`.slice(0, 120), severidad: 'critico',
@@ -1669,16 +1682,48 @@ export async function procesarStockBolsa(db, cfg, sku) {
     return { estado: 'hecho', motivo: 'contradiccion_skus' };
   }
   const r = await conCandados(db, bolsa.skus, async (candado) => {
-    if (filasBarrera(db, bolsa.skus).length) return { estado: 'reencolar', motivo: 'barrera', demoraMs: 20_000 };
+    if (filasBarrera(db, bolsa.skus).length) return { estado: 'reencolar', diferido: true, motivo: 'barrera' };
     const c = await _conciliarClavesDeBolsa(db, cfg, bolsa, candado, {});
     if (c.ok) return { estado: 'hecho', empujadas: c.empujadas };
     return c.bloqueado ? { estado: 'hecho', motivo: 'bloqueado_por_identidad' } : { estado: 'reencolar', motivo: c.motivo };
   });
-  if (r.ocupado) return { estado: 'reencolar', motivo: 'candados_ocupados', demoraMs: 15_000 };
+  if (r.ocupado) return { estado: 'reencolar', diferido: true, motivo: 'candados_ocupados' };
   return r.valor;
 }
 
 let _trabajosRecursoEnCurso = false;
+
+/** Incidente crítico de un trabajo que agotó sus reintentos (por resultado o por excepción): la venta no queda muerta en silencio. */
+function incidenteTrabajoMuerto(db, t, motivo) {
+  abrirOActualizarIncidente(db, {
+    integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: `trabajo_muerto_${t.tipo}_${t.recurso}`.slice(0, 120), severidad: 'critico',
+    mensajeTecnico: `${t.tipo} ${t.recurso}: ${motivo}`,
+    mensajeHumano: `El trabajo ${t.tipo} del recurso ${t.recurso} agotó sus reintentos (${motivo}). Hay que revisarlo a mano.`,
+    contexto: { tipo: t.tipo, recurso: t.recurso },
+  });
+}
+
+/** Una espera legítima que dura demasiado no mata el trabajo: abre un incidente visible. */
+function incidenteTrabajoDiferidoLargo(db, t, motivo, desde) {
+  abrirOActualizarIncidente(db, {
+    integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: `trabajo_diferido_largo_${t.tipo}_${t.recurso}`.slice(0, 120), severidad: 'critico',
+    mensajeTecnico: `${t.tipo} ${t.recurso} espera hace más de 2 h (${motivo}) desde ${desde}`,
+    mensajeHumano: `El trabajo ${t.tipo} del recurso ${t.recurso} lleva más de 2 horas esperando (${motivo}). Revisalo: puede ser una venta sin pedido en la web.`,
+    contexto: { tipo: t.tipo, recurso: t.recurso, desde },
+  });
+}
+
+/** Cierra un intento no exitoso: diferimiento (no cuenta) o fallo real (cuenta y puede dejar el trabajo muerto). */
+function resolverReintento(db, t, { diferido = false, motivo, demoraMs = null }) {
+  if (diferido) {
+    const q = diferirTrabajo(db, t, { motivo, demoraMs });
+    if (q.alerta) incidenteTrabajoDiferidoLargo(db, t, motivo, q.desde);
+    return;
+  }
+  const q = reencolarTrabajo(db, t, { demoraMs, motivo });
+  if (q.muerto) incidenteTrabajoMuerto(db, t, motivo);
+}
+
 /** Worker de los trabajos por recurso. Lo llaman el cron (cada minuto) y, como acelerador no durable, el handler del aviso. */
 export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
   if (_trabajosRecursoEnCurso) return { omitido: true };
@@ -1689,15 +1734,12 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
       for (const t of reclamarTrabajos(db, [tipo], { limit })) {
         try {
           const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso) : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
-          if (r.estado === 'reencolar') {
-            const q = reencolarTrabajo(db, t, { demoraMs: r.demoraMs ?? null, motivo: r.motivo });
-            if (q.muerto) abrirOActualizarIncidente(db, { integracion: 'mercadolibre', proceso: 'trabajos_recurso', tipoError: `trabajo_muerto_${tipo}_${t.recurso}`.slice(0, 120), severidad: 'critico', mensajeTecnico: `${tipo} ${t.recurso}: ${r.motivo}`, mensajeHumano: `El trabajo ${tipo} del recurso ${t.recurso} agotó sus reintentos (${r.motivo}). Hay que revisarlo a mano.`, contexto: { tipo, recurso: t.recurso } });
-          } else {
-            cerrarTrabajo(db, t);
-          }
+          if (r.estado === 'reencolar') resolverReintento(db, t, r);
+          else cerrarTrabajo(db, t);
           procesados++;
         } catch (e) {
-          reencolarTrabajo(db, t, { motivo: String(e.message).slice(0, 200) });
+          // Una excepción es un fallo real: cuenta como intento y, al agotarse, abre el mismo incidente crítico.
+          resolverReintento(db, t, { motivo: String(e.message).slice(0, 200) });
         }
       }
     }

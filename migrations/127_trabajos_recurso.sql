@@ -12,7 +12,10 @@ CREATE TABLE IF NOT EXISTS trabajos_recurso (
   run_after TEXT NOT NULL,
   lease_hasta TEXT,
   lease_token TEXT,
-  intentos INTEGER NOT NULL DEFAULT 0,
+  intentos INTEGER NOT NULL DEFAULT 0,           -- solo fallos reales: los diferimientos legítimos no cuentan
+  diferidos INTEGER NOT NULL DEFAULT 0,          -- espera por algo que está en curso (reserva, barrera, candados…)
+  diferido_desde TEXT,                           -- inicio de la espera actual (alerta si dura demasiado)
+  contexto_json TEXT,                            -- p. ej. {"skus":[…]} de la orden, para no bloquear bolsas ajenas
   ultimo_error TEXT,
   creado_en TEXT NOT NULL,
   actualizado_en TEXT NOT NULL,

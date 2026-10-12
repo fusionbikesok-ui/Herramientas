@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import crypto from 'crypto';
 import { openDb } from '../db/index.js';
-import { verificarWebhookWoo, _resetWooWebhookAuth } from '../lib/wooWebhookAuth.js';
+import { verificarWebhookWoo, _resetWooWebhookAuth, _envejecerListaWooWebhookAuth } from '../lib/wooWebhookAuth.js';
 
 const PATH = `./test/tmp-woo-guard.${process.pid}.sqlite`;
 const SECRETO = 'secreto-guardia';
@@ -65,9 +65,10 @@ describe('guardia de webhooks Woo', () => {
     expect(l).toHaveBeenCalledTimes(1);
   });
 
-  it('un ID desconocido refresca la lista UNA vez; si sigue desconocido es 401 + incidente', async () => {
+  it('un ID desconocido refresca la lista UNA vez (si la lista tiene más de 30 s); si sigue desconocido es 401 + incidente', async () => {
     const l = listar([7]);
     await verificarWebhookWoo(db, {}, req(JSON_PEDIDO), 'order', { listar: l });
+    _envejecerListaWooWebhookAuth(31_000);
     const r = await verificarWebhookWoo(db, {}, req(JSON_PEDIDO, { id: '99' }), 'order', { listar: l });
     expect(r).toMatchObject({ ok: false, status: 401, error: 'webhook desconocido' });
     expect(l).toHaveBeenCalledTimes(2);
@@ -77,7 +78,34 @@ describe('guardia de webhooks Woo', () => {
   it('un webhook creado después del cache se acepta al refrescar', async () => {
     const l = vi.fn().mockResolvedValueOnce([7]).mockResolvedValueOnce([7, 12]);
     await verificarWebhookWoo(db, {}, req(JSON_PEDIDO), 'order', { listar: l });
+    _envejecerListaWooWebhookAuth(31_000);
     expect(await verificarWebhookWoo(db, {}, req(JSON_PEDIDO, { id: '12' }), 'order', { listar: l })).toEqual({ ok: true });
+  });
+
+  it('con la lista de menos de 30 s, un ID desconocido NO fuerza otra lectura (no se martilla a Woo)', async () => {
+    const l = listar([7]);
+    await verificarWebhookWoo(db, {}, req(JSON_PEDIDO), 'order', { listar: l });
+    for (const id of ['91', '92', '93']) {
+      expect((await verificarWebhookWoo(db, {}, req(JSON_PEDIDO, { id }), 'order', { listar: l })).status).toBe(401);
+    }
+    expect(l).toHaveBeenCalledTimes(1);
+  });
+
+  it('single-flight: avisos simultáneos comparten UNA lectura de la lista', async () => {
+    let n = 0;
+    const l = vi.fn(async () => { n++; await new Promise((r) => setTimeout(r, 30)); return [7]; });
+    const rs = await Promise.all([1, 2, 3, 4].map(() => verificarWebhookWoo(db, {}, req(JSON_PEDIDO), 'order', { listar: l })));
+    expect(rs.every((r) => r.ok)).toBe(true);
+    expect(n).toBe(1);
+  });
+
+  it('una lista lenta corta a los 3 s (aquí 50 ms) y cae a "firma válida + advertencia" sin demorar el ACK', async () => {
+    const l = vi.fn(() => new Promise(() => {})); // nunca responde
+    const t0 = Date.now();
+    const r = await verificarWebhookWoo(db, {}, req(JSON_PEDIDO), 'order', { listar: l, timeoutMs: 50 });
+    expect(r).toEqual({ ok: true });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(incidente('webhook_lista_no_disponible')).toMatchObject({ severidad: 'advertencia' });
   });
 
   it('WOO_WEBHOOK_IDS fija los IDs válidos sin consultar a Woo', async () => {

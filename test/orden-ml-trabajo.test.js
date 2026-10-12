@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { procesarOrdenMl, procesarStockBolsa, procesarTrabajosRecurso, encolarBolsasDeSkus } from '../routes/sync.js';
-import { encolarTrabajo } from '../lib/trabajosRecurso.js';
+import { encolarTrabajo, reclamarTrabajos, guardarContextoTrabajo } from '../lib/trabajosRecurso.js';
 import { escribirStockMl } from '../lib/stockBarrera.js';
 
 vi.mock('../lib/mlClient.js', async () => {
@@ -174,12 +174,36 @@ describe('stock.bolsa: único escritor de stock por eventos', () => {
     expect(ml.puts).toHaveLength(0);
   });
 
-  it('con una reserva wc_order_id=0 no escribe', async () => {
+  it('con una reserva wc_order_id=0 de ESA bolsa (su order.ml sigue pendiente) no escribe', async () => {
     woo.stock[100] = 3;
-    db.prepare("INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, creado_en) VALUES ('ORD-9', 0, ?)").run(new Date().toISOString());
+    woo.postError = new Error('timeout');
+    woo.busquedaError = new Error('woo caído');
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    await procesarTrabajosRecurso(db, CFG); // order.ml queda diferido con la reserva incierta; el contexto guarda sus SKUs
+    expect(reserva('ORD-1')?.wc_order_id).toBe(0);
+    ml.puts.length = 0;
     const r = await procesarStockBolsa(db, CFG, 'BIKE-001');
     expect(r.motivo).toBe('orden_ml_pendiente');
     expect(ml.puts).toHaveLength(0);
+  });
+
+  it('un order.ml AJENO en backoff (otro SKU) no frena la conciliación de esta bolsa', async () => {
+    woo.stock[100] = 3;
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-AJENA' });
+    const [t] = reclamarTrabajos(db, ['order.ml']);
+    guardarContextoTrabajo(db, 'order.ml', 'ORD-AJENA', { skus: ['OTRO-SKU'] });
+    db.prepare("UPDATE trabajos_recurso SET estado = 'pendiente', lease_token = NULL, intentos = 2 WHERE tipo = 'order.ml' AND recurso = ?").run(t.recurso);
+    const r = await procesarStockBolsa(db, CFG, 'BIKE-001');
+    expect(r.estado).toBe('hecho');
+    expect(ml.puts).toHaveLength(1);
+  });
+
+  it('un order.ml en backoff cuyos SKUs no se pudieron leer tampoco frena bolsas ajenas; uno recién llegado sí', async () => {
+    woo.stock[100] = 3;
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-VIEJA' });
+    expect((await procesarStockBolsa(db, CFG, 'BIKE-001')).motivo).toBe('orden_ml_pendiente'); // todavía no se leyó
+    db.prepare("UPDATE trabajos_recurso SET intentos = 3 WHERE tipo = 'order.ml'").run();       // ya intentada y fallando
+    expect((await procesarStockBolsa(db, CFG, 'BIKE-001')).estado).toBe('hecho');
   });
 
   it('con una barrera de E-0 abierta no escribe y se reencola', async () => {
@@ -228,6 +252,55 @@ describe('worker procesarTrabajosRecurso', () => {
   });
 });
 
+describe('worker: job muerto y esperas largas', () => {
+  const incidenteCritico = (tipo) => db.prepare("SELECT severidad FROM incidentes_operativos WHERE tipo_error LIKE ?").get(tipo);
+  const vencer = () => db.prepare("UPDATE trabajos_recurso SET run_after = '2000-01-01T00:00:00.000Z' WHERE estado = 'pendiente'").run();
+
+  it('un job que muere por EXCEPCIÓN abre el incidente crítico trabajo_muerto_* (no queda muerto en silencio)', async () => {
+    preparacion.syncPedidoMlPuntual.mockRejectedValue(new Error('Preparación caída'));
+    ml.orden = ordenMl('ORD-1', 'payment_required');
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    for (let i = 0; i < 12; i++) { vencer(); await procesarTrabajosRecurso(db, CFG); }
+    expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'muerto', ultimo_error: 'Preparación caída' });
+    expect(incidenteCritico('trabajo_muerto_order.ml_ORD-1')).toMatchObject({ severidad: 'critico' });
+    preparacion.syncPedidoMlPuntual.mockResolvedValue(undefined);
+  });
+
+  it('una reserva en curso durante mucho más de 6 minutos NO mata el job: sigue pendiente, sin sumar intentos', async () => {
+    woo.postError = new Error('timeout');
+    woo.busquedaError = new Error('woo caído');
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    for (let i = 0; i < 40; i++) { vencer(); await procesarTrabajosRecurso(db, CFG); }
+    const t = trabajo('order.ml', 'ORD-1');
+    expect(t.estado).toBe('pendiente');
+    expect(t.intentos).toBeLessThanOrEqual(1);
+    expect(t.diferidos).toBeGreaterThanOrEqual(39);
+    expect(woo.posts).toBe(1); // y nunca un segundo POST
+  });
+
+  it('el backoff de las esperas crece hasta un tope de 10 min', async () => {
+    woo.postError = new Error('timeout');
+    woo.busquedaError = new Error('woo caído');
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    for (let i = 0; i < 12; i++) { vencer(); await procesarTrabajosRecurso(db, CFG); }
+    const espera = new Date(trabajo('order.ml', 'ORD-1').run_after).getTime() - Date.now();
+    expect(espera).toBeGreaterThan(9 * 60 * 1000);
+    expect(espera).toBeLessThanOrEqual(10 * 60 * 1000);
+  });
+
+  it('una espera de más de 2 h abre un incidente visible en vez de matar el job', async () => {
+    woo.postError = new Error('timeout');
+    woo.busquedaError = new Error('woo caído');
+    encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+    await procesarTrabajosRecurso(db, CFG);
+    db.prepare("UPDATE trabajos_recurso SET diferido_desde = ? WHERE tipo = 'order.ml'").run(new Date(Date.now() - 3 * 3600 * 1000).toISOString());
+    vencer();
+    await procesarTrabajosRecurso(db, CFG);
+    expect(trabajo('order.ml', 'ORD-1').estado).toBe('pendiente');
+    expect(incidenteCritico('trabajo_diferido_largo_order.ml_ORD-1')).toMatchObject({ severidad: 'critico' });
+  });
+});
+
 describe('guarda de multiorigen en escribirStockMl', () => {
   beforeEach(() => { process.env.ML_MULTIORIGEN_VERIFICAR = '1'; });
   afterEach(() => { process.env.ML_MULTIORIGEN_VERIFICAR = '0'; });
@@ -237,6 +310,17 @@ describe('guarda de multiorigen en escribirStockMl', () => {
     expect((await escribir()).omitido).toBe(false);
     await escribir();
     expect(ml.puts).toHaveLength(2);
+    expect(ml.gets.filter((p) => p.startsWith('/users/'))).toHaveLength(1);
+  });
+
+  it('single-flight: pushes simultáneos comparten UN solo GET /users/{id}', async () => {
+    const base = mlFetch.getMockImplementation();
+    mlFetch.mockImplementation(async (dbx, cfg, method, p, body) => {
+      if (p.startsWith('/users/')) await new Promise((r) => setTimeout(r, 30));
+      return base(dbx, cfg, method, p, body);
+    });
+    const rs = await Promise.all([escribir(), escribir(), escribir()]);
+    expect(rs.every((r) => r.omitido === false)).toBe(true);
     expect(ml.gets.filter((p) => p.startsWith('/users/'))).toHaveLength(1);
   });
 
