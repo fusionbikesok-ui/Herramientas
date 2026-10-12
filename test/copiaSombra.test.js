@@ -5,6 +5,7 @@ import request from 'supertest';
 import { crearEmisorSombra, destinoSenal, RUTA_SENALES } from '../lib/emisorSombra.js';
 import { firmarInterno } from '../lib/internoHmac.js';
 import { crearSelectorCanario } from '../lib/sombra.js';
+import { activarGuardiaWoo, desactivarGuardiaWoo, postWoo } from './helpers/wooFirmado.js';
 
 vi.mock('../routes/preparacion.js', async () => {
   const actual = await vi.importActual('../routes/preparacion.js');
@@ -24,12 +25,14 @@ afterEach(async () => {
   try { app?._db?.close(); } catch {}
   app = undefined;
   delete process.env.ML_USER_ID;
+  desactivarGuardiaWoo();
   for (const f of [DB, `${DB}-wal`, `${DB}-shm`]) fs.rmSync(f, { force: true });
 });
 
 function nuevaApp(sombraEnviar = null) {
   process.env.MOBILE_JWT_SECRET = 'test-mobile-jwt-secret-123456789012345';
   process.env.ML_USER_ID = '123';
+  activarGuardiaWoo();
   app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k', ...(sombraEnviar ? { sombraEnviar } : {}) });
   return app;
 }
@@ -51,8 +54,8 @@ describe('E1-RCP-01 copia de sombra enganchada a los webhooks', () => {
     const ml = { topic: 'orders_v2', resource: '/orders/555', user_id: 123, _id: 'notif-1' };
     expect((await request(a).post('/api/ml/notificacion').send(ml)).status).toBe(200);
     expect((await request(a).post('/api/ml/notificacion').send(ml)).status).toBe(200);
-    expect((await request(a).post('/api/woo/webhook/order').set('x-wc-webhook-delivery-id', 'd1').send({ id: 77, status: 'processing' })).status).toBe(200);
-    expect((await request(a).post('/api/woo/webhook/product').set({ 'x-wc-webhook-topic': 'product.updated', 'x-wc-webhook-delivery-id': 'd2' }).send({ id: 88 })).status).toBe(200);
+    expect((await postWoo(request, a, '/api/woo/webhook/order', { id: 77, status: 'processing' }, { deliveryId: 'd1' })).status).toBe(200);
+    expect((await postWoo(request, a, '/api/woo/webhook/product', { id: 88 }, { deliveryId: 'd2' })).status).toBe(200);
     await esperar(50);
     expect(enviados).toHaveLength(3);
     const estados = a._db.prepare('SELECT shadow_status, ack_at FROM integration_events').all();
@@ -103,7 +106,7 @@ describe('canario de la copia (C10)', () => {
       const enviar = vi.fn(async () => undefined);
       const a = nuevaApp(enviar);
       expect((await request(a).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/77', user_id: 123 })).status).toBe(200);
-      expect((await request(a).post('/api/woo/webhook/order').set('x-wc-webhook-delivery-id', 'd9').send({ id: 99, status: 'processing' })).status).toBe(200);
+      expect((await postWoo(request, a, '/api/woo/webhook/order', { id: 99, status: 'processing' }, { deliveryId: 'd9' })).status).toBe(200);
       await esperar(50);
       expect(enviar).toHaveBeenCalledTimes(1);
       const filas = a._db.prepare('SELECT channel, shadow_status, shadow_reason FROM integration_events ORDER BY channel').all();

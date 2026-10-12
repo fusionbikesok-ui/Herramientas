@@ -1,18 +1,20 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import request from 'supertest';
+import { activarGuardiaWoo, desactivarGuardiaWoo, postWoo } from './helpers/wooFirmado.js';
 
 const puntualWeb = vi.fn(() => Promise.resolve());
 const puntualMl = vi.fn(() => Promise.resolve());
 const syncMl = vi.fn(() => Promise.resolve());
 const puntualOrdenMl = vi.fn(() => Promise.resolve());
+const kickTrabajos = vi.fn(() => Promise.resolve());
 vi.mock('../routes/preparacion.js', async () => {
   const actual = await vi.importActual('../routes/preparacion.js');
   return { ...actual, syncPedidoWebPuntual: puntualWeb, syncPedidoMlPuntual: puntualMl };
 });
 vi.mock('../routes/sync.js', async () => {
   const actual = await vi.importActual('../routes/sync.js');
-  return { ...actual, syncMlToWc: syncMl, syncOrdenMlPuntual: puntualOrdenMl };
+  return { ...actual, syncMlToWc: syncMl, syncOrdenMlPuntual: puntualOrdenMl, procesarTrabajosRecurso: kickTrabajos };
 });
 
 const { buildApp } = await import('../server.js');
@@ -23,6 +25,7 @@ afterEach(() => {
   vi.clearAllMocks();
   delete process.env.ML_USER_ID;
   delete process.env.MOBILE_JWT_SECRET;
+  desactivarGuardiaWoo();
   try { app?._db?.close(); } catch {}
   app = undefined;
   try { fs.unlinkSync(DB); } catch {}
@@ -30,6 +33,7 @@ afterEach(() => {
 
 function nuevaApp() {
   process.env.MOBILE_JWT_SECRET = 'test-mobile-jwt-secret-123456789012345';
+  activarGuardiaWoo();
   app = buildApp({ dbPath: DB, sessionSecret: 's', wooCfg: {}, mlCfg: { userId: '123' }, geminiKey: 'k' });
   return app;
 }
@@ -37,7 +41,7 @@ function nuevaApp() {
 describe('handlers reales de webhooks en server.js', () => {
   it('Woo responde inmediato y deja el trabajo de fondo aunque rechace', async () => {
     puntualWeb.mockRejectedValueOnce(new Error('Woo caído'));
-    const res = await request(nuevaApp()).post('/api/woo/webhook/order').send({ id: 901, status: 'processing' });
+    const res = await postWoo(request, nuevaApp(), '/api/woo/webhook/order', { id: 901, status: 'processing' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true });
     expect(puntualWeb).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ woo: {} }), 901);
@@ -45,10 +49,8 @@ describe('handlers reales de webhooks en server.js', () => {
 
   it('E1-RCP-01 el pedido Woo deja recibo antes del ACK, sin job y deduplicado por entrega', async () => {
     const app = nuevaApp();
-    const envio = (id) => request(app).post('/api/woo/webhook/order')
-      .set('x-wc-webhook-topic', 'order.updated')
-      .set('x-wc-webhook-delivery-id', `entrega-${id}`)
-      .send({ id, status: 'processing', date_modified_gmt: '2026-09-16T10:00:00' });
+    const envio = (id) => postWoo(request, app, '/api/woo/webhook/order',
+      { id, status: 'processing', date_modified_gmt: '2026-09-16T10:00:00' }, { topic: 'order.updated', deliveryId: `entrega-${id}` });
 
     expect((await envio(902)).status).toBe(200);
     const fila = app._db.prepare("SELECT status,shadow_status,resource_id,channel FROM integration_events").get();
@@ -64,105 +66,99 @@ describe('handlers reales de webhooks en server.js', () => {
 
   it('E1-RCP-01 un pedido Woo sin id válido es 400 y no se reintenta', async () => {
     const app = nuevaApp();
-    const res = await request(app).post('/api/woo/webhook/order').send({ status: 'processing' });
+    const res = await postWoo(request, app, '/api/woo/webhook/order', { status: 'processing' });
     expect(res.status).toBe(400);
     expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
     // Un aviso que no se puede identificar no dispara trabajo de fondo.
     expect(puntualWeb).not.toHaveBeenCalled();
   });
 
-  it.each(['orders', 'orders_v2'])('ML %s dispara el camino puntual', async topic => {
+  it('E-1a Woo sin WOO_WEBHOOK_SECRET es 503 (fail-closed), sin recibo ni trabajo de fondo', async () => {
+    const app = nuevaApp();
+    delete process.env.WOO_WEBHOOK_SECRET;
+    const res = await postWoo(request, app, '/api/woo/webhook/order', { id: 903, status: 'processing' });
+    expect(res.status).toBe(503);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    expect(puntualWeb).not.toHaveBeenCalled();
+  });
+
+  it('E-1a Woo sin firma es 401 y con firma de otro secreto también', async () => {
+    const app = nuevaApp();
+    expect((await postWoo(request, app, '/api/woo/webhook/order', { id: 904 }, { firmar: false })).status).toBe(401);
+    expect((await postWoo(request, app, '/api/woo/webhook/order', { id: 904 }, { secreto: 'otro' })).status).toBe(401);
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+  });
+
+  it('E-1a el ping de Woo (form-urlencoded firmado) se contesta 200 sin recibo ni trabajo', async () => {
+    const app = nuevaApp();
+    const cuerpo = 'webhook_id=7';
+    const firma = (await import('crypto')).createHmac('sha256', 'secreto-test-woo').update(cuerpo).digest('base64');
+    const res = await request(app).post('/api/woo/webhook/order')
+      .set('content-type', 'application/x-www-form-urlencoded').set('x-wc-webhook-signature', firma).send(cuerpo);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, ping: true });
+    expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
+    expect(puntualWeb).not.toHaveBeenCalled();
+  });
+
+  it('E-1a un webhook de producto con topic de pedido es 400', async () => {
+    const app = nuevaApp();
+    expect((await postWoo(request, app, '/api/woo/webhook/product', { id: 5 }, { topic: 'order.updated' })).status).toBe(400);
+  });
+
+  const trabajos = (app) => app._db.prepare("SELECT recurso, estado, generacion FROM trabajos_recurso WHERE tipo = 'order.ml' ORDER BY recurso").all();
+
+  it.each(['orders', 'orders_v2'])('ML %s deja un trabajo order.ml durable antes del ACK y acelera el worker', async topic => {
     process.env.ML_USER_ID = '123';
-    const res = await request(nuevaApp()).post('/api/ml/notificacion')
-      .send({ topic, resource: '/orders/ORD-1', user_id: 123 });
+    const app = nuevaApp();
+    const res = await request(app).post('/api/ml/notificacion').send({ topic, resource: '/orders/ORD-1', user_id: 123 });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true });
-    expect(puntualMl).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ userId: '123' }), 'ORD-1');
-    // El webhook usa el procesamiento puntual; no dispara el barrido completo de ML.
+    expect(trabajos(app)).toEqual([{ recurso: 'ORD-1', estado: 'pendiente', generacion: 1 }]);
+    expect(kickTrabajos).toHaveBeenCalledTimes(1);
+    // Ya no se dispara la sincronización directa (se perdía si el proceso moría tras el ACK) ni el barrido completo.
+    expect(puntualMl).not.toHaveBeenCalled();
+    expect(puntualOrdenMl).not.toHaveBeenCalled();
     expect(syncMl).not.toHaveBeenCalled();
   });
 
   it('ignora user_id ajeno sin disparar trabajo', async () => {
     process.env.ML_USER_ID = '123';
-    const res = await request(nuevaApp()).post('/api/ml/notificacion')
+    const app = nuevaApp();
+    const res = await request(app).post('/api/ml/notificacion')
       .send({ topic: 'orders', resource: '/orders/ORD-2', user_id: 999 });
     expect(res.status).toBe(200);
-    expect(puntualMl).not.toHaveBeenCalled();
+    expect(trabajos(app)).toEqual([]);
+    expect(kickTrabajos).not.toHaveBeenCalled();
     expect(syncMl).not.toHaveBeenCalled();
   });
 
   it('responde y descarta recurso inválido', async () => {
     process.env.ML_USER_ID = '123';
-    const res = await request(nuevaApp()).post('/api/ml/notificacion')
+    const app = nuevaApp();
+    const res = await request(app).post('/api/ml/notificacion')
       .send({ topic: 'orders_v2', resource: '/shipments/9', user_id: 123 });
     expect(res.status).toBe(200);
-    expect(puntualMl).not.toHaveBeenCalled();
+    expect(trabajos(app)).toEqual([]);
   });
 
-  describe('deduplicación corta de notificaciones ML repetidas del mismo pedido', () => {
-    afterEach(() => { vi.useRealTimers(); });
-
-    it('dos webhooks orders_v2 seguidos del mismo pedido disparan una sola sincronización, y el ACK sigue en 200 en los dos', async () => {
+  describe('coalescencia durable de avisos ML del mismo pedido', () => {
+    it('avisos repetidos del mismo pedido (orders y orders_v2) comparten UN trabajo y suben su generación; el ACK es 200 siempre', async () => {
       process.env.ML_USER_ID = '123';
       const app = nuevaApp();
-      const notif = () => request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-DUP', user_id: 123 });
-      const r1 = await notif();
-      const r2 = await notif();
-      expect(r1.status).toBe(200);
-      expect(r2.status).toBe(200);
-      expect(puntualMl).toHaveBeenCalledTimes(1);
+      const notif = (topic) => request(app).post('/api/ml/notificacion').send({ topic, resource: '/orders/ORD-DUP', user_id: 123 });
+      const rs = [await notif('orders_v2'), await notif('orders_v2'), await notif('orders')];
+      expect(rs.map((r) => r.status)).toEqual([200, 200, 200]);
+      // El segundo orders_v2 es el mismo recibo (duplicado) y no suma; el orders es otro recibo del mismo recurso.
+      expect(trabajos(app)).toEqual([{ recurso: 'ORD-DUP', estado: 'pendiente', generacion: 2 }]);
     });
 
-    it('pasada la ventana de 15 s, el mismo pedido vuelve a disparar la sincronización', async () => {
-      process.env.ML_USER_ID = '123';
-      vi.useFakeTimers();
-      const app = nuevaApp();
-      const notif = () => request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-VENTANA', user_id: 123 });
-      await notif();
-      vi.advanceTimersByTime(15_001);
-      await notif();
-      expect(puntualMl).toHaveBeenCalledTimes(2);
-    });
-
-    it('pedidos ML distintos no se pisan entre sí', async () => {
+    it('pedidos ML distintos tienen trabajos distintos', async () => {
       process.env.ML_USER_ID = '123';
       const app = nuevaApp();
       await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-A', user_id: 123 });
       await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-B', user_id: 123 });
-      expect(puntualMl).toHaveBeenCalledTimes(2);
-      expect(puntualMl).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ORD-A');
-      expect(puntualMl).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ORD-B');
-    });
-
-    it('syncOrdenMlPuntual y syncPedidoMlPuntual tienen ventanas de dedup independientes: un orders_v2 no bloquea el orders posterior del mismo pedido', async () => {
-      process.env.ML_USER_ID = '123';
-      const app = nuevaApp();
-      // orders_v2 sólo dispara syncPedidoMlPuntual; no debería consumir la ventana de syncOrdenMlPuntual.
-      await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-COMPARTIDO', user_id: 123 });
-      await request(app).post('/api/ml/notificacion').send({ topic: 'orders', resource: '/orders/ORD-COMPARTIDO', user_id: 123 });
-      // Las dos llamadas a syncPedidoMlPuntual caen en la misma ventana (mismo pedido): una sola.
-      expect(puntualMl).toHaveBeenCalledTimes(1);
-      // syncOrdenMlPuntual es de 'orders' únicamente y nunca se disparó antes para este pedido: sí corre.
-      expect(puntualOrdenMl).toHaveBeenCalledTimes(1);
-      expect(puntualOrdenMl).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ORD-COMPARTIDO');
-    });
-
-    it('el Map de dedup no acumula entradas vencidas para siempre', async () => {
-      process.env.ML_USER_ID = '123';
-      vi.useFakeTimers();
-      const app = nuevaApp();
-      for (let i = 0; i < 5; i++) {
-        await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: `/orders/ORD-VIEJO-${i}`, user_id: 123 });
-      }
-      vi.advanceTimersByTime(15_001);
-      // Un pedido nuevo, después de vencida la ventana de los anteriores: su sola llegada purga lo vencido
-      // (purga perezosa, sin tabla ni temporizador aparte) y no se acumula sin límite.
-      await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-NUEVO', user_id: 123 });
-      expect(puntualMl).toHaveBeenCalledTimes(6);
-      // No hay forma directa de leer el tamaño del Map desde afuera del módulo: se verifica por
-      // comportamiento — un pedido repetido de los "viejos", ya vencidos, vuelve a disparar.
-      await request(app).post('/api/ml/notificacion').send({ topic: 'orders_v2', resource: '/orders/ORD-VIEJO-0', user_id: 123 });
-      expect(puntualMl).toHaveBeenCalledTimes(7);
+      expect(trabajos(app).map((t) => t.recurso)).toEqual(['ORD-A', 'ORD-B']);
     });
   });
 });

@@ -200,6 +200,7 @@ describe('server', () => {
   it('persiste antes del ACK un webhook firmado de producto Woo y deduplica su entrega', async () => {
     const anterior = process.env.WOO_WEBHOOK_SECRET;
     process.env.WOO_WEBHOOK_SECRET = 'secret-producto';
+    process.env.WOO_WEBHOOK_IDS = '7';
     try {
       const app = buildApp({ dbPath: TEST_DB, sessionSecret: 's', mobileJwtSecret: MOBILE_SECRET, wooCfg: {}, geminiKey: 'k' });
       currentApp = app;
@@ -209,6 +210,7 @@ describe('server', () => {
         .set('content-type', 'application/json')
         .set('x-wc-webhook-signature', firma)
         .set('x-wc-webhook-topic', 'product.updated')
+        .set('x-wc-webhook-id', '7')
         .set('x-wc-webhook-delivery-id', 'delivery-1732')
         .send(payload);
       const primero = await enviar();
@@ -221,6 +223,7 @@ describe('server', () => {
       expect(app._db.prepare("SELECT job_type FROM integration_jobs WHERE event_id=?").get(primero.body.event_id).job_type)
         .toBe('catalog.woo_product_sync');
     } finally {
+      delete process.env.WOO_WEBHOOK_IDS;
       if (anterior === undefined) delete process.env.WOO_WEBHOOK_SECRET;
       else process.env.WOO_WEBHOOK_SECRET = anterior;
     }
