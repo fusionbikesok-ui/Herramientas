@@ -594,7 +594,7 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(inc()).toBeUndefined(); // y no sale el aviso de "descuento completado"
   });
 
-  it('ALTO lápida: la cancelación llega SIN fila mientras un descuento ya leyó paid → 0 PUT, lápida completo y sin aviso', async () => {
+  it('una lápida grabada por fuera (entre el GET y el PUT) frena el PUT del descuento → 0 PUT, lápida completo y sin aviso', async () => {
     const { cerrarYAvisarCancelacion } = await import('../lib/descuentoOrdenVieja.js');
     const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
     const base = wooFetch.getMockImplementation();
@@ -635,6 +635,28 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
       expect(await procesarOrdenMl(db, CFG, 'ORD-1')).toMatchObject({ estado: 'reencolar', diferido: true, motivo: 'descuento_en_curso' });
     } finally { liberarCandados(db, c.token); }
     expect(await procesarOrdenMl(db, CFG, 'ORD-1')).toMatchObject({ estado: 'hecho' }); // sin candados ocupados avisa
+  });
+
+  it('MEDIO: lápida y la orden vuelve paid → incidente crítico único, sin pedido ni descuento (polling y job)', async () => {
+    ml.orden = vieja({}, 'cancelled');
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    ml.orden = conCantidad(1); // vuelve paid
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    await syncMlToWc(db, CFG);
+    await syncMlToWc(db, CFG);
+    expect(woo.posts).toBe(0);
+    expect(woo.productPuts).toHaveLength(0);
+    const i = db.prepare("SELECT severidad FROM incidentes_operativos WHERE tipo_error = 'orden_ml_cancelada_luego_pagada_ORD-1'").all();
+    expect(i).toEqual([{ severidad: 'critico' }]);
+    const mails = db.prepare("SELECT COUNT(*) n FROM incidentes_email_outbox o JOIN incidentes_operativos i ON i.id = o.incidente_id WHERE i.tipo_error = 'orden_ml_cancelada_luego_pagada_ORD-1'").get().n;
+    expect(mails).toBe(1);
+  });
+
+  it('BAJO: cancelación de una orden sin ningún SKU resoluble (lista vacía de candados) graba la lápida sin colgarse', async () => {
+    const { avisarCancelacionDescontada } = await import('../lib/descuentoOrdenVieja.js');
+    const huerfana = { id: 'ORD-1', status: 'cancelled', order_items: [{ item: { id: 'MLA-NADA', variation_id: '' }, quantity: 1 }] };
+    expect(await avisarCancelacionDescontada(db, huerfana)).toBe(false);
+    expect(fila()).toMatchObject({ estado: 'completo', origen: 'cancelada' });
   });
 
   it('MEDIO: una cancelación sobre una fila completo no la reescribe ni reavisa', async () => {

@@ -12,7 +12,7 @@ import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { requireAdmin } from '../lib/auth.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
-import { descontarOrdenVieja, destinoActual, fechaOrdenMs, avisarCancelacionDescontada } from '../lib/descuentoOrdenVieja.js';
+import { descontarOrdenVieja, destinoActual, fechaOrdenMs, avisarCancelacionDescontada, avisarCanceladaLuegoPagada } from '../lib/descuentoOrdenVieja.js';
 import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
@@ -655,9 +655,10 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   if (pedidoMlRetenido(db, orderId)) return;
   // E-1a: una orden vieja con descuento de stock registrado (cualquier estado, también `parcial`) NO puede terminar con
   // pedido Woo: Woo descontaría otra vez. Vale para el polling legacy, el sync puntual y el manual (todos pasan por acá).
-  const filaDescuento = db.prepare('SELECT estado FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(orderId);
+  const filaDescuento = db.prepare('SELECT estado, origen FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(orderId);
   if (filaDescuento) {
     // Descuento a medias (p. ej. el proceso cayó tras persistir la línea y antes de encolar): este camino no reintenta, lo hace el job.
+    if (orden.status === 'paid') avisarCanceladaLuegoPagada(db, orden, filaDescuento); // lápida + 'paid': revisión manual
     if (filaDescuento.estado !== 'completo') encolarTrabajo(db, { tipo: 'order.ml', recurso: orderId });
     // El polling pasa por acá en cada ciclo: se registra una sola vez por orden.
     if (!db.prepare("SELECT 1 FROM sync_log WHERE clave = ? AND estado = 'omitida_descuento_sin_pedido'").get(orderId)) {
