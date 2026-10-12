@@ -266,8 +266,10 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     ml.orden = conCantidad(1);
     encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
     await procesarTrabajosRecurso(db, CFG);
-    expect(fila()).toBeUndefined();
-    expect(inc()).toBeUndefined();
+    // un 5xx pudo haberse aplicado: la línea queda incierta (nunca vuelve a pendiente) y el registro NO es completo
+    expect(fila().estado).toBe('parcial');
+    expect(JSON.parse(fila().lineas_json)[0].estado).toBe('incierta');
+    expect(inc()).toBeUndefined(); // el aviso de la venta solo sale al completar
     expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'pendiente' });
     expect(trabajo('order.ml', 'ORD-1').intentos).toBeGreaterThan(0);
     woo.putError = null;
@@ -499,6 +501,68 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(woo.stock[100]).toBe(4); // no volvió a restar
     expect(JSON.parse(fila().lineas_json)[0].estado).toBe('ambigua');
+  });
+
+  it('ALTO 1: el POST falla definitivo DENTRO de ventana → se libera y el reintento crea el pedido', async () => {
+    ml.orden = ordenMl('ORD-1');
+    woo.postError = Object.assign(new Error('Woo 400'), { status: 400 });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(reserva('ORD-1')).toBeUndefined(); // reserva liberada
+    woo.postError = null;
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(2);
+    expect(reserva('ORD-1')?.wc_order_id).toBe(7001);
+  });
+
+  it('ALTO 1: el POST falla, se libera y la orden llega FUERA de ventana → descuenta (no se pierde)', async () => {
+    ml.orden = ordenMl('ORD-1');
+    woo.postError = Object.assign(new Error('Woo 400'), { status: 400 });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(reserva('ORD-1')).toBeUndefined();
+    woo.postError = null;
+    ml.orden = vieja();
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1);
+    expect(woo.stock[100]).toBe(4);
+    expect(fila().estado).toBe('completo');
+  });
+
+  it('ALTO 2: cancelación de una orden ya descontada → incidente crítico único, sin reponer stock', async () => {
+    ml.orden = conCantidad(2);
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.stock[100]).toBe(3);
+    ml.orden = { ...conCantidad(2), status: 'cancelled' };
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    await procesarOrdenMl(db, CFG, 'ORD-1'); // otro aviso: no se repite
+    expect(woo.stock[100]).toBe(3); // NO se repone solo
+    const c = db.prepare("SELECT severidad, mensaje_humano FROM incidentes_operativos WHERE tipo_error = 'orden_ml_descontada_cancelada_ORD-1'").all();
+    expect(c).toHaveLength(1);
+    expect(c[0].severidad).toBe('critico');
+    expect(c[0].mensaje_humano).toMatch(/CANCELADA.*reponé a mano.*BIKE-001 x2 \(stock leído 5, escrito 3\)/);
+    const mails = db.prepare("SELECT COUNT(*) n FROM incidentes_email_outbox o JOIN incidentes_operativos i ON i.id = o.incidente_id WHERE i.tipo_error = 'orden_ml_descontada_cancelada_ORD-1'").get().n;
+    expect(mails).toBe(1);
+  });
+
+  it('B2: un 4xx en el PUT es definitivo (vuelve a pendiente y no deja fila); un 408 queda incierta', async () => {
+    ml.orden = conCantidad(1);
+    const base = wooFetch.getMockImplementation();
+    let status = 400;
+    wooFetch.mockImplementation(async (c, p, m, b) => {
+      if (m === 'put' && p === '/products/100') throw Object.assign(new Error(`Woo ${status}`), { status });
+      return base(c, p, m, b);
+    });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(fila()).toBeUndefined();
+    status = 408;
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(JSON.parse(fila().lineas_json)[0].estado).toBe('incierta');
+  });
+
+  it('B1: el polling que deja un descuento a medias encola un job order.ml para terminarlo', async () => {
+    ml.orden = conCantidad(1);
+    woo.putError = Object.assign(new Error('Woo 503'), { status: 503 });
+    await syncMlToWc(db, CFG);
+    expect(trabajo('order.ml', 'ORD-1')).toMatchObject({ estado: 'pendiente' });
   });
 
   it('fila parcial que no avanza: incidente crítico con lo descontado y lo pendiente, y encola la bolsa de lo ya descontado', async () => {

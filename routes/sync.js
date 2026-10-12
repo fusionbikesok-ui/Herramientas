@@ -12,7 +12,7 @@ import { compararProductos } from '../lib/comparacionProductos.js';
 import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../lib/mlClient.js';
 import { requireAdmin } from '../lib/auth.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
-import { descontarOrdenVieja, reclamarDestino, destinoActual, fechaOrdenMs } from '../lib/descuentoOrdenVieja.js';
+import { descontarOrdenVieja, destinoActual, fechaOrdenMs, avisarCancelacionDescontada } from '../lib/descuentoOrdenVieja.js';
 import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
@@ -663,7 +663,7 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
     return;
   }
   // La ventana rige para TODOS los orígenes (job, polling legacy, puntual, manual): una orden vieja sin tratar no crea pedido.
-  if ((await tratarOrdenFueraDeVentana(db, { woo: wooCfg, ml: mlCfg }, orden)).tratada) return;
+  if ((await tratarOrdenFueraDeVentana(db, { woo: wooCfg, ml: mlCfg }, orden, { reencolarSiPendiente: true })).tratada) return;
   let algunSinMapeo = false;
 
   // Reservas abandonadas (proceso murió entre reservar y confirmar/liberar, ej: kill -9)
@@ -793,15 +793,20 @@ async function _procesarOrden(db, wooCfg, mlCfg, orden) {
   // arriba antes de que ninguno insertara, y ambos terminaban creando un pedido duplicado en
   // WooCommerce. Reservar la fila ahora, antes de cualquier llamada a Woo, hace que el
   // segundo proceso pierda la carrera acá (INSERT falla por PK) en vez de después.
-  // Destino excluyente (pedido vs descuento): se reclama en una transacción ANTES de reservar y de cualquier efecto en Woo.
-  if (reclamarDestino(db, orderId, 'pedido') !== 'pedido') return;
+  // Destino excluyente (pedido vs descuento): la reserva se inserta en una transacción IMMEDIATE que mira el reclamo 'descuento'.
+  // El lado pedido ES la reserva, así que borrarla (fallo definitivo, abandono) libera el destino sin estado extra.
   const reservaCreadaEn = now();
+  const REPARTO_DESCUENTO = Symbol('descuento');
   try {
-    db.prepare(`
-      INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en)
-      VALUES (?, 0, NULL, ?)
-    `).run(orderId, reservaCreadaEn);
+    db.transaction(() => {
+      if (db.prepare("SELECT 1 FROM ordenes_ml_destino WHERE ml_order_id = ? AND destino = 'descuento'").get(orderId)) throw REPARTO_DESCUENTO;
+      db.prepare(`
+        INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, comprador_json, creado_en)
+        VALUES (?, 0, NULL, ?)
+      `).run(orderId, reservaCreadaEn);
+    }).immediate();
   } catch (e) {
+    if (e === REPARTO_DESCUENTO) return; // la orden se resuelve por descuento, nunca por pedido
     if (!/UNIQUE|PRIMARY ?KEY/i.test(e.message ?? '')) {
       // No es un conflicto de reserva (otro proceso llegó primero) — es un error real de
       // DB (disco lleno, locked, etc.). No lo tragamos en silencio.
@@ -1648,7 +1653,7 @@ const ordenYaTratada = (db, id) => destinoActual(db, id) === 'pedido';
  * Corte por fecha común a todos los orígenes. Orden pagada, no tratada y fuera de ventana → descuento sin pedido + aviso;
  * sin fecha legible → ni pedido ni descuento, solo incidente. `{tratada:true}` = el llamador NO debe crear pedido.
  */
-async function tratarOrdenFueraDeVentana(db, cfg, orden) {
+async function tratarOrdenFueraDeVentana(db, cfg, orden, { reencolarSiPendiente = false } = {}) {
   if (orden?.status !== 'paid' || ordenYaTratada(db, orden.id)) return { tratada: false };
   const v = estadoVentana(orden);
   if (v === 'dentro') return { tratada: false };
@@ -1660,7 +1665,10 @@ async function tratarOrdenFueraDeVentana(db, cfg, orden) {
     });
     return { tratada: true, d: { estado: 'sin_fecha' } };
   }
-  return { tratada: true, d: await descontarOrdenViejaSinPedido(db, cfg, orden, { origen: 'job' }) };
+  const d = await descontarOrdenViejaSinPedido(db, cfg, orden, { origen: 'job' });
+  // Polling/puntual no reintentan: si quedó a medias, un job order.ml (con su backoff) lo termina.
+  if (reencolarSiPendiente && d.estado === 'reintentar') encolarTrabajo(db, { tipo: 'order.ml', recurso: String(orden.id) });
+  return { tratada: true, d };
 }
 
 /**
@@ -1697,6 +1705,7 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
     return [...new Set(p.line_items.map((l) => l.sku).filter(Boolean))];
   };
   if (orden.status === 'cancelled') {
+    avisarCancelacionDescontada(db, orden); // si ya se había descontado sin pedido: aviso para reponer a mano (no se repone solo)
     const c = await cancelarPedidoWooDeOrden(db, cfg.woo, mlOrderId);
     if (c.estado === 'reserva_en_curso') return { estado: 'reencolar', diferido: true, motivo: 'reserva_en_curso' };
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // saca la orden de la cola de Preparación

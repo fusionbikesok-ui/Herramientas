@@ -985,6 +985,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('trabajos_recurso_127')").run();
     })();
   }
+  const descuentoVieja128 = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='descuento_orden_vieja_128'").get();
+  if (!descuentoVieja128) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '128_descuento_orden_vieja.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('descuento_orden_vieja_128')").run();
+    })();
+  }
   const devolucionesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_devoluciones_102'").get();
   if (!devolucionesMigration) {
     db.transaction(() => {
