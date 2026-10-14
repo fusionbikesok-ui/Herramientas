@@ -204,3 +204,44 @@ describe('order.woo: papelera y 404', () => {
     expect(JSON.parse(eventos(prep().id, 'anulado_en_woo')[0].detalle_json).estado_previo).toBe('en_preparacion');
   });
 });
+
+describe('order.woo: orden anterior al deploy (woo_orden_skus vacía)', () => {
+  const NO_EXISTE = () => Object.assign(new Error('WooCommerce API error 404'), { status: 404, cuerpo: '{"code":"woocommerce_rest_shop_order_invalid_id","message":"ID no válido."}' });
+  const cacheConItems = (id, skus) => db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
+    VALUES (?, 'web', ?, ?, 'Ana', '2026-10-14', 'pendiente', ?, ?)`).run(clave(id), id, String(id), JSON.stringify(skus.map((sku) => ({ sku }))), new Date().toISOString());
+
+  it('sembrar desde pedidos_cache y preparaciones es idempotente y no pisa una fila de un trabajo verificado', async () => {
+    const { sembrarWooOrdenSkus } = await import('../lib/wooOrdenSkus.js');
+    cacheConItems(500, ['A-1', 'B-2']);
+    cacheConItems(501, ['C-3']);
+    crearPreparacion(db, { canal: 'web', wcOrderId: 502, numeroPedido: '502', comprador: 'X', items: [{ sku: 'D-4', nombre: 'D', cantidad_esperada: 1 }] });
+    db.prepare("INSERT INTO woo_orden_skus (order_id, skus_json, actualizado_en) VALUES ('501', '[\"VERIFICADO\"]', 'x')").run();
+    expect(sembrarWooOrdenSkus(db)).toBe(2);
+    expect(skusPersistidosOrdenWoo(db, 500).sort()).toEqual(['A-1', 'B-2']);
+    expect(skusPersistidosOrdenWoo(db, 501)).toEqual(['VERIFICADO']);
+    expect(skusPersistidosOrdenWoo(db, 502)).toEqual(['D-4']);
+    expect(sembrarWooOrdenSkus(db)).toBe(0);
+  });
+
+  it('primer aviso deleted (404) de una orden previa sin sembrar: usa la cola de Preparación y encola sus bolsas', async () => {
+    cacheConItems(500, ['A-1', 'B-2']);
+    error = NO_EXISTE();
+    encolarOrdenWoo(db, 500); await corrida();
+    expect(bolsas()).toEqual(['sku:A-1', 'sku:B-2']);
+    expect(db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = 'order_woo_sin_skus_500'").get()).toBeUndefined();
+  });
+
+  it('primer aviso en la papelera sin nada persistido: usa las líneas que Woo devuelve', async () => {
+    orden = ord(500, 'trash', ['A-1', 'B-2']);
+    encolarOrdenWoo(db, 500); await corrida();
+    expect(bolsas()).toEqual(['sku:A-1', 'sku:B-2']);
+  });
+
+  it('404 sin ninguna fuente de SKUs: incidente de advertencia order_woo_sin_skus_<id> y el trabajo cierra (no queda reintentando)', async () => {
+    error = NO_EXISTE();
+    encolarOrdenWoo(db, 500); await corrida();
+    expect(bolsas()).toEqual([]);
+    expect(db.prepare("SELECT severidad FROM incidentes_operativos WHERE tipo_error = 'order_woo_sin_skus_500'").get()).toMatchObject({ severidad: 'advertencia' });
+    expect(trabajo()).toMatchObject({ estado: 'hecho' });
+  });
+});

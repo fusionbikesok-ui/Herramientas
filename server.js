@@ -40,6 +40,7 @@ import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { catalogoVinculosRouter } from './routes/catalogoVinculos.js';
 import { preciosRouter } from './routes/precios.js';
 import { configurarAuditoriaPrecios, dispararAuditoriaPrecios } from './lib/auditoriaPrecios.js';
+import { sembrarWooOrdenSkus } from './lib/wooOrdenSkus.js';
 import { preparacionRouter, syncPedidosCache, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking, reconciliarPreparacionesAbiertas } from './routes/preparacion.js';
 import { gestionPedidosRouter } from './routes/gestionPedidos.js';
 import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
@@ -680,6 +681,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
     enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
   }));
+  sembrarWooOrdenSkus(db); // E-1b: idempotente; woo_orden_skus nace vacía y un primer aviso `deleted` no tendría SKUs que liberar
   app.use('/preparacion', express.static(path.join(__dirname, 'public/preparacion')));
   app.use('/api/consulta-precios', consultaPreciosRouter(db, wooCfg));
   app.use('/consulta-precios', express.static(path.join(__dirname, 'public/consulta-precios')));

@@ -4,7 +4,7 @@ import path from 'path';
 import express from 'express';
 import multer from 'multer';
 import { wooFetch } from './woo.js';
-import { abrirOActualizarIncidente } from '../lib/incidentes.js';
+import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
@@ -1171,7 +1171,19 @@ export function guardiaPreparacionAnulada(db) {
     try {
       const p = req.path;
       let m;
-      if ((m = /^\/(\d+)(?:\/|$)/.exec(p)) || (m = /^\/despacho\/(\d+)(?:\/|$)/.exec(p))) {
+      // Lotes de despacho: una sola preparación anulada entre los miembros frena escanear/tracking/cerrar/salida (que encola una
+      // acción a Woo). `anular` queda permitido: es la salida para un lote que ya no puede cerrarse.
+      if ((m = /^\/despacho\/lotes\/(\d+)\/(iniciar|escanear|tracking|cerrar|salida)$/.exec(p))) {
+        const anuladas = db.prepare(`SELECT DISTINCT p.wc_order_id, p.numero_pedido FROM despacho_lote_items li
+          JOIN despacho_controles d ON d.id = li.control_id
+          JOIN preparaciones p ON (p.pack_id = d.grupo_clave OR p.clave = d.grupo_clave)
+          WHERE li.lote_id = ? AND p.estado = ?`).all(Number(m[1]), ESTADO_ANULADO_EN_WOO);
+        if (anuladas.length) {
+          const wc = anuladas.map((a) => a.wc_order_id).filter((x) => x != null);
+          return res.status(409).json({ ok: false, code: 'PREPARACION_ANULADA_EN_WOO', wc_order_ids: wc,
+            error: `El lote tiene ${anuladas.length === 1 ? 'un pedido anulado' : 'pedidos anulados'} en Woo (${anuladas.map((a) => `#${a.numero_pedido || a.wc_order_id}`).join(', ')}). Anulá el lote o quitá ese pedido antes de seguir.` });
+        }
+      } else if ((m = /^\/(\d+)(?:\/|$)/.exec(p)) || (m = /^\/despacho\/(\d+)(?:\/|$)/.exec(p))) {
         prep = db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(Number(m[1]));
       } else if ((m = /^\/(?:etiquetas|seguimientos)\/(\d+)(?:\/|$)/.exec(p))) {
         prep = db.prepare('SELECT estado FROM preparaciones WHERE clave=?').get(`web:${m[1]}`);
@@ -3918,7 +3930,7 @@ export function anularPreparacionPorWoo(db, wcOrderId, { motivo = 'trash' } = {}
     // Una preparación ya terminada o con tracking puede haber salido físicamente: anularla es reversible, pero alguien tiene que verlo.
     if (ESTADOS_ANULADOS_CON_AVISO.includes(prep.estado) || String(prep.tracking || '').trim()) {
       const texto = `El pedido web #${prep.numero_pedido || wcOrderId} se borró o fue a la papelera en Woo (${motivo}) con la preparación en estado "${prep.estado}"`
-        + `${prep.tracking ? ` y tracking ${prep.tracking}` : ''}. Quedó marcada "Anulado en Woo": revisá si el paquete ya salió. Si se restaura en Woo con un estado de preparación, vuelve sola.`;
+        + `${prep.tracking ? ` y tracking ${prep.tracking}` : ''}. Quedó marcada "Anulado en Woo": revisá si el paquete ya salió. Si se restaura en Woo con un estado de preparación, vuelve sola si se restaura con un estado de preparación (lpaandreani/completed/enviadoandreani); si vuelve como cancelado u otro estado, sigue anulada.`;
       abrirOActualizarIncidente(db, {
         integracion: 'woocommerce', proceso: 'preparacion', tipoError: `preparacion_anulada_en_woo_${wcOrderId}`.slice(0, 120), severidad: 'advertencia',
         mensajeTecnico: texto, mensajeHumano: texto, contexto: { wc_order_id: String(wcOrderId), estado_previo: prep.estado, motivo, tracking: prep.tracking || null },
@@ -3962,6 +3974,15 @@ export function restaurarPreparacionPorWoo(db, wcOrderId, estadoWoo, { elegibles
     const cambio = db.prepare('UPDATE preparaciones SET estado = ? WHERE id = ? AND estado = ?').run(previo, prep.id, ESTADO_ANULADO_EN_WOO);
     if (!cambio.changes) return { restaurada: false };
     registrarEvento(db, { preparacionId: prep.id, tipo: 'restaurado_en_woo', usuario: null, detalle: { estado: previo, estado_woo: estado }, failClosed: true });
+    // El aviso de la anulación ya no corresponde: se resuelve (fail-open) dejando la nota en el historial.
+    const tipoError = `preparacion_anulada_en_woo_${wcOrderId}`.slice(0, 120);
+    const inc = db.prepare("SELECT id FROM incidentes_operativos WHERE tipo_error = ? AND estado = 'activo'").get(tipoError);
+    if (inc && confirmarCicloSano(db, { integracion: 'woocommerce', proceso: 'preparacion', tipoError }).resueltos) {
+      try {
+        db.prepare("UPDATE incidentes_operativos_historial SET detalle_json = ? WHERE incidente_id = ? AND evento = 'resuelto' AND detalle_json IS NULL")
+          .run(JSON.stringify({ nota: `El pedido volvió en Woo como "${estado}" y la preparación se restauró a "${previo}".` }), inc.id);
+      } catch { /* la nota es informativa */ }
+    }
     return { restaurada: true, estado: previo };
   })();
 }

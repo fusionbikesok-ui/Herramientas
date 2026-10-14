@@ -1538,7 +1538,8 @@ function renderDetalle(){
       +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
       +'<p class="sub" role="status">Este pedido se borró o fue a la papelera en Woo'+(p.estado_previo_anulado?' cuando la preparación estaba en «'+esc(p.estado_previo_anulado.replace(/_/g,' '))+'»':'')+'. No se puede trabajar ni modificar desde acá.'
       +(p.tracking?' Tenía el tracking <strong>'+esc(p.tracking)+'</strong>: revisá si el paquete ya salió.':'')
-      +' Si se restaura en Woo con un estado de preparación, vuelve a la cola sola.</p>';
+      +' Si se restaura en Woo con un estado de preparación (lpaandreani, completed o enviadoandreani), vuelve a la cola sola; si vuelve cancelado u otro estado, sigue anulada.</p>'
+      +'<ul class="sub" style="padding-left:18px;margin:0">'+(p.items||[]).map(function(it){return '<li>'+esc(it.sku||'Sin SKU')+' — '+esc(it.nombre||it.descripcion||'')+' × '+esc(String(it.cantidad_esperada||''))+'</li>';}).join('')+'</ul>';
     return;
   }
 

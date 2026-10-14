@@ -28,6 +28,7 @@ import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, ignoraVentas, esNoSincronizar, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar, CLASIFICACIONES_SIN_VINCULO, planR4, R4_MAX_POR_CORRIDA } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
+import { skusConocidosOrdenWoo } from '../lib/wooOrdenSkus.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
 import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
 import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
@@ -1810,7 +1811,20 @@ export async function procesarOrdenWoo(db, cfg, orderId) {
   if (!inexistente && (!orden || typeof orden !== 'object')) return { estado: 'reencolar', motivo: 'woo_orden_ilegible' };
   const fuera = inexistente || orden.status === 'trash';
   const actuales = fuera ? [] : skusDeLineasWoo(orden);
-  const union = [...new Set([...skusPersistidosOrdenWoo(db, orderId), ...actuales])];
+  // Fuentes para la UNIÓN: lo persistido por un trabajo verificado, las líneas que Woo devuelve aun en la papelera, y — si la
+  // orden es anterior al deploy y nunca cerró un trabajo — lo que Preparación ya conoce (cola y preparaciones).
+  const persistidos = skusPersistidosOrdenWoo(db, orderId);
+  const lineasEnPapelera = fuera && orden ? skusDeLineasWoo(orden) : [];
+  const conocidos = persistidos.length ? [] : skusConocidosOrdenWoo(db, orderId);
+  const union = [...new Set([...persistidos, ...actuales, ...lineasEnPapelera, ...conocidos])];
+  if (inexistente && !union.length) {
+    // 404 sin ninguna fuente: no se puede saber qué stock liberar. No se cierra en silencio.
+    const txt = `El pedido Woo ${orderId} ya no existe (404) y no hay ningún SKU registrado para él (ni en el trabajo, ni en la cola de Preparación, ni en preparaciones): no se pudo liberar su stock reservado. Revisá a mano si ese pedido tenía productos con stock gestionado.`;
+    abrirOActualizarIncidente(db, {
+      integracion: 'woocommerce', proceso: 'order_woo', tipoError: `order_woo_sin_skus_${orderId}`.slice(0, 120), severidad: 'advertencia',
+      mensajeTecnico: txt, mensajeHumano: txt, contexto: { wc_order_id: String(orderId) },
+    });
+  }
   // Preparación: una falla acá cuenta como fallo real del trabajo (reintenta con backoff); el cron de 10 min es el respaldo.
   await syncPedidoWebPuntual(db, {
     woo: cfg.woo,

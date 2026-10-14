@@ -97,11 +97,51 @@ describe('anular una preparación ya completada o con tracking: incidente de adv
     const r = await request(app).get(`/api/preparacion/${id2}`);
     expect(r.body.data.estado_previo_anulado).toBe('completada');
   });
+  it('al restaurarse con un estado elegible el incidente se resuelve con nota; el texto aclara cuándo vuelve sola', () => {
+    const id2 = crearPreparacion(db, { canal: 'web', wcOrderId: 503, numeroPedido: '503', comprador: 'D', items: [] });
+    db.prepare("UPDATE preparaciones SET estado = 'completada' WHERE id = ?").run(id2);
+    anularPreparacionPorWoo(db, 503);
+    expect(incidente(503).mensaje_humano).toMatch(/si vuelve como cancelado u otro estado, sigue anulada/);
+    restaurarPreparacionPorWoo(db, 503, 'cancelled'); // no elegible: sigue anulada e incidente activo
+    expect(incidente(503).estado).toBe('activo');
+    restaurarPreparacionPorWoo(db, 503, 'completed');
+    expect(incidente(503).estado).toBe('resuelto');
+    expect(db.prepare("SELECT detalle_json FROM incidentes_operativos_historial WHERE incidente_id = ? AND evento = 'resuelto'").get(incidente(503).id).detalle_json).toMatch(/restauró a/);
+  });
   it('con tracking aunque siga en preparación: también avisa; sin tracking y en preparación: no', () => {
     crearPreparacion(db, { canal: 'web', wcOrderId: 502, numeroPedido: '502', comprador: 'C', items: [] });
     db.prepare("UPDATE preparaciones SET tracking = 'AND123' WHERE clave = 'web:502'").run();
     anularPreparacionPorWoo(db, 502);
     expect(incidente(502)).toBeDefined();
     expect(incidente(500)).toBeUndefined();
+  });
+});
+
+describe('lotes de despacho con una preparación anulada en Woo', () => {
+  let loteId;
+  beforeEach(() => {
+    const ts = new Date().toISOString();
+    const ctl = db.prepare("INSERT INTO despacho_controles (grupo_clave, creado_en, actualizado_en) VALUES ('web:500', ?, ?)").run(ts, ts).lastInsertRowid;
+    loteId = db.prepare("INSERT INTO despacho_lotes (canal, fecha_jornada, estado, creado_por, creado_en) VALUES ('web', '2026-10-14', 'en_preparacion', 'sup', ?)").run(ts).lastInsertRowid;
+    db.prepare("INSERT INTO despacho_lote_items (lote_id, control_id, agregado_en) VALUES (?, ?, ?)").run(loteId, ctl, ts);
+  });
+  const loteEstado = () => db.prepare('SELECT estado, salida_idempotencia FROM despacho_lotes WHERE id = ?').get(loteId);
+
+  for (const [ruta, cuerpo] of [['iniciar', {}], ['escanear', { codigo: 'web:500' }], ['tracking', { control_id: 1, tracking: 'AND1' }], ['cerrar', {}], ['salida', {}]]) {
+    it(`POST /despacho/lotes/:id/${ruta} responde 409 PREPARACION_ANULADA_EN_WOO con el wc afectado y no cambia nada`, async () => {
+      const antes = loteEstado();
+      const r = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/${ruta}`).set('Idempotency-Key', 'k1').send(cuerpo);
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('PREPARACION_ANULADA_EN_WOO');
+      expect(r.body.wc_order_ids).toEqual([500]);
+      expect(loteEstado()).toEqual(antes);
+      expect(db.prepare("SELECT COUNT(*) n FROM despacho_lote_items WHERE tracking IS NOT NULL OR estado <> 'esperado'").get().n).toBe(0);
+    });
+  }
+
+  it('anular el lote sigue permitido (es la salida cuando no puede cerrarse)', async () => {
+    const r = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/anular`).send({ motivo: 'pedido anulado en Woo' });
+    expect(r.status).toBe(200);
+    expect(loteEstado().estado).toBe('anulado');
   });
 });
