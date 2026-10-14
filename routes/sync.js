@@ -1821,6 +1821,9 @@ export async function procesarOrdenWoo(db, cfg, orderId) {
   return { estado: 'hecho', skusActuales: actuales };
 }
 
+/** Topics de pedido que dispara el trabajo `order.woo`. Todos se tratan igual: el topic solo dispara, la relectura decide. */
+export const TOPICS_ORDEN_WOO = new Set(['order.created', 'order.updated', 'order.deleted', 'order.restored']);
+
 /** Encola (o reprograma) el `order.woo` de una orden. Lo llama el handler del webhook ANTES del ACK. */
 export function encolarOrdenWoo(db, orderId) {
   return encolarTrabajo(db, { tipo: 'order.woo', recurso: String(orderId) });
