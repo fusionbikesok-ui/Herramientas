@@ -1595,15 +1595,35 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
       expect(woo.productPuts).toHaveLength(0);
     });
 
-    it('ya existe en Preparación → 0 PUT e incidente para revisar (no se sella)', async () => {
+    it('ya existe en Preparación → 0 PUT, incidente para revisar y sello terminal sin líneas (conciliada_preparacion)', async () => {
       db.prepare("CREATE TABLE IF NOT EXISTS preparaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, canal TEXT NOT NULL, clave TEXT NOT NULL UNIQUE, wc_order_id INTEGER, ml_order_id TEXT, numero_pedido TEXT, comprador TEXT, etiqueta_lista INTEGER NOT NULL DEFAULT 0, estado TEXT NOT NULL DEFAULT 'en_preparacion', notas TEXT, preparado_por TEXT, creado_en TEXT NOT NULL, completado_en TEXT)").run();
       db.prepare("INSERT INTO preparaciones (canal, clave, ml_order_id, estado, creado_en) VALUES ('ml', 'ml:ORD-1', 'ORD-1', 'en_preparacion', ?)").run(new Date().toISOString());
       ml.orden = vieja();
       await procesarOrdenMl(db, CFG, 'ORD-1');
       expect(woo.productPuts).toHaveLength(0);
       expect(woo.posts).toBe(0);
-      expect(fila()).toBeUndefined();
+      expect(fila()).toMatchObject({ estado: 'completo', origen: 'conciliada_preparacion', lineas_json: '[]' });
       expect(inc('orden_ml_ya_atendida_prep_ORD-1')).toMatchObject({ severidad: 'info' });
+      expect(await procesarOrdenMl(db, CFG, 'ORD-1')).toMatchObject({ estado: 'hecho' }); // idempotente: ya_descontada, sin nuevo PUT
+      expect(woo.productPuts).toHaveLength(0);
+    });
+
+    it('orden en Preparación: el siguiente barrido NO la re-registra como pendiente y el cursor avanza', async () => {
+      db.prepare("CREATE TABLE IF NOT EXISTS preparaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, canal TEXT NOT NULL, clave TEXT NOT NULL UNIQUE, wc_order_id INTEGER, ml_order_id TEXT, numero_pedido TEXT, comprador TEXT, etiqueta_lista INTEGER NOT NULL DEFAULT 0, estado TEXT NOT NULL DEFAULT 'en_preparacion', notas TEXT, preparado_por TEXT, creado_en TEXT NOT NULL, completado_en TEXT)").run();
+      db.prepare("INSERT INTO preparaciones (canal, clave, ml_order_id, estado, creado_en) VALUES ('ml', 'ml:ORD-1', 'ORD-1', 'en_preparacion', ?)").run(new Date().toISOString());
+      const previo = hace(2 * 3600_000);
+      db.prepare("INSERT OR REPLACE INTO sync_estado (clave, valor, actualizado_en) VALUES ('ml_polling_actualizadas_hasta', ?, ?)").run(previo, previo);
+      const o = orden({ id: 'ORD-1', date_created: hace(20 * DIA), date_last_updated: hace(60_000), payments: [aprobado(20 * DIA)] });
+      ml.orden = o;
+      mlFetch.mockImplementation(async (dbx, cfg, method, p) => {
+        if (p.startsWith('/orders/search')) return { status: 200, data: { results: [o], paging: { total: 1, offset: 0, limit: 50 } } };
+        return { status: 200, data: o };
+      });
+      await syncMlToWc(db, CFG);
+      await syncMlToWc(db, CFG);
+      expect(db.prepare("SELECT 1 FROM sync_estado WHERE clave = 'ml_pendiente:ORD-1'").get()).toBeUndefined();
+      expect(db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ml_polling_actualizadas_hasta'").get().valor > previo).toBe(true);
+      expect(woo.productPuts).toHaveLength(0);
     });
   });
 
