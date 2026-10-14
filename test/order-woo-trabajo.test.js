@@ -6,7 +6,7 @@ import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { procesarOrdenWoo, procesarTrabajosRecurso, encolarOrdenWoo, skusPersistidosOrdenWoo } from '../routes/sync.js';
 import { encolarTrabajo } from '../lib/trabajosRecurso.js';
-import { crearPreparacion, ESTADO_ANULADO_EN_WOO } from '../routes/preparacion.js';
+import { crearPreparacion, preparacionRouter, ESTADO_ANULADO_EN_WOO } from '../routes/preparacion.js';
 
 vi.mock('../lib/mlClient.js', async () => {
   const actual = await vi.importActual('../lib/mlClient.js');
@@ -32,6 +32,7 @@ const eventos = (pid, tipo) => db.prepare('SELECT * FROM preparacion_eventos WHE
 beforeEach(() => {
   limpiarDb();
   db = openDb(TEST_DB);
+  preparacionRouter(db, CFG); // crea preparaciones / pedidos_cache / preparacion_eventos
   vi.clearAllMocks();
   orden = ord(500, 'lpaandreani', ['A-1', 'B-2']);
   error = null;
