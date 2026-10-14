@@ -163,6 +163,12 @@ export function attachmentType(file) {
   return ALLOWED_MIMES.has(mime) ? mime : (!mime || mime === 'application/octet-stream' ? FILE_MIMES[extension] : '');
 }
 
+export function clipboardImages(data) {
+  const itemFiles = Array.from(data?.items || []).filter(item => item.kind === 'file').map(item => item.getAsFile()).filter(Boolean);
+  const files = itemFiles.length ? itemFiles : Array.from(data?.files || []);
+  return files.filter(file => String(file.type || FILE_MIMES[String(file.name || '').split('.').pop().toLowerCase()] || '').startsWith('image/'));
+}
+
 export function attachmentError(file) {
   const mime = attachmentType(file);
   if (!mime) return 'Elegí un archivo JPEG, PNG, WEBP, PDF, MP3, OGG, M4A, AAC o MP4.';
@@ -625,7 +631,13 @@ function start() {
     if (state.templateContext?.preview) $('template-send').disabled = !$('template-opt-in').checked || !canUseTemplate() || state.templateContext.key !== state.selected || state.templateContext.preview.signature !== templateInputSignature();
     $('new-chat').disabled = !access.write || !state.numbers.some(number => number.connected === true);
     $('attachment').hidden = note || draft.recording || (!draft.file && !draft.uploaded); $('attachment-name').textContent = draft.file ? `${draft.file.name} · ${formatBytes(draft.file.size)}` : draft.uploaded?.name || '';
-    const thumbnail = !note && draft.uploaded?.mime === 'image/jpeg' ? `${API}/media/${encodeURIComponent(draft.uploaded.media_id)}` : '';
+    let thumbnail = '';
+    if (!note && draft.file && attachmentType(draft.file).startsWith('image/')) {
+      if (!draft.previewURL) draft.previewURL = URL.createObjectURL(draft.file);
+      thumbnail = draft.previewURL;
+    } else if (!note && draft.uploaded?.mime?.startsWith('image/')) {
+      thumbnail = `${API}/media/${encodeURIComponent(draft.uploaded.media_id)}`;
+    }
     $('attachment-image').hidden = !thumbnail;
     if (thumbnail) { if ($('attachment-image').getAttribute('src') !== thumbnail) $('attachment-image').src = thumbnail; } else $('attachment-image').removeAttribute('src');
     $('file-help').hidden = note; $('file-help').textContent = canAttach ? 'Imagen, audio, video o PDF' : 'Este canal admite solo texto';
@@ -633,6 +645,7 @@ function start() {
     $('composer-help').textContent = !state.thread ? 'Elegí una conversación para comenzar.' : !access.write ? 'Tu acceso permite consultar el historial. No permite responder, adjuntar ni cambiar la atención.' : !access.manage ? (state.thread.owner_id ? 'Esta conversación la atiende otra persona. Podés consultar su historial.' : 'Tomá esta conversación antes de responder o agregar notas.') : note ? 'Solo el equipo verá esta nota. No se envía al cliente.' : closed ? 'La conversación está cerrada. Reabrila para responder.' : !sendWindow(state.thread).allowed ? sendWindow(state.thread).label : pending ? 'Hay una operación pendiente de confirmar. El borrador se conserva.' : caption || (hasAudio ? 'El audio se envía sin texto. Tu borrador se conserva para una respuesta separada.' : web ? 'La respuesta llega a este chat web.' : 'Respondés desde el número de negocio de esta conversación.');
     $('composer-help').classList.toggle('is-hint', Boolean(state.thread && access.manage && !note && !closed && sendWindow(state.thread).allowed && !pending && !caption && !hasAudio));
     $('keyboard-help').textContent = !note && hasAudio ? 'Para enviar el audio, pulsá Enviar audio · El texto se conserva' : note ? 'Enter guarda la nota privada · Shift + Enter agrega una línea' : 'Enter envía · Shift + Enter agrega una línea';
+    if (!note && canAttach && !hasAudio) $('keyboard-help').textContent += ' · Ctrl+V pega una imagen';
     renderRecording();
   }
   function canUseTemplate(thread = state.thread) { return Boolean(templateOffered(state.actor, thread) && !state.operations.has(thread.key)); }
@@ -872,20 +885,22 @@ function start() {
     const note = message.sender === 'note' || message.kind === 'note'; const outbound = ['operator', 'bot', 'agent', 'human'].includes(message.sender); const system = message.sender === 'system';
     const node = element('article', `message${note ? ' note' : outbound ? ' outbound' : system ? ' system' : ''}`); node.setAttribute('role', 'listitem'); node.dataset.id = text(message.id);
     const heading=element('div','message-heading');heading.append(element('span', 'message-author', note ? `Nota privada · ${message.agent_name || 'Equipo'}` : message.sender === 'bot' ? message.agent_name || 'Asistente IA' : outbound ? message.agent_name || 'Atención humana' : system ? 'Actividad' : nameOf(state.thread)));
-    appendMessageActions(heading,message);node.append(heading);
+    const missingDocument = message.kind === 'document' && !message.media_id && message.file_name && !message.revoked;
+    appendMessageActions(heading,missingDocument ? { ...message, can_forward: false } : message);node.append(heading);
     if(message.forwarded&&!message.revoked)node.append(element('span','forwarded-label','↗ Reenviado'));
     if(message.quoted&&!message.revoked){const quote=element('button','message-quote');quote.type='button';quote.disabled=message.quoted.unavailable;quote.append(element('strong','',message.quoted.author),element('span','',message.quoted.text));quote.addEventListener('click',()=>{const original=state.messageNodes.get(String(message.quoted.id));if(original){original.node.scrollIntoView({block:'center',behavior:'smooth'});original.node.classList.add('quote-highlight');setTimeout(()=>original.node.classList.remove('quote-highlight'),1600);}else setNotice('thread-notice','El mensaje citado es anterior. Usá Cargar anteriores para verlo.','info');});node.append(quote);}
     if (!message.revoked && message.media_reading?.text) {
       const reading=element('details','media-reading');reading.append(element('summary','meta',message.media_reading.kind==='audio'?'Transcripción automática':'Descripción automática'));
       reading.append(element('p','message-text',message.media_reading.text));node.append(reading);
     }
-    if (message.revoked || message.text && !(message.media_id && /^\[[^\]]{1,100}\]$/.test(message.text))) node.append(element('p', 'message-text', message.revoked ? `Mensaje eliminado en ${channelLabel(state.thread)}.` : message.text));
+    if (message.revoked || message.text && !((message.media_id || missingDocument) && /^\[[^\]]{1,100}\]$/.test(message.text))) node.append(element('p', 'message-text', message.revoked ? `Mensaje eliminado en ${channelLabel(state.thread)}.` : message.text));
+    if (missingDocument) { node.append(element('p', 'message-text', message.file_name)); node.append(element('p', 'meta', 'Este archivo ya no está disponible para descargar. Pedí que lo reenvíen.')); }
     if (message.edited && !message.revoked) node.append(element('span', 'meta', `Editado en ${channelLabel(state.thread)}`));
     if (message.media_id && !message.revoked) {
       const url = `${API}/media/${encodeURIComponent(message.media_id)}`; const mime = text(message.mime); const kind = text(message.kind);
       if (mime.startsWith('image/') || kind === 'image') { const link = element('a', 'media-preview'); link.href = url; link.target = '_blank'; link.rel = 'noopener'; const image = element('img', 'message-media'); image.src = url; image.alt = message.file_name || 'Imagen adjunta'; image.loading = 'lazy'; image.referrerPolicy = 'same-origin'; link.append(image); node.append(link); }
       else if (mime.startsWith('audio/') || kind === 'audio' || mime.startsWith('video/') || kind === 'video') { const media = element(mime.startsWith('audio/') || kind === 'audio' ? 'audio' : 'video', 'message-media'); media.controls = true; media.preload = 'none'; media.src = url; if (media.tagName === 'VIDEO') media.playsInline = true; media.setAttribute('aria-label', message.file_name || 'Archivo adjunto'); node.append(media); }
-      const download = element('a', 'media-download', mime === 'application/pdf' ? `↓ ${message.file_name || 'Descargar PDF'}` : '↓ Descargar'); download.href = url; download.download = message.file_name || ''; download.target = '_blank'; download.rel = 'noopener'; if(kind!=='audio'&&!mime.startsWith('audio/'))node.append(download);
+      const download = element('a', 'media-download', kind === 'document' || mime === 'application/pdf' ? `↓ ${message.file_name || 'Descargar documento'}` : '↓ Descargar'); download.href = url; download.download = message.file_name || ''; download.target = '_blank'; download.rel = 'noopener'; if(kind!=='audio'&&!mime.startsWith('audio/'))node.append(download);
     }
     const footer = element('div', 'message-footer'); const date = element('time', '', formatTime(message.created_at)); if (message.created_at) date.dateTime = message.created_at; footer.append(date);
     if (outbound && !note) { footer.append(element('span', `message-status ${message.status === 'unknown' || message.status === 'failed' || message.status === 'read' ? message.status : ''}`, deliveryLabel(message.status))); }
@@ -1241,6 +1256,28 @@ function start() {
   $('forward-form').addEventListener('submit',confirmForward);
   $('forward-search').addEventListener('input',()=>{clearTimeout(forwardSearchTimer);forwardSearchTimer=setTimeout(searchForward,250);});
   $('reply-mode').addEventListener('click', () => switchMode('reply')); $('note-mode').addEventListener('click', () => switchMode('note'));
+  $('message-input').addEventListener('paste', event => {
+    const images = clipboardImages(event.clipboardData);
+    if (!images.length) return; // Plain text keeps the browser's normal paste behavior.
+    event.preventDefault();
+    if (!state.selected || !state.thread || state.thread.key !== state.selected) return;
+    if (state.mode !== 'reply') { setNotice('thread-notice', 'Las imágenes se adjuntan desde Respuesta; las notas privadas admiten texto.', 'info'); return; }
+    if (!permissions(state.actor, state.thread).send || !mediaAllowed(state.thread)) { setNotice('thread-notice', 'Esta conversación no permite adjuntar imágenes en este momento.', 'info'); return; }
+    if (state.operations.has(state.selected) || state.recordingPhase !== 'idle') { setNotice('thread-notice', 'Terminá la operación o grabación actual antes de pegar una imagen.', 'info'); return; }
+    const draft = currentDraft();
+    if (draft.file || draft.uploaded) { setNotice('thread-notice', 'Ya tenés un adjunto en el borrador. Quitalo o envialo antes de pegar otra imagen.', 'info'); return; }
+    if (images.length !== 1) { setNotice('thread-notice', 'Pegá una imagen por vez para revisarla antes de enviar.', 'info'); return; }
+    const original = images[0];
+    const mime = String(original.type || attachmentType(original)).toLowerCase().split(';')[0];
+    const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[mime];
+    if (!extension) { setNotice('thread-notice', 'Pegá una imagen PNG, JPEG o WEBP.', 'critico'); return; }
+    const file = new File([original], `captura-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`, { type: mime });
+    const error = attachmentError(file);
+    if (error) { setNotice('thread-notice', error, 'critico'); return; }
+    saveText(); clearAttachment(draft); draft.file = file;
+    $('file-input').value = ''; setNotice('thread-notice', 'Imagen pegada. Revisala y pulsá Enviar cuando quieras compartirla.', 'ok');
+    renderPermissions(); announce('Imagen agregada al borrador. Todavía no se envió.');
+  });
   $('message-input').addEventListener('input', () => { saveText(); renderPermissions(); });
   $('message-input').addEventListener('keydown', event => {
     if (shouldSendOnEnter(event, { disabled: $('send').disabled || $('message-input').disabled, pending: state.operations.has(state.selected) || state.recordingPhase !== 'idle', audio: state.mode === 'reply' && audioDraft(currentDraft()) })) { event.preventDefault(); $('composer').requestSubmit($('send')); }
