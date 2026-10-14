@@ -4,6 +4,7 @@
 // que después llegue un aviso de la misma orden no descuenta de nuevo. Avisa (incidente crítico → mail + push) salvo en --dry-run.
 //
 //   node scripts/ops/descontar-ordenes-viejas.mjs --dry-run 2000018274075296 2000018414706684 2000018562885820
+//   node scripts/ops/descontar-ordenes-viejas.mjs --omitir-conciliacion <id>   # solo si José confirmó que el pedido manual detectado NO es esa venta
 //   node scripts/ops/descontar-ordenes-viejas.mjs            2000018274075296 2000018414706684 2000018562885820
 import 'dotenv/config';
 import { openDb } from '../../db/index.js';
@@ -12,6 +13,8 @@ import { descontarOrdenViejaSinPedido } from '../../routes/sync.js';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
+// Salida manual de una orden bloqueada por "posible pedido manual" cuando José confirmó que NO es la misma venta: omite la conciliación con Woo/Preparación.
+const omitirConciliacion = args.includes('--omitir-conciliacion');
 const ids = args.filter((a) => !a.startsWith('--'));
 const malos = ids.filter((i) => !/^\d+$/.test(i));
 if (malos.length) {
@@ -40,7 +43,7 @@ for (const id of ids) {
       fallos++;
       continue;
     }
-    const r = await descontarOrdenViejaSinPedido(db, cfg, resp.data, { dryRun, actor: 'script:descontar-ordenes-viejas', origen: 'script' });
+    const r = await descontarOrdenViejaSinPedido(db, cfg, resp.data, { dryRun, omitirConciliacion, actor: 'script:descontar-ordenes-viejas', origen: 'script' });
     console.log(`${id} (${String(resp.data.date_created).slice(0, 10)}, ${resp.data.status}): ${r.estado}${r.motivo ? ` — ${r.motivo}` : ''}`);
     for (const l of r.lineas) {
       const cambio = l.antes != null ? `stock ${l.antes} → ${l.despues}` : '';

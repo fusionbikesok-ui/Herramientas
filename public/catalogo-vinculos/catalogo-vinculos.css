@@ -47,6 +47,12 @@
   display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
   padding: var(--sp-2) var(--sp-3); background: var(--surface); border-bottom: 1px solid var(--border);
 }
+.cv-inicio {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); padding: 0 var(--sp-2);
+  color: var(--muted); text-decoration: none; border: 1px solid transparent; border-radius: var(--radius); font-size: var(--fs-cuerpo);
+}
+.cv-inicio:hover { color: var(--text); border-color: var(--border2); }
+.cv-inicio:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; }
 .cv-titulo { margin: 0; font-size: var(--fs-titulo); font-weight: 700; flex: 1 1 auto; }
 .cv-top__acciones { display: flex; align-items: center; gap: var(--sp-2); }
 .cv-switch { display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min); cursor: pointer; font-size: var(--fs-cuerpo); }
