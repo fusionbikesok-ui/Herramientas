@@ -374,59 +374,190 @@ export async function syncMlToWc(db, cfg) {
   }
 }
 
+/**
+ * Barrido de respaldo por `order.date_last_updated` (doc oficial de ML). Pagar una orden cambia su `date_last_updated`, así que
+ * una creada hace 30 días y pagada hoy aparece sin retroceder días fijos.
+ *
+ * Ventana FIJA por corrida: from = cursor − solape (`ML_POLLING_SOLAPE_MIN`, 60 min), to = ahora; ambos constantes durante todo
+ * el recorrido (ML ordena por creación, no por actualización, y pagina por offset: sin ventana fija el cursor podía avanzar
+ * sin haber visto todo). Se recorren TODAS las páginas; el cursor propio (`ml_polling_actualizadas_hasta`) avanza a `to` (no al
+ * máximo visto) y SOLO si el recorrido completo terminó sin error: una página fallida lo deja intacto. Si el offset llega al
+ * tope de ML la ventana se parte en dos; si no se puede partir más, incidente crítico y el cursor no se mueve. Como ML puede
+ * mover una orden fuera de la ventana mientras se pagina (se actualiza de nuevo → `date_last_updated` > to) y eso corre los
+ * offsets, se compara `paging.total` antes y después: si cambió se repite el recorrido (hasta 3 veces) y, si sigue inestable,
+ * el cursor no avanza. Las repetidas por el solape o el desplazamiento se cubren con la idempotencia de siempre (selladas,
+ * reserva, fila de descuento).
+ */
+const POLLING_CURSOR = 'ml_polling_actualizadas_hasta';
+const POLLING_PAGINA = 50;
+const maxOffsetMl = () => { const n = Number(process.env.ML_BUSQUEDA_MAX_OFFSET); return Number.isFinite(n) && n >= 100 ? n : 10000; }; // tope de offset de /orders/search
+const POLLING_REINTENTOS_INESTABLE = 3;
+const POLLING_VENTANA_MINIMA_MS = 60 * 1000;
+
+export function desdePollingMl(base) {
+  const m = Number(process.env.ML_POLLING_SOLAPE_MIN);
+  const solape = (Number.isFinite(m) && m >= 0 ? m : 60) * 60 * 1000;
+  const t = Date.parse(base);
+  return new Date((Number.isFinite(t) ? t : Date.now() - 30 * 24 * 3600 * 1000) - solape).toISOString();
+}
+
+async function paginarVentanaMl(db, mlCfg, desdeMs, hastaMs, procesar) {
+  const f = encodeURIComponent(new Date(desdeMs).toISOString());
+  const t = encodeURIComponent(new Date(hastaMs).toISOString());
+  const base = `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_asc&order.date_last_updated.from=${f}&order.date_last_updated.to=${t}`;
+  for (let intento = 0; intento < POLLING_REINTENTOS_INESTABLE; intento++) {
+    let offset = 0;
+    let total = null;
+    for (;;) {
+      if (offset + POLLING_PAGINA > maxOffsetMl()) {
+        if (hastaMs - desdeMs <= POLLING_VENTANA_MINIMA_MS) throw new Error(`ventana de ${hastaMs - desdeMs} ms con más de ${maxOffsetMl()} órdenes: no se puede partir más`);
+        const mitad = Math.floor((desdeMs + hastaMs) / 2);
+        await paginarVentanaMl(db, mlCfg, desdeMs, mitad, procesar);
+        await paginarVentanaMl(db, mlCfg, mitad, hastaMs, procesar);
+        return;
+      }
+      const resp = await mlFetch(db, mlCfg, 'get', `${base}&offset=${offset}&limit=${POLLING_PAGINA}`);
+      if (resp.status !== 200) throw new Error(`error API ML ${resp.status} en la página offset=${offset}`);
+      if (total === null && Number.isFinite(resp.data?.paging?.total)) total = resp.data.paging.total;
+      const ordenes = resp.data?.results ?? [];
+      for (const orden of ordenes) await procesar(orden);
+      offset += ordenes.length;
+      if (ordenes.length < POLLING_PAGINA) break;
+    }
+    if (total === null) return; // ML no informa paging.total: no hay forma de comprobar estabilidad
+    const fin = await mlFetch(db, mlCfg, 'get', `${base}&offset=0&limit=1`);
+    if (fin.status !== 200) throw new Error(`error API ML ${fin.status} al comprobar la estabilidad de la ventana`);
+    // Invariante: `to` es fijo y está en el pasado, y `date_last_updated` solo crece. Ninguna orden puede ENTRAR a la ventana durante
+    // el recorrido (tendría que bajar su fecha); una que se actualiza de nuevo SALE (pasa a > to) y el total baja. Por eso comparar el
+    // total antes/después detecta todo corrimiento de offsets (no existe un "una entra y otra sale" que deje el total igual).
+    if (!Number.isFinite(fin.data?.paging?.total) || fin.data.paging.total === total) return;
+  }
+  throw new Error('la ventana cambió durante el recorrido en cada intento (órdenes que entran o salen): no se avanza el cursor');
+}
+
+/** ¿Sellada, o con una fila de descuento / reserva / retención de la Guardia que la retoma otro camino? (una sola consulta) */
+function ordenRetomada(db, id) {
+  const r = db.prepare(`SELECT
+      EXISTS(SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = @id)
+      OR EXISTS(SELECT 1 FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = @id)
+      OR EXISTS(SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = @id)
+      OR EXISTS(SELECT 1 FROM guardia_ml_pedidos_retenidos WHERE ml_order_id = @id AND estado = 'retenido') AS ok`).get({ id });
+  return Boolean(r?.ok);
+}
+
+const PENDIENTE_PREFIJO = 'ml_pendiente:';
+const RESULTADOS_TERMINALES_DESCUENTO = ['descontada', 'ya_descontada', 'no_aplica', 'cancelada'];
+/** Lista blanca: solo estos resultados de `descontarOrdenVieja` cierran el pendiente; cualquier otro (desconocido, nuevo, `sin_fecha`) lo conserva. */
+export const esResultadoTerminalDescuento = (estado) => RESULTADOS_TERMINALES_DESCUENTO.includes(estado);
+/** Saca la orden del registro de pendientes y, si estaba en cuarentena, resuelve su incidente dejando el motivo en el historial. */
+function limpiarPendienteMl(db, id, motivo = 'orden_retomada') {
+  const borrado = db.prepare('DELETE FROM sync_estado WHERE clave = ?').run(`${PENDIENTE_PREFIJO}${id}`).changes;
+  const tipoError = `orden_ml_en_cuarentena_${id}`.slice(0, 120);
+  try { // el incidente es informativo: que no pueda resolverse nunca cambia el resultado del trabajo
+    const inc = db.prepare("SELECT id FROM incidentes_operativos WHERE tipo_error = ? AND estado = 'activo'").get(tipoError);
+    if (!inc) return borrado;
+    const r = confirmarCicloSano(db, { integracion: 'mercadolibre', proceso: 'polling_ordenes', tipoError });
+    if (r.resueltos) {
+      db.prepare("UPDATE incidentes_operativos_historial SET detalle_json = ? WHERE incidente_id = ? AND evento = 'resuelto' AND detalle_json IS NULL")
+        .run(JSON.stringify({ nota: `La venta ${id} salió de cuarentena sola: ${motivo}.` }), inc.id);
+    }
+  } catch { /* fail-open */ }
+  return borrado;
+}
+const umbralCuarentenaMs = () => { const h = Number(process.env.ML_POLLING_CUARENTENA_HORAS); return (Number.isFinite(h) && h >= 0 ? h : 3) * 3600 * 1000; };
+
+/**
+ * Orden pagada que `_procesarOrden` no pudo sellar ni dejar en manos de otro camino. Se registra su primera vez (`sync_estado`
+ * `ml_pendiente:<id>`) y se encola un `order.ml` (reintento con backoff, visible). Pasado `ML_POLLING_CUARENTENA_HORAS` (3) pasa a
+ * cuarentena: cuenta como retomada (el cursor avanza), abre un incidente crítico por orden (dedupe) y el barrido de pendientes
+ * (`barrerPendientesMl`) sigue reintentándola; nunca se descuenta mientras siga dudosa. Devuelve true si está en cuarentena.
+ */
+async function ponerEnCuarentenaSiCorresponde(db, id, orden) {
+  const clave = `${PENDIENTE_PREFIJO}${id}`;
+  const ahoraIso = new Date().toISOString();
+  db.prepare('INSERT OR IGNORE INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)').run(clave, ahoraIso, ahoraIso);
+  try { encolarTrabajo(db, { tipo: 'order.ml', recurso: id }); } catch { /* el reintento es una ayuda: el cursor ya decide */ }
+  const desde = Date.parse(db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(clave)?.valor);
+  if (!(Number.isFinite(desde) && Date.now() - desde >= umbralCuarentenaMs())) return false;
+  const txt = `La venta de MercadoLibre ${id} no se pudo sellar desde ${new Date(desde).toISOString()} (sin fecha legible o con un posible pedido manual por confirmar) y quedó en CUARENTENA: NO se descontó stock ni se creó pedido; sigue reintentándose. Para cerrarla: si ya existe su pedido Woo, agregale el campo personalizado _ml_order_id = ${id} (la próxima pasada la sella sola); si NO es la misma venta, descontala a mano con scripts/ops/descontar-ordenes-viejas.mjs --omitir-conciliacion ${id}.`;
+  abrirOActualizarIncidente(db, {
+    integracion: 'mercadolibre', proceso: 'polling_ordenes', tipoError: `orden_ml_en_cuarentena_${id}`.slice(0, 120), severidad: 'critico',
+    mensajeTecnico: txt, mensajeHumano: txt, contexto: { ml_order_id: id, desde: new Date(desde).toISOString(), estado: orden?.status ?? null },
+  });
+  return true;
+}
+
+/** Reintenta las órdenes pendientes/en cuarentena: las ya retomadas salen del registro; el resto vuelve a encolar su `order.ml`. */
+export function barrerPendientesMl(db) {
+  // Rotación con progreso garantizado: las 200 más viejas por `actualizado_en`; al re-encolar una se le actualiza, así pasa al final
+  // y la próxima pasada toma las siguientes (sin ORDER BY, SQLite devolvía siempre el mismo subconjunto y el resto nunca se tocaba).
+  const filas = db.prepare("SELECT clave FROM sync_estado WHERE clave LIKE 'ml_pendiente:%' ORDER BY actualizado_en, clave LIMIT 200").all();
+  const tocar = db.prepare('UPDATE sync_estado SET actualizado_en = ? WHERE clave = ?');
+  for (const { clave } of filas) {
+    const id = clave.slice(PENDIENTE_PREFIJO.length);
+    if (ordenRetomada(db, id)) { limpiarPendienteMl(db, id); continue; }
+    try { encolarTrabajo(db, { tipo: 'order.ml', recurso: id }); } catch { /* se reintenta en la próxima pasada */ }
+    try { tocar.run(new Date().toISOString(), clave); } catch { /* la rotación es una ayuda: se reintenta en la próxima pasada */ }
+  }
+  return filas.length;
+}
+
 async function _syncMlToWc(db, cfg) {
   const { ml: mlCfg, woo: wooCfg } = cfg;
-  const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get();
-  const desde = cursorRow?.valor ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const leer = (clave) => db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(clave)?.valor ?? null;
+  // Primer arranque (sin cursor propio): max(ultima_orden_ml − 60 min, ahora − 3 días). El barrido anterior por `date_created` (con piso de
+  // 14 días) ya cubrió todo lo anterior; más atrás solo hay órdenes viejas que, sin sellar, caerían en el descuento sin pedido. Sin
+  // ningún cursor histórico: ahora − 3 días. Los 3 días se escalonan por el tope de ventana por corrida (abajo).
+  const tresDias = Date.now() - 3 * 24 * 3600 * 1000;
+  const historico = Date.parse(leer('ultima_orden_ml'));
+  const semilla = new Date(Number.isFinite(historico) ? Math.max(historico - 60 * 60 * 1000, tresDias) : tresDias).toISOString();
+  const baseDesde = leer(POLLING_CURSOR) ?? semilla;
+  const desdeMs = Date.parse(desdePollingMl(baseDesde));
+  // Tope de ventana por corrida (`ML_POLLING_VENTANA_MAX_HORAS`, 24): un cursor atrasado se pone al día en varias corridas.
+  const h = Number(process.env.ML_POLLING_VENTANA_MAX_HORAS);
+  const hastaMs = Math.min(Date.now(), Date.parse(baseDesde) + (Number.isFinite(h) && h > 0 ? h : 24) * 3600 * 1000);
+  let incompletas = 0;
+  barrerPendientesMl(db);
 
-  let offset = 0;
-  const limit = 50;
-  let ultimaFecha = desde;
-  let hayMas = true;
-
-  while (hayMas) {
-    const resp = await mlFetch(
-      db, mlCfg, 'get',
-      `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_asc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limit}`
-    );
-
-    if (resp.status !== 200) {
-      console.error(`syncMlToWc: error API ML ${resp.status}`);
-      break;
-    }
-
-    const orders = resp.data.results ?? [];
-    hayMas = orders.length === limit;
-    offset += orders.length;
-
-    for (const orden of orders) {
-      const orderId = String(orden.id);
-
+  try {
+    await paginarVentanaMl(db, mlCfg, desdeMs, hastaMs, async (orden) => {
+      const id = String(orden.id);
       // Idempotencia: saltar si ya fue procesada
-      const yaProc = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(orderId);
-      if (yaProc) continue;
-
+      if (db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(id)) return;
       await _procesarOrden(db, wooCfg, mlCfg, orden);
-
-      if (orden.date_created && orden.date_created > ultimaFecha) {
-        ultimaFecha = orden.date_created;
-      }
+      // Si no quedó sellada ni la retoma otro camino (fila de descuento, reserva, retención de la Guardia) la corrida está
+      // incompleta: pasada la hora de solape la orden saldría de la ventana y se perdería en silencio. Una orden que nunca sella (sin
+      // fecha legible, posible pedido manual) no puede trabar el cursor para siempre: pasado el umbral va a CUARENTENA.
+      if (!ordenRetomada(db, id)) {
+        if (!(await ponerEnCuarentenaSiCorresponde(db, id, orden))) incompletas++;
+      } else limpiarPendienteMl(db, id);
+    });
+    if (incompletas) throw Object.assign(new Error(`${incompletas} orden(es) quedaron sin sellar ni retomar por otro camino`), { incompleta: true });
+  } catch (e) {
+    console.error(`syncMlToWc: ${e.message}; el cursor no avanza`);
+    if (e.incompleta && Date.now() - Date.parse(baseDesde) > 24 * 3600 * 1000) {
+      abrirOActualizarIncidente(db, {
+        integracion: 'mercadolibre', proceso: 'polling_ordenes', tipoError: 'polling_ml_cursor_detenido', severidad: 'advertencia',
+        mensajeTecnico: e.message, mensajeHumano: `El barrido de órdenes de MercadoLibre lleva más de un día sin avanzar su cursor: ${e.message}.`,
+        contexto: { cursor: baseDesde },
+      });
     }
+    if (/no se puede partir más|cambió durante el recorrido/.test(e.message)) {
+      abrirOActualizarIncidente(db, {
+        integracion: 'mercadolibre', proceso: 'polling_ordenes', tipoError: 'polling_ml_ventana_no_recorrible', severidad: 'critico',
+        mensajeTecnico: e.message, mensajeHumano: `El barrido de órdenes de MercadoLibre no pudo recorrer la ventana completa (${e.message}). El cursor no avanza; revisá.`,
+        contexto: { desde: new Date(desdeMs).toISOString(), hasta: new Date(hastaMs).toISOString() },
+      });
+    }
+    return;
   }
 
-  // Avanzar cursor. El WHERE del ON CONFLICT lo hace monótono en SQL (hallazgo del revisor,
-  // A.3): este barrido puede tardar minutos (paginado + Woo + shipments) leyendo `desde` al
-  // empezar; si mientras tanto syncOrdenMlPuntual ya avanzó el cursor a una orden más nueva
-  // (llegó por webhook durante la corrida), este UPDATE incondicional lo haría retroceder.
-  // Comparando contra el valor ACTUAL en la tabla (no contra `desde`, que es una copia vieja)
-  // nunca se pisa un valor más nuevo ya guardado por el otro camino.
-  if (ultimaFecha > desde) {
-    db.prepare(`
-      INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
-      ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
-        WHERE excluded.valor > sync_estado.valor
-    `).run(ultimaFecha, now());
-  }
+  // Avanzar a `to` (no al máximo visto), monótono en SQL: syncOrdenMlPuntual o una corrida paralela no pueden hacerlo retroceder.
+  db.prepare(`
+    INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)
+    ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
+      WHERE excluded.valor > sync_estado.valor
+  `).run(POLLING_CURSOR, new Date(hastaMs).toISOString(), now());
 }
 
 /**
@@ -585,14 +716,54 @@ async function _confirmarInexistenciaEnWc(wooCfg, orderId, desdeIso = null) {
       if (match) return match.id;
       if (resp.data.length < 100) { agotado = true; break; }
       if (limiteMs != null) {
-        const fechas = resp.data.map(fechaMs).filter((t) => t != null);
-        if (fechas.length && Math.min(...fechas) < limiteMs) { agotado = true; break; }
+        const fechas = resp.data.map(fechaMs);
+        const validas = fechas.filter((t) => t != null);
+        // Un pedido sin fecha legible no se puede descartar como anterior al umbral: la página no corta el recorrido. Si por eso se
+        // llega al tope de páginas, se lanza (inconcluso), nunca se afirma "inexistente".
+        if (validas.length === fechas.length && validas.length && Math.min(...validas) < limiteMs) { agotado = true; break; }
       } else {
         agotado = true; break; // sin fecha de referencia: comportamiento histórico (primera página)
       }
     }
     if (!agotado) throw new Error(`inexistencia no concluyente: ${VERIF_INEXISTENCIA_MAX_PAGINAS} páginas de pedidos (${status}) sin agotar el rango`);
   }
+  return null;
+}
+
+const VERIF_TEXTO_MAX_PAGINAS = 5;
+/**
+ * Segunda red para pedidos cargados A MANO sin la meta `_ml_order_id`: `GET /orders?search=<término>` (status any y trash). Woo busca
+ * en sus campos indexados (datos de facturación/envío, ítems, etc.); lo que devuelva se re-verifica localmente buscando el término en
+ * `customer_note`, `number` y valores de meta, como token exacto (`mencionaTokenExacto`). Coincidencia → id del pedido, que NO es
+ * concluyente: el llamador no sella y abre un incidente crítico para que una persona confirme. Resultados que no contienen el término
+ * (coincidencia dudosa) o cualquier falla/forma inesperada → LANZA (inconcluso: nadie descuenta). Sin resultados → null.
+ * Riesgo residual: un pedido manual que no menciona el número de ML en ningún campo que Woo devuelva/indexe no se detecta.
+ */
+/**
+ * ¿El pedido menciona el token EXACTO? Solo en `customer_note`, `number` y el valor de `meta_data`, con límites que no sean
+ * alfanuméricos: el número NUNCA cuenta como subcadena de uno más largo (un teléfono, otro ID).
+ */
+function mencionaTokenExacto(pedido, token) {
+  const re = new RegExp(`(?<![A-Za-z0-9])${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`);
+  const campos = [pedido?.customer_note, pedido?.number, ...(Array.isArray(pedido?.meta_data) ? pedido.meta_data.map((m) => (typeof m?.value === 'object' ? JSON.stringify(m.value) : m?.value)) : [])];
+  return campos.some((c) => c != null && re.test(String(c)));
+}
+
+async function buscarPedidoWcPorTexto(wooCfg, termino) {
+  const t = String(termino ?? '').trim();
+  if (!t) return null;
+  let dudoso = false;
+  for (const status of ['any', 'trash']) {
+    for (let page = 1; ; page++) {
+      const resp = await wooFetch(wooCfg, `/orders?per_page=100&status=${status}&page=${page}&search=${encodeURIComponent(t)}`);
+      if (!Array.isArray(resp?.data)) throw new Error('respuesta de Woo con forma inesperada en la búsqueda por texto');
+      for (const p of resp.data) if (mencionaTokenExacto(p, t)) return p.id;
+      if (resp.data.length) dudoso = true;
+      if (resp.data.length < 100) break;
+      if (page >= VERIF_TEXTO_MAX_PAGINAS) throw new Error(`búsqueda por texto de "${t}": ${VERIF_TEXTO_MAX_PAGINAS} páginas sin agotar, no concluyente`);
+    }
+  }
+  if (dudoso) throw new Error(`búsqueda por texto de "${t}": Woo devolvió pedidos que no se pueden descartar como ajenos (coincidencia dudosa)`);
   return null;
 }
 
@@ -1662,10 +1833,13 @@ const ordenYaTratada = (db, id) => destinoActual(db, id) === 'pedido';
  */
 async function tratarOrdenFueraDeVentana(db, cfg, orden, { reencolarSiPendiente = false } = {}) {
   if (orden?.status !== 'paid' || ordenYaTratada(db, orden.id)) return { tratada: false };
-  const v = estadoVentana(orden);
+  // Con fila de descuento (cualquiera, no completa) la orden sigue por el descuento sin importar la ventana: si no, un `parcial`
+  // cuya fecha de pago cae dentro iría al camino del pedido y el job cerraría 'hecho' sin completar el descuento.
+  const hayFila = Boolean(db.prepare('SELECT 1 FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(String(orden.id)));
+  const v = hayFila ? 'fuera' : estadoVentana(orden);
   if (v === 'dentro') return { tratada: false };
   if (v === 'sin_fecha') {
-    const txt = `La venta de MercadoLibre ${orden.id} no trae fecha de creación legible (${JSON.stringify(orden.date_created ?? null)}): no se creó el pedido ni se descontó stock. Revisala a mano.`;
+    const txt = `La venta de MercadoLibre ${orden.id} no trae ninguna fecha legible (pago, cierre ni creación; creación: ${JSON.stringify(orden.date_created ?? null)}): no se creó el pedido ni se descontó stock. Revisala a mano.`;
     abrirOActualizarIncidente(db, {
       integracion: 'mercadolibre', proceso: 'orden_ml_tardia', tipoError: `orden_ml_sin_fecha_${orden.id}`.slice(0, 120), severidad: 'critico',
       mensajeTecnico: txt, mensajeHumano: txt, contexto: { ml_order_id: String(orden.id), fecha: orden.date_created ?? null },
@@ -1687,6 +1861,18 @@ export function descontarOrdenViejaSinPedido(db, cfg, orden, opts = {}) {
   return descontarOrdenVieja(db, cfg, orden, {
     enriquecer: enriquecerLineasBarrera, encolarBolsas: encolarBolsasDeSkus,
     log: (msg, id) => logSync(db, { direccion: 'ml_wc', clave: id, estado: 'aviso_cancelada_luego_pagada_fallo', error: String(msg).slice(0, 300) }), vinculos: ACCIONES_VINCULO, diasVentana: ventanaOrdenMlMs() / 86400000,
+    // Mismo identificador que escribe el POST de creación (meta `_ml_order_id`). Lanza si la lectura no es concluyente.
+    // Después, búsqueda por texto del número de orden y del pack (pedidos manuales sin la meta). Devuelve {id, via} o null; lanza si no concluye.
+    conciliarConWoo: async (_db, c, o) => {
+      const t = Date.parse(o?.date_created);
+      const viaMeta = await buscarPedidoWcPorMlOrderId(c.woo, String(o.id), new Date(Number.isFinite(t) ? t : Date.now() - 30 * 86400000).toISOString());
+      if (viaMeta) return { id: viaMeta, via: 'meta' };
+      for (const [termino, via] of [[String(o.id), 'texto'], [o?.pack_id != null && String(o.pack_id) !== String(o.id) ? String(o.pack_id) : null, 'texto_pack']]) {
+        const w = termino ? await buscarPedidoWcPorTexto(c.woo, termino) : null;
+        if (w) return { id: w, via };
+      }
+      return null;
+    },
   }, opts);
 }
 
@@ -1719,10 +1905,12 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
     if (c.estado === 'reserva_en_curso') return { estado: 'reencolar', diferido: true, motivo: 'reserva_en_curso' };
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // saca la orden de la cola de Preparación
     encolarBolsasDeSkus(db, c.skus);
+    limpiarPendienteMl(db, mlOrderId, 'la orden pasó a cancelled');
     return { estado: 'hecho' };
   }
   if (orden.status !== 'paid') {
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId);
+    limpiarPendienteMl(db, mlOrderId, `la orden ya no está paid (${orden.status})`);
     return { estado: 'hecho' };
   }
   // Corte por fecha: un aviso tardío (calificación, reclamo, mediación) de una orden vieja que nunca se selló NO crea el
@@ -1733,6 +1921,9 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
     // Decisión de José: no se crea el pedido, pero sí se descuenta lo vendido (una vez por orden) y se avisa.
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // Preparación sigue igual
     if (corte.d?.estado === 'reintentar') return { estado: 'reencolar', motivo: corte.d.motivo };
+    // Lista blanca de resultados terminales: `sin_fecha` (la fecha puede aparecer en una relectura) y cualquier estado desconocido
+    // o nuevo conservan el pendiente (fail-closed); cuando por fin selle, se limpia por el camino normal.
+    if (esResultadoTerminalDescuento(corte.d?.estado)) limpiarPendienteMl(db, mlOrderId, 'la orden se resolvió por el descuento sin pedido');
     return { estado: 'hecho', motivo: corte.d?.estado === 'sin_fecha' ? 'orden_sin_fecha' : 'orden_vieja_sin_pedido' };
   }
   // Efecto 1: pedido Woo. `syncOrdenMlPuntual` no duplica: la reserva atómica de `_procesarOrden` impide un segundo POST.
@@ -1742,6 +1933,7 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
   await syncPedidoMlPuntual(db, cfg.ml, mlOrderId);
   if (!sellada) return { estado: 'reencolar', diferido: true, motivo: 'pedido_woo_sin_confirmar' };
   encolarBolsasDeSkus(db, await skusDelPedido());
+  limpiarPendienteMl(db, mlOrderId, 'la orden se selló');
   return { estado: 'hecho' };
 }
 
