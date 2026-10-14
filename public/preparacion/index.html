@@ -515,13 +515,13 @@ async function cargarLotes(){
   var c=document.getElementById('cuerpo'); var fecha=fechaBA(); c.innerHTML='<div class="loading">Cargando lotes…</div>';
   try{var r=await api('/despacho/lotes?fecha_jornada='+encodeURIComponent(fecha));if(!r.body.ok)throw new Error(r.body.error||'error');
     var lotes=r.body.lotes||[]; c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">Recargar</button></div><p class="sub">Lotes de '+esc(fecha)+' · separados por canal</p>'+
-      (lotes.length?'<div class="desp-list">'+lotes.map(function(l){return '<article class="desp-card"><h3>'+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+' · lote '+esc(String(l.id))+'</h3><div class="desp-meta">Estado: '+esc(l.estado)+' · Miembros: '+Number(l.miembros||0)+' · Confirmados: '+Number(l.confirmados||0)+' · Con tracking: '+Number(l.con_tracking||0)+'</div><div class="desp-actions"><button class="btn sec" onclick="verDetalleLote('+Number(l.id)+')">Ver paquetes</button></div></article>';}).join('')+'</div>':'<div class="desp-empty">No hay lotes para esta jornada.</div>');
+      (lotes.length?'<div class="desp-list">'+lotes.map(function(l){return '<article class="desp-card"><h3>'+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+' · lote '+esc(String(l.id))+'</h3><div class="desp-meta">Estado: '+esc(etiquetaEstadoLote(l.estado))+' · Miembros: '+Number(l.miembros||0)+' · Confirmados: '+Number(l.confirmados||0)+' · Con tracking: '+Number(l.con_tracking||0)+'</div><div class="desp-actions"><button class="btn sec" onclick="verDetalleLote('+Number(l.id)+')">Ver paquetes</button></div></article>';}).join('')+'</div>':'<div class="desp-empty">No hay lotes para esta jornada.</div>');
   }catch(e){c.innerHTML='<div class="loading err" role="alert">No se pudieron cargar los lotes: '+esc(e.message)+'</div>';}
 }
 async function verDetalleLote(id){
   var c=document.getElementById('cuerpo'); c.innerHTML='<div class="loading">Cargando paquetes…</div>';
   try{var r=await api('/despacho/lotes/'+encodeURIComponent(id));if(!r.body.ok)throw new Error(r.body.error||'error');var l=r.body.lote,items=r.body.items||[];
-    c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">← Volver a lotes</button>'+(l.estado==='abierto'?'<button class="btn" onclick="accionLote('+l.id+',\'iniciar\')">Iniciar lote</button>':'')+(l.estado==='en_preparacion'?'<button class="btn danger" onclick="cerrarLote('+l.id+')">Cerrar lote</button>':'')+((l.estado==='abierto'||l.estado==='en_preparacion')?'<button class="btn danger" onclick="anularLote('+l.id+')">Anular lote</button>':'')+'</div><h2>Lote '+esc(String(l.id))+' · '+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+'</h2><p class="sub">Estado: '+esc(l.estado)+' · Jornada: '+esc(l.fecha_jornada)+'</p><div class="desp-scan"><label for="lote-codigo">Código del paquete</label><input id="lote-codigo" placeholder="pack o clave" autocomplete="off"><button class="btn" onclick="escanearLote('+l.id+')" '+(l.estado==='en_preparacion'?'':'disabled')+'>Escanear</button></div><div id="desp-live" class="flash" role="status" aria-live="polite"></div><div class="desp-list">'+(items.length?items.map(function(i){return '<article class="desp-card"><h3>'+esc(i.grupo_clave)+' <span class="badge '+(i.estado==='confirmado'?'b-ok':'b-mut')+'">'+esc(i.estado)+'</span></h3><div class="desp-meta">'+(l.canal==='web'?'Tracking: '+esc(i.tracking||'asociar en embalaje'):'MercadoLibre: el tracking se gestiona fuera de este sistema')+'</div></article>';}).join(''):'<div class="desp-empty">Lote sin paquetes.</div>')+'</div>';
+    c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">← Volver a lotes</button>'+(l.estado==='abierto'?'<button class="btn" onclick="accionLote('+l.id+',\'iniciar\')">Iniciar lote</button>':'')+(l.estado==='en_preparacion'?'<button class="btn danger" onclick="cerrarLote('+l.id+')">Cerrar lote</button>':'')+((l.estado==='abierto'||l.estado==='en_preparacion')?'<button class="btn danger" onclick="anularLote('+l.id+')">Anular lote</button>':'')+'</div><h2>Lote '+esc(String(l.id))+' · '+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+'</h2><p class="sub">Estado: '+esc(etiquetaEstadoLote(l.estado))+' · Jornada: '+esc(l.fecha_jornada)+'</p><div class="desp-scan"><label for="lote-codigo">Código del paquete</label><input id="lote-codigo" placeholder="pack o clave" autocomplete="off"><button class="btn" onclick="escanearLote('+l.id+')" '+(l.estado==='en_preparacion'?'':'disabled')+'>Escanear</button></div><div id="desp-live" class="flash" role="status" aria-live="polite"></div><div class="desp-list">'+(items.length?items.map(function(i){return '<article class="desp-card"><h3>'+esc(i.grupo_clave)+' <span class="badge '+(i.estado==='confirmado'?'b-ok':'b-mut')+'">'+esc(i.estado)+'</span></h3><div class="desp-meta">'+(l.canal==='web'?'Tracking: '+esc(i.tracking||'asociar en embalaje'):'MercadoLibre: el tracking se gestiona fuera de este sistema')+'</div></article>';}).join(''):'<div class="desp-empty">Lote sin paquetes.</div>')+'</div>';
     if(l.estado==='cerrado'&&!l.salida_confirmada_en){var toolbar=c.querySelector('.desp-toolbar');if(toolbar){var b=document.createElement('button');b.className='btn';b.textContent='Confirmar salida';b.onclick=function(){confirmarSalidaLote(l.id);};toolbar.appendChild(b);}}
     if(window.__PREP_AUTH&&(window.__PREP_AUTH.is_admin||['supervisor','supervisor_deposito','auditor','despacho'].indexOf(String(window.__PREP_AUTH.rol||window.__PREP_AUTH.role||'').toLowerCase())>=0)){var tb=c.querySelector('.desp-toolbar');if(tb){var ev=document.createElement('button');ev.className='btn sec';ev.textContent='Ver auditoría';ev.onclick=function(){verEventosLote(l.id);};tb.appendChild(ev);}}
   }catch(e){c.innerHTML='<div class="loading err" role="alert">No se pudo cargar el lote: '+esc(e.message)+'</div>';}
@@ -535,12 +535,16 @@ async function confirmarSalidaLote(id){if(!confirm('¿Confirmás que todo el lot
 async function verEventosLote(id){var r=await api('/despacho/lotes/'+id+'/eventos');if(!r.body.ok)return despAviso(r.body.error||'No se pudo cargar la auditoría','bad');var eventos=r.body.eventos||[];alert(eventos.map(function(e){return e.creado_en+' · '+e.usuario+' · '+e.tipo;}).join('\n')||'Sin eventos');}
 
 var ETIQUETAS_ESTADO_PREP={en_preparacion:'en preparación',completada:'completada',pendiente_deposito:'pendiente de depósito',despachada_sin_verificar:'despachada sin verificar',cerrada_sin_evidencia:'cerrada sin evidencia',cancelada_sin_retiro_registrado:'cancelada sin retiro registrado',cancelada_pendiente_devolucion:'cancelada, devolución pendiente',cancelada_devuelta:'cancelada y devuelta',anulado_en_woo:'anulado en Woo'};
+var ETIQUETAS_ESTADO_LOTE={abierto:'abierto',en_preparacion:'en preparación',cerrado:'cerrado',anulado:'anulado'};
+function etiquetaEstadoLote(estado){return ETIQUETAS_ESTADO_LOTE[estado]||String(estado||'').replace(/_/g,' ');}
 function etiquetaEstadoPrep(estado){return ETIQUETAS_ESTADO_PREP[estado]||String(estado||'').replace(/_/g,' ');}
 // Una preparación abierta que Woo anula: cualquier acción (o el heartbeat) recibe 409 PREPARACION_ANULADA_EN_WOO. Se corta el
 // heartbeat, se avisa y se recarga la vista de solo lectura (una sola vez, aunque lleguen varias respuestas a la vez).
 var RECARGANDO_ANULADA=false;
-function alAnularseEnWoo(){
+function alAnularseEnWoo(idOrigen){
   if(RECARGANDO_ANULADA||VISTA!=='detalle'||!PREP||PREP.estado==='anulado_en_woo')return;
+  // Un 409 tardío de OTRA preparación (heartbeat de la que ya se cerró) no debe marcar la vista que está abierta ahora.
+  if(idOrigen!=null&&String(idOrigen)!==String(PREP.id))return;
   RECARGANDO_ANULADA=true;
   detenerHeartbeat();
   var id=PREP.id;
@@ -553,7 +557,7 @@ async function api(path,opts){
   var r=await fetch('/api/preparacion'+path,opts);
   var d=await r.json().catch(function(){return{ok:false,error:'HTTP '+r.status};});
   if(r.status===401){location.href='/herramientas/login/';throw new Error('sesión vencida');}
-  if(r.status===409&&d&&d.code==='PREPARACION_ANULADA_EN_WOO')alAnularseEnWoo();
+  if(r.status===409&&d&&d.code==='PREPARACION_ANULADA_EN_WOO'){var mId=/^\/(\d+)(?:\/|$)/.exec(path);alAnularseEnWoo(mId?mId[1]:null);}
   return {status:r.status,body:d};
 }
 

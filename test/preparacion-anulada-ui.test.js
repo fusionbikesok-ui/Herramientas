@@ -57,6 +57,18 @@ describe('preparación abierta que Woo anula', () => {
     terminar();
   });
 
+  it('un 409 de OTRA preparación (heartbeat tardío) no marca la vista abierta', async () => {
+    ctx.VISTA = 'detalle';
+    ctx.PREP = { id: 7, estado: 'en_preparacion' };
+    ctx.detenerHeartbeat = vi.fn();
+    ctx.abrirDetalle = vi.fn(() => Promise.resolve());
+    await ctx.api('/9/heartbeat', { method: 'POST' });
+    expect(ctx.abrirDetalle).not.toHaveBeenCalled();
+    expect(ctx.detenerHeartbeat).not.toHaveBeenCalled();
+    await ctx.api('/7/heartbeat', { method: 'POST' });
+    expect(ctx.abrirDetalle).toHaveBeenCalledWith(7, false);
+  });
+
   it('fuera de la vista de detalle, o con otro código 409, no hace nada', async () => {
     ctx.VISTA = 'pendientes';
     ctx.PREP = null;
@@ -80,6 +92,12 @@ describe('etiquetas legibles del estado previo', () => {
 });
 
 describe('detalle del lote con un pedido anulado', () => {
+  it('el estado del lote se muestra con etiqueta legible, no en crudo', () => {
+    expect(ctx.etiquetaEstadoLote('en_preparacion')).toBe('en preparación');
+    expect(HTML).not.toContain("esc(l.estado)+' · Jornada");
+    expect(HTML).not.toContain("esc(l.estado)+' · Miembros");
+  });
+
   it('el detalle del lote tiene su contenedor de aviso (aria-live) para mostrar el 409', () => {
     const detalle = HTML.slice(HTML.indexOf('async function verDetalleLote'), HTML.indexOf('async function accionLote'));
     expect(detalle).toContain('id="desp-live" class="flash" role="status" aria-live="polite"');
