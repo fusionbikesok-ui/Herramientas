@@ -2011,6 +2011,8 @@ export async function procesarOrdenWoo(db, cfg, orderId) {
   const union = [...new Set([...persistidos, ...actuales, ...lineasEnPapelera, ...conocidos])];
   if (inexistente && !union.length) {
     // 404 sin ninguna fuente: no se puede saber qué stock liberar. No se cierra en silencio.
+    // Riesgo residual aceptado: una orden creada DESPUÉS de la siembra y borrada para siempre antes de cualquier aviso nunca tuvo
+    // SKUs registrados. Este incidente lo hace visible y la reconciliación periódica de stock (`reconciliarStockMl`) corrige la diferencia.
     const txt = `El pedido Woo ${orderId} ya no existe (404) y no hay ningún SKU registrado para él (ni en el trabajo, ni en la cola de Preparación, ni en preparaciones): no se pudo liberar su stock reservado. Revisá a mano si ese pedido tenía productos con stock gestionado.`;
     abrirOActualizarIncidente(db, {
       integracion: 'woocommerce', proceso: 'order_woo', tipoError: `order_woo_sin_skus_${orderId}`.slice(0, 120), severidad: 'advertencia',

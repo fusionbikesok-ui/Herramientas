@@ -241,6 +241,27 @@ describe('order.woo: orden anterior al deploy (woo_orden_skus vacía)', () => {
     expect(skusPersistidosOrdenWoo(db, 501)).toEqual([]);
   });
 
+  it('un error SQL de lectura aborta la siembra: sin marca, sin filas a medias, y el próximo arranque la completa', async () => {
+    const { sembrarWooOrdenSkus, MARCA_SIEMBRA } = await import('../lib/wooOrdenSkus.js');
+    cacheConItems(500, ['A-1']);
+    const roto = { prepare: (q) => { if (/FROM pedidos_cache/.test(q)) throw new Error('database disk image is malformed'); return db.prepare(q); }, transaction: (f) => db.transaction(f) };
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try { expect(sembrarWooOrdenSkus(roto)).toBe(0); } finally { log.mockRestore(); }
+    expect(db.prepare('SELECT 1 FROM sync_estado WHERE clave = ?').get(MARCA_SIEMBRA)).toBeUndefined();
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_orden_skus').get().n).toBe(0);
+    expect(sembrarWooOrdenSkus(db)).toBe(1);
+  });
+
+  it('items_json ilegible en una fila se saltea y se loguea UNA sola vez con el total; la marca se graba', async () => {
+    const { sembrarWooOrdenSkus, MARCA_SIEMBRA } = await import('../lib/wooOrdenSkus.js');
+    cacheConItems(500, ['A-1']);
+    for (const id of [601, 602, 603]) db.prepare(`INSERT INTO pedidos_cache (clave, canal, wc_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
+      VALUES (?, 'web', ?, ?, 'X', '2026-10-14', 'pendiente', 'no-es-json', 'x')`).run(clave(id), id, String(id));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try { expect(sembrarWooOrdenSkus(db)).toBe(1); expect(log).toHaveBeenCalledTimes(1); expect(String(log.mock.calls[0][0])).toMatch(/3 fila/); } finally { log.mockRestore(); }
+    expect(db.prepare('SELECT 1 FROM sync_estado WHERE clave = ?').get(MARCA_SIEMBRA)).toBeDefined();
+  });
+
   it('una fila persistida desactualizada NO pierde un SKU que Preparación conoce: la unión incluye siempre los conocidos', async () => {
     db.prepare("INSERT INTO woo_orden_skus (order_id, skus_json, actualizado_en) VALUES ('500', '[\"A-1\"]', 'x')").run();
     cacheConItems(500, ['A-1', 'NUEVO-9']);
