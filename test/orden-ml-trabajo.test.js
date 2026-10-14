@@ -70,6 +70,17 @@ function instalarMocks() {
     if ((m = /^\/orders\/(\d+)$/.exec(p))) return { status: 200, data: woo.pedidos[m[1]], headers: {} };
     if (p.startsWith('/orders?')) {
       if (woo.busquedaError) throw woo.busquedaError;
+      const txt = /[?&]search=([^&]+)/.exec(p);
+      if (txt) { // búsqueda por texto: lo que fije el test, o los pedidos que contienen el término
+        if (woo.busquedaTextoError) throw woo.busquedaTextoError;
+        const t = decodeURIComponent(txt[1]);
+        return { status: 200, data: /status=trash/.test(p) ? [] : (woo.ordenesBusqueda ?? woo.ordenes.filter((o) => JSON.stringify(o).includes(t))), headers: {} };
+      }
+      if (woo.paginasConfirmar && /orderby=date/.test(p)) { // reverificación sin filtro de fecha, paginada
+        const pg = Number(/[?&]page=(\d+)/.exec(p)[1]);
+        return { status: 200, data: /status=trash/.test(p) ? [] : (woo.paginasConfirmar[pg - 1] ?? []), headers: {} };
+      }
+      if (woo.paginasConfirmar) return { status: 200, data: [], headers: {} };
       return { status: 200, data: woo.ordenes, headers: {} };
     }
     return { status: 200, data: {}, headers: {} };
@@ -1181,13 +1192,135 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
     expect(woo.posts).toBe(0);
   });
 
-  it('polling: el cursor avanza con date_last_updated aunque la orden ya esté sellada', async () => {
-    db.prepare("INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)").run(hace(1 * DIA), new Date().toISOString());
-    const act = hace(30 * 60_000);
-    ml.orden = orden({ date_created: hace(30 * DIA), date_last_updated: act });
-    db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES ('ORD-1', ?, '[]', 'ok', ?)").run(new Date().toISOString(), new Date().toISOString());
-    await syncMlToWc(db, CFG);
-    expect(db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get().valor).toBe(act);
+  describe('polling por date_last_updated: ventana fija, todas las páginas, cursor a `to`', () => {
+    const CURSOR = 'ml_polling_actualizadas_hasta';
+    const cursor = () => db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(CURSOR)?.valor ?? null;
+    const sembrar = (valor) => db.prepare("INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)").run(CURSOR, valor, new Date().toISOString());
+    const ordenN = (n, over = {}) => ({ ...orden({ id: `P-${n}` }), date_created: hace(30 * DIA), date_last_updated: hace(60_000), payments: [aprobado(60_000)], ...over });
+    // Mock paginado: `ml.busqueda(offset, limit, params)` → { results, paging }.
+    const paginado = (lista, { alPagina = null } = {}) => {
+      const base = ml.orden;
+      mlFetch.mockImplementation(async (dbx, cfg, method, p) => {
+        ml.gets.push(p);
+        if (p.startsWith('/orders/search')) {
+          const q = new URLSearchParams(p.split('?')[1]);
+          const off = Number(q.get('offset')), lim = Number(q.get('limit'));
+          if (alPagina) { const r = alPagina(off, lista); if (r) return r; }
+          return { status: 200, data: { results: lista.slice(off, off + lim), paging: { total: lista.length, offset: off, limit: lim } } };
+        }
+        return { status: 404, data: {} };
+      });
+      return base;
+    };
+
+    it('ventana fija: pide from=cursor−solape y to=ahora con los MISMOS valores en todas las páginas', async () => {
+      sembrar(hace(2 * 3600_000));
+      const lista = Array.from({ length: 120 }, (_, i) => ordenN(i, { id: `S-${i}` }));
+      lista.forEach((o) => db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'ok', ?)").run(o.id, o.date_created, new Date().toISOString()));
+      paginado(lista);
+      await syncMlToWc(db, CFG);
+      const urls = ml.gets.filter((p) => p.startsWith('/orders/search') && !/limit=1$/.test(p));
+      expect(urls).toHaveLength(3); // 50 + 50 + 20
+      const ventana = (u) => [/date_last_updated\.from=([^&]+)/.exec(u)[1], /date_last_updated\.to=([^&]+)/.exec(u)[1]];
+      expect(new Set(urls.map((u) => ventana(u).join('|'))).size).toBe(1);
+      const [from, to] = ventana(urls[0]).map((x) => Date.parse(decodeURIComponent(x)));
+      expect(from).toBeLessThan(Date.now() - 3 * 3600_000 + 5000);
+      expect(to).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('una orden vieja pagada hoy que aparece en la PÁGINA 2 no se saltea', async () => {
+      sembrar(hace(2 * 3600_000));
+      const relleno = Array.from({ length: 50 }, (_, i) => ordenN(i, { id: `S-${i}` }));
+      relleno.forEach((o) => db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'ok', ?)").run(o.id, o.date_created, new Date().toISOString()));
+      const objetivo = ordenN(0, { id: 'ORD-1' });
+      paginado([...relleno, objetivo]);
+      await syncMlToWc(db, CFG);
+      expect(woo.posts).toBe(1);
+      expect(cursor()).toBeTruthy();
+    });
+
+    it('una página fallida → el cursor queda SIN cambios (y las anteriores ya procesadas no se pierden)', async () => {
+      const previo = hace(2 * 3600_000);
+      sembrar(previo);
+      const lista = [ordenN(0, { id: 'ORD-1' }), ...Array.from({ length: 60 }, (_, i) => ordenN(i, { id: `S-${i}` }))];
+      paginado(lista, { alPagina: (off) => (off >= 50 ? { status: 500, data: null } : null) });
+      await syncMlToWc(db, CFG);
+      expect(cursor()).toBe(previo);
+      expect(woo.posts).toBeGreaterThan(0); // la primera página sí se procesó (idempotente al repetir)
+    });
+
+    it('un 429 sintético de ML tampoco mueve el cursor', async () => {
+      const previo = hace(2 * 3600_000);
+      sembrar(previo);
+      paginado([], { alPagina: () => ({ status: 429, data: null }) });
+      await syncMlToWc(db, CFG);
+      expect(cursor()).toBe(previo);
+    });
+
+    it('offsets desplazados: si entra una orden a mitad del paginado se repite el recorrido y no se pierde ninguna', async () => {
+      sembrar(hace(2 * 3600_000));
+      const relleno = Array.from({ length: 50 }, (_, i) => ordenN(i, { id: `S-${i}` }));
+      relleno.forEach((o) => db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'ok', ?)").run(o.id, o.date_created, new Date().toISOString()));
+      const objetivo = ordenN(0, { id: 'ORD-1' });
+      const lista = [...relleno, objetivo];
+      let inyectada = false;
+      paginado(lista, {
+        // Tras servir la página 1, una orden ya vista (índice 0) "sale" de la ventana: todo se corre un lugar hacia arriba.
+        alPagina: (off) => { if (off === 50 && !inyectada) { inyectada = true; lista.shift(); } return null; },
+      });
+      await syncMlToWc(db, CFG);
+      expect(woo.posts).toBe(1); // el objetivo se encontró (en el 2.º recorrido)
+      expect(cursor()).toBeTruthy();
+    });
+
+    it('si la ventana sigue inestable en cada intento: cursor intacto + incidente crítico', async () => {
+      const previo = hace(2 * 3600_000);
+      sembrar(previo);
+      let total = 10;
+      paginado([], { alPagina: (off, l) => ({ status: 200, data: { results: [], paging: { total: total++, offset: off, limit: 50 } } }) });
+      await syncMlToWc(db, CFG);
+      expect(cursor()).toBe(previo);
+      expect(inc('polling_ml_ventana_no_recorrible')).toMatchObject({ severidad: 'critico' });
+    });
+
+    // Mock con datos reales: filtra por from/to de date_last_updated y pagina por offset.
+    const conDatos = (lista) => mlFetch.mockImplementation(async (dbx, cfg, method, p) => {
+      ml.gets.push(p);
+      const q = new URLSearchParams(p.split('?')[1]);
+      const desde = Date.parse(q.get('order.date_last_updated.from')), hasta = Date.parse(q.get('order.date_last_updated.to'));
+      const off = Number(q.get('offset')), lim = Number(q.get('limit'));
+      const ventana = lista.filter((o) => Date.parse(o.date_last_updated) >= desde && Date.parse(o.date_last_updated) <= hasta);
+      return { status: 200, data: { results: ventana.slice(off, off + lim), paging: { total: ventana.length, offset: off, limit: lim } } };
+    });
+
+    it('tope de offset de ML: la ventana se parte en dos y se recorre completa (nada se pierde)', async () => {
+      process.env.ML_BUSQUEDA_MAX_OFFSET = '100';
+      sembrar(hace(2 * 3600_000));
+      // 150 órdenes selladas repartidas en la última hora + una pendiente (la objetivo) en el medio.
+      const lista = Array.from({ length: 150 }, (_, i) => ordenN(i, { id: `S-${i}`, date_last_updated: hace((i + 1) * 20_000) }));
+      lista.forEach((o) => db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'ok', ?)").run(o.id, o.date_created, new Date().toISOString()));
+      lista.push(ordenN(0, { id: 'ORD-1', date_last_updated: hace(1_500_000) }));
+      conDatos(lista);
+      await syncMlToWc(db, CFG);
+      delete process.env.ML_BUSQUEDA_MAX_OFFSET;
+      expect(woo.posts).toBe(1);
+      expect(cursor()).toBeTruthy();
+    });
+
+    it('tope de offset con una ventana que no se puede partir más: cursor intacto + incidente crítico', async () => {
+      process.env.ML_BUSQUEDA_MAX_OFFSET = '100';
+      const previo = hace(2 * 3600_000);
+      sembrar(previo);
+      // Todas las órdenes con la misma date_last_updated: ninguna partición baja de 100.
+      const t = hace(30_000);
+      const lista = Array.from({ length: 300 }, (_, i) => ordenN(i, { id: `S-${i}`, date_last_updated: t }));
+      lista.forEach((o) => db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'ok', ?)").run(o.id, o.date_created, new Date().toISOString()));
+      conDatos(lista);
+      await syncMlToWc(db, CFG);
+      delete process.env.ML_BUSQUEDA_MAX_OFFSET;
+      expect(cursor()).toBe(previo);
+      expect(inc('polling_ml_ventana_no_recorrible')).toMatchObject({ severidad: 'critico' });
+    });
   });
 
   it('guarda de stock: Woo con menos stock que lo vendido → no escribe, línea omitida, incidente crítico y orden cerrada', async () => {
@@ -1303,6 +1436,81 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
       expect(woo.posts).toBe(0);
       expect(fila()).toBeUndefined();
       expect(inc('orden_ml_ya_atendida_prep_ORD-1')).toMatchObject({ severidad: 'info' });
+    });
+  });
+
+  describe('conciliación (ronda 3): pedidos manuales sin meta, páginas sin fecha, errores de SQL', () => {
+    const vieja = (over = {}) => orden({ date_created: hace(20 * DIA), ...over });
+    const sinMeta = (extra = {}) => ({ id: 9100, status: 'processing', date_created_gmt: hace(DIA).replace('Z', ''), line_items: [], meta_data: [], customer_note: 'Venta ML', ...extra });
+
+    it('pedido manual SIN _ml_order_id que menciona el número de la venta en la nota → 0 PUT, sellada e incidente informativo', async () => {
+      woo.ordenes.push(sinMeta({ customer_note: 'es la venta ML ORD-1' }));
+      ml.orden = vieja();
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(fila()).toMatchObject({ estado: 'completo', origen: 'manual_sin_descuento' });
+      expect(inc('orden_ml_ya_atendida_woo_ORD-1').mensaje_humano).toMatch(/SIN la meta _ml_order_id/);
+    });
+
+    it('también se encuentra por el pack_id', async () => {
+      woo.ordenes.push(sinMeta({ customer_note: 'carrito PACK-77' }));
+      ml.orden = vieja({ pack_id: 'PACK-77' });
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(inc('orden_ml_ya_atendida_woo_ORD-1').mensaje_humano).toMatch(/el pack/);
+    });
+
+    it('coincidencia dudosa (Woo devuelve pedidos que no contienen el término) → 0 PUT y reintento', async () => {
+      woo.ordenesBusqueda = [sinMeta({ customer_note: 'otra cosa' })];
+      ml.orden = vieja();
+      const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(r.estado).toBe('reencolar');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(fila()).toBeUndefined();
+    });
+
+    it('la búsqueda por texto falla (5xx) → 0 PUT y reintento; sin pedidos que coincidan → descuenta', async () => {
+      woo.busquedaTextoError = Object.assign(new Error('WooCommerce API error 502'), { status: 502 });
+      ml.orden = vieja();
+      expect((await procesarOrdenMl(db, CFG, 'ORD-1')).estado).toBe('reencolar');
+      expect(woo.productPuts).toHaveLength(0);
+      woo.busquedaTextoError = null;
+      expect((await procesarOrdenMl(db, CFG, 'ORD-1')).estado).toBe('hecho');
+      expect(woo.productPuts).toHaveLength(1);
+    });
+
+    it('reverificación: una página con un pedido SIN fecha no corta el recorrido (el pedido está en la página 2)', async () => {
+      const viejos = Array.from({ length: 99 }, (_, i) => ({ id: 100 + i, date_created_gmt: '2020-01-01T00:00:00', meta_data: [] }));
+      woo.paginasConfirmar = [[...viejos, { id: 99, meta_data: [] }], [{ id: 9200, date_created_gmt: '2020-01-01T00:00:00', meta_data: [{ key: '_ml_order_id', value: 'ORD-1' }] }]];
+      ml.orden = vieja();
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(fila()).toMatchObject({ origen: 'manual_sin_descuento' });
+    });
+
+    it('reverificación: si todas las fechas son legibles y anteriores al umbral, sí corta (contraste)', async () => {
+      const viejos = Array.from({ length: 100 }, (_, i) => ({ id: 100 + i, date_created_gmt: '2020-01-01T00:00:00', meta_data: [] }));
+      woo.paginasConfirmar = [viejos, [{ id: 9200, date_created_gmt: '2020-01-01T00:00:00', meta_data: [{ key: '_ml_order_id', value: 'ORD-1' }] }]];
+      ml.orden = vieja();
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(woo.productPuts).toHaveLength(1); // no leyó la página 2: inexistente → descuenta
+    });
+
+    it('reverificación: páginas sin fecha hasta el tope → inconcluso (nunca "inexistente"): 0 PUT y reintento', async () => {
+      const sinFecha = Array.from({ length: 100 }, (_, i) => ({ id: 100 + i, meta_data: [] }));
+      woo.paginasConfirmar = Array.from({ length: 25 }, () => sinFecha);
+      ml.orden = vieja();
+      expect((await procesarOrdenMl(db, CFG, 'ORD-1')).estado).toBe('reencolar');
+      expect(woo.productPuts).toHaveLength(0);
+    });
+
+    it('un error SQL de Preparación que NO es "no such table" es inconcluso: 0 PUT y reintento', async () => {
+      db.prepare('CREATE TABLE preparaciones (id INTEGER PRIMARY KEY, clave TEXT, estado TEXT)').run(); // sin la columna ml_order_id
+      ml.orden = vieja();
+      const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(r.estado).toBe('reencolar');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(fila()).toBeUndefined();
     });
   });
 
