@@ -2847,7 +2847,11 @@ describe('syncMlToWc — el cursor de ventas no avanza si ML no responde (cooldo
     await vi.runAllTimersAsync();
     await p;
 
-    expect(leerCursor(db)).toBe(fechaOrden);
+    // Ronda 3: el barrido avanza su cursor propio a `to` (el inicio de la corrida), no al máximo visto.
+    const cursor = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ml_polling_actualizadas_hasta'").get()?.valor;
+    expect(cursor).toBeTruthy();
+    expect(cursor > cursorPrevio).toBe(true);
+    expect(Date.parse(cursor)).toBeGreaterThanOrEqual(Date.parse(fechaOrden));
   });
 });
 
