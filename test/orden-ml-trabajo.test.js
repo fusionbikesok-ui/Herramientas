@@ -1337,6 +1337,49 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
         expect(woo.productPuts).toHaveLength(0);
       });
 
+      it('pendiente que pasa a cancelled: se limpia el registro y el incidente de cuarentena se resuelve con nota', async () => {
+        const previo = hace(2 * 3600_000);
+        sembrar(previo);
+        const sinFecha = ordenN(0, { id: 'ORD-1', date_created: undefined, payments: [] });
+        paginado([sinFecha]);
+        await syncMlToWc(db, CFG);
+        envejecer();
+        await syncMlToWc(db, CFG);
+        expect(cuarentena()).toMatchObject({ estado: 'activo' });
+        ml.orden = { ...sinFecha, status: 'cancelled' };
+        await procesarOrdenMl(db, CFG, 'ORD-1');
+        expect(pendiente()).toBeUndefined();
+        expect(cuarentena()).toMatchObject({ estado: 'resuelto' });
+        const nota = db.prepare("SELECT detalle_json FROM incidentes_operativos_historial WHERE incidente_id = ? AND evento = 'resuelto'").get(cuarentena().id);
+        expect(nota.detalle_json).toMatch(/cancelled/);
+      });
+
+      it('pendiente cuya orden ya no está paid (otro estado): se limpia', async () => {
+        sembrar(hace(2 * 3600_000));
+        const sinFecha = ordenN(0, { id: 'ORD-1', date_created: undefined, payments: [] });
+        paginado([sinFecha]);
+        await syncMlToWc(db, CFG);
+        expect(pendiente()).toBeTruthy();
+        ml.orden = { ...sinFecha, status: 'invalid' };
+        await procesarOrdenMl(db, CFG, 'ORD-1');
+        expect(pendiente()).toBeUndefined();
+      });
+
+      it('más de 200 pendientes: el barrido rota y todos se re-encolan en algún momento', async () => {
+        const ts = (i) => new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
+        const ins = db.prepare('INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)');
+        for (let i = 0; i < 250; i++) ins.run(`ml_pendiente:P-${String(i).padStart(3, '0')}`, ts(i), ts(i));
+        const { barrerPendientesMl } = await import('../routes/sync.js');
+        const vistos = new Set();
+        const trabajos = () => db.prepare("SELECT recurso FROM trabajos_recurso WHERE tipo = 'order.ml'").all().map((r) => r.recurso);
+        barrerPendientesMl(db);
+        trabajos().forEach((r) => vistos.add(r));
+        expect(vistos.size).toBe(200);
+        barrerPendientesMl(db);
+        trabajos().forEach((r) => vistos.add(r));
+        expect(vistos.size).toBe(250);
+      });
+
       it('si NO es la misma venta: descontar-ordenes-viejas con omitirConciliacion descuenta (salida manual)', async () => {
         woo.ordenes.push({ id: 9100, status: 'processing', date_created_gmt: hace(DIA).replace('Z', ''), line_items: [], meta_data: [], customer_note: 'venta ORD-1' });
         const o = orden({ date_created: hace(20 * DIA) });

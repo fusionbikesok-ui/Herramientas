@@ -445,7 +445,21 @@ function ordenRetomada(db, id) {
 }
 
 const PENDIENTE_PREFIJO = 'ml_pendiente:';
-const limpiarPendienteMl = (db, id) => db.prepare('DELETE FROM sync_estado WHERE clave = ?').run(`${PENDIENTE_PREFIJO}${id}`);
+/** Saca la orden del registro de pendientes y, si estaba en cuarentena, resuelve su incidente dejando el motivo en el historial. */
+function limpiarPendienteMl(db, id, motivo = 'orden_retomada') {
+  const borrado = db.prepare('DELETE FROM sync_estado WHERE clave = ?').run(`${PENDIENTE_PREFIJO}${id}`).changes;
+  const tipoError = `orden_ml_en_cuarentena_${id}`.slice(0, 120);
+  try { // el incidente es informativo: que no pueda resolverse nunca cambia el resultado del trabajo
+    const inc = db.prepare("SELECT id FROM incidentes_operativos WHERE tipo_error = ? AND estado = 'activo'").get(tipoError);
+    if (!inc) return borrado;
+    const r = confirmarCicloSano(db, { integracion: 'mercadolibre', proceso: 'polling_ordenes', tipoError });
+    if (r.resueltos) {
+      db.prepare("UPDATE incidentes_operativos_historial SET detalle_json = ? WHERE incidente_id = ? AND evento = 'resuelto' AND detalle_json IS NULL")
+        .run(JSON.stringify({ nota: `La venta ${id} salió de cuarentena sola: ${motivo}.` }), inc.id);
+    }
+  } catch { /* fail-open */ }
+  return borrado;
+}
 const umbralCuarentenaMs = () => { const h = Number(process.env.ML_POLLING_CUARENTENA_HORAS); return (Number.isFinite(h) && h >= 0 ? h : 3) * 3600 * 1000; };
 
 /**
@@ -471,11 +485,15 @@ async function ponerEnCuarentenaSiCorresponde(db, id, orden) {
 
 /** Reintenta las órdenes pendientes/en cuarentena: las ya retomadas salen del registro; el resto vuelve a encolar su `order.ml`. */
 export function barrerPendientesMl(db) {
-  const filas = db.prepare("SELECT clave FROM sync_estado WHERE clave LIKE 'ml_pendiente:%' LIMIT 200").all();
+  // Rotación con progreso garantizado: las 200 más viejas por `actualizado_en`; al re-encolar una se le actualiza, así pasa al final
+  // y la próxima pasada toma las siguientes (sin ORDER BY, SQLite devolvía siempre el mismo subconjunto y el resto nunca se tocaba).
+  const filas = db.prepare("SELECT clave FROM sync_estado WHERE clave LIKE 'ml_pendiente:%' ORDER BY actualizado_en, clave LIMIT 200").all();
+  const tocar = db.prepare('UPDATE sync_estado SET actualizado_en = ? WHERE clave = ?');
   for (const { clave } of filas) {
     const id = clave.slice(PENDIENTE_PREFIJO.length);
     if (ordenRetomada(db, id)) { limpiarPendienteMl(db, id); continue; }
     try { encolarTrabajo(db, { tipo: 'order.ml', recurso: id }); } catch { /* se reintenta en la próxima pasada */ }
+    tocar.run(new Date().toISOString(), clave);
   }
   return filas.length;
 }
@@ -1883,10 +1901,12 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
     if (c.estado === 'reserva_en_curso') return { estado: 'reencolar', diferido: true, motivo: 'reserva_en_curso' };
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // saca la orden de la cola de Preparación
     encolarBolsasDeSkus(db, c.skus);
+    limpiarPendienteMl(db, mlOrderId, 'la orden pasó a cancelled');
     return { estado: 'hecho' };
   }
   if (orden.status !== 'paid') {
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId);
+    limpiarPendienteMl(db, mlOrderId, `la orden ya no está paid (${orden.status})`);
     return { estado: 'hecho' };
   }
   // Corte por fecha: un aviso tardío (calificación, reclamo, mediación) de una orden vieja que nunca se selló NO crea el
@@ -1897,6 +1917,7 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
     // Decisión de José: no se crea el pedido, pero sí se descuenta lo vendido (una vez por orden) y se avisa.
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // Preparación sigue igual
     if (corte.d?.estado === 'reintentar') return { estado: 'reencolar', motivo: corte.d.motivo };
+    limpiarPendienteMl(db, mlOrderId, corte.d?.estado === 'sin_fecha' ? 'la orden quedó resuelta como sin fecha' : 'la orden se resolvió por el descuento sin pedido');
     return { estado: 'hecho', motivo: corte.d?.estado === 'sin_fecha' ? 'orden_sin_fecha' : 'orden_vieja_sin_pedido' };
   }
   // Efecto 1: pedido Woo. `syncOrdenMlPuntual` no duplica: la reserva atómica de `_procesarOrden` impide un segundo POST.
@@ -1906,6 +1927,7 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
   await syncPedidoMlPuntual(db, cfg.ml, mlOrderId);
   if (!sellada) return { estado: 'reencolar', diferido: true, motivo: 'pedido_woo_sin_confirmar' };
   encolarBolsasDeSkus(db, await skusDelPedido());
+  limpiarPendienteMl(db, mlOrderId, 'la orden se selló');
   return { estado: 'hecho' };
 }
 
