@@ -445,6 +445,9 @@ function ordenRetomada(db, id) {
 }
 
 const PENDIENTE_PREFIJO = 'ml_pendiente:';
+const RESULTADOS_TERMINALES_DESCUENTO = ['descontada', 'ya_descontada', 'no_aplica', 'cancelada'];
+/** Lista blanca: solo estos resultados de `descontarOrdenVieja` cierran el pendiente; cualquier otro (desconocido, nuevo, `sin_fecha`) lo conserva. */
+export const esResultadoTerminalDescuento = (estado) => RESULTADOS_TERMINALES_DESCUENTO.includes(estado);
 /** Saca la orden del registro de pendientes y, si estaba en cuarentena, resuelve su incidente dejando el motivo en el historial. */
 function limpiarPendienteMl(db, id, motivo = 'orden_retomada') {
   const borrado = db.prepare('DELETE FROM sync_estado WHERE clave = ?').run(`${PENDIENTE_PREFIJO}${id}`).changes;
@@ -493,7 +496,7 @@ export function barrerPendientesMl(db) {
     const id = clave.slice(PENDIENTE_PREFIJO.length);
     if (ordenRetomada(db, id)) { limpiarPendienteMl(db, id); continue; }
     try { encolarTrabajo(db, { tipo: 'order.ml', recurso: id }); } catch { /* se reintenta en la próxima pasada */ }
-    tocar.run(new Date().toISOString(), clave);
+    try { tocar.run(new Date().toISOString(), clave); } catch { /* la rotación es una ayuda: se reintenta en la próxima pasada */ }
   }
   return filas.length;
 }
@@ -1917,7 +1920,9 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
     // Decisión de José: no se crea el pedido, pero sí se descuenta lo vendido (una vez por orden) y se avisa.
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // Preparación sigue igual
     if (corte.d?.estado === 'reintentar') return { estado: 'reencolar', motivo: corte.d.motivo };
-    limpiarPendienteMl(db, mlOrderId, corte.d?.estado === 'sin_fecha' ? 'la orden quedó resuelta como sin fecha' : 'la orden se resolvió por el descuento sin pedido');
+    // Lista blanca de resultados terminales: `sin_fecha` (la fecha puede aparecer en una relectura) y cualquier estado desconocido
+    // o nuevo conservan el pendiente (fail-closed); cuando por fin selle, se limpia por el camino normal.
+    if (esResultadoTerminalDescuento(corte.d?.estado)) limpiarPendienteMl(db, mlOrderId, 'la orden se resolvió por el descuento sin pedido');
     return { estado: 'hecho', motivo: corte.d?.estado === 'sin_fecha' ? 'orden_sin_fecha' : 'orden_vieja_sin_pedido' };
   }
   // Efecto 1: pedido Woo. `syncOrdenMlPuntual` no duplica: la reserva atómica de `_procesarOrden` impide un segundo POST.

@@ -1337,6 +1337,31 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
         expect(woo.productPuts).toHaveLength(0);
       });
 
+      it('orden_sin_fecha conserva el pendiente y la cuarentena; una relectura con fecha la sella y recién ahí se limpia', async () => {
+        sembrar(hace(2 * 3600_000));
+        const sinFecha = ordenN(0, { id: 'ORD-1', date_created: undefined, payments: [] });
+        paginado([sinFecha]);
+        await syncMlToWc(db, CFG);
+        envejecer();
+        await syncMlToWc(db, CFG);
+        ml.orden = sinFecha;
+        const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+        expect(r.motivo).toBe('orden_sin_fecha');
+        expect(pendiente()).toBeTruthy();
+        expect(cuarentena()).toMatchObject({ estado: 'activo' });
+        ml.orden = { ...sinFecha, date_created: hace(60_000), payments: [aprobado(60_000)] };
+        await procesarOrdenMl(db, CFG, 'ORD-1');
+        expect(db.prepare("SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = 'ORD-1'").get()).toBeTruthy();
+        expect(pendiente()).toBeUndefined();
+        expect(cuarentena()).toMatchObject({ estado: 'resuelto' });
+      });
+
+      it('solo los resultados terminales de la lista blanca cierran el pendiente; un estado desconocido o nuevo lo conserva (fail-closed)', async () => {
+        const { esResultadoTerminalDescuento } = await import('../routes/sync.js');
+        for (const e of ['descontada', 'ya_descontada', 'no_aplica', 'cancelada']) expect(esResultadoTerminalDescuento(e)).toBe(true);
+        for (const e of ['sin_fecha', 'reintentar', 'omitida', 'ambigua', 'pendiente', 'estado_nuevo_desconocido', undefined, null]) expect(esResultadoTerminalDescuento(e)).toBe(false);
+      });
+
       it('pendiente que pasa a cancelled: se limpia el registro y el incidente de cuarentena se resuelve con nota', async () => {
         const previo = hace(2 * 3600_000);
         sembrar(previo);
