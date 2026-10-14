@@ -286,3 +286,10 @@ Spec: `docs/superpowers/specs/2026-10-11-fase-e-webhooks-design.md` (corte acord
 - **Filas `origen='manual_sin_descuento'`** (las inserta José para órdenes ya resueltas a mano: `completo`, `lineas_json='[]'`, `cancelada_en` NULL) se respetan como cerradas: ni pedido, ni descuento, ni aviso. `cerrarYAvisarCancelacion` las ignora (no las marca `cancelada_en`), así que no son lápida ni disparan `orden_ml_cancelada_luego_pagada`.
 - **Texto del aviso:** ya no dice "ya fue atendida"; dice que la venta quedó fuera de la ventana, que NO se creó el pedido y, si de verdad se descontó, que solo se ajustó el stock (si no se descontó nada, no lo afirma).
 
+
+
+## Stock y reposición con ventas locales — 2026-10-14
+
+Informe en `/herramientas/gestion-vps/ventas/stock/`, API `ventas/api?mode=stock&days=90&cover=15`, restringido a administradores. Período inicial 90 días (30/60/90/180), cobertura 15 días ajustable 1–90. Comparte la caché comercial de `metrics.mjs`; conserva originales ML y elimina sus espejos Woo, excluye pendientes/canceladas/devueltas/sin conciliar y usa unidades netas. `catalog_id` identifica la variante; fallback sólo SKU único compatible, nunca similitud del nombre. Stock exclusivamente del catálogo local de Herramientas (caché 30 segundos), sin nuevas consultas a Woo/ML.
+
+Promedio = unidades netas / días calendario; cobertura = stock / promedio, por variante. Stock compartido en padre, cantidad desconocida o SKU ambiguo no producen cobertura. `catalogo_cache` convierte cantidades Woo nulas a cero y no conserva manage_stock: cero se presenta como «Sin stock informado», no como agotado confirmado. Historial parcial, líneas sin vínculo y stock de más de 24 h quedan visibles. No estima demanda perdida, reservas ni compras en camino. No modifica inventario, pedidos, precios, checkout, emisión fiscal ni sincronizadores.

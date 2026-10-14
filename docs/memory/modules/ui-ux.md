@@ -181,3 +181,45 @@ autenticada y auditada. No puede autoexcluirse de Mensajería.
 - Historial cronológico por fecha+ID, paginación y reinicio de página tras desconexión sin solapamiento; borrador se conserva. IA se informa según estado local y habilitación/conexión efectiva del número.
 
 - Los números pendientes se muestran en el panel de estado; el filtro de conversaciones sólo habilita IDs configurados y se deshabilita si no hay ninguno.
+
+
+## Mensajería: imágenes desde el portapapeles (2026-10-14)
+
+En Respuesta, Ctrl+V (o Pegar del navegador) agrega una captura PNG/JPEG/WEBP al borrador
+de la conversación actual, con miniatura y Quitar. No se sube ni envía hasta pulsar Enviar.
+Se conserva el texto existente; el pegado de texto normal sigue nativo. Un adjunto previo
+no se reemplaza, se admite una imagen por vez y rige el máximo existente de 5 MiB.
+Se mantienen permisos, ventana de WhatsApp, bloqueo de operación/grabación y capacidad
+de medios del canal. Notas privadas y chat web de solo texto no aceptan imágenes.
+Las imágenes locales también muestran miniatura al elegir Archivo; sus URL temporales se
+liberan al quitar, enviar o cambiar de conversación. Archivos sin subir siguen en memoria
+y requieren volver a adjuntarlos si se recarga la página, igual que el selector de archivos.
+No se usa lectura persistente del portapapeles ni se pide un permiso nuevo.
+
+
+## Informes de stock y reposición — 2026-10-14
+
+Panel comercial incorpora navegación a Stock y reposición (`/herramientas/gestion-vps/ventas/stock/`). Tres vistas: Stock crítico, Más vendidos por unidades y Todo el catálogo; búsqueda por modelo/nombre/SKU/talle/color y filtros de marca, categoría y situación. Cada variante conserva su stock/ventas Web-POS y ML/cobertura/última venta y miniatura. Primero aparecen variantes con cobertura baja positiva; los ceros con ventas se indican como cantidad no informada. CSV exporta sólo el filtro/vista cargados, con período y protección de fórmulas. Período inicial 90 días, alerta 15, ambos ajustables. Tema compartido, tabla desplazable dentro de la tarjeta en celular, controles accesibles. API falla explícitamente si falta catálogo; al fallar la actualización se identifica el informe anterior que sigue visible.
+
+
+## Mensajería: documentos Excel entrantes (2026-10-14)
+
+Los adjuntos XLSX de WhatsApp se registran con nombre y vínculo privado, junto a los PDF.
+La descarga usa el flujo autenticado existente, se valida el paquete OOXML sin ejecutar ni
+extraer archivos y se conserva el máximo de 16 MiB. Se rechazan paquetes cifrados, con
+macros/objetos activos incrustados, rutas anómalas o expansión excesiva. La interfaz muestra
+el nombre del documento en el enlace de descarga; imágenes y audios mantienen su presentación.
+La reparación de referencias faltantes usa los eventos ya almacenados y no reingresa mensajes
+al worker: no dispara IA, no envía mensajes ni cambia responsables, leídos o estados del chat.
+Si Meta ya no entrega un archivo antiguo, se conserva su nombre con un aviso para pedir el
+reenvío, sin presentar un enlace roto ni ofrecer reenviar el marcador como si fuera el archivo.
+
+
+### Controles de resultados de stock — 2026-10-14
+
+Las seis columnas se ordenan al pulsar su encabezado, con flecha y aria-sort; selector de columna/sentido equivalente para móvil. Valores desconocidos siempre al final en ambos sentidos; desempate estable por nombre e ID. El orden recomendado conserva el criterio original de cada vista, y el elegido se mantiene al cambiar de vista o actualizar el informe. Nuevos filtros: stock positivo/cero/negativo/sin dato, mínimos/máximos de stock y unidades netas, cobertura máxima inclusiva. Se combinan con marca/categoría/situación/búsqueda sobre todas las filas antes de paginar. Los rangos excluyen valores desconocidos; cero no equivale a ausencia de cantidad. Rangos inválidos conservan el resultado anterior con aviso y bloquean el CSV. Paginación 20/50/100, restablecer resultados o limpiar todos los filtros. CSV respeta filtro y orden completos, no sólo la página. Implementación estática; sin cambios de API, datos, sincronización ni servicio.
+
+
+### Corrección de totales entre vistas de stock — 2026-10-14
+
+El resumen ahora se calcula sobre las mismas filas de la pestaña elegida (después de filtros, antes de paginar), en lugar del catálogo completo filtrado. Las tarjetas se ubican dentro del bloque de la vista y distinguen productos/variantes, variantes con stock positivo sin marcas de revisión, unidades vendidas y reposición. Las cantidades exactas se conservan por variante en la tabla; no se suman en un total físico las cantidades administrativas de servicios. Las tres pestañas muestran su cantidad de resultados. Se explicitan los filtros activos compartidos entre vistas. Misma fila/ID conserva cantidad de stock en todas las pestañas; no se altera inventario ni fuente de datos.

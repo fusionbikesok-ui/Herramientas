@@ -629,3 +629,37 @@ archivos de esta interfaz, sin reiniciar ni restaurar bases, colas o configuraci
 - Coexistencia de ambos números y publicación Meta pendientes con teléfonos. `INBOX_CONNECTED_NUMBER_IDS` vacío: sin envíos desde la nueva bandeja. Controles de bot independientes conservados.
 
 - Publicación verificada el 2026-10-07: Home abre la bandeja con sesión real; rol de Matías consulta; API/worker/outbox operativos; ambos números permanecen pendientes y sin emisión. Respaldo de software/configuración y bases en `/opt/fusionbikes/backups/mensajeria-20261007`.
+
+
+## Copia manual de Herramientas retenida — 2026-10-14
+
+Por instrucción del usuario se conservará como referencia de esta depuración únicamente la
+copia manual más reciente de la base de Herramientas:
+`/opt/fusionbikes/backups/fusion-20261014T143817Z-pre-marcar-ordenes-viejas.sqlite`.
+La copia conservada pasó `PRAGMA quick_check`; su SHA-256 figura en
+`/opt/fusionbikes/backups/manual-cleanup-20261014.json`.
+
+Se eliminaron las instantáneas manuales anteriores de esa misma base dentro de
+`/opt/fusionbikes/backups/`, incluidas las alojadas en paquetes de migración.
+Los archivos de código, configuración y dumps de otras bases se conservaron; los
+paquetes históricos que referencian las SQLite retiradas ya no pueden restaurarlas.
+Los respaldos automáticos de `db/*.sqlite.gz`, `uploads/*.tar.gz`, PostgreSQL y la nube
+permanecen fuera de esta limpieza. Fue una depuración puntual; no se modificó la
+programación ni la retención automática.
+
+
+## Modelos de Ollama depurados — 2026-10-14
+
+Por autorización del usuario se retiraron mediante `ollama rm` únicamente los modelos
+no seleccionados `qwen3.5:4b` y `qwen3:4b-instruct-2507-q4_K_M`.
+Se conserva `qwen2.5:1.5b-instruct-q4_K_M` (ID `65ec06548149`), todavía seleccionado
+por el circuito local anterior. El vendedor principal continúa configurado con OpenAI.
+Ollama, su imagen y su volumen se mantienen; no se modificaron los controles de IA,
+los horarios, los servicios ni los datos de conversaciones. Los modelos retirados
+se pueden volver a descargar si fueran necesarios. Registro de la operación:
+`/opt/fusionbikes/backups/ollama-model-cleanup-20261014.json`.
+
+
+## Servicio de informes: stock y reposición — 2026-10-14
+
+Runtime `/opt/fusion-management-migration`, fuente `integrations/management-migration`, entrada en el Panel comercial existente. La nueva vista comparte el lector/caché comercial y lee catálogo por loopback autenticado; no agrega tareas de sincronización. Gateway `fusion-management-validation.service` conserva CPUQuota=25% y recibe drop-in `stock-report-memory.conf` con MemoryHigh=192M y MemoryMax=256M para el historial consolidado. Solamente ese servicio requiere reinicio; no cambia la app principal ni las bases. Respaldo previo por archivo y manifiesto en `/opt/fusion-management-migration/backups/stock-report-*`; para revertir, restaurar originales y retirar sólo los archivos nuevos enumerados en ese manifiesto (incluido drop-in), daemon-reload y reiniciar el gateway. No restaurar bases de datos.
