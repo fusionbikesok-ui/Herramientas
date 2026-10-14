@@ -374,16 +374,17 @@ export async function syncMlToWc(db, cfg) {
 }
 
 /**
- * Punto de partida del polling: `/orders/search` filtra por `date_created`, así que una orden creada ANTES del cursor y pagada
- * después (caso real: creada el 10/10, pagada el 13/10) quedaba fuera para siempre. Se retrocede al menos
- * `ML_POLLING_RETROCESO_DIAS` (14 por defecto; la doc de ML no se pudo verificar para filtrar por pago/actualización, y
- * `date_created.from` sí está en uso). Las ya selladas se saltean por `ordenes_ml_procesadas`, así que solo cuesta paginar.
+ * Punto de partida del polling: `/orders/search` admite `order.date_last_updated.from` (doc oficial de ML). Una orden creada
+ * ANTES del cursor y pagada después (caso real: creada el 10/10, pagada el 13/10) cambia su `date_last_updated` al pagarse, así
+ * que el cursor incremental sobre esa fecha la encuentra sin retroceder días fijos. Se resta un solape de
+ * `ML_POLLING_SOLAPE_MIN` (60 por defecto) por si una actualización llega con retraso. Las ya selladas se saltean por
+ * `ordenes_ml_procesadas`, así que el solape solo cuesta paginar.
  */
 export function desdePollingMl(base) {
-  const d = Number(process.env.ML_POLLING_RETROCESO_DIAS);
-  const piso = new Date(Date.now() - (Number.isFinite(d) && d > 0 ? d : 14) * 24 * 3600 * 1000);
+  const m = Number(process.env.ML_POLLING_SOLAPE_MIN);
+  const solape = (Number.isFinite(m) && m >= 0 ? m : 60) * 60 * 1000;
   const t = Date.parse(base);
-  return Number.isFinite(t) && t < piso.getTime() ? base : piso.toISOString();
+  return new Date((Number.isFinite(t) ? t : Date.now() - 30 * 24 * 3600 * 1000) - solape).toISOString();
 }
 
 async function _syncMlToWc(db, cfg) {
@@ -400,7 +401,7 @@ async function _syncMlToWc(db, cfg) {
   while (hayMas) {
     const resp = await mlFetch(
       db, mlCfg, 'get',
-      `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_asc&order.date_created.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limit}`
+      `/orders/search?seller=${mlCfg.userId}&order.status=paid&sort=date_asc&order.date_last_updated.from=${encodeURIComponent(desde)}&offset=${offset}&limit=${limit}`
     );
 
     if (resp.status !== 200) {
@@ -415,15 +416,15 @@ async function _syncMlToWc(db, cfg) {
     for (const orden of orders) {
       const orderId = String(orden.id);
 
+      // El cursor avanza también con las ya selladas (si no, quedaría clavado y cada ciclo re-paginaría todo el solape).
+      const act = Date.parse(orden.date_last_updated || orden.date_created);
+      if (Number.isFinite(act) && new Date(act).toISOString() > ultimaFecha) ultimaFecha = new Date(act).toISOString();
+
       // Idempotencia: saltar si ya fue procesada
       const yaProc = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(orderId);
       if (yaProc) continue;
 
       await _procesarOrden(db, wooCfg, mlCfg, orden);
-
-      if (orden.date_created && orden.date_created > ultimaFecha) {
-        ultimaFecha = orden.date_created;
-      }
     }
   }
 
@@ -1675,7 +1676,10 @@ const ordenYaTratada = (db, id) => destinoActual(db, id) === 'pedido';
  */
 async function tratarOrdenFueraDeVentana(db, cfg, orden, { reencolarSiPendiente = false } = {}) {
   if (orden?.status !== 'paid' || ordenYaTratada(db, orden.id)) return { tratada: false };
-  const v = estadoVentana(orden);
+  // Con fila de descuento (cualquiera, no completa) la orden sigue por el descuento sin importar la ventana: si no, un `parcial`
+  // cuya fecha de pago cae dentro iría al camino del pedido y el job cerraría 'hecho' sin completar el descuento.
+  const hayFila = Boolean(db.prepare('SELECT 1 FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(String(orden.id)));
+  const v = hayFila ? 'fuera' : estadoVentana(orden);
   if (v === 'dentro') return { tratada: false };
   if (v === 'sin_fecha') {
     const txt = `La venta de MercadoLibre ${orden.id} no trae ninguna fecha legible (pago, cierre ni creación; creación: ${JSON.stringify(orden.date_created ?? null)}): no se creó el pedido ni se descontó stock. Revisala a mano.`;
@@ -1700,6 +1704,11 @@ export function descontarOrdenViejaSinPedido(db, cfg, orden, opts = {}) {
   return descontarOrdenVieja(db, cfg, orden, {
     enriquecer: enriquecerLineasBarrera, encolarBolsas: encolarBolsasDeSkus,
     log: (msg, id) => logSync(db, { direccion: 'ml_wc', clave: id, estado: 'aviso_cancelada_luego_pagada_fallo', error: String(msg).slice(0, 300) }), vinculos: ACCIONES_VINCULO, diasVentana: ventanaOrdenMlMs() / 86400000,
+    // Mismo identificador que escribe el POST de creación (meta `_ml_order_id`). Lanza si la lectura no es concluyente.
+    conciliarConWoo: (_db, c, o) => {
+      const t = Date.parse(o?.date_created);
+      return buscarPedidoWcPorMlOrderId(c.woo, String(o.id), new Date(Number.isFinite(t) ? t : Date.now() - 30 * 86400000).toISOString());
+    },
   }, opts);
 }
 

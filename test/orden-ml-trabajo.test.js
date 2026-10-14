@@ -77,7 +77,13 @@ function instalarMocks() {
   mlFetch.mockImplementation(async (dbx, cfg, method, p, body) => {
     ml.gets.push(p);
     if (method === 'put') { ml.puts.push({ p, body }); ml.qty = body.available_quantity; return { status: 200, data: {} }; }
-    if (p.startsWith('/orders/search')) return { status: 200, data: { results: [ml.orden] } };
+    if (p.startsWith('/orders/search')) {
+      // Filtra como ML: por `order.date_last_updated.from` (si la orden trae esa fecha).
+      const f = /order\.date_last_updated\.from=([^&]+)/.exec(p);
+      const desde = f ? Date.parse(decodeURIComponent(f[1])) : null;
+      const entra = desde === null || !ml.orden.date_last_updated || Date.parse(ml.orden.date_last_updated) >= desde;
+      return { status: 200, data: { results: entra ? [ml.orden] : [] } };
+    }
     if (/^\/orders\/[^/?]+$/.test(p)) return ml.ordenHttp === 200 ? { status: 200, data: ml.orden } : { status: ml.ordenHttp, data: null };
     if (p.startsWith('/users/')) return ml.usuarioHttp === 200 ? { status: 200, data: ml.usuario } : { status: ml.usuarioHttp, data: null };
     if (p.startsWith('/items/bulk')) return { status: 200, data: [{ code: 200, body: { id: 'MLA100', status: 'active', available_quantity: ml.qty } }] };
@@ -171,6 +177,7 @@ describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
     db.prepare('DELETE FROM ordenes_ml_wc_pedidos').run();
     db.prepare('DELETE FROM ordenes_ml_procesadas').run();
     db.prepare('DELETE FROM ordenes_ml_destino').run();
+    woo.ordenes.length = 0; // el pedido creado arriba ya no existe en Woo (si existiera, la conciliación lo respetaría)
     ml.orden = conFecha(3 * DIA + 60_000);
     await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(woo.posts).toBe(1); // no hubo un segundo POST
@@ -1154,14 +1161,33 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
     expect(fila()).toBeDefined();
   });
 
-  it('polling: una orden creada ANTES del cursor y pagada después entra (el filtro retrocede más que el cursor)', async () => {
+  it('polling: orden creada hace 30 días y pagada hoy → el cursor por date_last_updated la encuentra', async () => {
     db.prepare("INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)").run(hace(1 * DIA), new Date().toISOString());
-    ml.orden = orden({ date_created: hace(10 * DIA), payments: [aprobado(60_000)] });
+    ml.orden = orden({ date_created: hace(30 * DIA), date_last_updated: hace(60_000), payments: [aprobado(60_000)] });
     await syncMlToWc(db, CFG);
     const busqueda = ml.gets.find((p) => p.startsWith('/orders/search'));
-    const desde = Date.parse(decodeURIComponent(/order\.date_created\.from=([^&]+)/.exec(busqueda)[1]));
-    expect(desde).toBeLessThan(Date.now() - 10 * DIA);
+    expect(busqueda).toMatch(/order\.status=paid/);
+    expect(busqueda).not.toMatch(/date_created/);
+    const desde = Date.parse(decodeURIComponent(/order\.date_last_updated\.from=([^&]+)/.exec(busqueda)[1]));
+    expect(desde).toBeGreaterThan(Date.now() - 2 * DIA); // sale del cursor (con solape), no de un retroceso fijo de días
+    expect(desde).toBeLessThan(Date.now() - DIA);
     expect(woo.posts).toBe(1);
+  });
+
+  it('polling: una orden sin cambios desde antes del cursor (menos el solape) no se vuelve a traer', async () => {
+    db.prepare("INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)").run(hace(1 * DIA), new Date().toISOString());
+    ml.orden = orden({ date_created: hace(30 * DIA), date_last_updated: hace(5 * DIA) });
+    await syncMlToWc(db, CFG);
+    expect(woo.posts).toBe(0);
+  });
+
+  it('polling: el cursor avanza con date_last_updated aunque la orden ya esté sellada', async () => {
+    db.prepare("INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)").run(hace(1 * DIA), new Date().toISOString());
+    const act = hace(30 * 60_000);
+    ml.orden = orden({ date_created: hace(30 * DIA), date_last_updated: act });
+    db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES ('ORD-1', ?, '[]', 'ok', ?)").run(new Date().toISOString(), new Date().toISOString());
+    await syncMlToWc(db, CFG);
+    expect(db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get().valor).toBe(act);
   });
 
   it('guarda de stock: Woo con menos stock que lo vendido → no escribe, línea omitida, incidente crítico y orden cerrada', async () => {
@@ -1223,6 +1249,110 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
       expect(fila().cancelada_en).toBeNull();
       expect(woo.posts).toBe(0);
       expect(incidentes()).toEqual([]);
+    });
+  });
+
+  describe('conciliación previa al descuento (Woo y Preparación)', () => {
+    const vieja = () => orden({ date_created: hace(20 * DIA) });
+    const pedidoManual = () => ({ id: 9001, status: 'processing', date_created_gmt: hace(DIA).replace('Z', ''), line_items: [], meta_data: [{ key: '_ml_order_id', value: 'ORD-1' }] });
+
+    it('pedido Woo manual de esa orden → 0 PUT, fila sellada manual_sin_descuento e incidente informativo', async () => {
+      woo.ordenes.push(pedidoManual());
+      ml.orden = vieja();
+      const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(r.estado).toBe('hecho');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(woo.posts).toBe(0);
+      expect(fila()).toMatchObject({ estado: 'completo', origen: 'manual_sin_descuento' });
+      expect(inc('orden_ml_ya_atendida_woo_ORD-1')).toMatchObject({ severidad: 'info' });
+      expect(inc('orden_ml_ya_atendida_woo_ORD-1').mensaje_humano).toMatch(/9001/);
+      await procesarOrdenMl(db, CFG, 'ORD-1'); // idempotente
+      expect(woo.productPuts).toHaveLength(0);
+    });
+
+    it('Woo 5xx al buscar → 0 PUT, sin fila ni destino, se reencola; al volver Woo descuenta', async () => {
+      woo.busquedaError = Object.assign(new Error('WooCommerce API error 503'), { status: 503 });
+      ml.orden = vieja();
+      const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(r.estado).toBe('reencolar');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(fila()).toBeUndefined();
+      expect(db.prepare("SELECT 1 FROM ordenes_ml_destino WHERE ml_order_id = 'ORD-1'").get()).toBeUndefined();
+      expect(inc('orden_ml_conciliacion_woo_ORD-1')).toBeUndefined(); // un primer fallo no es crítico
+      woo.busquedaError = null;
+      expect((await procesarOrdenMl(db, CFG, 'ORD-1')).estado).toBe('hecho');
+      expect(woo.productPuts).toEqual([{ id: '100', body: { stock_quantity: 4 } }]);
+    });
+
+    it('si la lectura sigue fallando (3.er fallo seguido) abre el incidente CRÍTICO y sigue sin descontar', async () => {
+      woo.busquedaError = Object.assign(new Error('WooCommerce API error 503'), { status: 503 });
+      ml.orden = vieja();
+      encolarTrabajo(db, { tipo: 'order.ml', recurso: 'ORD-1' });
+      db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 2 WHERE tipo = 'order.ml' AND recurso = 'ORD-1'").run();
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(inc('orden_ml_conciliacion_woo_ORD-1')).toMatchObject({ severidad: 'critico' });
+      expect(woo.productPuts).toHaveLength(0);
+    });
+
+    it('ya existe en Preparación → 0 PUT e incidente para revisar (no se sella)', async () => {
+      db.prepare("CREATE TABLE IF NOT EXISTS preparaciones (id INTEGER PRIMARY KEY AUTOINCREMENT, canal TEXT NOT NULL, clave TEXT NOT NULL UNIQUE, wc_order_id INTEGER, ml_order_id TEXT, numero_pedido TEXT, comprador TEXT, etiqueta_lista INTEGER NOT NULL DEFAULT 0, estado TEXT NOT NULL DEFAULT 'en_preparacion', notas TEXT, preparado_por TEXT, creado_en TEXT NOT NULL, completado_en TEXT)").run();
+      db.prepare("INSERT INTO preparaciones (canal, clave, ml_order_id, estado, creado_en) VALUES ('ml', 'ml:ORD-1', 'ORD-1', 'en_preparacion', ?)").run(new Date().toISOString());
+      ml.orden = vieja();
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(woo.posts).toBe(0);
+      expect(fila()).toBeUndefined();
+      expect(inc('orden_ml_ya_atendida_prep_ORD-1')).toMatchObject({ severidad: 'info' });
+    });
+  });
+
+  describe('bordes de la guarda de stock', () => {
+    it('stock === cantidad vendida: descuenta y queda en 0 (la guarda es estrictamente menor)', async () => {
+      woo.stock[100] = 1;
+      ml.orden = orden({ date_created: hace(20 * DIA) });
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(woo.productPuts).toEqual([{ id: '100', body: { stock_quantity: 0 } }]);
+      expect(inc('orden_ml_stock_insuficiente_ORD-1_BIKE-001')).toBeUndefined();
+    });
+
+    it('la guarda también rige en un REINTENTO (stock cayó a 0 entre intentos): no escribe más', async () => {
+      woo.putError = Object.assign(new Error('Woo 400'), { status: 400 });
+      ml.orden = orden({ date_created: hace(20 * DIA) });
+      await procesarOrdenMl(db, CFG, 'ORD-1'); // primer intento: Woo rechaza el PUT (definitivo, nada se aplicó)
+      expect(woo.productPuts).toHaveLength(1);
+      woo.putError = null;
+      woo.stock[100] = 0; // alguien ajustó a mano
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(woo.productPuts).toHaveLength(1); // ningún PUT nuevo
+      expect(woo.stock[100]).toBe(0);
+      expect(inc('orden_ml_stock_insuficiente_ORD-1_BIKE-001')).toMatchObject({ severidad: 'critico' });
+    });
+  });
+
+  describe('fila de descuento no completa + fecha de pago dentro de la ventana', () => {
+    it('sigue por el descuento (no por el pedido): se completa y nunca crea el pedido', async () => {
+      woo.putError = Object.assign(new Error('WooCommerce API error 503'), { status: 503 });
+      ml.orden = orden({ date_created: hace(20 * DIA) });
+      await procesarOrdenMl(db, CFG, 'ORD-1'); // PUT dudoso → línea incierta, fila parcial
+      expect(fila().estado).toBe('parcial');
+      woo.putError = null;
+      ml.orden = orden({ date_created: hace(20 * DIA), payments: [aprobado(60_000)] }); // ahora el pago cae DENTRO de la ventana
+      const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(r.estado).toBe('hecho');
+      expect(woo.posts).toBe(0);
+      expect(reserva('ORD-1')).toBeUndefined();
+      expect(fila().estado).toBe('completo');
+    });
+
+    it('el polling con fila parcial y fecha dentro de ventana tampoco crea pedido y encola el job', async () => {
+      woo.putError = Object.assign(new Error('WooCommerce API error 503'), { status: 503 });
+      ml.orden = orden({ date_created: hace(20 * DIA) });
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      woo.putError = null;
+      ml.orden = orden({ date_created: hace(20 * DIA), date_last_updated: hace(60_000), payments: [aprobado(60_000)] });
+      await syncMlToWc(db, CFG);
+      expect(woo.posts).toBe(0);
+      expect(trabajo('order.ml', 'ORD-1')).toBeDefined();
     });
   });
 });
