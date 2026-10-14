@@ -84,7 +84,14 @@ function encolarSalidaWoo(db, lote, usuario) {
 // siendo trabajables (la primera, para que después /completar la pueda subir a
 // 'completada' si se verifica todo; la segunda, para que el depósito termine su parte).
 // Las canceladas se resuelven por el circuito de devoluciones o el historial.
-const ESTADOS_BLOQUEADOS_PARA_TRABAJAR = new Set(['completada', 'cerrada_sin_evidencia', 'cancelada_sin_retiro_registrado', 'cancelada_pendiente_devolucion']);
+// E-1b: 'anulado_en_woo' = el pedido web pasó a la papelera o se borró en Woo. La fila NO se borra (historial); queda
+// bloqueada hasta que una relectura posterior la encuentre vigente (restaurada) y vuelva al estado previo del evento.
+export const ESTADO_ANULADO_EN_WOO = 'anulado_en_woo';
+const ESTADOS_BLOQUEADOS_PARA_TRABAJAR = new Set(['completada', 'cerrada_sin_evidencia', 'cancelada_sin_retiro_registrado', 'cancelada_pendiente_devolucion', ESTADO_ANULADO_EN_WOO]);
+// Estados que NO se pisan al anular: ya tienen su propio circuito de cierre/devolución.
+const ESTADOS_QUE_NO_SE_ANULAN = ['cancelada_sin_retiro_registrado', 'cancelada_pendiente_devolucion', 'cancelada_devuelta'];
+// Lista para los `NOT IN (...)` de las transiciones automáticas que filtran por estado con condiciones propias.
+const SQL_ESTADOS_TERMINALES = "'completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado', 'anulado_en_woo'";
 
 function encolarEtiquetaInterna(db, prep, usuario) {
   const grupo = prep.pack_id || prep.clave;
@@ -105,6 +112,7 @@ function bloqueoPorEstado(prep) {
   if (prep.estado === 'cerrada_sin_evidencia') {
     return 'esta preparación está cerrada — pedile a un compañero que la reabra antes de seguir';
   }
+  if (prep.estado === ESTADO_ANULADO_EN_WOO) return 'el pedido fue anulado o enviado a la papelera en la web — no se trabaja hasta que se restaure';
   if (prep.estado === 'cancelada_sin_retiro_registrado') return 'el pedido fue cancelado y no hay unidades levantadas registradas';
   return 'ya completada';
 }
@@ -823,7 +831,7 @@ function mapearEvento(e) {
 // Woo, paso 2 pendiente). Fail-open por ítem: si uno vuelve a fallar, sigue con el resto
 // y lo deja para la corrida siguiente del cron. Devuelve cuántos se resolvieron.
 export async function reintentarColgadosTracking(db, cfg) {
-  const pendientes = db.prepare('SELECT * FROM preparaciones WHERE woo_paso2_pendiente=1').all();
+  const pendientes = db.prepare("SELECT * FROM preparaciones WHERE woo_paso2_pendiente=1 AND estado<>'anulado_en_woo'").all();
   let resueltos = 0;
   for (const prep of pendientes) {
     try {
@@ -1148,9 +1156,37 @@ const SQL_NO_WEB_CONFIRMADO = `NOT (p.canal = 'web' AND COALESCE(p.tracking, '')
   AND p.woo_paso2_pendiente = 0 AND COALESCE(p.woo_paso1_incierto, 0) = 0
   AND (pc.estado_wc = 'enviadoandreani' OR p.estado = 'despachada_sin_verificar'))`;
 
+/**
+ * E-1b: una preparación `anulado_en_woo` no admite NINGUNA mutación (409). Va como guarda del router, antes de cada handler,
+ * para que una ruta nueva no pueda olvidarse de excluirla; las transiciones automáticas con `WHERE estado ...` propio
+ * la excluyen aparte (SQL_ESTADOS_TERMINALES y compañía). Las lecturas (GET) siguen funcionando: es lo que muestra el aviso.
+ */
+export function guardiaPreparacionAnulada(db) {
+  return (req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+    let prep = null;
+    try {
+      const p = req.path;
+      let m;
+      if ((m = /^\/(\d+)(?:\/|$)/.exec(p)) || (m = /^\/despacho\/(\d+)(?:\/|$)/.exec(p))) {
+        prep = db.prepare('SELECT estado FROM preparaciones WHERE id=?').get(Number(m[1]));
+      } else if ((m = /^\/(?:etiquetas|seguimientos)\/(\d+)(?:\/|$)/.exec(p))) {
+        prep = db.prepare('SELECT estado FROM preparaciones WHERE clave=?').get(`web:${m[1]}`);
+      } else if (p === '/iniciar' && req.body?.canal === 'web' && /^\d+$/.test(String(req.body?.id ?? ''))) {
+        prep = db.prepare('SELECT estado FROM preparaciones WHERE clave=?').get(`web:${req.body.id}`);
+      }
+    } catch { /* si no se puede leer, cada handler igual valida el estado */ }
+    if (prep?.estado === ESTADO_ANULADO_EN_WOO) {
+      return res.status(409).json({ ok: false, code: 'PREPARACION_ANULADA_EN_WOO', error: bloqueoPorEstado(prep) });
+    }
+    return next();
+  };
+}
+
 export function preparacionRouter(db, cfg) {
   ensureTables(db);
   const router = express.Router();
+  router.use(guardiaPreparacionAnulada(db));
   const seguimientosEnCurso = new Set();
   const eventoLote = (loteId, tipo, usuario, detalle = {}) => db.prepare(
     'INSERT INTO despacho_lote_eventos (lote_id, tipo, usuario, detalle_json, creado_en) VALUES (?,?,?,?,?)'
@@ -1631,7 +1667,7 @@ export function preparacionRouter(db, cfg) {
       db.prepare(`INSERT INTO preparacion_eventos (preparacion_id, item_id, tipo, usuario, detalle_json, creado_en)
         VALUES (?,?,?,?,?,?)`).run(prep.id, null, 'despacho_confirmado', req.user.username,
           JSON.stringify({ grupo_clave: grupo, etiqueta_cola_id: null, formato: '50x25mm', etiqueta_momento: 'evidencia_completa', rotulado_pendiente: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente }), ts);
-      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado')")
+      db.prepare(`UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN (${SQL_ESTADOS_TERMINALES})`)
         .run(prep.id);
       return { repetido: false, etiquetaId: null, rotuladoPendiente };
     })();
@@ -1660,7 +1696,7 @@ export function preparacionRouter(db, cfg) {
       const cambio = db.prepare("UPDATE despacho_controles SET estado='confirmado', confirmado_por=?, confirmado_en=?, actualizado_en=?, confirmacion_idempotencia=? WHERE id=? AND estado!='confirmado' AND (confirmacion_idempotencia IS NULL OR confirmacion_idempotencia=?)").run(req.user.username, ts, ts, idempotencia, control.id, idempotencia);
       if (!cambio.changes) return { repetido: true };
       registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_confirmado_manual', usuario: req.user.username, detalle: { grupo_clave: grupo, motivo, nota: nota || null, codigo_verificado: false, rotulado_pendiente: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente }, failClosed: true });
-      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado')").run(prep.id);
+      db.prepare(`UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN (${SQL_ESTADOS_TERMINALES})`).run(prep.id);
       return { repetido: false };
     })();
     return res.json({ ok: true, ...resultado, control: db.prepare('SELECT * FROM despacho_controles WHERE grupo_clave=?').get(grupo), requiere_revision_rotulado: rotuladoPendiente > 0, tareas_rotulado_pendientes: rotuladoPendiente });
@@ -1681,7 +1717,7 @@ export function preparacionRouter(db, cfg) {
       const grupo = prep.pack_id || prep.clave;
       db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en, confirmado_por, confirmado_en, confirmacion_idempotencia) VALUES (?, 'confirmado', ?, ?, ?, ?, ?) ON CONFLICT(grupo_clave) DO UPDATE SET estado='confirmado', confirmado_por=excluded.confirmado_por, confirmado_en=excluded.confirmado_en, actualizado_en=excluded.actualizado_en, confirmacion_idempotencia=COALESCE(despacho_controles.confirmacion_idempotencia, excluded.confirmacion_idempotencia)").run(grupo, ts, ts, req.user.username, ts, `regularizacion:${fecha}:${grupo}`);
       registrarEvento(db, { preparacionId: prep.id, tipo: 'despacho_regularizado_sin_evidencia', usuario: req.user.username, detalle: { grupo_clave: grupo, fecha, motivo, evidencia: 'no_disponible', herramienta_inhabilitada: true }, failClosed: true });
-      db.prepare("UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN ('completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado')").run(prep.id);
+      db.prepare(`UPDATE preparaciones SET estado='despachada_sin_verificar' WHERE id=? AND estado NOT IN (${SQL_ESTADOS_TERMINALES})`).run(prep.id);
       return n + 1;
     }, 0))();
     res.json({ ok: true, fecha, regularizadas: cantidad });
@@ -2445,7 +2481,7 @@ export function preparacionRouter(db, cfg) {
         .run(usuario, ts, dev.id);
       // Cierre honesto: 'cancelada_devuelta' dice lo que pasó. Declararla enviada era la
       // única salida que existía antes, y era falsa.
-      db.prepare("UPDATE preparaciones SET estado='cancelada_devuelta', completado_en=? WHERE id=?").run(ts, dev.preparacion_id);
+      db.prepare("UPDATE preparaciones SET estado='cancelada_devuelta', completado_en=? WHERE id=? AND estado<>'anulado_en_woo'").run(ts, dev.preparacion_id);
       registrarEvento(db, {
         preparacionId: dev.preparacion_id, itemId: null, tipo: 'devolucion_confirmada', usuario,
         detalle: { ubicaciones: items.map(it => ({ item_id: it.item_id, sku: it.sku, ubicacion_id: parseInt(seleccion[String(it.item_id)], 10) })) },
@@ -3216,7 +3252,7 @@ export function preparacionRouter(db, cfg) {
       // Todavía no es el cierre final (falta lo que resuelva el depósito) -> el paquete no
       // está sellado y no tiene sentido pedir "la foto del paquete armado" acá. Se exige en
       // el completar final, más abajo.
-      db.prepare("UPDATE preparaciones SET estado='pendiente_deposito' WHERE id=? AND estado<>'cerrada_sin_evidencia'").run(prep.id);
+      db.prepare("UPDATE preparaciones SET estado='pendiente_deposito' WHERE id=? AND estado NOT IN ('cerrada_sin_evidencia','anulado_en_woo')").run(prep.id);
       return res.json({ ok: true, estado: 'pendiente_deposito', pendientes_deposito: delegadosPendientes });
     }
 
@@ -3236,7 +3272,7 @@ export function preparacionRouter(db, cfg) {
     // al cliente en vez de mentir con un 200.
     const completada = db.transaction(() => {
       const cambio = db.prepare(
-        "UPDATE preparaciones SET estado='completada', completado_en=?, preparado_por=? WHERE id=? AND estado<>'cerrada_sin_evidencia'"
+        "UPDATE preparaciones SET estado='completada', completado_en=?, preparado_por=? WHERE id=? AND estado NOT IN ('cerrada_sin_evidencia','anulado_en_woo')"
       ).run(now(), req.user?.username || null, prep.id);
       if (!cambio.changes) return false;
       registrarEvento(db, {
@@ -3854,26 +3890,87 @@ function invalidarCacheMlNoElegible(db, mlOrderId, estadoOrden, estadoEnvio = nu
     .run(detalle || null, logisticType, now(), `ml:${mlOrderId}`);
 }
 
+/**
+ * E-1b: el pedido web ya no existe en Woo (404 confirmado o `status=trash`). Lo retira de la cola de Preparación
+ * (`pedidos_cache`) y, si ya tenía una fila en `preparaciones`, NO la borra: pasa a `anulado_en_woo` con un evento que guarda
+ * el estado previo (para la restauración). Idempotente; no toca las que ya tienen su propio circuito de cancelación.
+ */
+export function anularPreparacionPorWoo(db, wcOrderId, { motivo = 'trash' } = {}) {
+  ensureTables(db);
+  return db.transaction(() => {
+    const retirada = db.prepare('DELETE FROM pedidos_cache WHERE clave = ?').run(`web:${wcOrderId}`).changes;
+    const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave = ?').get(`web:${wcOrderId}`);
+    if (!prep || prep.estado === ESTADO_ANULADO_EN_WOO || ESTADOS_QUE_NO_SE_ANULAN.includes(prep.estado)) {
+      return { anulada: false, retirada_cache: retirada > 0 };
+    }
+    const cambio = db.prepare("UPDATE preparaciones SET estado = ? WHERE id = ? AND estado = ?").run(ESTADO_ANULADO_EN_WOO, prep.id, prep.estado);
+    if (!cambio.changes) return { anulada: false, retirada_cache: retirada > 0 };
+    registrarEvento(db, { preparacionId: prep.id, tipo: 'anulado_en_woo', usuario: null, detalle: { estado_previo: prep.estado, motivo }, failClosed: true });
+    return { anulada: true, estado_previo: prep.estado, retirada_cache: retirada > 0 };
+  })();
+}
+
+/** E-1b: la relectura encontró vigente (restaurado) un pedido anulado: la preparación vuelve al estado que registró el evento. */
+export function restaurarPreparacionPorWoo(db, wcOrderId) {
+  ensureTables(db);
+  return db.transaction(() => {
+    const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave = ?').get(`web:${wcOrderId}`);
+    if (!prep || prep.estado !== ESTADO_ANULADO_EN_WOO) return { restaurada: false };
+    const ev = db.prepare("SELECT detalle_json FROM preparacion_eventos WHERE preparacion_id = ? AND tipo = 'anulado_en_woo' ORDER BY id DESC LIMIT 1").get(prep.id);
+    let previo = null;
+    try { previo = JSON.parse(ev?.detalle_json || 'null')?.estado_previo; } catch { /* sin evento legible */ }
+    // Sin estado previo registrado no se adivina: vuelve al único estado seguro para seguir trabajando.
+    if (!previo || previo === ESTADO_ANULADO_EN_WOO) previo = 'en_preparacion';
+    const cambio = db.prepare('UPDATE preparaciones SET estado = ? WHERE id = ? AND estado = ?').run(previo, prep.id, ESTADO_ANULADO_EN_WOO);
+    if (!cambio.changes) return { restaurada: false };
+    registrarEvento(db, { preparacionId: prep.id, tipo: 'restaurado_en_woo', usuario: null, detalle: { estado: previo }, failClosed: true });
+    return { restaurada: true, estado: previo };
+  })();
+}
+
+/** 404 de Woo por orden inexistente (`..._invalid_id`). Un 404 genérico (ruta rota, plugin apagado) NO prueba que la orden no exista. */
+export function esOrdenWooInexistente(err) {
+  return err?.status === 404 && /invalid_id/i.test(String(err?.cuerpo || ''));
+}
+
 // Trae SOLO la orden `wcOrderId` de Woo y hace upsert inmediato en pedidos_cache si su
 // estado es uno de los 3 que syncPedidosCache ya trackea (lpaandreani/completed/enviadoandreani).
 // Cualquier otro estado (pending, cancelled, etc.) se ignora en silencio: no es un estado
 // relevante para la cola de preparación, igual que el barrido del cron nunca lo trae.
-export async function syncPedidoWebPuntual(db, cfg, wcOrderId) {
+// E-1b: ahora también maneja la orden que ya no existe (404 confirmado) o está en la papelera (`status=trash`): la retira de
+// la cola y anula su preparación; y si la encuentra vigente tras haber estado anulada, la restaura.
+// `opts.orden` evita una segunda lectura cuando el trabajo ya leyó la orden; `opts.inexistente` la da por borrada.
+// @returns {{estado:'anulada'|'vigente', ...}}
+export async function syncPedidoWebPuntual(db, cfg, wcOrderId, opts = {}) {
   ensureTables(db);
   const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
   const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
-  const resp = await wooFetch(cfg.woo, `/orders/${wcOrderId}`);
-  const order = resp.data;
-  if (!order) return;
+  let order = opts.orden || null;
+  let inexistente = Boolean(opts.inexistente);
+  if (!order && !inexistente) {
+    try {
+      order = (await wooFetch(cfg.woo, `/orders/${wcOrderId}`)).data;
+    } catch (e) {
+      if (!esOrdenWooInexistente(e)) throw e;
+      inexistente = true;
+    }
+  }
+  if (inexistente || order?.status === 'trash') {
+    const r = anularPreparacionPorWoo(db, wcOrderId, { motivo: inexistente ? 'inexistente' : 'trash' });
+    return { estado: 'anulada', ...r };
+  }
+  if (!order) return { estado: 'vigente', sin_datos: true };
+  const restauracion = restaurarPreparacionPorWoo(db, order.id || wcOrderId);
   let estadoEnvio = null;
   if (order.status === andreaniStatus) estadoEnvio = 'pendiente';
   else if (order.status === 'completed' || order.status === enviadoAndreaniStatus) estadoEnvio = 'enviado';
   if (!estadoEnvio) {
     db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
       .run(order.status || null, now(), `web:${order.id || wcOrderId}`);
-    return;
+    return { estado: 'vigente', ...restauracion };
   }
   upsertPedidoCache(db, filaWebDesdeOrder(db, order, estadoEnvio));
+  return { estado: 'vigente', ...restauracion };
 }
 
 // Trae SOLO la orden `mlOrderId` de ML y hace upsert inmediato en pedidos_cache si sigue
