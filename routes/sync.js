@@ -373,14 +373,28 @@ export async function syncMlToWc(db, cfg) {
   }
 }
 
+/**
+ * Punto de partida del polling: `/orders/search` filtra por `date_created`, así que una orden creada ANTES del cursor y pagada
+ * después (caso real: creada el 10/10, pagada el 13/10) quedaba fuera para siempre. Se retrocede al menos
+ * `ML_POLLING_RETROCESO_DIAS` (14 por defecto; la doc de ML no se pudo verificar para filtrar por pago/actualización, y
+ * `date_created.from` sí está en uso). Las ya selladas se saltean por `ordenes_ml_procesadas`, así que solo cuesta paginar.
+ */
+export function desdePollingMl(base) {
+  const d = Number(process.env.ML_POLLING_RETROCESO_DIAS);
+  const piso = new Date(Date.now() - (Number.isFinite(d) && d > 0 ? d : 14) * 24 * 3600 * 1000);
+  const t = Date.parse(base);
+  return Number.isFinite(t) && t < piso.getTime() ? base : piso.toISOString();
+}
+
 async function _syncMlToWc(db, cfg) {
   const { ml: mlCfg, woo: wooCfg } = cfg;
   const cursorRow = db.prepare("SELECT valor FROM sync_estado WHERE clave = 'ultima_orden_ml'").get();
-  const desde = cursorRow?.valor ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const baseDesde = cursorRow?.valor ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const desde = desdePollingMl(baseDesde);
 
   let offset = 0;
   const limit = 50;
-  let ultimaFecha = desde;
+  let ultimaFecha = baseDesde;
   let hayMas = true;
 
   while (hayMas) {
@@ -419,7 +433,7 @@ async function _syncMlToWc(db, cfg) {
   // (llegó por webhook durante la corrida), este UPDATE incondicional lo haría retroceder.
   // Comparando contra el valor ACTUAL en la tabla (no contra `desde`, que es una copia vieja)
   // nunca se pisa un valor más nuevo ya guardado por el otro camino.
-  if (ultimaFecha > desde) {
+  if (ultimaFecha > baseDesde) {
     db.prepare(`
       INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)
       ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor, actualizado_en = excluded.actualizado_en
@@ -1664,7 +1678,7 @@ async function tratarOrdenFueraDeVentana(db, cfg, orden, { reencolarSiPendiente 
   const v = estadoVentana(orden);
   if (v === 'dentro') return { tratada: false };
   if (v === 'sin_fecha') {
-    const txt = `La venta de MercadoLibre ${orden.id} no trae fecha de creación legible (${JSON.stringify(orden.date_created ?? null)}): no se creó el pedido ni se descontó stock. Revisala a mano.`;
+    const txt = `La venta de MercadoLibre ${orden.id} no trae ninguna fecha legible (pago, cierre ni creación; creación: ${JSON.stringify(orden.date_created ?? null)}): no se creó el pedido ni se descontó stock. Revisala a mano.`;
     abrirOActualizarIncidente(db, {
       integracion: 'mercadolibre', proceso: 'orden_ml_tardia', tipoError: `orden_ml_sin_fecha_${orden.id}`.slice(0, 120), severidad: 'critico',
       mensajeTecnico: txt, mensajeHumano: txt, contexto: { ml_order_id: String(orden.id), fecha: orden.date_created ?? null },

@@ -304,12 +304,13 @@ describe('orden ML vieja sin pedido: descuento de lo vendido + aviso', () => {
     expect(fila().estado).toBe('completo');
   });
 
-  it('stock negativo: se escribe igual y el aviso lo marca', async () => {
+  it('stock insuficiente (hotfix): NO se deja negativo; no se escribe y se avisa', async () => {
     woo.stock[100] = 1;
     ml.orden = conCantidad(3);
     await procesarOrdenMl(db, CFG, 'ORD-1');
-    expect(woo.stock[100]).toBe(-2);
-    expect(inc().mensaje_humano).toMatch(/NEGATIVO/);
+    expect(woo.stock[100]).toBe(1);
+    expect(woo.productPuts).toHaveLength(0);
+    expect(db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = 'orden_ml_stock_insuficiente_ORD-1_BIKE-001'").get()).toBeDefined();
   });
 
   it('línea sin SKU resoluble: no se descuenta y va en el aviso', async () => {
@@ -1095,5 +1096,133 @@ describe('guarda de multiorigen en escribirStockMl', () => {
     expect(r).toMatchObject({ omitido: true, motivo: 'multiorigen_no_verificado' });
     expect(ml.puts).toHaveLength(0);
     expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE tipo_error = 'multiorigen_no_verificado'").get().n).toBe(1);
+  });
+});
+
+describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas manuales', () => {
+  const DIA = 24 * 3600 * 1000;
+  const hace = (ms) => new Date(Date.now() - ms).toISOString();
+  const orden = (over = {}) => ({ ...ordenMl('ORD-1'), ...over });
+  const inc = (tipo = 'orden_ml_vieja_sin_pedido_ORD-1') => db.prepare('SELECT * FROM incidentes_operativos WHERE tipo_error = ?').get(tipo);
+  const fila = () => db.prepare("SELECT * FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = 'ORD-1'").get();
+  const aprobado = (ms) => ({ status: 'approved', date_approved: hace(ms) });
+
+  it('creada hace 4 días y pagada hoy → crea el pedido normal (venta viva), sin descuento ni incidente', async () => {
+    ml.orden = orden({ date_created: hace(4 * DIA), payments: [aprobado(60_000)] });
+    expect((await procesarOrdenMl(db, CFG, 'ORD-1')).estado).toBe('hecho');
+    expect(woo.posts).toBe(1);
+    expect(fila()).toBeUndefined();
+    expect(inc()).toBeUndefined();
+  });
+
+  it('pagada hace 4 días → descuento sin pedido', async () => {
+    ml.orden = orden({ date_created: hace(5 * DIA), payments: [aprobado(4 * DIA)] });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(0);
+    expect(woo.productPuts).toEqual([{ id: '100', body: { stock_quantity: 4 } }]);
+  });
+
+  it('sin payments ni date_closed cae a date_created (4 días → descuento)', async () => {
+    ml.orden = orden({ date_created: hace(4 * DIA) });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(0);
+    expect(woo.productPuts).toHaveLength(1);
+  });
+
+  it('caso 2000018902455242 con payments[].date_approved: creada el 10/10, pagada el 13/10 → venta viva', async () => {
+    ml.orden = orden({ id: '2000018902455242', date_created: hace(4 * DIA), payments: [{ status: 'approved', date_approved: hace(2 * 3600_000) }] });
+    expect((await procesarOrdenMl(db, CFG, '2000018902455242')).estado).toBe('hecho');
+    expect(woo.posts).toBe(1);
+    expect(woo.productPuts).toHaveLength(0);
+  });
+
+  it('caso 2000018902455242 solo con date_closed (payments sin date_approved) → venta viva', async () => {
+    ml.orden = orden({ id: '2000018902455242', date_created: hace(4 * DIA), date_closed: hace(2 * 3600_000), payments: [{ status: 'approved' }] });
+    await procesarOrdenMl(db, CFG, '2000018902455242');
+    expect(woo.posts).toBe(1);
+    expect(woo.productPuts).toHaveLength(0);
+  });
+
+  it('usa el MÁXIMO date_approved de los aprobados e ignora los no aprobados', async () => {
+    ml.orden = orden({ date_created: hace(9 * DIA), payments: [aprobado(8 * DIA), aprobado(60_000), { status: 'rejected', date_approved: hace(60_000) }] });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1); // el pago aprobado más reciente es de hace 1 minuto
+    db.prepare('DELETE FROM ordenes_ml_wc_pedidos').run(); db.prepare('DELETE FROM ordenes_ml_procesadas').run(); db.prepare('DELETE FROM ordenes_ml_destino').run();
+    ml.orden = orden({ date_created: hace(9 * DIA), payments: [aprobado(8 * DIA), { status: 'rejected', date_approved: hace(60_000) }] });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.posts).toBe(1); // solo cuenta el aprobado de hace 8 días: fuera de ventana, sin segundo POST
+    expect(fila()).toBeDefined();
+  });
+
+  it('polling: una orden creada ANTES del cursor y pagada después entra (el filtro retrocede más que el cursor)', async () => {
+    db.prepare("INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)").run(hace(1 * DIA), new Date().toISOString());
+    ml.orden = orden({ date_created: hace(10 * DIA), payments: [aprobado(60_000)] });
+    await syncMlToWc(db, CFG);
+    const busqueda = ml.gets.find((p) => p.startsWith('/orders/search'));
+    const desde = Date.parse(decodeURIComponent(/order\.date_created\.from=([^&]+)/.exec(busqueda)[1]));
+    expect(desde).toBeLessThan(Date.now() - 10 * DIA);
+    expect(woo.posts).toBe(1);
+  });
+
+  it('guarda de stock: Woo con menos stock que lo vendido → no escribe, línea omitida, incidente crítico y orden cerrada', async () => {
+    woo.stock[100] = 0;
+    ml.orden = orden({ date_created: hace(20 * DIA), order_items: [{ item: { id: 'MLA100', variation_id: '', title: 'Bici' }, quantity: 1, unit_price: 150 }] });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    expect(woo.productPuts).toHaveLength(0);
+    expect(woo.stock[100]).toBe(0);
+    const l = JSON.parse(fila().lineas_json)[0];
+    expect(l).toMatchObject({ sku: 'BIKE-001', estado: 'omitida', motivo: 'stock insuficiente: probablemente ya se ajustó a mano' });
+    expect(fila().estado).toBe('completo');
+    const a = inc('orden_ml_stock_insuficiente_ORD-1_BIKE-001');
+    expect(a.severidad).toBe('critico');
+    expect(a.mensaje_humano).toMatch(/ya se ajustó a mano/);
+    expect(inc().mensaje_humano).not.toMatch(/solo se descontó el stock/);
+  });
+
+  it('el aviso de una orden descontada dice lo que pasó (fuera de ventana, sin pedido) y no "ya fue atendida"', async () => {
+    ml.orden = orden({ date_created: hace(20 * DIA) });
+    await procesarOrdenMl(db, CFG, 'ORD-1');
+    const t = inc().mensaje_humano;
+    expect(t).not.toMatch(/ya fue atendida/);
+    expect(t).toMatch(/fuera de la ventana/);
+    expect(t).toMatch(/NO se creó el pedido/);
+  });
+
+  describe('filas manual_sin_descuento (cerradas a mano)', () => {
+    const insertarManual = () => db.prepare(`INSERT INTO ordenes_ml_descuento_sin_pedido (ml_order_id, lineas_json, estado, actor, origen, creado_en, actualizado_en, cancelada_en)
+      VALUES ('ORD-1', '[]', 'completo', 'jose', 'manual_sin_descuento', ?, ?, NULL)`).run(new Date().toISOString(), new Date().toISOString());
+    const incidentes = () => db.prepare('SELECT tipo_error FROM incidentes_operativos').all().map((r) => r.tipo_error);
+
+    it('pagada vieja: ni pedido ni descuento ni aviso', async () => {
+      insertarManual();
+      ml.orden = orden({ date_created: hace(20 * DIA) });
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(woo.posts).toBe(0);
+      expect(woo.productPuts).toHaveLength(0);
+      expect(incidentes()).toEqual([]);
+    });
+
+    it('pagada fresca (también por el sync puntual): no crea pedido ni avisa', async () => {
+      insertarManual();
+      ml.orden = orden();
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      await syncOrdenMlPuntual(db, CFG, 'ORD-1', { orden: ml.orden });
+      expect(woo.posts).toBe(0);
+      expect(incidentes()).toEqual([]);
+    });
+
+    it('cancelada y luego pagada otra vez: no se marca como lápida ni abre cancelada_luego_pagada', async () => {
+      insertarManual();
+      ml.orden = orden({ date_created: hace(20 * DIA) });
+      ml.orden.status = 'cancelled';
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(fila().cancelada_en).toBeNull();
+      ml.orden.status = 'paid';
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(fila().cancelada_en).toBeNull();
+      expect(woo.posts).toBe(0);
+      expect(incidentes()).toEqual([]);
+    });
   });
 });
