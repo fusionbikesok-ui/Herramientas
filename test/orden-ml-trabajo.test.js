@@ -1249,6 +1249,45 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
       expect(woo.posts).toBeGreaterThan(0); // la primera página sí se procesó (idempotente al repetir)
     });
 
+    it('una orden que queda sin sellar ni retomar por otro camino (POST rechazado) → el cursor NO avanza; con todo sellado sí', async () => {
+      const previo = hace(2 * 3600_000);
+      sembrar(previo);
+      // Woo rechaza el POST (400 con cuerpo de error de Woo): la reserva se libera y la orden NO queda sellada.
+      woo.postError = Object.assign(new Error('WooCommerce API error 400'), { status: 400, cuerpo: '{"code":"woocommerce_rest_invalid","message":"x"}' });
+      paginado([ordenN(0, { id: 'ORD-1', date_created: hace(60_000) })]);
+      await syncMlToWc(db, CFG);
+      woo.postError = null;
+      expect(db.prepare("SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = 'ORD-1'").get()).toBeUndefined();
+      expect(cursor()).toBe(previo);
+      paginado([ordenN(0, { id: 'ORD-2', date_created: hace(60_000) })]);
+      await syncMlToWc(db, CFG);
+      expect(cursor() > previo).toBe(true);
+    });
+
+    it('primer arranque: semilla max(ultima_orden_ml − 60 min, ahora − 3 días) y ventana de a lo sumo 24 h por corrida', async () => {
+      db.prepare("INSERT INTO sync_estado (clave, valor, actualizado_en) VALUES ('ultima_orden_ml', ?, ?)").run(hace(20 * DIA), new Date().toISOString());
+      paginado([]);
+      await syncMlToWc(db, CFG);
+      const u = ml.gets.find((x) => x.startsWith('/orders/search'));
+      const from = Date.parse(decodeURIComponent(/date_last_updated\.from=([^&]+)/.exec(u)[1]));
+      const to = Date.parse(decodeURIComponent(/date_last_updated\.to=([^&]+)/.exec(u)[1]));
+      expect(from).toBeGreaterThan(Date.now() - 3 * DIA - 2 * 3600_000); // ~ahora − 3 días − solape, no 20 días
+      expect(from).toBeLessThan(Date.now() - 3 * DIA);
+      expect(to - from).toBeLessThanOrEqual(25 * 3600_000 + 60_000); // tope de ventana por corrida
+      expect(Date.parse(cursor())).toBe(to); // escalonado: el cursor llega a `to`, no a ahora
+    });
+
+    it('una orden que SALE de la ventana a mitad de la corrida baja el total y se detecta (invariante: nada entra, solo sale)', async () => {
+      sembrar(hace(2 * 3600_000));
+      const lista = [ordenN(0, { id: 'ORD-1' }), ...Array.from({ length: 50 }, (_, i) => ordenN(i, { id: `S-${i}` }))];
+      lista.slice(1).forEach((o) => db.prepare("INSERT INTO ordenes_ml_procesadas (order_id, fecha_orden, items_json, estado, procesado_en) VALUES (?, ?, '[]', 'ok', ?)").run(o.id, o.date_created, new Date().toISOString()));
+      let salida = false;
+      paginado(lista, { alPagina: (off) => { if (off === 50 && !salida) { salida = true; lista.splice(10, 1); } return null; } });
+      await syncMlToWc(db, CFG);
+      expect(ml.gets.filter((x) => x.startsWith('/orders/search') && /offset=0&limit=50/.test(x)).length).toBeGreaterThanOrEqual(2); // repitió el recorrido
+      expect(woo.posts).toBe(1);
+    });
+
     it('un 429 sintético de ML tampoco mueve el cursor', async () => {
       const previo = hace(2 * 3600_000);
       sembrar(previo);
@@ -1443,21 +1482,57 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
     const vieja = (over = {}) => orden({ date_created: hace(20 * DIA), ...over });
     const sinMeta = (extra = {}) => ({ id: 9100, status: 'processing', date_created_gmt: hace(DIA).replace('Z', ''), line_items: [], meta_data: [], customer_note: 'Venta ML', ...extra });
 
-    it('pedido manual SIN _ml_order_id que menciona el número de la venta en la nota → 0 PUT, sellada e incidente informativo', async () => {
-      woo.ordenes.push(sinMeta({ customer_note: 'es la venta ML ORD-1' }));
+    const posible = () => inc('orden_ml_posible_pedido_manual_ORD-1');
+
+    it('pedido manual SIN _ml_order_id con el número EXACTO en la nota → 0 PUT, NO se sella, incidente crítico "posible pedido manual", reintento', async () => {
+      woo.ordenes.push(sinMeta({ customer_note: 'es la venta ML ORD-1.' }));
       ml.orden = vieja();
-      await procesarOrdenMl(db, CFG, 'ORD-1');
+      const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(r.estado).toBe('reencolar');
       expect(woo.productPuts).toHaveLength(0);
-      expect(fila()).toMatchObject({ estado: 'completo', origen: 'manual_sin_descuento' });
-      expect(inc('orden_ml_ya_atendida_woo_ORD-1').mensaje_humano).toMatch(/SIN la meta _ml_order_id/);
+      expect(fila()).toBeUndefined();
+      expect(posible()).toMatchObject({ severidad: 'critico' });
+      expect(posible().mensaje_humano).toMatch(/#9100/);
+      await procesarOrdenMl(db, CFG, 'ORD-1'); // dedupe: sigue siendo UN incidente
+      expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE tipo_error = 'orden_ml_posible_pedido_manual_ORD-1'").get().n).toBe(1);
+      expect(woo.productPuts).toHaveLength(0);
     });
 
-    it('también se encuentra por el pack_id', async () => {
+    it('el número exacto en el valor de otra meta o en `number` también es "posible", nunca sellado', async () => {
+      woo.ordenes.push(sinMeta({ customer_note: '', meta_data: [{ key: 'referencia', value: 'ORD-1' }] }));
+      ml.orden = vieja();
+      await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(posible()).toBeDefined();
+      expect(fila()).toBeUndefined();
+    });
+
+    it('un ID MÁS LARGO que contiene el número (ORD-10) no cuenta como coincidencia exacta: sin incidente "posible", 0 PUT, inconcluso', async () => {
+      woo.ordenes.push(sinMeta({ customer_note: 'venta ORD-10' }));
+      ml.orden = vieja();
+      const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(r.estado).toBe('reencolar');
+      expect(woo.productPuts).toHaveLength(0);
+      expect(posible()).toBeUndefined();
+      expect(fila()).toBeUndefined();
+    });
+
+    it('un teléfono que contiene el número no es coincidencia exacta (ni se sella ni se toma por pedido manual)', async () => {
+      woo.ordenes.push(sinMeta({ customer_note: '', billing: { phone: '11ORD-1999' } }));
+      ml.orden = vieja();
+      const r = await procesarOrdenMl(db, CFG, 'ORD-1');
+      expect(r.estado).toBe('reencolar');
+      expect(posible()).toBeUndefined();
+      expect(fila()).toBeUndefined();
+      expect(woo.productPuts).toHaveLength(0);
+    });
+
+    it('también por el pack_id exacto: crítico, no se sella', async () => {
       woo.ordenes.push(sinMeta({ customer_note: 'carrito PACK-77' }));
       ml.orden = vieja({ pack_id: 'PACK-77' });
       await procesarOrdenMl(db, CFG, 'ORD-1');
       expect(woo.productPuts).toHaveLength(0);
-      expect(inc('orden_ml_ya_atendida_woo_ORD-1').mensaje_humano).toMatch(/el pack/);
+      expect(fila()).toBeUndefined();
+      expect(posible().mensaje_humano).toMatch(/el pack/);
     });
 
     it('coincidencia dudosa (Woo devuelve pedidos que no contienen el término) → 0 PUT y reintento', async () => {

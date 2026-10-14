@@ -426,6 +426,9 @@ async function paginarVentanaMl(db, mlCfg, desdeMs, hastaMs, procesar) {
     if (total === null) return; // ML no informa paging.total: no hay forma de comprobar estabilidad
     const fin = await mlFetch(db, mlCfg, 'get', `${base}&offset=0&limit=1`);
     if (fin.status !== 200) throw new Error(`error API ML ${fin.status} al comprobar la estabilidad de la ventana`);
+    // Invariante: `to` es fijo y está en el pasado, y `date_last_updated` solo crece. Ninguna orden puede ENTRAR a la ventana durante
+    // el recorrido (tendría que bajar su fecha); una que se actualiza de nuevo SALE (pasa a > to) y el total baja. Por eso comparar el
+    // total antes/después detecta todo corrimiento de offsets (no existe un "una entra y otra sale" que deje el total igual).
     if (!Number.isFinite(fin.data?.paging?.total) || fin.data.paging.total === total) return;
   }
   throw new Error('la ventana cambió durante el recorrido en cada intento (órdenes que entran o salen): no se avanza el cursor');
@@ -434,19 +437,43 @@ async function paginarVentanaMl(db, mlCfg, desdeMs, hastaMs, procesar) {
 async function _syncMlToWc(db, cfg) {
   const { ml: mlCfg, woo: wooCfg } = cfg;
   const leer = (clave) => db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(clave)?.valor ?? null;
-  // Primer arranque: desde el cursor histórico (por creación) o, sin nada, 30 días atrás.
-  const baseDesde = leer(POLLING_CURSOR) ?? leer('ultima_orden_ml') ?? new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  // Primer arranque (sin cursor propio): max(ultima_orden_ml − 60 min, ahora − 3 días). El barrido anterior por `date_created` (con piso de
+  // 14 días) ya cubrió todo lo anterior; más atrás solo hay órdenes viejas que, sin sellar, caerían en el descuento sin pedido. Sin
+  // ningún cursor histórico: ahora − 3 días. Los 3 días se escalonan por el tope de ventana por corrida (abajo).
+  const tresDias = Date.now() - 3 * 24 * 3600 * 1000;
+  const historico = Date.parse(leer('ultima_orden_ml'));
+  const semilla = new Date(Number.isFinite(historico) ? Math.max(historico - 60 * 60 * 1000, tresDias) : tresDias).toISOString();
+  const baseDesde = leer(POLLING_CURSOR) ?? semilla;
   const desdeMs = Date.parse(desdePollingMl(baseDesde));
-  const hastaMs = Date.now();
+  // Tope de ventana por corrida (`ML_POLLING_VENTANA_MAX_HORAS`, 24): un cursor atrasado se pone al día en varias corridas.
+  const h = Number(process.env.ML_POLLING_VENTANA_MAX_HORAS);
+  const hastaMs = Math.min(Date.now(), Date.parse(baseDesde) + (Number.isFinite(h) && h > 0 ? h : 24) * 3600 * 1000);
+  let incompletas = 0;
 
   try {
     await paginarVentanaMl(db, mlCfg, desdeMs, hastaMs, async (orden) => {
+      const id = String(orden.id);
       // Idempotencia: saltar si ya fue procesada
-      if (db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(String(orden.id))) return;
+      if (db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(id)) return;
       await _procesarOrden(db, wooCfg, mlCfg, orden);
+      // Si no quedó sellada ni la retoma otro camino (fila de descuento, reserva, retención de la Guardia) la corrida está
+      // incompleta: pasada la hora de solape la orden saldría de la ventana y se perdería en silencio.
+      const retomada = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(id)
+        || db.prepare('SELECT 1 FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(id)
+        || db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(id)
+        || pedidoMlRetenido(db, id);
+      if (!retomada) incompletas++;
     });
+    if (incompletas) throw Object.assign(new Error(`${incompletas} orden(es) quedaron sin sellar ni retomar por otro camino`), { incompleta: true });
   } catch (e) {
     console.error(`syncMlToWc: ${e.message}; el cursor no avanza`);
+    if (e.incompleta && Date.now() - Date.parse(baseDesde) > 24 * 3600 * 1000) {
+      abrirOActualizarIncidente(db, {
+        integracion: 'mercadolibre', proceso: 'polling_ordenes', tipoError: 'polling_ml_cursor_detenido', severidad: 'advertencia',
+        mensajeTecnico: e.message, mensajeHumano: `El barrido de órdenes de MercadoLibre lleva más de un día sin avanzar su cursor: ${e.message}.`,
+        contexto: { cursor: baseDesde },
+      });
+    }
     if (/no se puede partir más|cambió durante el recorrido/.test(e.message)) {
       abrirOActualizarIncidente(db, {
         integracion: 'mercadolibre', proceso: 'polling_ordenes', tipoError: 'polling_ml_ventana_no_recorrible', severidad: 'critico',
@@ -639,10 +666,21 @@ const VERIF_TEXTO_MAX_PAGINAS = 5;
 /**
  * Segunda red para pedidos cargados A MANO sin la meta `_ml_order_id`: `GET /orders?search=<término>` (status any y trash). Woo busca
  * en sus campos indexados (datos de facturación/envío, ítems, etc.); lo que devuelva se re-verifica localmente buscando el término en
- * TODO el JSON del pedido (meta, nota del cliente, nombres…). Coincidencia → id del pedido. Resultados que no contienen el término
+ * `customer_note`, `number` y valores de meta, como token exacto (`mencionaTokenExacto`). Coincidencia → id del pedido, que NO es
+ * concluyente: el llamador no sella y abre un incidente crítico para que una persona confirme. Resultados que no contienen el término
  * (coincidencia dudosa) o cualquier falla/forma inesperada → LANZA (inconcluso: nadie descuenta). Sin resultados → null.
  * Riesgo residual: un pedido manual que no menciona el número de ML en ningún campo que Woo devuelva/indexe no se detecta.
  */
+/**
+ * ¿El pedido menciona el token EXACTO? Solo en `customer_note`, `number` y el valor de `meta_data`, con límites que no sean
+ * alfanuméricos: el número NUNCA cuenta como subcadena de uno más largo (un teléfono, otro ID).
+ */
+function mencionaTokenExacto(pedido, token) {
+  const re = new RegExp(`(?<![A-Za-z0-9])${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`);
+  const campos = [pedido?.customer_note, pedido?.number, ...(Array.isArray(pedido?.meta_data) ? pedido.meta_data.map((m) => (typeof m?.value === 'object' ? JSON.stringify(m.value) : m?.value)) : [])];
+  return campos.some((c) => c != null && re.test(String(c)));
+}
+
 async function buscarPedidoWcPorTexto(wooCfg, termino) {
   const t = String(termino ?? '').trim();
   if (!t) return null;
@@ -651,7 +689,7 @@ async function buscarPedidoWcPorTexto(wooCfg, termino) {
     for (let page = 1; ; page++) {
       const resp = await wooFetch(wooCfg, `/orders?per_page=100&status=${status}&page=${page}&search=${encodeURIComponent(t)}`);
       if (!Array.isArray(resp?.data)) throw new Error('respuesta de Woo con forma inesperada en la búsqueda por texto');
-      for (const p of resp.data) if (JSON.stringify(p).includes(t)) return p.id;
+      for (const p of resp.data) if (mencionaTokenExacto(p, t)) return p.id;
       if (resp.data.length) dudoso = true;
       if (resp.data.length < 100) break;
       if (page >= VERIF_TEXTO_MAX_PAGINAS) throw new Error(`búsqueda por texto de "${t}": ${VERIF_TEXTO_MAX_PAGINAS} páginas sin agotar, no concluyente`);
