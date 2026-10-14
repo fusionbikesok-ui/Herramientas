@@ -231,6 +231,24 @@ describe('order.woo: orden anterior al deploy (woo_orden_skus vacía)', () => {
     expect(db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = 'order_woo_sin_skus_500'").get()).toBeUndefined();
   });
 
+  it('la siembra corre UNA sola vez (marca en sync_estado): un segundo arranque no vuelve a recorrer el historial', async () => {
+    const { sembrarWooOrdenSkus, MARCA_SIEMBRA } = await import('../lib/wooOrdenSkus.js');
+    cacheConItems(500, ['A-1']);
+    expect(sembrarWooOrdenSkus(db)).toBe(1);
+    expect(db.prepare('SELECT 1 FROM sync_estado WHERE clave = ?').get(MARCA_SIEMBRA)).toBeDefined();
+    cacheConItems(501, ['B-2']); // aparece después: no se siembra (lo cubre la unión en ejecución)
+    expect(sembrarWooOrdenSkus(db)).toBe(0);
+    expect(skusPersistidosOrdenWoo(db, 501)).toEqual([]);
+  });
+
+  it('una fila persistida desactualizada NO pierde un SKU que Preparación conoce: la unión incluye siempre los conocidos', async () => {
+    db.prepare("INSERT INTO woo_orden_skus (order_id, skus_json, actualizado_en) VALUES ('500', '[\"A-1\"]', 'x')").run();
+    cacheConItems(500, ['A-1', 'NUEVO-9']);
+    error = NO_EXISTE();
+    encolarOrdenWoo(db, 500); await corrida();
+    expect(bolsas()).toEqual(['sku:A-1', 'sku:NUEVO-9']);
+  });
+
   it('primer aviso en la papelera sin nada persistido: usa las líneas que Woo devuelve', async () => {
     orden = ord(500, 'trash', ['A-1', 'B-2']);
     encolarOrdenWoo(db, 500); await corrida();

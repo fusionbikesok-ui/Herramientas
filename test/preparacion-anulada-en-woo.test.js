@@ -101,7 +101,7 @@ describe('anular una preparación ya completada o con tracking: incidente de adv
     const id2 = crearPreparacion(db, { canal: 'web', wcOrderId: 503, numeroPedido: '503', comprador: 'D', items: [] });
     db.prepare("UPDATE preparaciones SET estado = 'completada' WHERE id = ?").run(id2);
     anularPreparacionPorWoo(db, 503);
-    expect(incidente(503).mensaje_humano).toMatch(/si vuelve como cancelado u otro estado, sigue anulada/);
+    expect(incidente(503).mensaje_humano).toMatch(/Vuelve sola solo si se restaura con lpaandreani\/completed\/enviadoandreani; si vuelve cancelado u otro estado, sigue anulada/);
     restaurarPreparacionPorWoo(db, 503, 'cancelled'); // no elegible: sigue anulada e incidente activo
     expect(incidente(503).estado).toBe('activo');
     restaurarPreparacionPorWoo(db, 503, 'completed');

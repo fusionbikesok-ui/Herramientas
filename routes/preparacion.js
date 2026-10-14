@@ -3930,7 +3930,7 @@ export function anularPreparacionPorWoo(db, wcOrderId, { motivo = 'trash' } = {}
     // Una preparación ya terminada o con tracking puede haber salido físicamente: anularla es reversible, pero alguien tiene que verlo.
     if (ESTADOS_ANULADOS_CON_AVISO.includes(prep.estado) || String(prep.tracking || '').trim()) {
       const texto = `El pedido web #${prep.numero_pedido || wcOrderId} se borró o fue a la papelera en Woo (${motivo}) con la preparación en estado "${prep.estado}"`
-        + `${prep.tracking ? ` y tracking ${prep.tracking}` : ''}. Quedó marcada "Anulado en Woo": revisá si el paquete ya salió. Si se restaura en Woo con un estado de preparación, vuelve sola si se restaura con un estado de preparación (lpaandreani/completed/enviadoandreani); si vuelve como cancelado u otro estado, sigue anulada.`;
+        + `${prep.tracking ? ` y tracking ${prep.tracking}` : ''}. Quedó marcada "Anulado en Woo": revisá si el paquete ya salió. Vuelve sola solo si se restaura con lpaandreani/completed/enviadoandreani; si vuelve cancelado u otro estado, sigue anulada.`;
       abrirOActualizarIncidente(db, {
         integracion: 'woocommerce', proceso: 'preparacion', tipoError: `preparacion_anulada_en_woo_${wcOrderId}`.slice(0, 120), severidad: 'advertencia',
         mensajeTecnico: texto, mensajeHumano: texto, contexto: { wc_order_id: String(wcOrderId), estado_previo: prep.estado, motivo, tracking: prep.tracking || null },

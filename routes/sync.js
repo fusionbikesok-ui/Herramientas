@@ -2007,7 +2007,7 @@ export async function procesarOrdenWoo(db, cfg, orderId) {
   // orden es anterior al deploy y nunca cerró un trabajo — lo que Preparación ya conoce (cola y preparaciones).
   const persistidos = skusPersistidosOrdenWoo(db, orderId);
   const lineasEnPapelera = fuera && orden ? skusDeLineasWoo(orden) : [];
-  const conocidos = persistidos.length ? [] : skusConocidosOrdenWoo(db, orderId);
+  const conocidos = skusConocidosOrdenWoo(db, orderId); // siempre: una fila sembrada desactualizada perdería un SKU agregado después
   const union = [...new Set([...persistidos, ...actuales, ...lineasEnPapelera, ...conocidos])];
   if (inexistente && !union.length) {
     // 404 sin ninguna fuente: no se puede saber qué stock liberar. No se cierra en silencio.
