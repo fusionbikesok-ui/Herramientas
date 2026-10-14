@@ -1208,6 +1208,7 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
           if (alPagina) { const r = alPagina(off, lista); if (r) return r; }
           return { status: 200, data: { results: lista.slice(off, off + lim), paging: { total: lista.length, offset: off, limit: lim } } };
         }
+        if (/^\/orders\/[^/?]+$/.test(p)) return { status: 200, data: ml.orden };
         return { status: 404, data: {} };
       });
       return base;
@@ -1286,6 +1287,66 @@ describe('hotfix E-1a: la ventana se mide desde el PAGO, guarda de stock y filas
       await syncMlToWc(db, CFG);
       expect(ml.gets.filter((x) => x.startsWith('/orders/search') && /offset=0&limit=50/.test(x)).length).toBeGreaterThanOrEqual(2); // repitió el recorrido
       expect(woo.posts).toBe(1);
+    });
+
+    describe('cuarentena: una orden que nunca sella no traba el cursor', () => {
+      const pendiente = (id = 'ORD-1') => db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(`ml_pendiente:${id}`);
+      const envejecer = () => db.prepare("UPDATE sync_estado SET valor = ? WHERE clave = 'ml_pendiente:ORD-1'").run(hace(4 * 3600_000));
+      const cuarentena = () => inc('orden_ml_en_cuarentena_ORD-1');
+
+      it('orden pagada SIN fecha legible: antes del umbral frena el cursor; pasado el umbral va a cuarentena, el cursor avanza, incidente crítico y sigue en el registro', async () => {
+        const previo = hace(2 * 3600_000);
+        sembrar(previo);
+        const sinFecha = ordenN(0, { id: 'ORD-1', date_created: undefined, payments: [] });
+        paginado([sinFecha]);
+        await syncMlToWc(db, CFG);
+        expect(cursor()).toBe(previo); // todavía dentro del umbral
+        expect(pendiente()).toBeTruthy();
+        expect(trabajo('order.ml', 'ORD-1')).toBeDefined(); // se reintenta por el job
+        envejecer();
+        await syncMlToWc(db, CFG);
+        expect(cursor() > previo).toBe(true);
+        expect(cuarentena()).toMatchObject({ severidad: 'critico' });
+        expect(cuarentena().mensaje_humano).toMatch(/_ml_order_id = ORD-1/);
+        expect(pendiente()).toBeTruthy(); // sigue visible y reintentándose
+        expect(woo.productPuts).toHaveLength(0);
+        expect(woo.posts).toBe(0);
+      });
+
+      it('posible pedido manual: igual, cuarentena sin descontar; al agregar la meta _ml_order_id la orden sella y sale de pendientes', async () => {
+        const previo = hace(2 * 3600_000);
+        sembrar(previo);
+        woo.ordenes.push({ id: 9100, status: 'processing', date_created_gmt: hace(DIA).replace('Z', ''), line_items: [], meta_data: [], customer_note: 'venta ORD-1' });
+        const vieja = ordenN(0, { id: 'ORD-1', date_created: hace(20 * DIA), payments: [aprobado(20 * DIA)] });
+        paginado([vieja]);
+        ml.orden = vieja;
+        await syncMlToWc(db, CFG);
+        expect(cursor()).toBe(previo);
+        envejecer();
+        await syncMlToWc(db, CFG);
+        expect(cursor() > previo).toBe(true);
+        expect(cuarentena()).toBeDefined();
+        expect(inc('orden_ml_posible_pedido_manual_ORD-1').mensaje_humano).toMatch(/_ml_order_id = ORD-1/);
+        expect(woo.productPuts).toHaveLength(0);
+        // José agrega la meta al pedido Woo → la próxima pasada del job lo sella.
+        woo.ordenes[0].meta_data = [{ key: '_ml_order_id', value: 'ORD-1' }];
+        await procesarOrdenMl(db, CFG, 'ORD-1');
+        expect(fila()).toMatchObject({ estado: 'completo', origen: 'manual_sin_descuento' });
+        await syncMlToWc(db, CFG);
+        expect(pendiente()).toBeUndefined(); // salió de pendientes
+        expect(woo.productPuts).toHaveLength(0);
+      });
+
+      it('si NO es la misma venta: descontar-ordenes-viejas con omitirConciliacion descuenta (salida manual)', async () => {
+        woo.ordenes.push({ id: 9100, status: 'processing', date_created_gmt: hace(DIA).replace('Z', ''), line_items: [], meta_data: [], customer_note: 'venta ORD-1' });
+        const o = orden({ date_created: hace(20 * DIA) });
+        const { descontarOrdenViejaSinPedido } = await import('../routes/sync.js');
+        const bloqueada = await descontarOrdenViejaSinPedido(db, CFG, o, { origen: 'script' });
+        expect(bloqueada.estado).toBe('reintentar');
+        const r = await descontarOrdenViejaSinPedido(db, CFG, o, { origen: 'script', omitirConciliacion: true });
+        expect(r.estado).toBe('descontada');
+        expect(woo.productPuts).toEqual([{ id: '100', body: { stock_quantity: 4 } }]);
+      });
     });
 
     it('un 429 sintético de ML tampoco mueve el cursor', async () => {

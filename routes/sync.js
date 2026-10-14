@@ -434,6 +434,52 @@ async function paginarVentanaMl(db, mlCfg, desdeMs, hastaMs, procesar) {
   throw new Error('la ventana cambió durante el recorrido en cada intento (órdenes que entran o salen): no se avanza el cursor');
 }
 
+/** ¿Sellada, o con una fila de descuento / reserva / retención de la Guardia que la retoma otro camino? (una sola consulta) */
+function ordenRetomada(db, id) {
+  const r = db.prepare(`SELECT
+      EXISTS(SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = @id)
+      OR EXISTS(SELECT 1 FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = @id)
+      OR EXISTS(SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = @id)
+      OR EXISTS(SELECT 1 FROM guardia_ml_pedidos_retenidos WHERE ml_order_id = @id AND estado = 'retenido') AS ok`).get({ id });
+  return Boolean(r?.ok);
+}
+
+const PENDIENTE_PREFIJO = 'ml_pendiente:';
+const limpiarPendienteMl = (db, id) => db.prepare('DELETE FROM sync_estado WHERE clave = ?').run(`${PENDIENTE_PREFIJO}${id}`);
+const umbralCuarentenaMs = () => { const h = Number(process.env.ML_POLLING_CUARENTENA_HORAS); return (Number.isFinite(h) && h >= 0 ? h : 3) * 3600 * 1000; };
+
+/**
+ * Orden pagada que `_procesarOrden` no pudo sellar ni dejar en manos de otro camino. Se registra su primera vez (`sync_estado`
+ * `ml_pendiente:<id>`) y se encola un `order.ml` (reintento con backoff, visible). Pasado `ML_POLLING_CUARENTENA_HORAS` (3) pasa a
+ * cuarentena: cuenta como retomada (el cursor avanza), abre un incidente crítico por orden (dedupe) y el barrido de pendientes
+ * (`barrerPendientesMl`) sigue reintentándola; nunca se descuenta mientras siga dudosa. Devuelve true si está en cuarentena.
+ */
+async function ponerEnCuarentenaSiCorresponde(db, id, orden) {
+  const clave = `${PENDIENTE_PREFIJO}${id}`;
+  const ahoraIso = new Date().toISOString();
+  db.prepare('INSERT OR IGNORE INTO sync_estado (clave, valor, actualizado_en) VALUES (?, ?, ?)').run(clave, ahoraIso, ahoraIso);
+  try { encolarTrabajo(db, { tipo: 'order.ml', recurso: id }); } catch { /* el reintento es una ayuda: el cursor ya decide */ }
+  const desde = Date.parse(db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(clave)?.valor);
+  if (!(Number.isFinite(desde) && Date.now() - desde >= umbralCuarentenaMs())) return false;
+  const txt = `La venta de MercadoLibre ${id} no se pudo sellar desde ${new Date(desde).toISOString()} (sin fecha legible o con un posible pedido manual por confirmar) y quedó en CUARENTENA: NO se descontó stock ni se creó pedido; sigue reintentándose. Para cerrarla: si ya existe su pedido Woo, agregale el campo personalizado _ml_order_id = ${id} (la próxima pasada la sella sola); si NO es la misma venta, descontala a mano con scripts/ops/descontar-ordenes-viejas.mjs --omitir-conciliacion ${id}.`;
+  abrirOActualizarIncidente(db, {
+    integracion: 'mercadolibre', proceso: 'polling_ordenes', tipoError: `orden_ml_en_cuarentena_${id}`.slice(0, 120), severidad: 'critico',
+    mensajeTecnico: txt, mensajeHumano: txt, contexto: { ml_order_id: id, desde: new Date(desde).toISOString(), estado: orden?.status ?? null },
+  });
+  return true;
+}
+
+/** Reintenta las órdenes pendientes/en cuarentena: las ya retomadas salen del registro; el resto vuelve a encolar su `order.ml`. */
+export function barrerPendientesMl(db) {
+  const filas = db.prepare("SELECT clave FROM sync_estado WHERE clave LIKE 'ml_pendiente:%' LIMIT 200").all();
+  for (const { clave } of filas) {
+    const id = clave.slice(PENDIENTE_PREFIJO.length);
+    if (ordenRetomada(db, id)) { limpiarPendienteMl(db, id); continue; }
+    try { encolarTrabajo(db, { tipo: 'order.ml', recurso: id }); } catch { /* se reintenta en la próxima pasada */ }
+  }
+  return filas.length;
+}
+
 async function _syncMlToWc(db, cfg) {
   const { ml: mlCfg, woo: wooCfg } = cfg;
   const leer = (clave) => db.prepare('SELECT valor FROM sync_estado WHERE clave = ?').get(clave)?.valor ?? null;
@@ -449,6 +495,7 @@ async function _syncMlToWc(db, cfg) {
   const h = Number(process.env.ML_POLLING_VENTANA_MAX_HORAS);
   const hastaMs = Math.min(Date.now(), Date.parse(baseDesde) + (Number.isFinite(h) && h > 0 ? h : 24) * 3600 * 1000);
   let incompletas = 0;
+  barrerPendientesMl(db);
 
   try {
     await paginarVentanaMl(db, mlCfg, desdeMs, hastaMs, async (orden) => {
@@ -457,12 +504,11 @@ async function _syncMlToWc(db, cfg) {
       if (db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(id)) return;
       await _procesarOrden(db, wooCfg, mlCfg, orden);
       // Si no quedó sellada ni la retoma otro camino (fila de descuento, reserva, retención de la Guardia) la corrida está
-      // incompleta: pasada la hora de solape la orden saldría de la ventana y se perdería en silencio.
-      const retomada = db.prepare('SELECT 1 FROM ordenes_ml_procesadas WHERE order_id = ?').get(id)
-        || db.prepare('SELECT 1 FROM ordenes_ml_descuento_sin_pedido WHERE ml_order_id = ?').get(id)
-        || db.prepare('SELECT 1 FROM ordenes_ml_wc_pedidos WHERE ml_order_id = ?').get(id)
-        || pedidoMlRetenido(db, id);
-      if (!retomada) incompletas++;
+      // incompleta: pasada la hora de solape la orden saldría de la ventana y se perdería en silencio. Una orden que nunca sella (sin
+      // fecha legible, posible pedido manual) no puede trabar el cursor para siempre: pasado el umbral va a CUARENTENA.
+      if (!ordenRetomada(db, id)) {
+        if (!(await ponerEnCuarentenaSiCorresponde(db, id, orden))) incompletas++;
+      } else limpiarPendienteMl(db, id);
     });
     if (incompletas) throw Object.assign(new Error(`${incompletas} orden(es) quedaron sin sellar ni retomar por otro camino`), { incompleta: true });
   } catch (e) {
