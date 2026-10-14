@@ -90,6 +90,8 @@ function encolarSalidaWoo(db, lote, usuario) {
 export const ESTADO_ANULADO_EN_WOO = 'anulado_en_woo';
 const ESTADOS_BLOQUEADOS_PARA_TRABAJAR = new Set(['completada', 'cerrada_sin_evidencia', 'cancelada_sin_retiro_registrado', 'cancelada_pendiente_devolucion', ESTADO_ANULADO_EN_WOO]);
 // Estados que NO se pisan al anular: ya tienen su propio circuito de cierre/devolución.
+const ETIQUETAS_ESTADO_PREP = { en_preparacion: 'en preparación', completada: 'completada', pendiente_deposito: 'pendiente de depósito', despachada_sin_verificar: 'despachada sin verificar', cerrada_sin_evidencia: 'cerrada sin evidencia' };
+const etiquetaEstadoPrep = (e) => ETIQUETAS_ESTADO_PREP[e] || String(e || '').replace(/_/g, ' ');
 const ESTADOS_ANULADOS_CON_AVISO = ['completada', 'despachada_sin_verificar'];
 const ESTADOS_WOO_ELEGIBLES_DEFAULT = ['lpaandreani', 'completed', 'enviadoandreani'];
 const ESTADOS_QUE_NO_SE_ANULAN = ['cancelada_sin_retiro_registrado', 'cancelada_pendiente_devolucion', 'cancelada_devuelta'];
@@ -3929,7 +3931,7 @@ export function anularPreparacionPorWoo(db, wcOrderId, { motivo = 'trash' } = {}
     registrarEvento(db, { preparacionId: prep.id, tipo: 'anulado_en_woo', usuario: null, detalle: { estado_previo: prep.estado, motivo }, failClosed: true });
     // Una preparación ya terminada o con tracking puede haber salido físicamente: anularla es reversible, pero alguien tiene que verlo.
     if (ESTADOS_ANULADOS_CON_AVISO.includes(prep.estado) || String(prep.tracking || '').trim()) {
-      const texto = `El pedido web #${prep.numero_pedido || wcOrderId} se borró o fue a la papelera en Woo (${motivo}) con la preparación en estado "${prep.estado}"`
+      const texto = `El pedido web #${prep.numero_pedido || wcOrderId} se borró o fue a la papelera en Woo (${motivo}) con la preparación en estado «${etiquetaEstadoPrep(prep.estado)}»`
         + `${prep.tracking ? ` y tracking ${prep.tracking}` : ''}. Quedó marcada "Anulado en Woo": revisá si el paquete ya salió. Vuelve sola solo si se restaura con lpaandreani/completed/enviadoandreani; si vuelve cancelado u otro estado, sigue anulada.`;
       abrirOActualizarIncidente(db, {
         integracion: 'woocommerce', proceso: 'preparacion', tipoError: `preparacion_anulada_en_woo_${wcOrderId}`.slice(0, 120), severidad: 'advertencia',
