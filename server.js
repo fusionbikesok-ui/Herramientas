@@ -26,7 +26,7 @@ import { csvRouter } from './routes/csv.js';
 import { bandejaIdentidadRouter } from './routes/bandejaIdentidad.js';
 import { matcherRouter, dispararRefrescoMl, estadoRefrescoMl } from './routes/matcher.js';
 import { verificarWebhookWoo } from './lib/wooWebhookAuth.js';
-import { syncRouter, procesarBarreraVentas, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, procesarTrabajosRecurso, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
+import { syncRouter, encolarOrdenWoo, TOPICS_ORDEN_WOO, procesarBarreraVentas, syncMlToWc, syncOrdenMlPuntual, syncWcToMl, procesarReintentos, procesarCancelacionesMl, procesarTrabajosRecurso, reactivarAutomatico, reconciliarStockMl } from './routes/sync.js';
 import { recepcionesRouter } from './routes/recepciones.js';
 import { pedidosRouter } from './routes/pedidos.js';
 import { coberturaRouter } from './routes/cobertura.js';
@@ -40,7 +40,8 @@ import { identidadProductosRouter } from './routes/identidadProductos.js';
 import { catalogoVinculosRouter } from './routes/catalogoVinculos.js';
 import { preciosRouter } from './routes/precios.js';
 import { configurarAuditoriaPrecios, dispararAuditoriaPrecios } from './lib/auditoriaPrecios.js';
-import { preparacionRouter, syncPedidosCache, syncPedidoWebPuntual, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking, reconciliarPreparacionesAbiertas } from './routes/preparacion.js';
+import { sembrarWooOrdenSkus } from './lib/wooOrdenSkus.js';
+import { preparacionRouter, syncPedidosCache, syncPedidoMlPuntual, purgarFotosBorradas, reintentarColgadosTracking, reconciliarPreparacionesAbiertas } from './routes/preparacion.js';
 import { gestionPedidosRouter } from './routes/gestionPedidos.js';
 import { procesarColaFotos } from './lib/fotosPreparacionCola.js';
 import { consultaPreciosRouter } from './routes/consultaPrecios.js';
@@ -327,16 +328,21 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       try { order = JSON.parse(req.body.toString('utf8')); }
       catch { return res.status(400).json({ ok: false, error: 'payload inválido' }); }
 
-      // E1 T3 C2: recibo durable ANTES del ACK. Es el único cambio deliberado de código de respuesta
-      // del legado: este webhook no tenía recibo y un reinicio perdía el aviso sin rastro. Si SQLite
-      // falla devolvemos 503 y WC reintenta, que es exactamente lo que queremos de un aviso no
-      // registrado; un id inválido es 400 y no se reintenta. El ACK sigue sin esperar a la plataforma.
+      // E-1b: el topic solo DISPARA; decide la relectura vigente del trabajo `order.woo`. created/updated/deleted/restored
+      // se tratan igual (con hoy solo order.updated dado de alta en la tienda, el resto es el mismo camino cuando se sumen).
+      const topic = String(req.headers['x-wc-webhook-topic'] || 'order.updated').trim().toLowerCase();
+      if (!TOPICS_ORDEN_WOO.has(topic)) return res.status(400).json({ ok: false, error: `topic de pedido no soportado: ${topic}` });
+
+      // E1 T3 C2: recibo durable ANTES del ACK. Si SQLite falla devolvemos 503 y WC reintenta, que es exactamente lo que
+      // queremos de un aviso no registrado; un id inválido es 400 y no se reintenta. El ACK no espera a la plataforma.
+      // E-1b: el trabajo durable `order.woo` se encola en la misma etapa, así un reinicio entre el ACK y el efecto no pierde el aviso.
       try {
         const persistido = registrarWebhookWooPedido(app._db, order, {
-          topic: req.headers['x-wc-webhook-topic'],
+          topic,
           deliveryId: req.headers['x-wc-webhook-delivery-id'],
           sombra: Boolean(colaSombra),
         });
+        encolarOrdenWoo(app._db, order.id);
         engancharSombra(res, persistido);
       } catch (err) {
         const status = err.code === 'woo_order_id_invalid' ? 400 : 503;
@@ -346,26 +352,11 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       // Responder antes de procesar — WC no espera más de 5s
       res.json({ ok: true });
 
-      // A.1 (2026-08-26): camino rápido a la cola de Preparación. Va ANTES del filtro
-      // ESTADOS_CON_STOCK de abajo a propósito: ese filtro es para relevancia de stock/precio
-      // ML (syncWcToMl), pero el estado que de verdad importa para la cola de preparación es
-      // el de Andreani (lpaandreani/completed/enviadoandreani), que no está en esa lista. La
-      // función puntual ya descarta en silencio cualquier estado que no sea uno de esos 3.
-      // Fail-open: si esto falla, syncPedidosCache (cron cada 10 min) igual va a traer el
-      // pedido en su próxima corrida -- no se pierde, solo tarda más en aparecer.
-      syncPedidoWebPuntual(app._db, {
-        woo: wooCfg,
-        andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
-        enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
-      }, order.id).catch(err => console.error('[webhook-woo] syncPedidoWebPuntual error:', err.message));
-
-      const ESTADOS_CON_STOCK = ['processing', 'completed', 'on-hold'];
-      if (!ESTADOS_CON_STOCK.includes(order.status)) return;
-
-      const skus = (order.line_items || []).map(li => li.sku).filter(Boolean).join(', ');
-      console.log(`[webhook-woo] order #${order.id} status=${order.status} skus=${skus || '(sin sku)'} → syncWcToMl`);
-      syncWcToMl(app._db, syncCfg, { maxLlamadas: 30 })
-        .catch(err => console.error('[webhook-woo] syncWcToMl error:', err.message));
+      // Acelerador no durable: si el proceso muere, el cron de cada minuto toma el trabajo. Reemplaza al `syncWcToMl` general
+      // para este disparador (los barridos de los crons siguen corriendo igual: no se baja ninguna frecuencia).
+      console.log(`[webhook-woo] ${topic} order #${order.id} status=${order.status ?? '(sin estado)'} → trabajo order.woo`);
+      procesarTrabajosRecurso(app._db, syncCfg)
+        .catch(err => console.error('[webhook-woo] procesarTrabajosRecurso error:', err.message));
     }
   );
 
@@ -690,6 +681,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
     andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
     enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
   }));
+  sembrarWooOrdenSkus(db); // E-1b: idempotente; woo_orden_skus nace vacía y un primer aviso `deleted` no tendría SKUs que liberar
   app.use('/preparacion', express.static(path.join(__dirname, 'public/preparacion')));
   app.use('/api/consulta-precios', consultaPreciosRouter(db, wooCfg));
   app.use('/consulta-precios', express.static(path.join(__dirname, 'public/consulta-precios')));

@@ -48,6 +48,8 @@ export const COLUMNAS_JSON = new Set([
   'trabajos_recurso.contexto_json',
   // E-1a: lineas_json de ordenes_ml_descuento_sin_pedido = SKU, nombre, cantidades y stock antes/después (sin personas).
   'ordenes_ml_descuento_sin_pedido.lineas_json',
+  // E-1b: skus_json de woo_orden_skus = SKUs del catálogo de la orden (sin personas, se conserva); order_id y fecha no son datos de cliente.
+  'woo_orden_skus.skus_json',
 ]);
 // Coinciden por nombre pero no contienen JSON.
 export const COLUMNAS_NO_JSON = new Set(['integration_events.payload_version']);

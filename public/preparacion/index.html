@@ -515,13 +515,13 @@ async function cargarLotes(){
   var c=document.getElementById('cuerpo'); var fecha=fechaBA(); c.innerHTML='<div class="loading">Cargando lotes…</div>';
   try{var r=await api('/despacho/lotes?fecha_jornada='+encodeURIComponent(fecha));if(!r.body.ok)throw new Error(r.body.error||'error');
     var lotes=r.body.lotes||[]; c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">Recargar</button></div><p class="sub">Lotes de '+esc(fecha)+' · separados por canal</p>'+
-      (lotes.length?'<div class="desp-list">'+lotes.map(function(l){return '<article class="desp-card"><h3>'+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+' · lote '+esc(String(l.id))+'</h3><div class="desp-meta">Estado: '+esc(l.estado)+' · Miembros: '+Number(l.miembros||0)+' · Confirmados: '+Number(l.confirmados||0)+' · Con tracking: '+Number(l.con_tracking||0)+'</div><div class="desp-actions"><button class="btn sec" onclick="verDetalleLote('+Number(l.id)+')">Ver paquetes</button></div></article>';}).join('')+'</div>':'<div class="desp-empty">No hay lotes para esta jornada.</div>');
+      (lotes.length?'<div class="desp-list">'+lotes.map(function(l){return '<article class="desp-card"><h3>'+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+' · lote '+esc(String(l.id))+'</h3><div class="desp-meta">Estado: '+esc(etiquetaEstadoLote(l.estado))+' · Miembros: '+Number(l.miembros||0)+' · Confirmados: '+Number(l.confirmados||0)+' · Con tracking: '+Number(l.con_tracking||0)+'</div><div class="desp-actions"><button class="btn sec" onclick="verDetalleLote('+Number(l.id)+')">Ver paquetes</button></div></article>';}).join('')+'</div>':'<div class="desp-empty">No hay lotes para esta jornada.</div>');
   }catch(e){c.innerHTML='<div class="loading err" role="alert">No se pudieron cargar los lotes: '+esc(e.message)+'</div>';}
 }
 async function verDetalleLote(id){
   var c=document.getElementById('cuerpo'); c.innerHTML='<div class="loading">Cargando paquetes…</div>';
   try{var r=await api('/despacho/lotes/'+encodeURIComponent(id));if(!r.body.ok)throw new Error(r.body.error||'error');var l=r.body.lote,items=r.body.items||[];
-    c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">← Volver a lotes</button>'+(l.estado==='abierto'?'<button class="btn" onclick="accionLote('+l.id+',\'iniciar\')">Iniciar lote</button>':'')+(l.estado==='en_preparacion'?'<button class="btn danger" onclick="cerrarLote('+l.id+')">Cerrar lote</button>':'')+((l.estado==='abierto'||l.estado==='en_preparacion')?'<button class="btn danger" onclick="anularLote('+l.id+')">Anular lote</button>':'')+'</div><h2>Lote '+esc(String(l.id))+' · '+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+'</h2><p class="sub">Estado: '+esc(l.estado)+' · Jornada: '+esc(l.fecha_jornada)+'</p><div class="desp-scan"><label for="lote-codigo">Código del paquete</label><input id="lote-codigo" placeholder="pack o clave" autocomplete="off"><button class="btn" onclick="escanearLote('+l.id+')" '+(l.estado==='en_preparacion'?'':'disabled')+'>Escanear</button></div><div class="desp-list">'+(items.length?items.map(function(i){return '<article class="desp-card"><h3>'+esc(i.grupo_clave)+' <span class="badge '+(i.estado==='confirmado'?'b-ok':'b-mut')+'">'+esc(i.estado)+'</span></h3><div class="desp-meta">'+(l.canal==='web'?'Tracking: '+esc(i.tracking||'asociar en embalaje'):'MercadoLibre: el tracking se gestiona fuera de este sistema')+'</div></article>';}).join(''):'<div class="desp-empty">Lote sin paquetes.</div>')+'</div>';
+    c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarLotes()">← Volver a lotes</button>'+(l.estado==='abierto'?'<button class="btn" onclick="accionLote('+l.id+',\'iniciar\')">Iniciar lote</button>':'')+(l.estado==='en_preparacion'?'<button class="btn danger" onclick="cerrarLote('+l.id+')">Cerrar lote</button>':'')+((l.estado==='abierto'||l.estado==='en_preparacion')?'<button class="btn danger" onclick="anularLote('+l.id+')">Anular lote</button>':'')+'</div><h2>Lote '+esc(String(l.id))+' · '+esc(l.canal==='ml'?'MercadoLibre':'Andreani/Web')+'</h2><p class="sub">Estado: '+esc(etiquetaEstadoLote(l.estado))+' · Jornada: '+esc(l.fecha_jornada)+'</p><div class="desp-scan"><label for="lote-codigo">Código del paquete</label><input id="lote-codigo" placeholder="pack o clave" autocomplete="off"><button class="btn" onclick="escanearLote('+l.id+')" '+(l.estado==='en_preparacion'?'':'disabled')+'>Escanear</button></div><div id="desp-live" class="flash" role="status" aria-live="polite"></div><div class="desp-list">'+(items.length?items.map(function(i){return '<article class="desp-card"><h3>'+esc(i.grupo_clave)+' <span class="badge '+(i.estado==='confirmado'?'b-ok':'b-mut')+'">'+esc(i.estado)+'</span></h3><div class="desp-meta">'+(l.canal==='web'?'Tracking: '+esc(i.tracking||'asociar en embalaje'):'MercadoLibre: el tracking se gestiona fuera de este sistema')+'</div></article>';}).join(''):'<div class="desp-empty">Lote sin paquetes.</div>')+'</div>';
     if(l.estado==='cerrado'&&!l.salida_confirmada_en){var toolbar=c.querySelector('.desp-toolbar');if(toolbar){var b=document.createElement('button');b.className='btn';b.textContent='Confirmar salida';b.onclick=function(){confirmarSalidaLote(l.id);};toolbar.appendChild(b);}}
     if(window.__PREP_AUTH&&(window.__PREP_AUTH.is_admin||['supervisor','supervisor_deposito','auditor','despacho'].indexOf(String(window.__PREP_AUTH.rol||window.__PREP_AUTH.role||'').toLowerCase())>=0)){var tb=c.querySelector('.desp-toolbar');if(tb){var ev=document.createElement('button');ev.className='btn sec';ev.textContent='Ver auditoría';ev.onclick=function(){verEventosLote(l.id);};tb.appendChild(ev);}}
   }catch(e){c.innerHTML='<div class="loading err" role="alert">No se pudo cargar el lote: '+esc(e.message)+'</div>';}
@@ -530,14 +530,34 @@ async function accionLote(id,op){var r=await api('/despacho/lotes/'+id+'/'+op,{m
 async function anularLote(id){var motivo=prompt('Motivo de anulación (obligatorio):');if(!motivo||!motivo.trim())return despAviso('La anulación requiere un motivo','bad');if(!confirm('¿Anular este lote? Sus eventos se conservarán.'))return;var r=await api('/despacho/lotes/'+id+'/anular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:motivo.trim()})});if(!r.body.ok)return despAviso(r.body.error||'No se pudo anular el lote','bad');verDetalleLote(id);}
 async function escanearLote(id){var el=document.getElementById('lote-codigo'),codigo=(el&&el.value||'').trim();if(!codigo)return despAviso('Ingresá el código del paquete','bad');var r=await api('/despacho/lotes/'+id+'/escanear',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':despEscaneoClave()},body:JSON.stringify({codigo:codigo})});if(!r.body.ok)return despAviso(r.body.error||'No se pudo escanear','bad');verDetalleLote(id);}
 async function trackingLote(id,controlId){return despAviso('El tracking se asocia durante el embalaje; despacho solo reconcilia el paquete.','bad');}
-async function cerrarLote(id){var r=await api('/despacho/lotes/'+id+'/cerrar',{method:'POST'});if(!r.body.ok){var motivo=prompt(r.body.error+' Motivo excepcional (opcional):');if(!motivo)return; r=await api('/despacho/lotes/'+id+'/cerrar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:motivo.trim()})});}if(!r.body.ok)return despAviso(r.body.error||'No se pudo cerrar','bad');verDetalleLote(id);}
+async function cerrarLote(id){var r=await api('/despacho/lotes/'+id+'/cerrar',{method:'POST'});if(!r.body.ok&&r.body.code==='PREPARACION_ANULADA_EN_WOO')return despAviso(r.body.error||'El lote tiene un pedido anulado en Woo','bad');if(!r.body.ok){var motivo=prompt(r.body.error+' Motivo excepcional (opcional):');if(!motivo)return; r=await api('/despacho/lotes/'+id+'/cerrar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:motivo.trim()})});}if(!r.body.ok)return despAviso(r.body.error||'No se pudo cerrar','bad');verDetalleLote(id);}
 async function confirmarSalidaLote(id){if(!confirm('¿Confirmás que todo el lote fue entregado al transporte?'))return;var r=await api('/despacho/lotes/'+id+'/salida',{method:'POST',headers:{'Idempotency-Key':despEscaneoClave()}});if(!r.body.ok)return despAviso(r.body.error||'No se pudo confirmar la salida','bad');verDetalleLote(id);}
 async function verEventosLote(id){var r=await api('/despacho/lotes/'+id+'/eventos');if(!r.body.ok)return despAviso(r.body.error||'No se pudo cargar la auditoría','bad');var eventos=r.body.eventos||[];alert(eventos.map(function(e){return e.creado_en+' · '+e.usuario+' · '+e.tipo;}).join('\n')||'Sin eventos');}
 
+var ETIQUETAS_ESTADO_PREP={en_preparacion:'en preparación',completada:'completada',pendiente_deposito:'pendiente de depósito',despachada_sin_verificar:'despachada sin verificar',cerrada_sin_evidencia:'cerrada sin evidencia',cancelada_sin_retiro_registrado:'cancelada sin retiro registrado',cancelada_pendiente_devolucion:'cancelada, devolución pendiente',cancelada_devuelta:'cancelada y devuelta',anulado_en_woo:'anulado en Woo'};
+var ETIQUETAS_ESTADO_LOTE={abierto:'abierto',en_preparacion:'en preparación',cerrado:'cerrado',anulado:'anulado'};
+function etiquetaEstadoLote(estado){return ETIQUETAS_ESTADO_LOTE[estado]||String(estado||'').replace(/_/g,' ');}
+function etiquetaEstadoPrep(estado){return ETIQUETAS_ESTADO_PREP[estado]||String(estado||'').replace(/_/g,' ');}
+// Una preparación abierta que Woo anula: cualquier acción (o el heartbeat) recibe 409 PREPARACION_ANULADA_EN_WOO. Se corta el
+// heartbeat, se avisa y se recarga la vista de solo lectura (una sola vez, aunque lleguen varias respuestas a la vez).
+var RECARGANDO_ANULADA=false;
+function alAnularseEnWoo(idOrigen){
+  if(RECARGANDO_ANULADA||VISTA!=='detalle'||!PREP||PREP.estado==='anulado_en_woo')return;
+  // Un 409 tardío de OTRA preparación (heartbeat de la que ya se cerró) no debe marcar la vista que está abierta ahora.
+  if(idOrigen!=null&&String(idOrigen)!==String(PREP.id))return;
+  RECARGANDO_ANULADA=true;
+  detenerHeartbeat();
+  var id=PREP.id;
+  abrirDetalle(id,false).then(function(){
+    var c=document.getElementById('cuerpo');
+    if(c){var d=document.createElement('div');d.className='flash bad';d.setAttribute('role','alert');d.textContent='Este pedido fue anulado en Woo. Ya no se puede trabajar desde acá.';c.insertBefore(d,c.firstChild);}
+  }).catch(function(){}).then(function(){RECARGANDO_ANULADA=false;});
+}
 async function api(path,opts){
   var r=await fetch('/api/preparacion'+path,opts);
   var d=await r.json().catch(function(){return{ok:false,error:'HTTP '+r.status};});
   if(r.status===401){location.href='/herramientas/login/';throw new Error('sesión vencida');}
+  if(r.status===409&&d&&d.code==='PREPARACION_ANULADA_EN_WOO'){var mId=/^\/(\d+)(?:\/|$)/.exec(path);alAnularseEnWoo(mId?mId[1]:null);}
   return {status:r.status,body:d};
 }
 
@@ -1349,7 +1369,9 @@ async function abrirDetalle(id,empujar){
   if(empujar!==false&&pedidoDeLaUrl()!==Number(id))history.pushState({pedido:Number(id)},'',urlPedido(id));
   ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, (PREP.eventos&&PREP.eventos[0])?PREP.eventos[0].id:0);
   renderDetalle();
-  iniciarHeartbeat(id);
+  // Una preparación anulada en Woo es solo lectura: sin heartbeat ni claim que renovar (el servidor responde 409 a todo).
+  if(PREP.estado==='anulado_en_woo')detenerHeartbeat();
+  else iniciarHeartbeat(id);
   if(hayFotosPendientes())iniciarPollFotos();
 }
 
@@ -1525,6 +1547,19 @@ function renderDetalle(){
       +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
       +'<p class="sub">Esta preparación se cerró sin poder verificar el contenido (ítems sin escanear o sin fotos). No está confirmada como completa. Si necesitás trabajarla — por ejemplo, entró un reclamo — reabrila primero.</p>'
       +'<button class="btn" onclick="reabrirCerrada('+p.id+')">Reabrir preparación</button>';
+    return;
+  }
+
+  // E-1b: el pedido se borró o fue a la papelera en Woo. Solo lectura: sin escaneo, fotos, ni botones de acción (el servidor
+  // responde 409). El aviso va en el flujo normal de la página, visible también en el celular.
+  if(p.estado==='anulado_en_woo'){
+    document.getElementById('cuerpo').innerHTML='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
+      +'<h1 style="margin-top:12px">Pedido <em>#'+esc(numMostrar(p))+'</em> '+badgeEstadoPrep(p.estado,p.estado_previo_anulado)+'</h1>'
+      +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
+      +'<p class="sub" role="status">Este pedido se borró o fue a la papelera en Woo'+(p.estado_previo_anulado?' cuando la preparación estaba en «'+esc(etiquetaEstadoPrep(p.estado_previo_anulado))+'»':'')+'. No se puede trabajar ni modificar desde acá.'
+      +(p.tracking?' Tenía el tracking <strong>'+esc(p.tracking)+'</strong>: revisá si el paquete ya salió.':'')
+      +' Si se restaura en Woo con un estado de preparación (lpaandreani, completed o enviadoandreani), vuelve a la cola sola; si vuelve cancelado u otro estado, sigue anulada.</p>'
+      +'<ul class="sub" style="padding-left:18px;margin:0">'+(p.items||[]).map(function(it){return '<li>'+esc(it.sku||'Sin SKU')+' — '+esc(it.nombre||'')+' × '+esc(String(it.cantidad_esperada||1))+'</li>';}).join('')+'</ul>';
     return;
   }
 
@@ -2948,7 +2983,8 @@ async function cargarSeguimientos(){
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
 
-function badgeEstadoPrep(estado){
+function badgeEstadoPrep(estado,previo){
+  if(estado==='anulado_en_woo')return '<span class="badge b-red">Anulado en Woo'+(previo?' (estaba: '+esc(etiquetaEstadoPrep(previo))+')':'')+'</span>';
   if(estado==='en_preparacion')return '<span class="badge b-warn">en preparación</span>';
   if(estado==='despachada_sin_verificar')return '<span class="badge b-mut">despachada sin verificar</span>';
   if(estado==='cancelada_sin_retiro_registrado')return '<span class="badge b-mut">cancelada sin retiro registrado</span>';
@@ -2966,7 +3002,7 @@ function badgeEstadoPrep(estado){
 // salida. Sin botón ahí; "Abrir preparación" cuando ya existe una fila trabajable.
 function iniciarBtnSeg(f){
   var estado=f.estado_preparacion;
-  if(estado==='cerrada_sin_evidencia')return '';
+  if(estado==='cerrada_sin_evidencia'||estado==='anulado_en_woo')return '';
   var texto=estado?'Abrir preparación':'Iniciar preparación ahora';
   // 44px (nit del revisor: WCAG 2.5.8): es la acción principal de "Sin preparación
   // verificada", la sección más poblada, en una pantalla táctil de depósito.

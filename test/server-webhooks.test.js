@@ -39,12 +39,40 @@ function nuevaApp() {
 }
 
 describe('handlers reales de webhooks en server.js', () => {
-  it('Woo responde inmediato y deja el trabajo de fondo aunque rechace', async () => {
-    puntualWeb.mockRejectedValueOnce(new Error('Woo caído'));
-    const res = await postWoo(request, nuevaApp(), '/api/woo/webhook/order', { id: 901, status: 'processing' });
+  const trabajosWoo = (app) => app._db.prepare("SELECT recurso, estado, generacion FROM trabajos_recurso WHERE tipo = 'order.woo' ORDER BY recurso").all();
+
+  it('E-1b el pedido Woo deja un trabajo order.woo durable antes del ACK y acelera el worker (sin syncWcToMl ni sync directo)', async () => {
+    const app = nuevaApp();
+    const res = await postWoo(request, app, '/api/woo/webhook/order', { id: 901, status: 'processing' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true });
-    expect(puntualWeb).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ woo: {} }), 901);
+    expect(trabajosWoo(app)).toEqual([{ recurso: '901', estado: 'pendiente', generacion: 1 }]);
+    expect(kickTrabajos).toHaveBeenCalledTimes(1);
+    expect(puntualWeb).not.toHaveBeenCalled();
+  });
+
+  it.each(['order.created', 'order.updated', 'order.deleted', 'order.restored'])('E-1b %s dispara el MISMO trabajo (el topic solo dispara; la relectura decide)', async (topic) => {
+    const app = nuevaApp();
+    // order.deleted de Woo trae solo el id: sin estado ni líneas.
+    const cuerpo = topic === 'order.deleted' ? { id: 905 } : { id: 905, status: 'processing' };
+    const res = await postWoo(request, app, '/api/woo/webhook/order', cuerpo, { topic, deliveryId: `e-${topic}` });
+    expect(res.status).toBe(200);
+    expect(trabajosWoo(app)).toEqual([{ recurso: '905', estado: 'pendiente', generacion: 1 }]);
+    expect(app._db.prepare("SELECT json_extract(metadata_json,'$.topic') t FROM integration_events").get().t).toBe(topic);
+  });
+
+  it('E-1b varios avisos del mismo pedido (incluido un deleted atrasado) son UN trabajo con generación creciente', async () => {
+    const app = nuevaApp();
+    await postWoo(request, app, '/api/woo/webhook/order', { id: 906, status: 'processing' }, { topic: 'order.restored', deliveryId: 'a' });
+    await postWoo(request, app, '/api/woo/webhook/order', { id: 906 }, { topic: 'order.deleted', deliveryId: 'b' });
+    expect(trabajosWoo(app)).toEqual([{ recurso: '906', estado: 'pendiente', generacion: 2 }]);
+  });
+
+  it('E-1b un topic de pedido desconocido es 400 y no deja trabajo', async () => {
+    const app = nuevaApp();
+    const res = await postWoo(request, app, '/api/woo/webhook/order', { id: 907 }, { topic: 'order.foo' });
+    expect(res.status).toBe(400);
+    expect(trabajosWoo(app)).toEqual([]);
   });
 
   it('E1-RCP-01 el pedido Woo deja recibo antes del ACK, sin job y deduplicado por entrega', async () => {
@@ -70,7 +98,7 @@ describe('handlers reales de webhooks en server.js', () => {
     expect(res.status).toBe(400);
     expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
     // Un aviso que no se puede identificar no dispara trabajo de fondo.
-    expect(puntualWeb).not.toHaveBeenCalled();
+    expect(app._db.prepare("SELECT COUNT(*) n FROM trabajos_recurso WHERE tipo = 'order.woo'").get().n).toBe(0);
   });
 
   it('E-1a Woo sin WOO_WEBHOOK_SECRET es 503 (fail-closed), sin recibo ni trabajo de fondo', async () => {
@@ -79,7 +107,7 @@ describe('handlers reales de webhooks en server.js', () => {
     const res = await postWoo(request, app, '/api/woo/webhook/order', { id: 903, status: 'processing' });
     expect(res.status).toBe(503);
     expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
-    expect(puntualWeb).not.toHaveBeenCalled();
+    expect(trabajosWoo(app)).toEqual([]);
   });
 
   it('E-1a Woo sin firma es 401 y con firma de otro secreto también', async () => {
@@ -98,7 +126,7 @@ describe('handlers reales de webhooks en server.js', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, ping: true });
     expect(app._db.prepare('SELECT COUNT(*) n FROM integration_events').get().n).toBe(0);
-    expect(puntualWeb).not.toHaveBeenCalled();
+    expect(trabajosWoo(app)).toEqual([]);
   });
 
   it('E-1a un webhook de producto con topic de pedido es 400', async () => {

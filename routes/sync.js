@@ -28,6 +28,7 @@ import { parseCategorias } from '../lib/modelos/producto.js';
 import { retenerPedidoMl, pedidoMlRetenido, claveFrenadaParaVenta, claveCubiertaParaVenta, ignoraVentas, esNoSincronizar, skuUnicoEnCatalogo } from '../lib/guardiaMl.js';
 import { modoProteccion, sqlFrenaIdentidad, frenaIdentidad, clavesSinVinculoAFrenar, CLASIFICACIONES_SIN_VINCULO, planR4, R4_MAX_POR_CORRIDA } from '../lib/proteccionIdentidad.js';
 import { espera } from '../lib/esperas.js';
+import { skusConocidosOrdenWoo } from '../lib/wooOrdenSkus.js';
 import { listarPausadasConStock, resumenSoloLocal, CAUSAS as CAUSAS_PAUSA } from '../lib/pausadasConStock.js';
 import { encoladasSinEjecutar } from '../lib/identidadAlarmas.js';
 import { contradiccionDeClave } from '../lib/contradiccionTitulo.js';
@@ -1968,6 +1969,74 @@ export async function procesarStockBolsa(db, cfg, sku) {
   return r.valor;
 }
 
+// ─── E-1b: trabajo `order.woo` (pedido Woo creado/modificado/borrado/restaurado) ────────────────────────────────────
+
+const skusDeLineasWoo = (orden) => [...new Set((orden?.line_items || []).map((l) => String(l?.sku || '').trim()).filter(Boolean))];
+
+/** Conjunto de SKUs persistido de la orden (vacío si nunca se cerró un trabajo para ella). */
+export function skusPersistidosOrdenWoo(db, orderId) {
+  const f = db.prepare('SELECT skus_json FROM woo_orden_skus WHERE order_id = ?').get(String(orderId));
+  try { const v = JSON.parse(f?.skus_json || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
+/**
+ * Trabajo `order.woo` (un job por orden Woo, lo dispara cualquier topic `order.*`: el topic solo dispara, la relectura vigente
+ * decide). Relee la orden y:
+ *  - 404 confirmado o `status=trash`: el conjunto actual es vacío; Preparación retira la orden y anula su fila;
+ *  - vigente: Preparación (incluida la restauración de una anulada);
+ *  - en ambos casos refresca (stock.bolsa relee Woo) y encola las bolsas de la UNIÓN (persistido ∪ actual), de modo que
+ *    un SKU quitado de la orden, o toda la orden enviada a la papelera, libera su stock.
+ * Reemplaza al `syncWcToMl` general para este disparador. No escribe en Woo ni en ML directamente.
+ * @returns {{estado:'hecho', skusActuales:string[]}|{estado:'reencolar', motivo:string}}
+ */
+export async function procesarOrdenWoo(db, cfg, orderId) {
+  if (!cfg.woo) return { estado: 'reencolar', motivo: 'woo_sin_configurar' };
+  const { syncPedidoWebPuntual, esOrdenWooInexistente } = await import('./preparacion.js');
+  let orden = null;
+  let inexistente = false;
+  try {
+    orden = (await wooFetch(cfg.woo, `/orders/${orderId}`)).data;
+  } catch (e) {
+    if (!esOrdenWooInexistente(e)) return { estado: 'reencolar', motivo: `woo_orders_${e.status || 'error'}: ${String(e.message).slice(0, 120)}` };
+    inexistente = true;
+  }
+  if (!inexistente && (!orden || typeof orden !== 'object')) return { estado: 'reencolar', motivo: 'woo_orden_ilegible' };
+  const fuera = inexistente || orden.status === 'trash';
+  const actuales = fuera ? [] : skusDeLineasWoo(orden);
+  // Fuentes para la UNIÓN: lo persistido por un trabajo verificado, las líneas que Woo devuelve aun en la papelera, y — si la
+  // orden es anterior al deploy y nunca cerró un trabajo — lo que Preparación ya conoce (cola y preparaciones).
+  const persistidos = skusPersistidosOrdenWoo(db, orderId);
+  const lineasEnPapelera = fuera && orden ? skusDeLineasWoo(orden) : [];
+  const conocidos = skusConocidosOrdenWoo(db, orderId); // siempre: una fila sembrada desactualizada perdería un SKU agregado después
+  const union = [...new Set([...persistidos, ...actuales, ...lineasEnPapelera, ...conocidos])];
+  if (inexistente && !union.length) {
+    // 404 sin ninguna fuente: no se puede saber qué stock liberar. No se cierra en silencio.
+    // Riesgo residual aceptado: una orden creada DESPUÉS de la siembra y borrada para siempre antes de cualquier aviso nunca tuvo
+    // SKUs registrados. Este incidente lo hace visible y la reconciliación periódica de stock (`reconciliarStockMl`) corrige la diferencia.
+    const txt = `El pedido Woo ${orderId} ya no existe (404) y no hay ningún SKU registrado para él (ni en el trabajo, ni en la cola de Preparación, ni en preparaciones): no se pudo liberar su stock reservado. Revisá a mano si ese pedido tenía productos con stock gestionado.`;
+    abrirOActualizarIncidente(db, {
+      integracion: 'woocommerce', proceso: 'order_woo', tipoError: `order_woo_sin_skus_${orderId}`.slice(0, 120), severidad: 'advertencia',
+      mensajeTecnico: txt, mensajeHumano: txt, contexto: { wc_order_id: String(orderId) },
+    });
+  }
+  // Preparación: una falla acá cuenta como fallo real del trabajo (reintenta con backoff); el cron de 10 min es el respaldo.
+  await syncPedidoWebPuntual(db, {
+    woo: cfg.woo,
+    andreaniStatus: process.env.ANDREANI_ORDER_STATUS || 'lpaandreani',
+    enviadoAndreaniStatus: process.env.ANDREANI_ENVIADO_STATUS || 'enviadoandreani',
+  }, orderId, { orden, inexistente });
+  encolarBolsasDeSkus(db, union);
+  return { estado: 'hecho', skusActuales: actuales };
+}
+
+/** Topics de pedido que dispara el trabajo `order.woo`. Todos se tratan igual: el topic solo dispara, la relectura decide. */
+export const TOPICS_ORDEN_WOO = new Set(['order.created', 'order.updated', 'order.deleted', 'order.restored']);
+
+/** Encola (o reprograma) el `order.woo` de una orden. Lo llama el handler del webhook ANTES del ACK. */
+export function encolarOrdenWoo(db, orderId) {
+  return encolarTrabajo(db, { tipo: 'order.woo', recurso: String(orderId) });
+}
+
 let _trabajosRecursoEnCurso = false;
 
 const tipoErrorTrabajo = (prefijo, t) => `${prefijo}_${t.tipo}_${t.recurso}`.slice(0, 120);
@@ -2027,12 +2096,22 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
   _trabajosRecursoEnCurso = true;
   let procesados = 0;
   try {
-    for (const tipo of ['order.ml', 'stock.bolsa']) {
+    for (const tipo of ['order.ml', 'order.woo', 'stock.bolsa']) {
       for (const t of reclamarTrabajos(db, [tipo], { limit })) {
         try {
-          const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso) : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
+          const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso)
+            : tipo === 'order.woo' ? await procesarOrdenWoo(db, cfg, t.recurso)
+              : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
           if (r.estado === 'reencolar') resolverReintento(db, t, r);
-          else if (cerrarTrabajo(db, t).cerrado) cerrarIncidentesDeTrabajo(db, t);
+          else {
+            // order.woo: el conjunto de SKUs se reemplaza SOLO si el cierre procede (misma transacción, generación vigente).
+            const enCierre = tipo === 'order.woo' ? (d) => {
+              d.prepare(`INSERT INTO woo_orden_skus (order_id, skus_json, actualizado_en) VALUES (?, ?, ?)
+                ON CONFLICT(order_id) DO UPDATE SET skus_json = excluded.skus_json, actualizado_en = excluded.actualizado_en`)
+                .run(t.recurso, JSON.stringify(r.skusActuales || []), new Date().toISOString());
+            } : null;
+            if (cerrarTrabajo(db, t, { enCierre }).cerrado) cerrarIncidentesDeTrabajo(db, t);
+          }
           procesados++;
         } catch (e) {
           // Una excepción es un fallo real: cuenta como intento y, al agotarse, abre el mismo incidente crítico.
