@@ -17,6 +17,7 @@ beforeEach(() => {
   const router = preparacionRouter(db, CFG);
   app = express();
   app.use(express.json());
+  app.use((req, _res, next) => { req.user = { username: 'sup', is_admin: true }; next(); });
   app.use('/api/preparacion', router);
   id = crearPreparacion(db, { canal: 'web', wcOrderId: 500, numeroPedido: '500', comprador: 'Ana', items: [] });
   anularPreparacionPorWoo(db, 500, { motivo: 'trash' });
@@ -53,9 +54,54 @@ describe('preparación anulada en Woo: toda acción devuelve 409 y no cambia nad
   });
 
   it('al restaurarse el pedido vuelve al estado previo y las acciones se habilitan de nuevo', async () => {
-    restaurarPreparacionPorWoo(db, 500);
+    restaurarPreparacionPorWoo(db, 500, 'lpaandreani');
     expect(estado()).toBe('en_preparacion');
     const r = await request(app).post(`/api/preparacion/${id}/heartbeat`).send({});
     expect(r.status).not.toBe(409);
+  });
+
+  it('restaurado de la papelera con un estado NO elegible (pending/on-hold): sigue anulada y el estado Woo queda en un evento (sin repetir el mismo)', () => {
+    expect(restaurarPreparacionPorWoo(db, 500, 'pending')).toMatchObject({ restaurada: false, rechazada: true });
+    restaurarPreparacionPorWoo(db, 500, 'pending');
+    restaurarPreparacionPorWoo(db, 500, 'on-hold');
+    expect(estado()).toBe(ESTADO_ANULADO_EN_WOO);
+    const evs = db.prepare("SELECT detalle_json FROM preparacion_eventos WHERE preparacion_id = ? AND tipo = 'restauracion_rechazada'").all(id).map((e) => JSON.parse(e.detalle_json).estado_woo);
+    expect(evs).toEqual(['pending', 'on-hold']);
+  });
+
+  it('cancelled con la preparación que estaba en curso: va al circuito de cancelación (no queda anulada)', () => {
+    const r = restaurarPreparacionPorWoo(db, 500, 'cancelled');
+    expect(r).toMatchObject({ restaurada: false, rechazada: true, cancelacion: true });
+    expect(estado()).toBe('cancelada_sin_retiro_registrado');
+  });
+
+  it('los estados elegibles configurados (lpaandreani/completed/enviadoandreani) restauran', () => {
+    expect(restaurarPreparacionPorWoo(db, 500, 'completed').restaurada).toBe(true);
+    expect(estado()).toBe('en_preparacion');
+  });
+
+  it('el detalle expone estado_previo_anulado para el badge', async () => {
+    const ui = await request(app).get(`/api/preparacion/${id}`);
+    expect(ui.body.data.estado_previo_anulado).toBe('en_preparacion');
+  });
+});
+
+describe('anular una preparación ya completada o con tracking: incidente de advertencia', () => {
+  const incidente = (wc) => db.prepare('SELECT * FROM incidentes_operativos WHERE tipo_error = ?').get(`preparacion_anulada_en_woo_${wc}`);
+  it('completada: queda anulada (reversible), abre incidente advertencia y el detalle dice de qué estado venía', async () => {
+    const id2 = crearPreparacion(db, { canal: 'web', wcOrderId: 501, numeroPedido: '501', comprador: 'Beto', items: [] });
+    db.prepare("UPDATE preparaciones SET estado = 'completada' WHERE id = ?").run(id2);
+    anularPreparacionPorWoo(db, 501, { motivo: 'trash' });
+    expect(db.prepare('SELECT estado FROM preparaciones WHERE id = ?').get(id2).estado).toBe(ESTADO_ANULADO_EN_WOO);
+    expect(incidente(501)).toMatchObject({ severidad: 'advertencia', estado: 'activo' });
+    const r = await request(app).get(`/api/preparacion/${id2}`);
+    expect(r.body.data.estado_previo_anulado).toBe('completada');
+  });
+  it('con tracking aunque siga en preparación: también avisa; sin tracking y en preparación: no', () => {
+    crearPreparacion(db, { canal: 'web', wcOrderId: 502, numeroPedido: '502', comprador: 'C', items: [] });
+    db.prepare("UPDATE preparaciones SET tracking = 'AND123' WHERE clave = 'web:502'").run();
+    anularPreparacionPorWoo(db, 502);
+    expect(incidente(502)).toBeDefined();
+    expect(incidente(500)).toBeUndefined();
   });
 });

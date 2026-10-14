@@ -4,6 +4,7 @@ import path from 'path';
 import express from 'express';
 import multer from 'multer';
 import { wooFetch } from './woo.js';
+import { abrirOActualizarIncidente } from '../lib/incidentes.js';
 import { mlFetch } from '../lib/mlClient.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
@@ -89,6 +90,8 @@ function encolarSalidaWoo(db, lote, usuario) {
 export const ESTADO_ANULADO_EN_WOO = 'anulado_en_woo';
 const ESTADOS_BLOQUEADOS_PARA_TRABAJAR = new Set(['completada', 'cerrada_sin_evidencia', 'cancelada_sin_retiro_registrado', 'cancelada_pendiente_devolucion', ESTADO_ANULADO_EN_WOO]);
 // Estados que NO se pisan al anular: ya tienen su propio circuito de cierre/devolución.
+const ESTADOS_ANULADOS_CON_AVISO = ['completada', 'despachada_sin_verificar'];
+const ESTADOS_WOO_ELEGIBLES_DEFAULT = ['lpaandreani', 'completed', 'enviadoandreani'];
 const ESTADOS_QUE_NO_SE_ANULAN = ['cancelada_sin_retiro_registrado', 'cancelada_pendiente_devolucion', 'cancelada_devuelta'];
 // Lista para los `NOT IN (...)` de las transiciones automáticas que filtran por estado con condiciones propias.
 const SQL_ESTADOS_TERMINALES = "'completada', 'cerrada_sin_evidencia', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado', 'anulado_en_woo'";
@@ -2738,8 +2741,14 @@ export function preparacionRouter(db, cfg) {
     // Si el canal dice que se canceló y alguien ya fue a buscar el producto, se abre la tarea
     // de devolución acá mismo: es el momento en que alguien está mirando esta preparación.
     asegurarDevolucionPendiente(db, prep, datosCanal);
+    let estadoPrevioAnulado = null;
+    if (prep.estado === ESTADO_ANULADO_EN_WOO) {
+      const evA = db.prepare("SELECT detalle_json FROM preparacion_eventos WHERE preparacion_id=? AND tipo='anulado_en_woo' ORDER BY id DESC LIMIT 1").get(prep.id);
+      try { estadoPrevioAnulado = JSON.parse(evA?.detalle_json || 'null')?.estado_previo || null; } catch { /* sin evento legible */ }
+    }
     const data = {
       ...prep,
+      estado_previo_anulado: estadoPrevioAnulado,
       canal_estado: datosCanal,
       items: items.map(it => ({
         ...it,
@@ -3899,31 +3908,60 @@ export function anularPreparacionPorWoo(db, wcOrderId, { motivo = 'trash' } = {}
   ensureTables(db);
   return db.transaction(() => {
     const retirada = db.prepare('DELETE FROM pedidos_cache WHERE clave = ?').run(`web:${wcOrderId}`).changes;
-    const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave = ?').get(`web:${wcOrderId}`);
+    const prep = db.prepare('SELECT id, estado, tracking, numero_pedido FROM preparaciones WHERE clave = ?').get(`web:${wcOrderId}`);
     if (!prep || prep.estado === ESTADO_ANULADO_EN_WOO || ESTADOS_QUE_NO_SE_ANULAN.includes(prep.estado)) {
       return { anulada: false, retirada_cache: retirada > 0 };
     }
     const cambio = db.prepare("UPDATE preparaciones SET estado = ? WHERE id = ? AND estado = ?").run(ESTADO_ANULADO_EN_WOO, prep.id, prep.estado);
     if (!cambio.changes) return { anulada: false, retirada_cache: retirada > 0 };
     registrarEvento(db, { preparacionId: prep.id, tipo: 'anulado_en_woo', usuario: null, detalle: { estado_previo: prep.estado, motivo }, failClosed: true });
+    // Una preparación ya terminada o con tracking puede haber salido físicamente: anularla es reversible, pero alguien tiene que verlo.
+    if (ESTADOS_ANULADOS_CON_AVISO.includes(prep.estado) || String(prep.tracking || '').trim()) {
+      const texto = `El pedido web #${prep.numero_pedido || wcOrderId} se borró o fue a la papelera en Woo (${motivo}) con la preparación en estado "${prep.estado}"`
+        + `${prep.tracking ? ` y tracking ${prep.tracking}` : ''}. Quedó marcada "Anulado en Woo": revisá si el paquete ya salió. Si se restaura en Woo con un estado de preparación, vuelve sola.`;
+      abrirOActualizarIncidente(db, {
+        integracion: 'woocommerce', proceso: 'preparacion', tipoError: `preparacion_anulada_en_woo_${wcOrderId}`.slice(0, 120), severidad: 'advertencia',
+        mensajeTecnico: texto, mensajeHumano: texto, contexto: { wc_order_id: String(wcOrderId), estado_previo: prep.estado, motivo, tracking: prep.tracking || null },
+      });
+    }
     return { anulada: true, estado_previo: prep.estado, retirada_cache: retirada > 0 };
   })();
 }
 
-/** E-1b: la relectura encontró vigente (restaurado) un pedido anulado: la preparación vuelve al estado que registró el evento. */
-export function restaurarPreparacionPorWoo(db, wcOrderId) {
+/**
+ * E-1b: la relectura encontró el pedido de nuevo en Woo tras haber estado anulado. Solo vuelve a Preparación si su estado Woo es
+ * elegible (`lpaandreani`/`completed`/`enviadoandreani`, los mismos de `pedidos_cache`). Con cualquier otro (p. ej. restaurado de la
+ * papelera como `cancelled`) la preparación sigue anulada, el estado Woo queda en un evento, y si estaba en curso y Woo lo canceló se
+ * la manda al circuito de cancelación (devolución del stock levantado).
+ */
+export function restaurarPreparacionPorWoo(db, wcOrderId, estadoWoo, { elegibles = ESTADOS_WOO_ELEGIBLES_DEFAULT } = {}) {
   ensureTables(db);
   return db.transaction(() => {
     const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave = ?').get(`web:${wcOrderId}`);
     if (!prep || prep.estado !== ESTADO_ANULADO_EN_WOO) return { restaurada: false };
-    const ev = db.prepare("SELECT detalle_json FROM preparacion_eventos WHERE preparacion_id = ? AND tipo = 'anulado_en_woo' ORDER BY id DESC LIMIT 1").get(prep.id);
+    const ev = db.prepare("SELECT id, detalle_json FROM preparacion_eventos WHERE preparacion_id = ? AND tipo = 'anulado_en_woo' ORDER BY id DESC LIMIT 1").get(prep.id);
     let previo = null;
     try { previo = JSON.parse(ev?.detalle_json || 'null')?.estado_previo; } catch { /* sin evento legible */ }
     // Sin estado previo registrado no se adivina: vuelve al único estado seguro para seguir trabajando.
     if (!previo || previo === ESTADO_ANULADO_EN_WOO) previo = 'en_preparacion';
+    const estado = String(estadoWoo || '').toLowerCase();
+    if (!estado || !elegibles.map((e) => String(e).toLowerCase()).includes(estado)) {
+      const yaDicho = db.prepare("SELECT detalle_json FROM preparacion_eventos WHERE preparacion_id = ? AND tipo = 'restauracion_rechazada' AND id > ? ORDER BY id DESC LIMIT 1").get(prep.id, ev?.id || 0);
+      let estadoDicho;
+      try { estadoDicho = JSON.parse(yaDicho?.detalle_json || 'null')?.estado_woo; } catch { /* ignorar */ }
+      if (!yaDicho || estadoDicho !== (estado || null)) {
+        registrarEvento(db, { preparacionId: prep.id, tipo: 'restauracion_rechazada', usuario: null, detalle: { estado_woo: estado || null, estado_previo: previo }, failClosed: true });
+      }
+      if ((estado === 'cancelled' || estado === 'canceled') && previo === 'en_preparacion') {
+        const vuelta = db.prepare('UPDATE preparaciones SET estado = ? WHERE id = ? AND estado = ?').run('en_preparacion', prep.id, ESTADO_ANULADO_EN_WOO);
+        if (vuelta.changes && aplicarCancelacionReconciliada(db, { id: prep.id }, estado)) return { restaurada: false, rechazada: true, estado_woo: estado, cancelacion: true };
+        if (vuelta.changes) db.prepare('UPDATE preparaciones SET estado = ? WHERE id = ? AND estado = ?').run(ESTADO_ANULADO_EN_WOO, prep.id, 'en_preparacion');
+      }
+      return { restaurada: false, rechazada: true, estado_woo: estado || null };
+    }
     const cambio = db.prepare('UPDATE preparaciones SET estado = ? WHERE id = ? AND estado = ?').run(previo, prep.id, ESTADO_ANULADO_EN_WOO);
     if (!cambio.changes) return { restaurada: false };
-    registrarEvento(db, { preparacionId: prep.id, tipo: 'restaurado_en_woo', usuario: null, detalle: { estado: previo }, failClosed: true });
+    registrarEvento(db, { preparacionId: prep.id, tipo: 'restaurado_en_woo', usuario: null, detalle: { estado: previo, estado_woo: estado }, failClosed: true });
     return { restaurada: true, estado: previo };
   })();
 }
@@ -3960,7 +3998,7 @@ export async function syncPedidoWebPuntual(db, cfg, wcOrderId, opts = {}) {
     return { estado: 'anulada', ...r };
   }
   if (!order) return { estado: 'vigente', sin_datos: true };
-  const restauracion = restaurarPreparacionPorWoo(db, order.id || wcOrderId);
+  const restauracion = restaurarPreparacionPorWoo(db, order.id || wcOrderId, order.status, { elegibles: [andreaniStatus, 'completed', enviadoAndreaniStatus] });
   let estadoEnvio = null;
   if (order.status === andreaniStatus) estadoEnvio = 'pendiente';
   else if (order.status === 'completed' || order.status === enviadoAndreaniStatus) estadoEnvio = 'enviado';

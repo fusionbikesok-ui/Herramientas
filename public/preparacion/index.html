@@ -1349,7 +1349,9 @@ async function abrirDetalle(id,empujar){
   if(empujar!==false&&pedidoDeLaUrl()!==Number(id))history.pushState({pedido:Number(id)},'',urlPedido(id));
   ULTIMO_EVENTO_VISTO=Math.max(ULTIMO_EVENTO_VISTO, (PREP.eventos&&PREP.eventos[0])?PREP.eventos[0].id:0);
   renderDetalle();
-  iniciarHeartbeat(id);
+  // Una preparación anulada en Woo es solo lectura: sin heartbeat ni claim que renovar (el servidor responde 409 a todo).
+  if(PREP.estado==='anulado_en_woo')detenerHeartbeat();
+  else iniciarHeartbeat(id);
   if(hayFotosPendientes())iniciarPollFotos();
 }
 
@@ -1525,6 +1527,18 @@ function renderDetalle(){
       +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
       +'<p class="sub">Esta preparación se cerró sin poder verificar el contenido (ítems sin escanear o sin fotos). No está confirmada como completa. Si necesitás trabajarla — por ejemplo, entró un reclamo — reabrila primero.</p>'
       +'<button class="btn" onclick="reabrirCerrada('+p.id+')">Reabrir preparación</button>';
+    return;
+  }
+
+  // E-1b: el pedido se borró o fue a la papelera en Woo. Solo lectura: sin escaneo, fotos, ni botones de acción (el servidor
+  // responde 409). El aviso va en el flujo normal de la página, visible también en el celular.
+  if(p.estado==='anulado_en_woo'){
+    document.getElementById('cuerpo').innerHTML='<button class="btn sec mini" onclick="ir(\'pendientes\')">&larr; Cola</button>'
+      +'<h1 style="margin-top:12px">Pedido <em>#'+esc(numMostrar(p))+'</em> '+badgeEstadoPrep(p.estado,p.estado_previo_anulado)+'</h1>'
+      +'<p class="sub" style="margin:0">'+esc(p.comprador||'')+'</p>'
+      +'<p class="sub" role="status">Este pedido se borró o fue a la papelera en Woo'+(p.estado_previo_anulado?' cuando la preparación estaba en «'+esc(p.estado_previo_anulado.replace(/_/g,' '))+'»':'')+'. No se puede trabajar ni modificar desde acá.'
+      +(p.tracking?' Tenía el tracking <strong>'+esc(p.tracking)+'</strong>: revisá si el paquete ya salió.':'')
+      +' Si se restaura en Woo con un estado de preparación, vuelve a la cola sola.</p>';
     return;
   }
 
@@ -2948,7 +2962,8 @@ async function cargarSeguimientos(){
   }catch(e){c.innerHTML='<div class="loading err">'+esc(e.message)+'</div>';}
 }
 
-function badgeEstadoPrep(estado){
+function badgeEstadoPrep(estado,previo){
+  if(estado==='anulado_en_woo')return '<span class="badge b-red">Anulado en Woo'+(previo?' (estaba: '+esc(String(previo).replace(/_/g,' '))+')':'')+'</span>';
   if(estado==='en_preparacion')return '<span class="badge b-warn">en preparación</span>';
   if(estado==='despachada_sin_verificar')return '<span class="badge b-mut">despachada sin verificar</span>';
   if(estado==='cancelada_sin_retiro_registrado')return '<span class="badge b-mut">cancelada sin retiro registrado</span>';
@@ -2966,7 +2981,7 @@ function badgeEstadoPrep(estado){
 // salida. Sin botón ahí; "Abrir preparación" cuando ya existe una fila trabajable.
 function iniciarBtnSeg(f){
   var estado=f.estado_preparacion;
-  if(estado==='cerrada_sin_evidencia')return '';
+  if(estado==='cerrada_sin_evidencia'||estado==='anulado_en_woo')return '';
   var texto=estado?'Abrir preparación':'Iniciar preparación ahora';
   // 44px (nit del revisor: WCAG 2.5.8): es la acción principal de "Sin preparación
   // verificada", la sección más poblada, en una pantalla táctil de depósito.
