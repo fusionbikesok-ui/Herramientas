@@ -18,7 +18,9 @@ export interface DependenciasMl {
 const LOTE_INDIVIDUAL = 1;
 /** Relecturas de un segmento de órdenes antes de declararlo inestable y dejar el cursor quieto. */
 const MAX_RELECTURAS_SEGMENTO = 3;
-const LOTE_PACKS = 1;
+// El código de ml.messages lee y avanza de a UN pack (pendientes[0] + slice(1), despuesDe = último leído): con un lote
+// mayor se saltearían packs en silencio. Por eso se verifica al crear el adaptador.
+const LOTE_PACKS: number = 1;
 const LIMITE_BUSQUEDA = 50;
 
 function versionHash(proyeccion: unknown): string {
@@ -305,6 +307,7 @@ export function mensajeMl(crudo: unknown, packId?: string): RecursoRemoto {
 }
 
 export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
+  if (LOTE_PACKS !== 1) throw new Error('ml.messages asume un pack por página (LOTE_PACKS=1)');
   return {
     topic: 'ml.messages', cursorKind: 'state_sweep', fullScan: false, versionKind: 'hash',
     async listar(ctx, posicionInicial): Promise<PaginaRemota> {
@@ -319,14 +322,17 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
         : posicionInicial.completa === true;
       const perdidosPrevios = numeroPosicion(posicionInicial, 'perdidos', 0);
       const iso = (n: number) => new Date(n).toISOString();
-      const cursorAfter = {
+      // `last_light_at` es hasta dónde la vuelta liviana cubrió TODO: si un tope recortó la lista, no llega a windowTo.
+      // El motor persiste este cursor sólo al cerrar la corrida (por página guarda únicamente la posición).
+      const armarCursor = (luz: string, recortados: boolean, perdidos: number) => ({
         ...cursorGeneracion(ctx.windowTo),
         last_unread_at: comprobarUnread ? ctx.windowTo.toISOString() : iso(ultimoUnread),
-        last_light_at: ctx.windowTo.toISOString(),
+        last_light_at: luz,
         ...(completa ? { last_full_at: ctx.windowTo.toISOString() } : Number.isFinite(ultimaCompleta) ? { last_full_at: iso(ultimaCompleta) } : {}),
-        // Packs que sólo el recorrido de control encontró con mensajes: lo que la vuelta liviana no avisó.
-        avisos_perdidos: perdidosPrevios,
-      };
+        // Mensajes que sólo el recorrido de control encontró y la sombra no tenía: lo que la vuelta liviana no avisó.
+        avisos_perdidos: perdidos,
+        avisos_recortados: recortados,
+      });
 
       if (posicionInicial === null) {
         // Vuelta liviana: sólo los packs con motivo. El recorrido de 30 días queda para la vuelta de control.
@@ -340,27 +346,44 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
             if (RECURSO_PACK.test(recurso)) candidatos.push(recurso);
           }
         }
-        // Avisos por webhook que todavía no se convirtieron en mensaje (los `succeeded` ya están leídos).
-        const avisos = await dep.db.query<{ resource_id: string }>(
-          `SELECT DISTINCT resource_id COLLATE "C" AS resource_id FROM integrations.reconciliation_signals
+        // Avisos por webhook que todavía no se convirtieron en mensaje (los `succeeded` ya están leídos). Del más
+        // viejo al más nuevo y con tope+1: si hay más, el cursor no avanza más allá del último procesado.
+        const avisos = await dep.db.query<{ resource_id: string; t: Date | string }>(
+          `SELECT resource_id COLLATE "C" AS resource_id, MIN(received_at) AS t FROM integrations.reconciliation_signals
             WHERE channel_account_id=$1 AND topic='ml.messages' AND received_at >= $2 AND status <> 'succeeded'
-            ORDER BY 1 LIMIT $3`,
-          [ctx.corrida.channelAccountId, desde, MAX_AVISOS_WEBHOOK],
+            GROUP BY 1 ORDER BY MIN(received_at), 1 LIMIT $3`,
+          [ctx.corrida.channelAccountId, desde, MAX_AVISOS_WEBHOOK + 1],
         );
-        for (const f of avisos.rows) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);
-        // Pedidos que cambiaron en la ventana de la corrida.
-        const cambiados = await dep.db.query<{ target_id: string }>(
-          `SELECT DISTINCT target_id COLLATE "C" AS target_id FROM integrations.resource_relations
+        // Pedidos que cambiaron en la ventana de la corrida, también del más viejo al más nuevo.
+        const cambiados = await dep.db.query<{ target_id: string; t: Date | string }>(
+          `SELECT target_id COLLATE "C" AS target_id, MAX(last_seen_at) AS t FROM integrations.resource_relations
             WHERE channel_account_id=$1 AND relation_type='order_pack' AND target_topic='ml.messages' AND last_seen_at >= $2
-            ORDER BY 1 LIMIT $3`,
-          [ctx.corrida.channelAccountId, desde, MAX_PACKS_CAMBIADOS],
+            GROUP BY 1 ORDER BY MAX(last_seen_at), 1 LIMIT $3`,
+          [ctx.corrida.channelAccountId, desde, MAX_PACKS_CAMBIADOS + 1],
         );
-        for (const f of cambiados.rows) candidatos.push(rutaPack(f.target_id, dep.sellerId));
+        let luz = ctx.windowTo.getTime(); let recortados = false;
+        const recortar = <T extends { t: Date | string }>(filas: T[], tope: number): T[] => {
+          if (filas.length <= tope) return filas;
+          recortados = true;
+          const ultimo = filas[tope - 1]!.t;
+          luz = Math.min(luz, ultimo instanceof Date ? ultimo.getTime() : Date.parse(String(ultimo)));
+          return filas.slice(0, tope);
+        };
+        for (const f of recortar(avisos.rows, MAX_AVISOS_WEBHOOK)) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);
+        for (const f of recortar(cambiados.rows, MAX_PACKS_CAMBIADOS)) candidatos.push(rutaPack(f.target_id, dep.sellerId));
         const pendientes = [...new Set(candidatos)];
         const vistos = [...new Set(pendientes.filter((p) => p.startsWith('/packs/')).map(packDeRecurso))];
-        return { resources: [], nextPosition: { pendientes, despuesDe: '', completa, vistos, perdidos: perdidosPrevios }, cursorAfter };
+        return {
+          resources: [],
+          // Liviana sin nada que leer: la vuelta termina acá, sin una página vacía de más.
+          nextPosition: !completa && !pendientes.length ? null
+            : { pendientes, despuesDe: '', completa, vistos, perdidos: perdidosPrevios, luz: iso(luz), recortados },
+          cursorAfter: armarCursor(iso(luz), recortados, perdidosPrevios),
+        };
       }
 
+      const luz = textoPosicion(posicionInicial, 'luz') ?? ctx.windowTo.toISOString();
+      const recortados = posicionInicial.recortados === true;
       const pendientesPrevios = Array.isArray(posicionInicial.pendientes) ? posicionInicial.pendientes.filter((p): p is string => typeof p === 'string') : [];
       const vistos = new Set(Array.isArray(posicionInicial.vistos) ? posicionInicial.vistos.filter((p): p is string => typeof p === 'string') : []);
       let despuesDe = textoPosicion(posicionInicial, 'despuesDe') ?? '';
@@ -404,14 +427,23 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
             const body = exigirRegistro(r.body, 'pack ML');
             const mensajes = exigirLista(body.messages, 'pack ML messages').map((m) => mensajeMl(m, packId));
             resources.push(...mensajes);
-            if (leidoEnControl && mensajes.length) perdidos += 1;
+            if (leidoEnControl && mensajes.length) {
+              // «Perdido» = mensaje que la sombra todavía no tenía proyectado; una conversación vieja ya leída no suma.
+              const conocidos = await dep.db.query<{ resource_id: string }>(
+                `SELECT resource_id FROM integrations.resource_observations
+                  WHERE channel_account_id=$1 AND topic='ml.messages' AND resource_id = ANY($2::text[])`,
+                [ctx.corrida.channelAccountId, mensajes.map((m) => m.id)],
+              );
+              const ya = new Set(conocidos.rows.map((f) => f.resource_id));
+              perdidos += mensajes.filter((m) => !ya.has(m.id)).length;
+            }
           }
         }
       }
       return {
         resources,
-        nextPosition: fin ? null : { pendientes: resto, despuesDe, completa, vistos: [...vistos], perdidos },
-        cursorAfter: { ...cursorAfter, avisos_perdidos: perdidos },
+        nextPosition: fin ? null : { pendientes: resto, despuesDe, completa, vistos: [...vistos], perdidos, luz, recortados },
+        cursorAfter: armarCursor(luz, recortados, perdidos),
       };
     },
   };
