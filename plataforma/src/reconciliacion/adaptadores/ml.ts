@@ -273,6 +273,14 @@ const RECURSO_PACK = /^\/packs\/[^/?#]+\/sellers\/[^/?#]+$/;
 // La guía de ML recomienda `/messages/unread` sólo como validación redundante del flujo de notificaciones.
 // Las notificaciones y missed_feeds cubren el flujo frecuente; este respaldo se consulta cada seis horas.
 const INTERVALO_UNREAD_MS = 6 * 60 * 60 * 1000;
+// Dos ritmos (a 10 RPM los ~470 packs de 30 días tardan ~47 min y no entran en la vuelta de 20 min):
+// la vuelta liviana lee sólo packs con motivo; el recorrido completo queda como control, una vez por día.
+const INTERVALO_COMPLETA_MS = DIA_MS;
+const MAX_AVISOS_WEBHOOK = 100;
+const MAX_PACKS_CAMBIADOS = 500;
+const PREFIJO_MENSAJE = 'msg:';
+const rutaPack = (pack: string, vendedor: string): string => `/packs/${encodeURIComponent(pack)}/sellers/${encodeURIComponent(vendedor)}`;
+const packDeRecurso = (recurso: string): string => decodeURIComponent(recurso.split('/')[2]!);
 
 /** Forma común entre GET /messages/{id} (notificación) y GET /messages/packs/{pack}/sellers/{seller}. */
 export function mensajeMl(crudo: unknown, packId?: string): RecursoRemoto {
@@ -300,30 +308,67 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
   return {
     topic: 'ml.messages', cursorKind: 'state_sweep', fullScan: false, versionKind: 'hash',
     async listar(ctx, posicionInicial): Promise<PaginaRemota> {
-      const ultimoUnread = typeof ctx.corrida.cursorBefore?.last_unread_at === 'string'
-        ? Date.parse(ctx.corrida.cursorBefore.last_unread_at) : Number.NaN;
+      const instante = (v: unknown): number => (typeof v === 'string' ? Date.parse(v) : Number.NaN);
+      const antes = ctx.corrida.cursorBefore;
+      const ultimoUnread = instante(antes?.last_unread_at);
+      const ultimaCompleta = instante(antes?.last_full_at);
+      const ultimaLiviana = instante(antes?.last_light_at);
       const comprobarUnread = !Number.isFinite(ultimoUnread) || ctx.windowTo.getTime() - ultimoUnread >= INTERVALO_UNREAD_MS;
+      const completa = posicionInicial === null
+        ? !Number.isFinite(ultimaCompleta) || ctx.windowTo.getTime() - ultimaCompleta >= INTERVALO_COMPLETA_MS
+        : posicionInicial.completa === true;
+      const perdidosPrevios = numeroPosicion(posicionInicial, 'perdidos', 0);
+      const iso = (n: number) => new Date(n).toISOString();
       const cursorAfter = {
         ...cursorGeneracion(ctx.windowTo),
-        last_unread_at: comprobarUnread ? ctx.windowTo.toISOString() : new Date(ultimoUnread).toISOString(),
+        last_unread_at: comprobarUnread ? ctx.windowTo.toISOString() : iso(ultimoUnread),
+        last_light_at: ctx.windowTo.toISOString(),
+        ...(completa ? { last_full_at: ctx.windowTo.toISOString() } : Number.isFinite(ultimaCompleta) ? { last_full_at: iso(ultimaCompleta) } : {}),
+        // Packs que sólo el recorrido de control encontró con mensajes: lo que la vuelta liviana no avisó.
+        avisos_perdidos: perdidosPrevios,
       };
-      let posicion = posicionInicial;
-      if (posicion === null && comprobarUnread) {
-        const body = exigirRegistro(exigirOk(await dep.transporte.get('/messages/unread?role=seller&tag=post_sale'), '/messages/unread'), '/messages/unread');
-        // `resource` se usa tal como lo devuelve ML: rearmarlo con otro vendedor produce 404.
-        const pendientes = exigirLista(body.results, '/messages/unread results')
-          .map((r) => (esRegistro(r) && typeof r.resource === 'string' ? r.resource.trim() : ''))
-          .filter((r) => RECURSO_PACK.test(r));
-        return { resources: [], nextPosition: { pendientes, despuesDe: '' }, cursorAfter };
+
+      if (posicionInicial === null) {
+        // Vuelta liviana: sólo los packs con motivo. El recorrido de 30 días queda para la vuelta de control.
+        const desde = new Date(Number.isFinite(ultimaLiviana) ? ultimaLiviana : ctx.windowTo.getTime() - DIA_MS);
+        const candidatos: string[] = [];
+        if (comprobarUnread) {
+          const body = exigirRegistro(exigirOk(await dep.transporte.get('/messages/unread?role=seller&tag=post_sale'), '/messages/unread'), '/messages/unread');
+          // `resource` se usa tal como lo devuelve ML: rearmarlo con otro vendedor produce 404.
+          for (const r of exigirLista(body.results, '/messages/unread results')) {
+            const recurso = esRegistro(r) && typeof r.resource === 'string' ? r.resource.trim() : '';
+            if (RECURSO_PACK.test(recurso)) candidatos.push(recurso);
+          }
+        }
+        // Avisos por webhook que todavía no se convirtieron en mensaje (los `succeeded` ya están leídos).
+        const avisos = await dep.db.query<{ resource_id: string }>(
+          `SELECT DISTINCT resource_id COLLATE "C" AS resource_id FROM integrations.reconciliation_signals
+            WHERE channel_account_id=$1 AND topic='ml.messages' AND received_at >= $2 AND status <> 'succeeded'
+            ORDER BY 1 LIMIT $3`,
+          [ctx.corrida.channelAccountId, desde, MAX_AVISOS_WEBHOOK],
+        );
+        for (const f of avisos.rows) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);
+        // Pedidos que cambiaron en la ventana de la corrida.
+        const cambiados = await dep.db.query<{ target_id: string }>(
+          `SELECT DISTINCT target_id COLLATE "C" AS target_id FROM integrations.resource_relations
+            WHERE channel_account_id=$1 AND relation_type='order_pack' AND target_topic='ml.messages' AND last_seen_at >= $2
+            ORDER BY 1 LIMIT $3`,
+          [ctx.corrida.channelAccountId, desde, MAX_PACKS_CAMBIADOS],
+        );
+        for (const f of cambiados.rows) candidatos.push(rutaPack(f.target_id, dep.sellerId));
+        const pendientes = [...new Set(candidatos)];
+        const vistos = [...new Set(pendientes.filter((p) => p.startsWith('/packs/')).map(packDeRecurso))];
+        return { resources: [], nextPosition: { pendientes, despuesDe: '', completa, vistos, perdidos: perdidosPrevios }, cursorAfter };
       }
-      if (posicion === null) posicion = { pendientes: [], despuesDe: '' };
-      const pendientesPrevios = Array.isArray(posicion.pendientes) ? posicion.pendientes.filter((p): p is string => typeof p === 'string') : [];
-      let lote: string[]; let resto: string[]; let despuesDe = textoPosicion(posicion, 'despuesDe') ?? '';
-      let fin = false;
+
+      const pendientesPrevios = Array.isArray(posicionInicial.pendientes) ? posicionInicial.pendientes.filter((p): p is string => typeof p === 'string') : [];
+      const vistos = new Set(Array.isArray(posicionInicial.vistos) ? posicionInicial.vistos.filter((p): p is string => typeof p === 'string') : []);
+      let despuesDe = textoPosicion(posicionInicial, 'despuesDe') ?? '';
+      let resto: string[] = []; let lote: string | null = null; let fin = false;
+      let leidoEnControl = false;
       if (pendientesPrevios.length) {
-        lote = pendientesPrevios.slice(0, LOTE_PACKS); resto = pendientesPrevios.slice(LOTE_PACKS);
-      } else {
-        resto = [];
+        lote = pendientesPrevios[0]!; resto = pendientesPrevios.slice(LOTE_PACKS);
+      } else if (completa) {
         const packs = (await dep.db.query<{ target_id: string }>(
           `SELECT DISTINCT target_id COLLATE "C" AS target_id FROM integrations.resource_relations
             WHERE channel_account_id=$1 AND relation_type='order_pack' AND target_topic='ml.messages'
@@ -331,20 +376,43 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
             ORDER BY 1 LIMIT $4`,
           [ctx.corrida.channelAccountId, new Date(ctx.windowTo.getTime() - 30 * DIA_MS), despuesDe, LOTE_PACKS],
         )).rows.map((f) => f.target_id);
-        lote = packs.map((p) => `/packs/${encodeURIComponent(p)}/sellers/${encodeURIComponent(dep.sellerId)}`);
-        if (packs.length) despuesDe = packs.at(-1)!;
+        if (packs.length) {
+          despuesDe = packs.at(-1)!;
+          // Un pack que la vuelta liviana ya leyó no se pide dos veces.
+          if (!vistos.has(packs[0]!)) { lote = rutaPack(packs[0]!, dep.sellerId); leidoEnControl = true; }
+        }
         fin = packs.length < LOTE_PACKS;
-      }
-      const leidos = await Promise.all(lote.map((recurso) =>
-        dep.transporte.get(`/messages${recurso}?tag=post_sale&mark_as_read=false`)));
+      } else fin = true;
+
       const resources: RecursoRemoto[] = [];
-      leidos.forEach((r, i) => {
-        if (r.status === 404) return;
-        const body = exigirRegistro(r.body, 'pack ML');
-        const packId = decodeURIComponent(lote[i]!.split('/')[2]!);
-        resources.push(...exigirLista(body.messages, 'pack ML messages').map((m) => mensajeMl(m, packId)));
-      });
-      return { resources, nextPosition: fin ? null : { pendientes: resto, despuesDe }, cursorAfter };
+      let perdidos = perdidosPrevios;
+      if (lote !== null) {
+        if (lote.startsWith(PREFIJO_MENSAJE)) {
+          // Aviso por webhook: el mensaje dice a qué pack pertenece; ese pack se lee después si no estaba ya.
+          const r = await dep.transporte.get(`/messages/${encodeURIComponent(lote.slice(PREFIJO_MENSAJE.length))}?tag=post_sale`, { headers: { 'x-format-new': 'true' } });
+          if (r.status !== 404) {
+            const recurso = mensajeMl(r.body);
+            resources.push(recurso);
+            const pack = esRegistro(recurso.projection) && typeof recurso.projection.pack_id === 'string' ? recurso.projection.pack_id : null;
+            if (pack && !vistos.has(pack)) { vistos.add(pack); resto = [rutaPack(pack, dep.sellerId), ...resto]; }
+          }
+        } else {
+          const packId = packDeRecurso(lote);
+          vistos.add(packId);
+          const r = await dep.transporte.get(`/messages${lote}?tag=post_sale&mark_as_read=false`);
+          if (r.status !== 404) {
+            const body = exigirRegistro(r.body, 'pack ML');
+            const mensajes = exigirLista(body.messages, 'pack ML messages').map((m) => mensajeMl(m, packId));
+            resources.push(...mensajes);
+            if (leidoEnControl && mensajes.length) perdidos += 1;
+          }
+        }
+      }
+      return {
+        resources,
+        nextPosition: fin ? null : { pendientes: resto, despuesDe, completa, vistos: [...vistos], perdidos },
+        cursorAfter: { ...cursorAfter, avisos_perdidos: perdidos },
+      };
     },
   };
 }
