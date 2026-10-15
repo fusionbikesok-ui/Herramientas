@@ -66,7 +66,7 @@ function instalarMocks() {
       if (p.includes('include_attributes')) { // proyección (refrescarPublicacionesMlAcotado)
         ml.bulks.push(ids);
         if (ml.antesDeBulk) { const f = ml.antesDeBulk; ml.antesDeBulk = null; f(); }
-      } else ml.lecturas.push(ids);
+      } else { ml.lecturas.push(ids); ml.alLeer?.(ml.lecturas.length); }
       return { status: 200, data: ids.map((id) => {
         const code = ml.codigos[id] ?? 200;
         return code === 200 ? { code: 200, body: cuerpoItem(id) } : { code, body: { id } };
@@ -342,6 +342,19 @@ describe('item.project: cada elemento del bulk se trata por su status_code', () 
       await correr();
       const m = JSON.parse(db.prepare("SELECT valor FROM stock_barrera_estado WHERE clave = 'bolsa_sin_escritura:S-500'").get().valor);
       expect(m.claves['MLA500|']).toEqual({ deseado: 5, remoto: 5 });
+    });
+
+    it('si Woo cambia entre la confirmación y el cierre, la marca guarda lo VERIFICADO y el siguiente item.project dispara', async () => {
+      ml.qty.MLA500 = 5; db.prepare("UPDATE ml_publicaciones_cache SET available_quantity = 5 WHERE item_id = 'MLA500'").run();
+      ml.alLeer = (n) => { if (n === 2) { woo.stock[500] = 3; db.prepare("UPDATE catalogo_cache SET stock = 3 WHERE sku = 'S-500'").run(); } }; // tras la relectura de confirmación
+      encolarTrabajo(db, { tipo: 'stock.bolsa', recurso: 'sku:S-500' });
+      await correr();
+      ml.alLeer = null;
+      const m = JSON.parse(db.prepare("SELECT valor FROM stock_barrera_estado WHERE clave = 'bolsa_sin_escritura:S-500'").get().valor);
+      expect(m.claves['MLA500|']).toEqual({ deseado: 5, remoto: 5 }); // lo que confirmó, no lo de después
+      db.prepare("DELETE FROM trabajos_recurso").run();
+      await lote('MLA500'); // el deseado ahora es 3 y ML publica 5
+      expect(bolsas()).toEqual(['sku:S-500']);
     });
 
     it('una marca vieja o sin datos de la clave no suprime', async () => {

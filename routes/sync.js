@@ -1766,7 +1766,12 @@ async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = nu
     if (rem.status !== 'active' || rem.cantidad == null) continue;
     if (rem.cantidad !== deseadoDeGrupo.get(f.grupo)) return { ok: false, motivo: `${f.clave}: ML publica ${rem.cantidad}` };
   }
-  return { ok: true, empujadas: pendientes.length };
+  const instantanea = {};
+  for (const f of filasClaves) {
+    const rem = remoto2.get(f.clave);
+    if (rem?.status === 'active' && rem.cantidad != null) instantanea[f.clave] = { deseado: deseadoDeGrupo.get(f.grupo), remoto: rem.cantidad };
+  }
+  return { ok: true, empujadas: pendientes.length, instantanea };
 }
 
 /**
@@ -2028,7 +2033,7 @@ export async function procesarStockBolsa(db, cfg, sku) {
   const r = await conCandados(db, bolsa.skus, async (candado) => {
     if (filasBarrera(db, bolsa.skus).length) return { estado: 'reencolar', diferido: true, motivo: 'barrera' };
     const c = await _conciliarClavesDeBolsa(db, cfg, bolsa, candado, {});
-    if (c.ok) return { estado: 'hecho', empujadas: c.empujadas };
+    if (c.ok) return { estado: 'hecho', empujadas: c.empujadas, instantanea: c.instantanea };
     return c.bloqueado ? { estado: 'hecho', motivo: 'bloqueado_por_identidad' } : { estado: 'reencolar', motivo: c.motivo };
   });
   if (r.ocupado) return { estado: 'reencolar', diferido: true, motivo: 'candados_ocupados' };
@@ -2186,17 +2191,10 @@ function remotoDifiereDelDeseado(db, f, skuVinculado, deseados) {
 }
 
 /** Recuerda, por clave, el deseado efectivo y la cantidad remota que verificó una bolsa que terminó sin escribir. */
-function marcarBolsaSinEscritura(db, sku) {
-  const claves = db.prepare(`SELECT clave FROM sku_matcher_decisiones WHERE accion IN ${ACCIONES_VINCULO} AND sku = ?`).all(sku).map((r) => r.clave);
-  const itemIds = [...new Set(claves.map((c) => c.split('|')[0]))];
-  const deseados = itemIds.length ? deseadosEfectivosDeItems(db, itemIds) : new Map();
-  const rem = db.prepare('SELECT cantidad_ml FROM ml_stock_estado WHERE clave = ?');
-  const porClave = {};
-  for (const c of claves) {
-    const r = rem.get(c);
-    if (deseados.has(c) && r?.cantidad_ml != null) porClave[c] = { deseado: deseados.get(c), remoto: Number(r.cantidad_ml) };
-  }
-  guardarEstado(db, `bolsa_sin_escritura:${sku}`, JSON.stringify({ claves: porClave }));
+function marcarBolsaSinEscritura(db, sku, instantanea) {
+  // Se guarda la instantánea VERIFICADA por la bolsa (deseado y remoto con que confirmó), sin releer nada: si Woo cambió entre la
+  // confirmación y el cierre, la marca conserva el valor viejo y el próximo item.project ve la diferencia y dispara.
+  guardarEstado(db, `bolsa_sin_escritura:${sku}`, JSON.stringify({ claves: instantanea || {} }));
 }
 
 /**
@@ -2464,11 +2462,17 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
                 ON CONFLICT(order_id) DO UPDATE SET skus_json = excluded.skus_json, actualizado_en = excluded.actualizado_en`)
                 .run(t.recurso, JSON.stringify(r.skusActuales || []), new Date().toISOString());
             } : null;
-            if (cerrarTrabajo(db, t, { enCierre }).cerrado) cerrarIncidentesDeTrabajo(db, t);
+            const cierre = cerrarTrabajo(db, t, { enCierre });
+            if (cierre.cerrado) cerrarIncidentesDeTrabajo(db, t);
             // E-2: recuerda si esta bolsa terminó sin escribir (ver remotoDifiereDelDeseado); una escritura real lo borra.
+            // Solo si el trabajo cerró como hecho, y con la instantánea que la propia bolsa verificó.
             if (tipo === 'stock.bolsa' && r.estado === 'hecho' && r.empujadas !== undefined) {
               const skuB = t.recurso.replace(/^sku:/, '');
-              try { if (r.empujadas === 0) marcarBolsaSinEscritura(db, skuB); else guardarEstado(db, `bolsa_sin_escritura:${skuB}`, 'escribio'); } catch { /* optimización */ }
+              try {
+                if (r.empujadas > 0) guardarEstado(db, `bolsa_sin_escritura:${skuB}`, 'escribio');
+                else if (cierre.cerrado && r.instantanea) marcarBolsaSinEscritura(db, skuB, r.instantanea);
+                else guardarEstado(db, `bolsa_sin_escritura:${skuB}`, 'sin_marca');
+              } catch { /* optimización */ }
             }
           }
           procesados++;
