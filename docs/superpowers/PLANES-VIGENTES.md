@@ -6,7 +6,7 @@ PR y commits, no este resumen. Actualizado: 2026-10-15.
 | Plan | Documento | Estado |
 |---|---|---|
 | Plan maestro E0–E26 | [plan-maestro.md](plan-maestro.md) · índice [INDEX.md](INDEX.md) · decisiones [decisions/plan-maestro-decisions.md](decisions/plan-maestro-decisions.md) | Vigente. El progreso se prueba por fichas (`deliveries/`), p. ej. [E26 cierre](deliveries/E26-consolidacion-cierre.md). |
-| E1 — PostgreSQL en sombra | [Ficha E1](deliveries/E1-fundacion-sombra.md) · [Recuperación del 15/10](plans/2026-10-15-recuperacion-sombra.md) | Reparación de barridos desplegada y firmas corregidas el 15/10. Sin aceptación: faltan capacidad comprobada y siete días verdes. |
+| E1 — PostgreSQL en sombra | [Ficha E1](deliveries/E1-fundacion-sombra.md) · [Capacidad y bajas Woo](evidence/e1/2026-10-15-capacidad-bajas-woo.md) | Barridos y firmas reparados; cupos redistribuidos y siete bajas Woo procesadas el 15/10. Sin aceptación: faltan capacidad sostenida comprobada y siete días verdes. |
 | Consolidación de herramientas (fases A–E) | [specs/2026-10-03-consolidacion-herramientas.md](specs/2026-10-03-consolidacion-herramientas.md) | A, B, C y D desplegadas. E en curso (ver abajo). |
 | Fase E — webhooks primero, crons reducidos | [specs/2026-10-11-fase-e-webhooks-design.md](specs/2026-10-11-fase-e-webhooks-design.md) | En curso. Detalle abajo. |
 | Etiquetas en Preparación + menos scroll | Borrador en revisión (todavía no está en el repo) | Diseño v4 en revisión con Codex; sin implementar. |

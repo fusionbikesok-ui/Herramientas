@@ -20,6 +20,7 @@ import { ErrorTransitorio } from '../colas/errores.ts';
 import { enTransaccion, type Consultable } from '../db/pool.ts';
 import { descifrarSobre, type KeyringSobre } from '../seguridad/sobre.ts';
 import { aplicarProyeccion, type Canal } from './aplicar.ts';
+import { atenderBajaWoo, ErrorBajaWooInvalida, ErrorEsperaPadreWoo } from './bajas-woo.ts';
 import { clasificarModelos } from './clasificacion.ts';
 import { esRechazo } from './intenciones.ts';
 import { proyectarItemMl } from './ml.ts';
@@ -95,6 +96,7 @@ export function crearProyector(o: OpcionesProyector): Proyector {
       { account: r.channelAccountId, topic: r.tipo, resource: r.resourceId, remoteVersion: r.remoteVersion }, o.keyring);
     const payload: unknown = JSON.parse(claro.toString('utf8'));
     const canal: Canal = r.tipo === 'woo.products' ? 'woocommerce' : 'mercadolibre';
+    if (canal === 'woocommerce' && await atenderBajaWoo(tx, r, payload)) return 'aplicado';
     const proyeccion = canal === 'woocommerce' ? proyectarProductoWoo(payload) : proyectarItemMl(payload);
     if (esRechazo(proyeccion)) throw new ErrorRechazoProyeccion(proyeccion.rechazo);
     const resumen = await aplicarProyeccion({ tx, cuenta: r.channelAccountId, canal, versionRemota: r.remoteVersion,
@@ -160,16 +162,19 @@ export function crearProyector(o: OpcionesProyector): Proyector {
           if (resultado === 'vencido') r.vencidos++; else r.aplicados++;
           anotar(false);
         } catch (error) {
-          if (error instanceof ErrorRechazoProyeccion) {
+          if (error instanceof ErrorRechazoProyeccion || error instanceof ErrorBajaWooInvalida) {
             await fallar(o.pool, reclamo, error);
             r.rechazados++;
             anotar(true);
           } else {
             // Todo lo demás se reintenta: una falla de base, un bloqueo, un sobre que no descifra por una
             // rotación de claves a medias. Si es persistente, los intentos se agotan y va a la DLQ.
-            await fallar(o.pool, reclamo, new ErrorTransitorio((error as Error).message));
+            const destino = await fallar(o.pool, reclamo, error instanceof ErrorEsperaPadreWoo
+              ? error : new ErrorTransitorio((error as Error).message));
             r.errores++;
-            anotar(true);
+            // Esperar al padre no debe detener el catálogo e impedir procesar su restauración.
+            // No diluir la ventana con éxitos ficticios; si agota intentos, sí cuenta el fallo.
+            if (!(error instanceof ErrorEsperaPadreWoo && destino === 'retryable')) anotar(true);
           }
         }
         procesados++;

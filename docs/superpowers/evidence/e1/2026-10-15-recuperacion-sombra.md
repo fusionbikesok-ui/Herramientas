@@ -1,5 +1,7 @@
 # Recuperación de E1 — 2026-10-15
 
+Ampliación posterior: [capacidad y bajas Woo, 23:21 UTC](2026-10-15-capacidad-bajas-woo.md). Allí consta el nuevo reparto de cupos y la resolución de las siete bajas; los pendientes descritos abajo corresponden a la fotografía inicial.
+
 ## Alcance y autorización
 
 José autorizó corregir los bloqueos de la migración y decidió conservar la captura de corrientes sin consumidor para las entregas posteriores. La autoridad operativa sigue en el legado. No se acepta E1 ni se reduce ningún cron con esta reparación.
