@@ -663,3 +663,90 @@ se pueden volver a descargar si fueran necesarios. Registro de la operación:
 ## Servicio de informes: stock y reposición — 2026-10-14
 
 Runtime `/opt/fusion-management-migration`, fuente `integrations/management-migration`, entrada en el Panel comercial existente. La nueva vista comparte el lector/caché comercial y lee catálogo por loopback autenticado; no agrega tareas de sincronización. Gateway `fusion-management-validation.service` conserva CPUQuota=25% y recibe drop-in `stock-report-memory.conf` con MemoryHigh=192M y MemoryMax=256M para el historial consolidado. Solamente ese servicio requiere reinicio; no cambia la app principal ni las bases. Respaldo previo por archivo y manifiesto en `/opt/fusion-management-migration/backups/stock-report-*`; para revertir, restaurar originales y retirar sólo los archivos nuevos enumerados en ese manifiesto (incluido drop-in), daemon-reload y reiniciar el gateway. No restaurar bases de datos.
+
+
+## Sincronización comercial de Mensajería (2026-10-14)
+
+Plugin independiente Fusion Mensajería Contactos expone POST /wp-json/fusion-chat/v1/prospects-export, sólo lectura y firmado con el puente Live Chat existente. Exporta campos permitidos de leads y carritos identificados, con paginación por ID y cursor temporal de la zona del sitio. VPS ejecuta python -m app.inbox_prospects en el contenedor api mediante fusion-mensajeria-prospects.timer cada 15 minutos. Lecturas de operadores consultan PostgreSQL local. Lock global y por fuente, identidad teléfono completo normalizado, clave única fuente/ID, solapamiento incremental de dos horas; un error no avanza el cursor de su fuente.
+
+Tabla aditiva inbox_prospect_sources conserva contexto comercial y estado. WhatsApp se vincula exclusivamente al número 2035; no se crean chats por registros inactivos sin conversación previa. Importación no crea mensajes recibidos, ventana de 24 horas, jobs de IA ni outbox. Contactos sólo email/teléfono inválido usan canal interno lead. El primer WhatsApp sigue requiriendo plantilla aprobada cuando no hay ventana y confirmación de autorización del contacto.
+
+Runtime /opt/fusion-chatbot; imagen fusion-chatbot-leads:20261014. Herramientas usa el proxy autenticado y controles de propiedad existentes. Respaldo y manifiesto /opt/fusionbikes/backups/mensajeria-leads-20261014. Para revertir: detener el timer y restaurar sólo los archivos/imágenes del manifiesto; conservar tablas e historial, nunca restaurar automáticamente el dump sobre actividad nueva. Una pestaña abierta necesita recarga para el nuevo selector.
+
+
+## Alertas internas de reposición por WhatsApp — 2026-10-14
+
+Programación VPS nativa `fusion-stock-whatsapp.timer`, diaria 09:00 Argentina, sin
+recuperar ejecuciones perdidas. Emisor 2035; destinatarios internos Matías y Fabri
+configurados en `/opt/fusion-management-migration/alerts/alert_config.json` privado
+root/0600 (no copiar teléfonos ni credenciales a la memoria/repositorio).
+Fuentes locales y algoritmo compartido del informe: 90 días de ventas, cobertura
+menor a 15 días; servicios excluidos. Resume altas en crítico o nuevas bajas de
+stock, sin repetir estado igual o mejorado. Detalle con hasta tres ejemplos y
+enlace al informe. Historial parcial de ML señalado; no decide compras ni cantidades.
+
+Plantilla Meta `fusion_resumen_reposicion_v1` es_AR enviada a revisión. Al publicar
+esta tarea seguía PENDING: el emisor está conectado, pero no se envía hasta aprobación;
+se comprueba cada ejecución y envío. Timer activo; primera evaluación 15/10 a las 09:00.
+Validación en PostgreSQL desechable sin red externa: 19 pruebas aprobadas. Vista
+previa bajo las restricciones systemd de producción confirmó el bloqueo de plantilla;
+ningún mensaje real de esta automatización se envió durante la instalación.
+
+Runtime `alerts/` bajo `/opt/fusion-management-migration`; fuente/documentación en
+`integrations/management-migration/alerts/README.md`. Reutiliza transporte, outbox
+y webhooks existentes del bot, sin reiniciar contenedores ni cambiar roles o IA.
+Tablas aditivas `stock_alert_runs` y `stock_alert_state`; registro `system` para
+evitar aprendizaje como respuesta humana. Un intento diario por destinatario;
+resultado incierto bloquea reintentos hasta conciliación. Fallas definitivas de
+Meta no consolidan el stock como notificado.
+
+Diagnóstico: `journalctl -u fusion-stock-whatsapp.service`, `alerts/status.json` y
+`python3 alerts/run_alerts.py --dry-run`. Pausa/rollback: `systemctl disable --now
+fusion-stock-whatsapp.timer`; conservar tablas/historial, nunca restaurar bases.
+Manifiesto por archivo en `alerts/deployment-manifest.json`.
+
+
+### Configuración editable de alertas de stock — 2026-10-14
+
+El panel Stock y reposición permite al administrador editar nombre/WhatsApp de los dos
+destinatarios, hora diaria de Argentina, pausa general e individual. Emisor 2035 fijo.
+GET/POST /herramientas/gestion-vps/ventas/stock/alertas exige sesión admin; POST agrega
+Origin exacto, CSRF, límite de cuerpo y revisión optimista. Cambiar una etiqueta no
+modifica usuarios ni permisos. Guardar no dispara mensajes y aplica al siguiente envío.
+
+Configuración vigente en /var/lib/fusion-management-validation/stock-alert-settings.json
+(privada, 0600, dueño del gateway DynamicUser). Alert_config.json privado conserva datos
+técnicos de Meta. El ejecutor root valida los campos permitidos antes de usarlos.
+Timer comprueba cada minuto; fuera de horario/pausado termina sin consultar catálogo,
+Docker o Meta. Máximo un intento por fecha y número, independiente de ediciones del
+horario. Estado sin secretos en stock-alert-status.json.
+
+Plantilla aprobada por Meta y previsualización real verificada sin enviar. Pausa desde
+la UI comprobada en el ejecutor (disabled), luego reactivada con los dos destinatarios
+originales a las 09:00. Pruebas de persistencia, permisos, horario, pausas y duplicados
+aprobadas. Dos pruebas antiguas de PDF/POS fallan igual con el gateway previo y nuevo;
+no se modificaron esos contratos. Respaldo por archivo/unidad: /opt/fusion-management-migration/backups/stock-alert-settings-20261014T231001Z.
+
+
+## Fabri — tono argentino y presupuestos compartidos (2026-10-14)
+
+Publicado en fusion-chatbot-tone-budget:20261014, API/worker/outbox. OpenAI usa ahora
+el prompt general publicado (prompt_versions), no sólo las instrucciones fijas del vendedor.
+El tono incorporado usa voseo natural, conserva contexto, evita saludos repetidos y preguntas
+innecesarias. El formato separa la pregunta final opcional de las fichas oficiales.
+Los precios, variantes, cuotas, enlaces y datos de posventa siguen pasando por las fuentes
+y controles previos. Hasta cinco consultas de herramientas y una reparación de formato
+dentro de seis llamadas máximas, con las mismas barreras de pausa/toma humana y presupuesto.
+
+Distribución mensual autorizada vigente: US$20 sólo imágenes; US$80 compartidos entre
+conversación y transcripción de audios. Reemplaza la distribución previa de 50/50.
+Los consumos anteriores del mes UTC se conservan y reclasifican por kind, sin borrarlos.
+sales_ai_calls y multimedia_jobs(audio) comparten un bloqueo transaccional para reservar;
+multimedia_jobs(image) consume el cupo separado. Se conservan reservas de intentos inciertos.
+La pantalla Inteligencia de Fabri muestra estos alcances y consumos. Esto no activa voz
+de salida: la voz personalizada permanece pendiente de habilitación del proveedor.
+
+Respaldo: /opt/fusionbikes/backups/fabri-tono-presupuesto-20261014. Paquete y manifiesto:
+ /opt/fusion-tone-budget-20261014. Reversión de archivos e imagen desde el respaldo,
+reactivando la versión de prompt y configuración previas de prepared.json; no restaurar
+conversaciones, bases ni colas. La clave permanece privada y no se recreó.

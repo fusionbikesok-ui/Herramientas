@@ -1,0 +1,12 @@
+[Unit]
+Description=Fusion Bikes - revision del horario configurable de reposicion
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=fusion-stock-whatsapp.service
+
+[Install]
+WantedBy=timers.target

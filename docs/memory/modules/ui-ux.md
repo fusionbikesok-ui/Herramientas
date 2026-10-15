@@ -223,3 +223,24 @@ Las seis columnas se ordenan al pulsar su encabezado, con flecha y aria-sort; se
 ### Corrección de totales entre vistas de stock — 2026-10-14
 
 El resumen ahora se calcula sobre las mismas filas de la pestaña elegida (después de filtros, antes de paginar), en lugar del catálogo completo filtrado. Las tarjetas se ubican dentro del bloque de la vista y distinguen productos/variantes, variantes con stock positivo sin marcas de revisión, unidades vendidas y reposición. Las cantidades exactas se conservan por variante en la tabla; no se suman en un total físico las cantidades administrativas de servicios. Las tres pestañas muestran su cantidad de resultados. Se explicitan los filtros activos compartidos entre vistas. Misma fila/ID conserva cantidad de stock en todas las pestañas; no se altera inventario ni fuente de datos.
+
+
+### Servicios y cantidades del informe de reposición — 2026-10-14
+
+El informe de stock distingue los productos de las categorías exactas SERVICES/Servicios: conserva sus ventas en el ranking y catálogo, pero muestra «Servicio · stock no aplicable» y no calcula cobertura ni alertas de reposición. No modifica existencias. La categoría Taller por sí sola no excluye mercadería. El catálogo legacy transforma stock_quantity nulo en cero; por eso no se puede interpretar cualquier cero como agotado verificado. Las otras cantidades continúan viniendo de catalogo_cache por ID de variante, con la misma cantidad en las tres vistas. Este ajuste no cambia la sincronización, el stock de Woo ni agrega consultas a la tienda.
+
+
+## Mensajería: contactos del sitio (2026-10-14)
+
+El selector Origen comercial filtra popup de regalo, carritos abandonados y solicitudes de contacto. La ficha Interés del cliente conserva producto/página, motivo, email y productos/total registrado del carrito. Los importes son históricos, no cotizaciones actuales. Los contactos con origen activo permanecen en Pendientes hasta tomarlos; leer no consume un lead. Al tomar salen de Pendientes y quedan en Mías/Todas; liberar los devuelve si siguen activos. Los chats sin estos orígenes conservan el criterio de mensajes sin leer. Pedidos generados se distinguen de pagos confirmados. Fichas sin teléfono válido son internas y no permiten WhatsApp. Las conversaciones existentes conservan responsable, estado y política de IA.
+
+
+### Alertas de reposición configurables — 2026-10-14
+
+Tarjeta desplegable «Alertas por WhatsApp» arriba del informe de stock; resumen visible
+con estado, horario y destinatarios activos. Edición de dos nombres y WhatsApp, pausa
+general/individual y horario diario (Argentina). Teléfono acepta formato local de 10
+dígitos o internacional argentino; se normaliza y rechaza duplicados. Guardar explícito
+no envía mensajes; confirmación y última edición visibles. Los filtros del informe no
+modifican el resumen automático de 90/15 días. Campos en columnas en escritorio y
+apilados en móvil, controles de 44 px y estilos compartidos. Acceso sólo administrador.

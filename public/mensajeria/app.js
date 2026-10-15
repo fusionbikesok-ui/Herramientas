@@ -1,3 +1,4 @@
+import {originLabel,prospectPreview,renderProspects} from './prospects.js';
 import {savedReply,messageLabel,forwardBlock} from './message-actions.js?v=351ec445ab57';
 const API = '../api/mensajeria';
 const POLL_MIN = 10000;
@@ -37,6 +38,7 @@ export function errorMessage(result) {
 }
 
 export function sendWindow(thread, now = Date.now()) {
+  if (threadChannel(thread)==='lead') return {allowed:false,label:'Este contacto no tiene un teléfono válido para WhatsApp. Podés copiar sus datos y guardar notas privadas.'};
   if (!thread) return { allowed: false, label: 'Sin conversación' };
   if (threadChannel(thread) === 'web') {
     if (thread.can_send === true) return { allowed: true, label: 'Chat web disponible' };
@@ -51,7 +53,7 @@ export function sendWindow(thread, now = Date.now()) {
   return { allowed: true, label: 'Ventana de atención abierta' };
 }
 
-export function threadChannel(thread) { return thread?.channel === 'web' ? 'web' : 'whatsapp'; }
+export function threadChannel(thread) { return thread?.channel === 'lead' ? 'lead' : thread?.channel === 'web' ? 'web' : 'whatsapp'; }
 export function customerWindowOpen(thread, now = Date.now()) {
   const inbound = Date.parse(thread?.last_inbound_at || '');
   return threadChannel(thread) === 'whatsapp' && Number.isFinite(inbound) && inbound <= now && now - inbound < SEND_WINDOW_MS;
@@ -95,7 +97,7 @@ export function productStock(value) {
   if (Number.isFinite(Number(value))) return Number(value) > 0 ? `Stock: ${Number(value)}` : 'Sin stock';
   return ({ instock: 'Disponible', outofstock: 'Sin stock', onbackorder: 'Por encargo' })[String(value)] || 'Stock a confirmar';
 }
-export function channelLabel(thread) { return threadChannel(thread) === 'web' ? 'Chat web' : 'WhatsApp'; }
+export function channelLabel(thread) { return threadChannel(thread) === 'lead' ? 'Contacto web' : threadChannel(thread) === 'web' ? 'Chat web' : 'WhatsApp'; }
 export function mediaAllowed(thread) { return Boolean(thread && (typeof thread.capabilities?.media === 'boolean' ? thread.capabilities.media : threadChannel(thread) === 'whatsapp')); }
 export function aiStateLabel(thread, status) {
   if (thread?.bot_paused) return 'IA pausada';
@@ -369,7 +371,7 @@ function start() {
   function nameOf(thread) { return thread?.name || thread?.phone || (threadChannel(thread) === 'web' ? 'Visitante del chat web' : 'Contacto de WhatsApp'); }
   function numberLabel(thread) { return threadChannel(thread) === 'web' ? thread?.page_title || '' : thread?.number_label || state.numbers.find(number => String(number.number_id) === String(thread?.number_id))?.number_label || thread?.number_id || 'Número de negocio'; }
   function sourceLabel(thread) { return [...new Set([channelLabel(thread), numberLabel(thread)].filter(Boolean))].join(' · '); }
-  function shortSource(thread) { const number = state.numbers.find(item => String(item.number_id) === String(thread.number_id)); const digits = String(number?.number || number?.number_label || thread.number_label || '').replace(/\D/g, ''); return threadChannel(thread) === 'web' ? 'Web' : `WA${digits ? ` · ${digits.slice(-4)}` : ''}`; }
+  function shortSource(thread) { if (threadChannel(thread)==='lead') return 'Contacto web'; const number = state.numbers.find(item => String(item.number_id) === String(thread.number_id)); const digits = String(number?.number || number?.number_label || thread.number_label || '').replace(/\D/g, ''); return threadChannel(thread) === 'web' ? 'Web' : `WA${digits ? ` · ${digits.slice(-4)}` : ''}`; }
   function renderList() {
     const list = $('thread-list'); const top = list.scrollTop; const anchor = [...list.children].find(node => node.offsetTop + node.offsetHeight > list.offsetTop + top); const anchorOffset = anchor ? anchor.offsetTop - top : 0;
     const existing = new Map([...$('thread-list').children].map(node => [node.dataset.key, node]));
@@ -384,7 +386,7 @@ function start() {
         const source = element('span', 'thread-channel', shortSource(thread)); source.title = sourceLabel(thread); bottom.append(source);
         if (Number(thread.unread) > 0) { const unread = element('span', 'unread-count', Number(thread.unread) > 99 ? '99+' : thread.unread); unread.setAttribute('aria-label', `${thread.unread} sin leer`); bottom.append(unread); }
         const avatar = element('span', 'thread-avatar', contactInitials(nameOf(thread))); avatar.setAttribute('aria-hidden', 'true');
-        const content = element('div', 'thread-card-content'); content.append(top, element('p', 'thread-preview', thread.preview || 'Sin mensajes de texto'), bottom); card.replaceChildren(avatar, content); card.classList.toggle('is-unread', Number(thread.unread) > 0);
+        const content = element('div', 'thread-card-content'); content.append(top, element('p', 'thread-preview', thread.preview || prospectPreview(thread) || 'Sin mensajes de texto'), bottom); card.replaceChildren(avatar, content); card.classList.toggle('is-unread', Number(thread.unread) > 0);
         card.dataset.signature = signature;
       }
       card.setAttribute('aria-current', key === state.selected ? 'true' : 'false');
@@ -394,13 +396,13 @@ function start() {
     if (top > 0 && anchor?.isConnected) list.scrollTop = anchor.offsetTop - anchorOffset; else list.scrollTop = top;
     $('load-list').hidden = !state.listMore;
     $('list-state').classList.toggle('error', Boolean(state.lastListError));
-    $('list-state').textContent = state.lastListError || (!state.threads.length ? (state.search || state.number || state.channel !== 'all' ? 'No hay conversaciones que coincidan con estos filtros.' : state.filter === 'unread' ? 'Estás al día. No hay chats pendientes de leer.' : state.filter === 'mine' ? 'Todavía no tenés conversaciones asignadas.' : state.filter === 'closed' ? 'No hay conversaciones cerradas.' : state.filter === 'unassigned' ? 'No hay conversaciones esperando responsable.' : 'Todavía no hay conversaciones. Las consultas reales del chat web y de WhatsApp aparecerán acá.') : '');
+    $('list-state').textContent = state.lastListError || (!state.threads.length ? (state.search || state.number || state.channel !== 'all' || $('prospect-source').value!=='all' ? 'No hay conversaciones que coincidan con estos filtros.' : state.filter === 'unread' ? 'Estás al día. No hay mensajes sin leer ni contactos por tomar.' : state.filter === 'mine' ? 'Todavía no tenés conversaciones asignadas.' : state.filter === 'closed' ? 'No hay conversaciones cerradas.' : state.filter === 'unassigned' ? 'No hay conversaciones esperando responsable.' : 'Todavía no hay conversaciones. Las consultas reales del chat web y de WhatsApp aparecerán acá.') : '');
     $('list-state').hidden = !$('list-state').textContent;
   }
   async function loadList({ more = false } = {}) {
     const seq = ++state.listSeq;
     const offset = more ? state.threads.length : 0;
-    const queries = Array.from({ length: more ? 1 : state.listPages }, (_, index) => new URLSearchParams({ filter: state.filter, channel: state.channel, search: state.search, number: state.channel === 'web' ? '' : state.number, offset: text(more ? offset : index * 50), limit: '50' }));
+    const queries = Array.from({ length: more ? 1 : state.listPages }, (_, index) => new URLSearchParams({ filter: state.filter, channel: state.channel, source:$('prospect-source').value, search: state.search, number: state.channel === 'web' ? '' : state.number, offset: text(more ? offset : index * 50), limit: '50' }));
     if (more) $('load-list').disabled = true;
     try {
       const pages = await Promise.all(queries.map(query => api(`/list?${query}`))); if (seq !== state.listSeq) return;
@@ -409,6 +411,8 @@ function start() {
       const all = more ? [...state.threads, ...incoming] : incoming;
       state.threads = [...new Map(all.map(thread => [text(thread.key), thread])).values()];
       if (more) state.listPages = Math.max(1, Math.ceil(state.threads.length / 50));
+      const sync=result.prospects_sync;
+      $('prospect-sync').textContent=$('prospect-source').value==='all'?'':sync?.lead?.ok===false||sync?.cart?.ok===false?'Hay contactos que requieren revisión; la sincronización volverá a intentarlo.':sync?.lead?.through&&sync?.cart?.through?`Datos del sitio: ${[sync.lead.through,sync.cart.through].sort()[0]} · cada 15 min`:'La sincronización de contactos todavía no está confirmada.';
       state.listMore = Boolean(result.more); state.lastListError = ''; renderList();
       for (const counter of document.querySelectorAll('[data-count]')) { const value = result.counts?.[counter.dataset.count]; counter.textContent = Number.isFinite(Number(value)) && value != null ? text(value) : ''; }
     } catch (error) { if (seq === state.listSeq) { state.lastListError = `No se pudo actualizar la bandeja. ${error.message}`; renderList(); } throw error; }
@@ -467,7 +471,7 @@ function start() {
     if (state.selected === key && state.thread) { $('workspace').classList.add('has-selection'); scheduleRead(); return; }
     saveText(); stopAudioResources(); state.selectionEpoch++; state.threadSeq++; state.selected = key; state.thread = null; state.relatedWeb = []; state.messages = []; state.messageNodes.clear(); state.more = false; state.historyLoading = false; state.mode = 'reply';
     $('workspace').classList.add('has-selection'); $('welcome').hidden = true; $('thread-view').hidden = false; $('messages').replaceChildren(); $('history-state').textContent = 'Cargando historial…'; $('contact-name').textContent = nameOf(state.threads.find(thread => text(thread.key) === key)); $('contact-meta').textContent = '';
-    $('thread-badges').replaceChildren(); $('ownership').textContent = ''; $('web-context').hidden = true; $('copy-phone').disabled = true;
+    $('thread-badges').replaceChildren(); $('ownership').textContent = ''; $('web-context').hidden = true; $('prospect-context').hidden=true; $('copy-phone').disabled = true;
     setNotice('thread-notice', ''); restoreComposer(); renderPermissions(); renderList(); renderPending();
     try { await loadThread({ initial: true }); if (state.selected === key) $('contact-name').focus({ preventScroll: true }); }
     catch (error) { if (state.selected === key) { $('history-state').textContent = 'No se pudo cargar el historial.'; setNotice('thread-notice', error.message, 'critico'); } }
@@ -560,6 +564,7 @@ function start() {
         history = reconcileHistoryPage(state.messages, incoming, { ...pagination, earlierExists: Array.isArray(probe.messages) && probe.messages.length > 0 });
       }
       if (!state.thread || Number(result.thread.revision) >= Number(state.thread.revision)) state.thread = result.thread;
+      if (!older) renderProspects(document.getElementById('prospect-context'),result.prospects||[]);
       if (!older && Array.isArray(result.related_web)) state.relatedWeb = result.related_web;
       state.messages = history.messages; state.more = history.more;
       reconcileOperation(key);
@@ -590,8 +595,9 @@ function start() {
   }
   function renderThreadBadges() {
     const thread = state.thread; if (!thread) return;
-    const ia = aiStateLabel(thread, state.statusReady ? { numbers: state.numbers, web: state.web } : null);
+    const ia = threadChannel(thread)==='lead'?'Ficha de contacto':aiStateLabel(thread, state.statusReady ? { numbers: state.numbers, web: state.web } : null);
     const badges = [chip(channelLabel(thread)), chip(thread.status === 'closed' ? 'Cerrada' : 'Abierta'), chip(ia)];
+    for(const item of thread.prospect_origins||[]) badges.push(chip(originLabel(item.origin)));
     for (const label of Array.isArray(thread.labels) ? thread.labels : []) badges.push(chip(typeof label === 'string' ? label : label.name || label.label || ''));
     $('thread-badges').replaceChildren(...badges);
   }
@@ -611,7 +617,7 @@ function start() {
     const web = threadChannel(state.thread) === 'web'; const canAttach = mediaAllowed(state.thread);
     for (const action of ['take', 'transfer', 'release', 'close', 'reopen', 'pause', 'resume']) {
       const visible = action === 'take' ? access.take : action === 'transfer' ? access.manage && !closed : action === 'release' ? access.manage && Boolean(state.thread?.owner_id) : action === 'close' ? access.manage && !closed : action === 'reopen' ? access.control && closed : action === 'pause' ? access.control && !state.thread?.bot_paused : access.control && !closed && Boolean(state.thread?.bot_paused);
-      $(action).hidden = !visible; $(action).disabled = pending || state.recordingPhase !== 'idle';
+      $(action).hidden = !visible || threadChannel(state.thread)==='lead' && ['pause','resume'].includes(action); $(action).disabled = pending || state.recordingPhase !== 'idle';
     }
     const note = state.mode === 'note'; const canCompose = note ? access.note : access.send;
     $('reply-mode').setAttribute('aria-pressed', text(!note)); $('note-mode').setAttribute('aria-pressed', text(note)); $('note-mode').disabled = !access.write;
@@ -1244,6 +1250,7 @@ function start() {
   let searchTimer;
   $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.search = $('search').value.trim(); resetList(); }, 350); });
   $('channel').addEventListener('change', () => { state.channel = $('channel').value; state.number = ''; $('number').value = ''; $('number-field').hidden = state.channel === 'web'; $('number').disabled = state.channel === 'web' || !state.numbers.some(number => number.number_id); resetList(); });
+  $('prospect-source').addEventListener('change',()=>{state.channel='all';state.number='';$('channel').value='all';$('number').value='';$('number-field').hidden=false;resetList();});
   $('number').addEventListener('change', () => { state.number = $('number').value; if (state.number) { state.channel = 'whatsapp'; $('channel').value = 'whatsapp'; } resetList(); });
   function resetList() { $('source-summary').textContent = state.channel === 'web' ? 'Chat web' : state.number ? `WhatsApp · ${$('number').selectedOptions[0]?.textContent || 'Número seleccionado'}` : state.channel === 'whatsapp' ? 'WhatsApp · Todos los números' : 'Todos los canales y números'; state.listSeq++; state.listPages = 1; state.threads = []; state.listMore = false; state.lastListError = ''; $('thread-list').replaceChildren(); $('list-state').hidden = false; $('list-state').textContent = 'Buscando conversaciones…'; loadList().catch(() => {}); }
   $('filters').addEventListener('click', event => { const button = event.target.closest('[data-filter]'); if (!button || button.dataset.filter === state.filter) return; state.filter = button.dataset.filter; for (const tab of $('filters').querySelectorAll('button')) tab.setAttribute('aria-pressed', text(tab === button)); resetList(); });
