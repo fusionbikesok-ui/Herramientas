@@ -1199,6 +1199,9 @@ function cardPendiente(p){
   if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
   var accion=p.preparacion_id&&p.estado_preparacion==='en_preparacion'?'Continuar →':'Preparar →';
   if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
+  // E-4: sub-estado del envío ML (llega por webhook `shipments`): etiqueta impresa / envío demorado.
+  if(p.canal!=='web'&&p.substatus==='printed')estado+=' <span class="badge b-ok">Etiqueta lista</span>';
+  if(p.canal!=='web'&&(p.substatus==='stale'||p.substatus==='delayed'))estado+=' <span class="badge b-warn">Demorado</span>';
   var items=(p.items||[]).map(function(i){return esc(i.cantidad+'× '+(i.nombre||i.sku));}).join('<br>');
   var nota=p.notas?'<div class="ped-nota">📝 '+esc(p.notas)+'</div>':'';
   var despacho=despachoSla(p)||(p.fecha_despacho?'<div class="ped-nota">Despacho sugerido: <b>'+esc(fecha(p.fecha_despacho))+'</b></div>':'');

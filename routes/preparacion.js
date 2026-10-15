@@ -139,7 +139,7 @@ function puedeVerDetallePreparacion(db, prep, user) {
 
 // ─── Tablas (idempotente, patrón de routes/pedidos.js) ───────────────────────
 
-function ensureTables(db) {
+export function ensureTables(db) {
   db.prepare(`CREATE TABLE IF NOT EXISTS preparaciones (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     canal           TEXT NOT NULL,
@@ -1005,7 +1005,7 @@ function registrarIntentoReconciliacion(db, prep, estadoRemoto, error = null) {
     .run(prep.id, now(), estadoRemoto, error);
 }
 
-function aplicarCancelacionReconciliada(db, prep, estadoRemoto) {
+export function aplicarCancelacionReconciliada(db, prep, estadoRemoto) {
   return db.transaction(() => {
     const actual = db.prepare("SELECT id,estado FROM preparaciones WHERE id=? AND estado='en_preparacion'").get(prep.id);
     if (!actual) return false;
@@ -3907,7 +3907,7 @@ export async function syncPedidosCache(db, cfg) {
 // pendientesMl (ML). El caller (server.js) ya llama a esto con .catch(), fire-and-forget,
 // igual que ya hace con syncWcToMl/syncMlToWc para el mismo webhook.
 
-function invalidarCacheMlNoElegible(db, mlOrderId, estadoOrden, estadoEnvio = null, logisticType = null) {
+export function invalidarCacheMlNoElegible(db, mlOrderId, estadoOrden, estadoEnvio = null, logisticType = null) {
   const detalle = estadoEnvio ? `${estadoOrden}/${estadoEnvio}/${logisticType || 'sin-logistica'}` : estadoOrden;
   db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, logistic_type=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
     .run(detalle || null, logisticType, now(), `ml:${mlOrderId}`);
@@ -4055,6 +4055,19 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     if (shipResp.status !== 200) return;
     envio = shipResp.data;
   }
+  await aplicarEnvioOrdenMl(db, mlCfg, orden, envio);
+}
+
+/**
+ * Proyecta a Preparación una orden ML paga con su envío ya leído: refresca `ml_shipment_estado`, retira de la cola lo que ya no es
+ * elegible (`invalidarCacheMlNoElegible`) o hace el upsert en `pedidos_cache` con tipo de logística, substatus y SLA vigentes.
+ * Lo comparten `syncPedidoMlPuntual` (aviso de orden) y el trabajo `shipment.project` (E-4). Con `marcarSalida`, una preparación
+ * en curso cuyo paquete ya salió se marca enviada (mismo camino que el barrido `pendientesMl`).
+ * @returns {Promise<{accion:'invalidada'|'excluida'|'proyectada', motivo?:string}>}
+ */
+export async function aplicarEnvioOrdenMl(db, mlCfg, orden, envio, { marcarSalida = false } = {}) {
+  ensureTables(db);
+  const shipmentId = orden.shipping?.id;
   const elegibilidad = clasificarElegibilidadMl(orden, envio);
   const logisticType = tipoLogisticaMl(envio);
   if (shipmentId && envio?.status) db.prepare(`
@@ -4062,13 +4075,19 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, substatus=excluded.substatus, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en
   `).run(String(shipmentId), envio.status, envio.substatus || null, logisticType || null, now());
+  if (marcarSalida && envioMlYaSalio(envio)) {
+    const prep = db.prepare('SELECT estado FROM preparaciones WHERE clave=?').get(`ml:${orden.id}`);
+    if (prep?.estado === 'en_preparacion') {
+      marcarPreparacionEnviada(db, `ml:${orden.id}`, { usuario: 'sistema', detalle: { origen: 'shipment_webhook', status: envio.status, substatus: envio.substatus || null } });
+    }
+  }
   if (elegibilidad.estado === 'no_elegible') {
-    invalidarCacheMlNoElegible(db, orden.id || mlOrderId, orden.status, envio?.status, logisticType);
-    return;
+    invalidarCacheMlNoElegible(db, orden.id, orden.status, envio?.status, logisticType);
+    return { accion: 'invalidada', motivo: elegibilidad.motivo };
   }
   envio = await resolverSlaShipment({ db, mlCfg, shipmentId, shipment: envio, logisticType });
   const sla = calcularSlaPreparacion({ canal: 'ml', logisticType, shipment: envio, ahora: new Date() });
-  if (sla.estado === 'excluido') return;
+  if (sla.estado === 'excluido') return { accion: 'excluida', motivo: sla.razon };
 
   const ov = normalizarOrdenMl(orden);
   const vinculo = db.prepare('SELECT wc_order_id FROM ordenes_ml_wc_pedidos WHERE ml_order_id=?').get(ov.ml_order_id);
@@ -4090,4 +4109,5 @@ export async function syncPedidoMlPuntual(db, mlCfg, mlOrderId) {
     items_json: JSON.stringify(itemsDesdeOrdenMl(db, orden)),
     actualizado_en: now(),
   });
+  return { accion: 'proyectada' };
 }
