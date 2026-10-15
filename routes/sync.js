@@ -2169,15 +2169,52 @@ function skusVinculadosDeItems(db, ids) {
  * deseado (el scan corrige `ml_stock_estado`, no encola bolsas). Se compara también contra el deseado calculado LOCAL (sin llamar
  * a ML): una publicación activa y vinculada cuya cantidad difiere de `stock_disponible_ml` encola su bolsa.
  */
-function remotoDifiereDelDeseado(db, f, skuVinculado) {
+function remotoDifiereDelDeseado(db, f, skuVinculado, deseados) {
   if (!skuVinculado || f.status !== 'active' || f.available_quantity == null) return false;
-  const row = db.prepare(`${computedStockCte()} SELECT stock_disponible_ml FROM computed WHERE clave = ?`).get(f.clave);
-  if (!row || row.stock_disponible_ml == null) return false;
-  return Number(f.available_quantity) !== Math.max(0, Math.round(row.stock_disponible_ml));
+  // Si la última bolsa de este SKU terminó SIN escribir hace poco, una diferencia local no la vuelve a disparar (evita lecturas
+  // a ML en cada aviso por un falso positivo persistente). Un cambio real de cantidad/estado/vínculo sí dispara (otra rama del diff).
+  const marca = leerEstado(db, `bolsa_sin_escritura:${skuVinculado}`);
+  if (marca?.valor === 'sin_escritura' && Date.now() - new Date(marca.actualizado_en).getTime() < VENTANA_SIN_ESCRITURA_MS) return false;
+  const deseado = deseados.get(f.clave);
+  if (deseado == null) return false;
+  return Number(f.available_quantity) !== deseado;
+}
+
+/**
+ * Deseado EFECTIVO por clave para un lote, calculado UNA vez con `computedStockCte() ... IN (...)` (no una consulta por clave).
+ * Las hermanas (mismo `user_product_id`) comparten una cantidad en ML: el deseado de cada una es el MÍNIMO del grupo, igual que
+ * en la bolsa, así que dos hermanas con deseados distintos no generan un falso positivo persistente.
+ */
+function deseadosEfectivosDeItems(db, ids) {
+  const out = new Map();
+  const base = fotoItemsMl(db, ids).filas;
+  if (!base.length) return out;
+  const ups = [...new Set(base.map((f) => String(f.user_product_id ?? '').trim()).filter(Boolean))];
+  const hermanas = ups.length
+    ? db.prepare(`SELECT clave, user_product_id FROM ml_publicaciones_cache WHERE user_product_id IN (${ups.map(() => '?').join(',')})`).all(...ups)
+    : [];
+  const upDe = new Map(base.map((f) => [f.clave, String(f.user_product_id ?? '').trim()]));
+  for (const h of hermanas) upDe.set(h.clave, String(h.user_product_id ?? '').trim());
+  const claves = [...upDe.keys()];
+  const calc = new Map();
+  for (const r of db.prepare(`${computedStockCte()} SELECT clave, stock_disponible_ml FROM computed WHERE clave IN (${claves.map(() => '?').join(',')})`).all(...claves)) {
+    if (r.stock_disponible_ml != null) calc.set(r.clave, Math.max(0, Math.round(r.stock_disponible_ml)));
+  }
+  const minGrupo = new Map();
+  for (const [clave, d] of calc) {
+    const up = upDe.get(clave);
+    if (up) minGrupo.set(up, Math.min(minGrupo.get(up) ?? Infinity, d));
+  }
+  for (const f of base) {
+    const up = upDe.get(f.clave);
+    const d = up ? minGrupo.get(up) : calc.get(f.clave);
+    if (d != null && d !== Infinity) out.set(f.clave, d);
+  }
+  return out;
 }
 
 /** Compara la foto previa con el estado actual de un ítem: ¿cambió cantidad, estado, user_product o vínculo? Devuelve los SKUs a conciliar. */
-function skusAfectadosPorItem(db, itemId, antes) {
+function skusAfectadosPorItem(db, itemId, antes, deseados) {
   const despues = fotoItemsMl(db, [itemId]);
   const previas = new Map(antes.filas.filter((f) => f.item_id === itemId).map((f) => [f.clave, f]));
   let cambio = false;
@@ -2186,7 +2223,7 @@ function skusAfectadosPorItem(db, itemId, antes) {
     const a = previas.get(f.clave);
     const skuAntes = antes.dec.get(f.clave) ?? null;
     const skuAhora = despues.dec.get(f.clave) ?? null;
-    if (!a || skuAntes !== skuAhora || CAMPOS_ITEM_QUE_ENCOLAN_BOLSA.some((c) => String(a[c] ?? '') !== String(f[c] ?? '')) || remotoDifiereDelDeseado(db, f, skuAhora)) {
+    if (!a || skuAntes !== skuAhora || CAMPOS_ITEM_QUE_ENCOLAN_BOLSA.some((c) => String(a[c] ?? '') !== String(f[c] ?? '')) || remotoDifiereDelDeseado(db, f, skuAhora, deseados)) {
       cambio = true;
       if (skuAntes) skus.add(skuAntes);
       if (skuAhora) skus.add(skuAhora);
@@ -2196,6 +2233,30 @@ function skusAfectadosPorItem(db, itemId, antes) {
     if (!despues.filas.some((f) => f.clave === clave)) { cambio = true; const s = antes.dec.get(clave); if (s) skus.add(s); }
   }
   return cambio ? [...skus] : [];
+}
+
+const VENTANA_SIN_ESCRITURA_MS = 10 * 60 * 1000; // tras una bolsa sin escritura, no se re-dispara por diferencia local
+/**
+ * Un solo incidente `item_ml_403` con la lista VIGENTE de ids: une los de antes con los de este lote y saca los que ya dieron
+ * 200 (o 404 confirmado). Si la lista queda vacía, el incidente se cierra.
+ */
+function actualizarIncidente403(db, ids403, idsResueltos) {
+  try {
+    const previo = db.prepare("SELECT contexto_json FROM incidentes_operativos WHERE tipo_error = 'item_ml_403' AND estado = 'activo'").get();
+    let previos = [];
+    try { previos = JSON.parse(previo?.contexto_json || 'null')?.item_ids || []; } catch { /* sin contexto */ }
+    const resueltos = new Set(idsResueltos);
+    const vigentes = [...new Set([...previos, ...ids403])].filter((id) => !resueltos.has(id) || ids403.includes(id));
+    if (!vigentes.length) {
+      if (previo) confirmarCicloSano(db, { integracion: 'mercadolibre', proceso: 'item_project', tipoError: 'item_ml_403' });
+      return;
+    }
+    const txt = `MercadoLibre respondió 403 al leer ${vigentes.length} ítem(s): ${vigentes.join(', ')} (ítem ajeno o token sin permiso). No se tocó el caché; se reintenta cada 30 min.`;
+    abrirOActualizarIncidente(db, {
+      integracion: 'mercadolibre', proceso: 'item_project', tipoError: 'item_ml_403', severidad: 'advertencia',
+      mensajeTecnico: txt, mensajeHumano: txt, contexto: { item_ids: vigentes },
+    });
+  } catch { /* informativo */ }
 }
 
 const TOPE_GET_404_POR_PASE = 5; // GET individuales de confirmación por pase; el resto se reencola
@@ -2228,20 +2289,27 @@ export async function procesarLoteItemsMl(db, cfg, recursos) {
   const skusAEncolar = new Set();
   // Un corte entre el refresco del caché y el encolado dejaría el diff invisible en el reintento (el caché ya está al día):
   // los SKUs pendientes se anotan en el contexto del trabajo ANTES de encolar y se retoman al releerlo.
+  const previosPorItem = new Map();
   for (const id of ids) {
     try {
       const c = JSON.parse(db.prepare("SELECT contexto_json FROM trabajos_recurso WHERE tipo = 'item.project' AND recurso = ?").get(id)?.contexto_json || 'null');
-      for (const s of c?.skus_pendientes || []) skusAEncolar.add(s);
+      const previos = c?.skus_pendientes || [];
+      previosPorItem.set(id, previos);
+      for (const s of previos) skusAEncolar.add(s);
     } catch { /* sin contexto */ }
   }
+  let deseados = new Map();
+  try { deseados = deseadosEfectivosDeItems(db, ids.filter((id) => !noOk.has(id))); } catch { /* sin deseado local: solo dispara el diff de campos */ }
   const ids403 = [];
   let getsIndividuales = 0;
   for (const id of ids) {
     try { // un fallo en un ítem no pierde lo ya calculado de los otros (sus skus_pendientes ya están en el contexto)
       if (!noOk.has(id)) {
-        const sk = skusAfectadosPorItem(db, id, antes);
+        const sk = skusAfectadosPorItem(db, id, antes, deseados);
         for (const s of sk) skusAEncolar.add(s);
-        if (sk.length) guardarContextoTrabajo(db, 'item.project', id, { skus_pendientes: sk }); // ANTES de encolar: un corte no pierde el diff
+        // ANTES de encolar: un corte no pierde el diff. Es la UNIÓN con los pendientes de intentos anteriores (dos cortes seguidos
+        // no pisan el SKU del primero); solo se limpian cuando la bolsa de TODOS ellos quedó encolada (abajo).
+        if (sk.length) guardarContextoTrabajo(db, 'item.project', id, { skus_pendientes: [...new Set([...(previosPorItem.get(id) || []), ...sk])] });
         try { // telemetría (no decide nada): fail-open
           const { registrarCambiosObservados } = await import('../lib/workerIntegrationJobs.js');
           registrarCambiosObservados(db, id, antes.filas.filter((f) => f.item_id === id), 'webhook');
@@ -2279,15 +2347,7 @@ export async function procesarLoteItemsMl(db, cfg, recursos) {
       res.set(id, { estado: 'reencolar', motivo: `item_error: ${String(e.message).slice(0, 120)}`, diferido: Boolean(e.__cooldownSintetico || e.__sinCupo || e.status === 429) });
     }
   }
-  if (ids403.length) { // un solo incidente con la lista (no uno por ítem)
-    const txt = `MercadoLibre respondió 403 al leer ${ids403.length} ítem(s): ${ids403.join(', ')} (ítem ajeno o token sin permiso). No se tocó el caché; se reintenta cada 30 min.`;
-    try {
-      abrirOActualizarIncidente(db, {
-        integracion: 'mercadolibre', proceso: 'item_project', tipoError: 'item_ml_403', severidad: 'advertencia',
-        mensajeTecnico: txt, mensajeHumano: txt, contexto: { item_ids: ids403 },
-      });
-    } catch { /* informativo */ }
-  }
+  actualizarIncidente403(db, ids403, ids.filter((id) => res.get(id)?.estado === 'hecho'));
   if (skusAEncolar.size) {
     encolarBolsasDeSkus(db, [...skusAEncolar]);
     for (const id of ids) { try { db.prepare("UPDATE trabajos_recurso SET contexto_json = NULL WHERE tipo = 'item.project' AND recurso = ?").run(id); } catch { /* ya encolado */ } }
@@ -2386,6 +2446,10 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
                 .run(t.recurso, JSON.stringify(r.skusActuales || []), new Date().toISOString());
             } : null;
             if (cerrarTrabajo(db, t, { enCierre }).cerrado) cerrarIncidentesDeTrabajo(db, t);
+            // E-2: recuerda si esta bolsa terminó sin escribir (ver remotoDifiereDelDeseado); una escritura real lo borra.
+            if (tipo === 'stock.bolsa' && r.estado === 'hecho' && r.empujadas !== undefined) {
+              try { guardarEstado(db, `bolsa_sin_escritura:${t.recurso.replace(/^sku:/, '')}`, r.empujadas === 0 ? 'sin_escritura' : 'escribio'); } catch { /* optimización */ }
+            }
           }
           procesados++;
         } catch (e) {

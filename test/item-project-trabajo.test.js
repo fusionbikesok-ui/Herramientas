@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
+import { guardarEstado } from '../lib/stockBarrera.js';
 import { procesarStockBolsa, procesarTrabajosRecurso, procesarLoteItemsMl } from '../routes/sync.js';
 import { registrarWebhookMl, procesarIntegrationJobs } from '../lib/workerIntegrationJobs.js';
 import { encolarTrabajo, encolarItemMl, COALESCENCIA_ITEM_MS } from '../lib/trabajosRecurso.js';
@@ -260,6 +261,62 @@ describe('item.project: cada elemento del bulk se trata por su status_code', () 
     const r = await lote('MLA500', 'MLA501');
     expect(r.get('MLA500').estado).toBe('hecho');
     expect(r.get('MLA501').estado).toBe('reencolar');
+    expect(bolsas()).toEqual(['sku:S-500']);
+  });
+
+  it('dos interrupciones seguidas conservan el SKU pendiente del primer intento (unión, no reemplazo)', async () => {
+    encolarItemMl(db, 'MLA500'); // el trabajo existe (el contexto vive en su fila)
+    db.exec("CREATE TRIGGER corte BEFORE INSERT ON trabajos_recurso WHEN NEW.tipo = 'stock.bolsa' BEGIN SELECT RAISE(ABORT, 'corte'); END");
+    ml.qty.MLA500 = 9; // intento 1: cambia la cantidad → pendiente S-500; el corte ocurre al encolar
+    await expect(lote('MLA500')).rejects.toThrow();
+    db.prepare("UPDATE sku_matcher_decisiones SET sku = 'S-501' WHERE clave = 'MLA500|'").run();
+    ml.qty.MLA500 = 7; // intento 2: otro cambio; ahora el vínculo es S-501 → pendiente S-501
+    await expect(lote('MLA500')).rejects.toThrow();
+    const ctx = JSON.parse(db.prepare("SELECT contexto_json FROM trabajos_recurso WHERE tipo = 'item.project' AND recurso = 'MLA500'").get()?.contexto_json || 'null');
+    db.exec('DROP TRIGGER corte');
+    await lote('MLA500'); // intento 3: sin cambios nuevos, retoma lo pendiente
+    expect(ctx?.skus_pendientes?.sort()).toEqual(['S-500', 'S-501']);
+    expect(bolsas()).toEqual(['sku:S-500', 'sku:S-501']);
+  });
+
+  it('403: el incidente une los ids vigentes y saca los que vuelven a dar 200; vacío = se cierra', async () => {
+    const lista = () => db.prepare("SELECT mensaje_tecnico, estado FROM incidentes_operativos WHERE tipo_error = 'item_ml_403'").get();
+    ml.codigos.MLA500 = 403; await lote('MLA500');
+    ml.codigos = { MLA501: 403 }; await lote('MLA501');
+    expect(lista().mensaje_tecnico).toContain('MLA500');
+    expect(lista().mensaje_tecnico).toContain('MLA501');
+    ml.codigos = { MLA501: 403 }; await lote('MLA500'); // MLA500 vuelve a dar 200
+    expect(lista().mensaje_tecnico).not.toContain('MLA500');
+    expect(lista().mensaje_tecnico).toContain('MLA501');
+    ml.codigos = {}; await lote('MLA501');
+    expect(lista().estado).not.toBe('activo');
+  });
+
+  it('hermanas con deseados distintos: se compara con el MÍNIMO del grupo, no por clave (sin falso positivo persistente)', async () => {
+    const t = ts(-60 * 60 * 1000); // MLA502: hermana de MLA500 (mismo SKU y mismo user_product)
+    db.prepare("UPDATE ml_publicaciones_cache SET user_product_id = 'MLAU1' WHERE item_id = 'MLA500'").run();
+    db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES ('MLA502|', 'S-500', 'x', 'confirmar', ?)").run(t);
+    db.prepare("INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, titulo, status, seller_sku, user_product_id, available_quantity, actualizado_en) VALUES ('MLA502|', 'MLA502', '', 'Hermana', 'active', 'S-500', 'MLAU1', 5, ?)").run(t);
+    process.env.IDENTIDAD_PROTECCION = 'activo';
+    try {
+      db.prepare(`INSERT INTO identidad_casos (direccion, ml_key, clasificacion, estado, severidad, evidencia_fingerprint, expected_version, primera_deteccion_en, ultima_deteccion_en)
+        VALUES ('ml_fusion', 'MLA502|', 'sku_inexistente', 'intervencion', 'critica', 'fp', 1, ?, ?)`).run(ts(), ts());
+      db.prepare("UPDATE ml_publicaciones_cache SET available_quantity = 0 WHERE item_id IN ('MLA500','MLA502')").run();
+      ml.up.MLA500 = 'MLAU1'; // la relectura trae el mismo user_product
+      ml.qty.MLA500 = 0; // comparten una cantidad: ML publica 0 (el deseado más restrictivo)
+      await lote('MLA500');
+      expect(bolsas()).toEqual([]);
+    } finally { delete process.env.IDENTIDAD_PROTECCION; }
+  });
+
+  it('tras una bolsa SIN escritura reciente, la diferencia local no re-dispara; un cambio real de cantidad sí', async () => {
+    db.prepare("UPDATE ml_publicaciones_cache SET available_quantity = 9 WHERE item_id = 'MLA500'").run();
+    ml.qty.MLA500 = 9; // difiere del deseado (5) pero el caché ya lo sabía
+    guardarEstado(db, 'bolsa_sin_escritura:S-500', 'sin_escritura');
+    await lote('MLA500');
+    expect(bolsas()).toEqual([]);
+    ml.qty.MLA500 = 7; // cambio REAL de available_quantity: dispara igual
+    await lote('MLA500');
     expect(bolsas()).toEqual(['sku:S-500']);
   });
 
