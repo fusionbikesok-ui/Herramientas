@@ -283,6 +283,9 @@ const MAX_PACKS_CAMBIADOS = 500;
 const PREFIJO_MENSAJE = 'msg:';
 /** Punto de reanudación (t, id) de cada consulta liviana: se consulta con `(t, id) > (luz.t, luz.id)`, así que más filas
  *  empatadas en `t` que el tope no frenan la ventana. */
+/** Texto ISO con los µs completos: `pg` entrega los timestamptz como Date (ms) y truncaría el cursor, con lo que filas del
+ *  mismo ms (distinto µs) volverían a entrar en cada consulta. El tiempo del cursor viaja siempre como este texto. */
+const TEXTO_US = `'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'`;
 const ID_MAXIMO = '￿';   // mayor que cualquier id (son ASCII) bajo COLLATE "C"
 interface PuntoLuz { t: string; id: string }
 interface Luz { avisos: PuntoLuz; pedidos: PuntoLuz }
@@ -362,32 +365,32 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
         }
         // Avisos por webhook que todavía no se convirtieron en mensaje (los `succeeded` ya están leídos). Del más viejo al
         // más nuevo, acotados a la ventana congelada de la corrida (`<= windowTo`), por clave (t, id) y con tope+1.
-        const avisos = await dep.db.query<{ resource_id: string; t: Date | string }>(
-          `SELECT resource_id COLLATE "C" AS resource_id, MIN(received_at) AS t FROM integrations.reconciliation_signals
+        const avisos = await dep.db.query<{ resource_id: string; t: string }>(
+          `SELECT resource_id COLLATE "C" AS resource_id, to_char(MIN(received_at) AT TIME ZONE 'UTC', ${TEXTO_US}) AS t FROM integrations.reconciliation_signals
             WHERE channel_account_id=$1 AND topic='ml.messages' AND status <> 'succeeded'
               AND received_at <= $4 AND (received_at, resource_id COLLATE "C") > ($2::timestamptz, $3::text)
             GROUP BY 1 ORDER BY MIN(received_at), 1 LIMIT $5`,
-          [ctx.corrida.channelAccountId, new Date(punto.avisos.t), punto.avisos.id, ctx.windowTo, MAX_AVISOS_WEBHOOK + 1],
+          [ctx.corrida.channelAccountId, punto.avisos.t, punto.avisos.id, ctx.windowTo, MAX_AVISOS_WEBHOOK + 1],
         );
         // Reagrupado (intencional, en ambas consultas): el filtro de clave es por FILA y se agrupa después. Un resource_id /
         // target_id ya leído que reciba una fila nueva posterior al cursor vuelve a aparecer: nueva actividad = releer.
         // Pedidos que cambiaron en la ventana de la corrida, con la misma clave.
-        const cambiados = await dep.db.query<{ target_id: string; t: Date | string }>(
-          `SELECT target_id COLLATE "C" AS target_id, MIN(last_seen_at) AS t FROM integrations.resource_relations
+        const cambiados = await dep.db.query<{ target_id: string; t: string }>(
+          `SELECT target_id COLLATE "C" AS target_id, to_char(MIN(last_seen_at) AT TIME ZONE 'UTC', ${TEXTO_US}) AS t FROM integrations.resource_relations
             WHERE channel_account_id=$1 AND relation_type='order_pack' AND target_topic='ml.messages'
               AND last_seen_at <= $4 AND (last_seen_at, target_id COLLATE "C") > ($2::timestamptz, $3::text)
             GROUP BY 1 ORDER BY MIN(last_seen_at), 1 LIMIT $5`,
-          [ctx.corrida.channelAccountId, new Date(punto.pedidos.t), punto.pedidos.id, ctx.windowTo, MAX_PACKS_CAMBIADOS + 1],
+          [ctx.corrida.channelAccountId, punto.pedidos.t, punto.pedidos.id, ctx.windowTo, MAX_PACKS_CAMBIADOS + 1],
         );
         // Cierre sin recorte: todo lo que tenga t <= windowTo ya se leyó, incluso una fila con t == windowTo exacto, así que el
         // punto queda en (windowTo, id máximo): ningún id lo supera y esa fila no se relee en la corrida siguiente.
         const fin: PuntoLuz = { t: iso(ctx.windowTo.getTime()), id: ID_MAXIMO };
         const luz: Luz = { avisos: fin, pedidos: fin }; let recortados = false;
-        const recortar = <T extends { t: Date | string }>(filas: T[], tope: number, clave: keyof Luz, idDe: (f: T) => string): T[] => {
+        const recortar = <T extends { t: string }>(filas: T[], tope: number, clave: keyof Luz, idDe: (f: T) => string): T[] => {
           if (filas.length <= tope) return filas;
           recortados = true;
           const ultimo = filas[tope - 1]!;
-          luz[clave] = { t: iso(ultimo.t instanceof Date ? ultimo.t.getTime() : Date.parse(String(ultimo.t))), id: idDe(ultimo) };
+          luz[clave] = { t: ultimo.t, id: idDe(ultimo) };
           return filas.slice(0, tope);
         };
         for (const f of recortar(avisos.rows, MAX_AVISOS_WEBHOOK, 'avisos', (x) => x.resource_id)) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);

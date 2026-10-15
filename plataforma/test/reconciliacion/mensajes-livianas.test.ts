@@ -13,8 +13,13 @@ function contexto(cursorBefore: Record<string, unknown>, windowTo = AHORA): Cont
   return { corrida: { channelAccountId: 'cuenta', cursorBefore }, windowFrom: null, windowTo } as unknown as ContextoListado;
 }
 
-type Fila = string | { id: string; t: Date };
-const fila = (f: Fila, i: number) => (typeof f === 'string' ? { id: f, t: new Date(AHORA.getTime() - 10 * 60_000 + i) } : f);
+/** Fecha → texto ISO con 6 decimales (µs), como lo entrega to_char(... 'US'): el simulador compara strings, nunca Date en ms. */
+const us = (v: Date | string): string => {
+  const iso = v instanceof Date ? v.toISOString() : v;
+  return iso.replace(/\.(\d+)Z$/, (_m, d: string) => `.${d.padEnd(6, '0')}Z`);
+};
+type Fila = string | { id: string; t: Date | string };
+const fila = (f: Fila, i: number) => (typeof f === 'string' ? { id: f, t: us(new Date(AHORA.getTime() - 10 * 60_000 + i)) } : { id: f.id, t: us(f.t) });
 
 function montar(opciones: {
   cambiados?: Fila[]; senales?: Fila[]; unread?: string[]; mensajes?: Record<string, string[]>; packDeMensaje?: Record<string, string>;
@@ -29,9 +34,9 @@ function montar(opciones: {
       }
       // Consultas livianas: args = [cuenta, luz.t, luz.id, windowTo, limite]; clave (t, id) estricta y acotada a windowTo.
       const ordenadas = (filas: Fila[]) => filas.map(fila)
-        .filter((f) => f.t.getTime() <= (args[3] as Date).getTime()
-          && (f.t.getTime() > (args[1] as Date).getTime() || (f.t.getTime() === (args[1] as Date).getTime() && f.id > String(args[2]))))
-        .sort((x, y) => x.t.getTime() - y.t.getTime() || (x.id < y.id ? -1 : 1)).slice(0, Number(args[4]));
+        .filter((f) => f.t <= us(args[3] as Date)
+          && (f.t > us(args[1] as string) || (f.t === us(args[1] as string) && f.id > String(args[2]))))
+        .sort((x, y) => (x.t < y.t ? -1 : x.t > y.t ? 1 : x.id < y.id ? -1 : 1)).slice(0, Number(args[4]));
       if (sql.includes('reconciliation_signals')) return { rows: ordenadas(opciones.senales ?? []).map((f) => ({ resource_id: f.id, t: f.t })) };
       if (sql.includes('GROUP BY')) return { rows: ordenadas(opciones.cambiados ?? []).map((f) => ({ target_id: f.id, t: f.t })) };
       return { rows: TODOS.filter((p) => p > String(args[2])).slice(0, Number(args[3])).map((target_id) => ({ target_id })) };
@@ -140,7 +145,7 @@ describe('ml.messages: vuelta liviana + control diario', () => {
     expect(m1.llamadas.filter((l) => l.startsWith('/messages/msg'))).toHaveLength(100);
     const c1 = p1.at(-1)!.cursorAfter;
     expect(c1.avisos_recortados).toBe(true);
-    expect(c1.last_light_at).toBe(senales[99]!.t.toISOString());
+    expect(c1.last_light_at).toBe(us(senales[99]!.t));
     // La corrida siguiente arranca desde ese punto y encuentra los 30 que faltaban (clave estricta: sin repetir el último).
     const m2 = montar({ senales });
     const p2 = await correr(m2.a, contexto({ ...base, last_light_at: c1.last_light_at, light: c1.light }));
@@ -156,7 +161,7 @@ describe('ml.messages: vuelta liviana + control diario', () => {
     const paginas = await correr(a, contexto({ ...reciente, last_light_at: new Date(AHORA.getTime() - 2 * H).toISOString(), last_full_at: new Date(AHORA.getTime() - H).toISOString() }));
     expect(llamadas.filter((l) => l.startsWith('/messages/packs/'))).toHaveLength(500);
     expect(paginas.at(-1)!.cursorAfter.avisos_recortados).toBe(true);
-    expect(paginas.at(-1)!.cursorAfter.last_light_at).toBe(cambiados[499]!.t.toISOString());
+    expect(paginas.at(-1)!.cursorAfter.last_light_at).toBe(us(cambiados[499]!.t));
   });
 
   it('avisos_perdidos no cuenta mensajes que la sombra ya tenía proyectados (conversación vieja ya leída)', async () => {
@@ -204,7 +209,7 @@ describe('ml.messages: vuelta liviana + control diario', () => {
     const c1 = p1.at(-1)!.cursorAfter;
     expect(leidos(m1.llamadas)).toHaveLength(100);
     expect(c1.avisos_recortados).toBe(true);
-    expect(c1.light).toMatchObject({ avisos: { t: t.toISOString(), id: 'msg099' } });
+    expect(c1.light).toMatchObject({ avisos: { t: us(t), id: 'msg099' } });
     const m2 = montar({ senales });   // las señales siguen en la tabla (el simulador no las borra al leer)
     const p2 = await correr(m2.a, contexto({ ...base, last_light_at: c1.last_light_at, light: c1.light }));
     const segundos = leidos(m2.llamadas);
@@ -234,6 +239,27 @@ describe('ml.messages: vuelta liviana + control diario', () => {
     const c = paginas.at(-1)!.cursorAfter;
     expect(c.last_light_at).toBe(AHORA.toISOString());
     expect(c.avisos_recortados).toBe(false);
+  });
+
+  it('timestamps con µs: filas del mismo µs (≠ .000) y tope menor se leen todas, sin repetir, en 2 corridas', async () => {
+    // Mismo ms, distintos µs: truncar el cursor a ms (Date) haría releer las 130 en cada corrida.
+    const mismoUs = '2026-10-15T11:55:00.123456Z';
+    const siguienteUs = '2026-10-15T11:55:00.123789Z';
+    const senales = [
+      ...Array.from({ length: 120 }, (_, i) => ({ id: `a${String(i).padStart(3, '0')}`, t: mismoUs })),
+      ...Array.from({ length: 10 }, (_, i) => ({ id: `b${String(i).padStart(3, '0')}`, t: siguienteUs })),
+    ];
+    const base = { ...reciente, last_light_at: new Date(AHORA.getTime() - 3 * 24 * H).toISOString(), last_full_at: new Date(AHORA.getTime() - H).toISOString() };
+    const leidos = (ll: string[]) => ll.filter((l) => l.startsWith('/messages/') && !l.startsWith('/messages/packs/')).map((l) => l.split('/')[2]!.split('?')[0]!);
+    const m1 = montar({ senales });
+    const p1 = await correr(m1.a, contexto(base));
+    const c1 = p1.at(-1)!.cursorAfter;
+    expect(leidos(m1.llamadas)).toHaveLength(100);
+    expect(c1.light).toMatchObject({ avisos: { t: mismoUs, id: 'a099' } });   // µs completos, no truncados a ms
+    const m2 = montar({ senales });
+    await correr(m2.a, contexto({ ...base, last_light_at: c1.last_light_at, light: c1.light }));
+    expect(leidos(m2.llamadas)).toHaveLength(30);
+    expect(new Set([...leidos(m1.llamadas), ...leidos(m2.llamadas)]).size).toBe(130);
   });
 
   it('un 404 de pack avanza sin cortar la vuelta', async () => {
