@@ -1664,6 +1664,27 @@ function persistirCantidadMl(db, clave, sku, cantidad) {
   if (sku && cantidad != null) upsertMlStockEstado(db, clave, sku, cantidad);
 }
 
+/** E-1c: por cada SKU con baja confirmada, abre (idempotente por SKU) un incidente con los item_ids activos que lo usan como `seller_sku` sin vínculo. Informativo: nunca falla el trabajo. */
+function avisarPublicacionesSinVinculoPorBaja(db, skus, clavesVinculadas) {
+  try {
+    const filas = db.prepare(`SELECT clave, item_id, TRIM(seller_sku) AS sku FROM ml_publicaciones_cache
+      WHERE TRIM(COALESCE(seller_sku, '')) IN (${skus.map(() => '?').join(',')}) AND status = 'active' AND ${FILTRO_MARKETPLACE}`).all(...skus);
+    const porSku = new Map();
+    for (const f of filas) {
+      if (clavesVinculadas.has(f.clave)) continue;
+      if (!porSku.has(f.sku)) porSku.set(f.sku, []);
+      porSku.get(f.sku).push(f.item_id ?? f.clave);
+    }
+    for (const [sku, items] of porSku) {
+      const txt = `El producto de Woo con SKU ${sku} fue dado de baja y hay ${items.length} publicación(es) activa(s) de MercadoLibre con ese seller_sku SIN vínculo confirmado (${items.join(', ')}). No se tocó su stock: vinculalas (para que queden en 0) o pausalas a mano.`;
+      abrirOActualizarIncidente(db, {
+        integracion: 'mercadolibre', proceso: 'baja_woo_sin_vinculo', tipoError: `baja_woo_publicacion_sin_vinculo_${sku}`.slice(0, 120), severidad: 'critico',
+        mensajeTecnico: txt, mensajeHumano: txt, contexto: { sku, item_ids: items },
+      });
+    }
+  } catch { /* informativo */ }
+}
+
 /**
  * Conciliación de una bolsa BAJO SUS CANDADOS (los toma el llamador): relee Woo (gestores) y ML (todas las claves), empuja
  * cada clave activa cuyo remoto difiera del deseado y relee ML para confirmar que TODAS publican lo deseado. No usa el
@@ -1679,15 +1700,11 @@ async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = nu
   // fila para él) y aunque haya un caso de identidad abierto. La baja se levanta sola si el SKU reaparece en el catálogo.
   levantarBajasReaparecidas(db);
   const bajas = skusConBajaWoo(db, bolsa.skus);
-  // Solo para una baja confirmada: también las publicaciones activas con ESE seller_sku que no tienen decisión de vínculo
-  // (la bolsa solo enumera las vinculadas). No amplía el universo del sync en general.
+  // Las publicaciones que solo coinciden por `seller_sku` (sin decisión asignar/confirmar) NO se escriben: una identidad no probada
+  // no justifica tocar ML. Con baja confirmada abren un incidente operativo (idempotente por SKU) para que alguien las vincule o pause.
+  // Supuesto: cuenta de ML única (el `seller_sku` de `ml_publicaciones_cache` pertenece a nuestra cuenta).
   const claves = [...bolsa.claves];
-  if (bajas.size) {
-    const lista = [...bajas];
-    const extra = db.prepare(`SELECT clave FROM ml_publicaciones_cache
-      WHERE TRIM(COALESCE(seller_sku, '')) IN (${lista.map(() => '?').join(',')}) AND status = 'active' AND ${FILTRO_MARKETPLACE}`).all(...lista);
-    for (const e of extra) if (!claves.includes(e.clave)) claves.push(e.clave);
-  }
+  if (bajas.size) avisarPublicacionesSinVinculoPorBaja(db, [...bajas], new Set(claves));
   const remoto = await leerCantidadesMl(db, mlCfg, claves);
   const computada = (clave) => {
     const row = db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);

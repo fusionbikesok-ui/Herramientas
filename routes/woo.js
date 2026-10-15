@@ -18,6 +18,9 @@ const MAX_PAGES = 200; // 200 × 100 items = 20.000 productos máximo por refres
 // el request. Se acota la concurrencia (mismo patrón que Sync ML con ML_CONCURRENCIA_MAX) para
 // no dispararlas todas de golpe y evitar rate-limits/carga en WooCommerce.
 const WOO_CONCURRENCIA_MAX = 4;
+// E-1c: confirmación por GET de las hijas que la lista de variaciones omite (concurrencia acotada y tope por pase).
+const CONFIRMACION_CONCURRENCIA = 4;
+const TOPE_FALTANTES_POR_PASE = 50;
 
 // `Retry-After` puede venir en segundos (entero) o como fecha HTTP (RFC 7231) — Woo/el
 // hosting delante no documentan cuál eligen, así que se soportan los dos.
@@ -624,24 +627,32 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
   const padrePrevio = db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_woo=?').get(parent);
   // Candidatas a baja: variaciones que la lista ya no trae. Si el padre dejó de ser variable, las hijas se retiran sin más.
   let faltantes = previas.filter((v) => !idsDevueltos.has(Number(v.id_woo)));
-  if (padre.tipo === 'variable' && previas.length && faltantes.length * 2 >= previas.length) {
-    // Pérdida total o de la mayoría (lista vacía por un 200 anómalo, paginación rota…): no alcanza con la lista. Se confirma
-    // CADA faltante con su propia lectura; solo 404 `invalid_id` o `status=trash` la da de baja. Una que sigue vigente se
-    // conserva (se vuelve a insertar). Un error de lectura aborta el refresco entero (reintenta): no se borra ni se lleva a 0.
-    const confirmadas = [];
-    for (const v of faltantes) {
+  if (padre.tipo === 'variable' && faltantes.length) {
+    // Una lista que omite hijas no prueba su baja (lista parcial, paginación rota, 200 anómalo): TODA faltante se confirma con
+    // su propia lectura, sea cual sea el porcentaje. Solo 404 `invalid_id` o `status=trash` la da de baja; una que sigue
+    // vigente se conserva. Cualquier otra cosa (error, 200 sin cuerpo, sin id o con id ajeno) aborta el refresco: reintenta.
+    if (faltantes.length > TOPE_FALTANTES_POR_PASE) {
+      throw Object.assign(new Error(`Woo omitió ${faltantes.length} variaciones de ${parent} (tope ${TOPE_FALTANTES_POR_PASE}): no se da de baja nada en este pase`), { retryable: true, code: 'woo_variations_faltantes_masivas', faltantes: faltantes.length });
+    }
+    const veredictos = await mapConLimite(faltantes, CONFIRMACION_CONCURRENCIA, async (v) => {
       let detalle = null;
       try {
         detalle = (await wooFetch(cfg, `/products/${parent}/variations/${v.id_woo}`)).data;
       } catch (e) {
-        if (!esProductoWooInexistente(e)) throw e;
+        if (esProductoWooInexistente(e)) return { v, baja: true };
+        throw e;
       }
-      if (detalle && detalle.status !== 'trash' && detalle.id) {
-        idsDevueltos.add(Number(v.id_woo));
-        if (detalle.sku) filas.push(normalizarVariacionWc(detalle, padre));
-      } else {
-        confirmadas.push(v);
+      if (!detalle || typeof detalle !== 'object' || Number(detalle.id) !== Number(v.id_woo)) {
+        throw Object.assign(new Error(`Woo devolvió una lectura inválida de la variación ${v.id_woo}`), { retryable: true, code: 'woo_variation_shape' });
       }
+      if (detalle.status === 'trash') return { v, baja: true };
+      return { v, baja: false, detalle };
+    });
+    const confirmadas = [];
+    for (const r of veredictos) {
+      if (r.baja) { confirmadas.push(r.v); continue; }
+      idsDevueltos.add(Number(r.v.id_woo));
+      if (r.detalle.sku) filas.push(normalizarVariacionWc(r.detalle, padre));
     }
     faltantes = confirmadas;
   }

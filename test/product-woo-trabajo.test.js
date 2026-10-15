@@ -59,6 +59,7 @@ function instalarMocks() {
     if ((m = /^\/products\/(\d+)\/variations$/.exec(sinQuery))) return { status: 200, headers: {}, data: woo.variaciones[m[1]] || [] };
     if ((m = /^\/products\/\d+\/variations\/(\d+)$/.exec(sinQuery))) {
       const v = woo.varDetalle && Number(m[1]) in woo.varDetalle ? woo.varDetalle[m[1]] : Object.values(woo.variaciones).flat().find((x) => x.id === Number(m[1]));
+      if (v === 'VACIO') return { status: 200, headers: {}, data: '' }; // 200 sin cuerpo utilizable
       return v ? { status: 200, headers: {}, data: v } : respuestaError(404, 'woocommerce_rest_product_variation_invalid_id');
     }
     if ((m = /^\/products\/(\d+)$/.exec(sinQuery))) {
@@ -279,12 +280,19 @@ describe('stock.bolsa con una baja Woo confirmada', () => {
     expect(bajas()).toEqual([]);
   });
 
-  it('una publicación de ML con ese seller_sku pero SIN decisión de vínculo también se lleva a 0 (solo por baja confirmada)', async () => {
+  it('una publicación de ML con ese seller_sku pero SIN decisión de vínculo NO recibe escritura: abre un incidente (idempotente por SKU) con sus item_ids', async () => {
     db.prepare("INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, seller_sku, available_quantity, actualizado_en) VALUES ('MLA600|', 'MLA600', '', 'active', 'S-500', 5, ?)").run(ts());
     ml.qty.MLA600 = 5;
-    ml.qty.MLA500 = 0;
     await procesarStockBolsa(db, CFG, 'S-500');
-    expect(ml.puts).toEqual([{ item: 'MLA600', cantidad: 0 }]);
+    expect(ml.puts).toEqual([{ item: 'MLA500', cantidad: 0 }]); // solo la que tiene decisión
+    expect(ml.qty.MLA600).toBe(5);
+    const incs = () => db.prepare("SELECT tipo_error, contexto_json FROM incidentes_operativos WHERE tipo_error LIKE 'baja_woo_publicacion_sin_vinculo_%'").all();
+    expect(incs()).toHaveLength(1);
+    expect(incs()[0].tipo_error).toBe('baja_woo_publicacion_sin_vinculo_S-500');
+    expect(JSON.parse(incs()[0].contexto_json).item_ids).toEqual(['MLA600']);
+    await procesarStockBolsa(db, CFG, 'S-500');
+    expect(incs()).toHaveLength(1);
+    expect(ml.puts.filter((p) => p.item === 'MLA600')).toEqual([]);
   });
 });
 
@@ -327,6 +335,45 @@ describe('guarda contra una lista de variaciones anómala', () => {
     await correr();
     expect(bajas()).toEqual(['FB-7248']);
     expect(enCache(7249)).toBe(true);
+  });
+
+  it('una sola faltante (menos del 50 %) también se confirma por GET: un 200 vigente la conserva', async () => {
+    db.prepare("INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (7249, 'Otra', 'FB-7249', 'variation', 1732, 1, ?)").run(ts());
+    db.prepare("INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (7250, 'Otra2', 'FB-7250', 'variation', 1732, 1, ?)").run(ts());
+    woo.variaciones[1732] = [7247, 7248, 7249].map((id) => ({ id, sku: `FB-${id}`, stock_quantity: 5, type: 'variation', attributes: [] }));
+    woo.varDetalle = { 7250: { id: 7250, sku: 'FB-7250', stock_quantity: 1, type: 'variation', attributes: [] } };
+    encolarProductoWoo(db, { productoId: 1732 });
+    await correr();
+    expect(woo.llamadas.some((l) => l.p === '/products/1732/variations/7250')).toBe(true);
+    expect(enCache(7250)).toBe(true);
+    expect(bajas()).toEqual([]);
+  });
+
+  it.each([
+    ['data vacío', () => 'VACIO'],
+    ['sin id', () => ({ sku: 'FB-7247', type: 'variation' })],
+    ['con otro id', () => ({ id: 9999, sku: 'FB-7247', type: 'variation' })],
+  ])('la lectura de la hija ausente devuelve 200 con %s: error reintentable, no borra ni baja', async (_n, mk) => {
+    woo.variaciones[1732] = [];
+    woo.varDetalle = { 7247: mk(), 7248: { id: 7248, sku: 'FB-7248', type: 'variation', attributes: [] } };
+    encolarProductoWoo(db, { productoId: 1732 });
+    await correr();
+    expect(enCache(7247) && enCache(7248)).toBe(true);
+    expect(bajas()).toEqual([]);
+    expect(ml.puts).toEqual([]);
+    expect(trabajo(1732)).toMatchObject({ estado: 'pendiente', fallos_consecutivos: 1 });
+  });
+
+  it('más de 50 faltantes en un pase: no da de baja nada y reencola', async () => {
+    const t = ts();
+    for (let i = 0; i < 51; i++) db.prepare("INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, actualizado_en) VALUES (?, 'x', ?, 'variation', 1732, 1, ?)").run(8000 + i, `FB-${8000 + i}`, t);
+    woo.variaciones[1732] = [];
+    encolarProductoWoo(db, { productoId: 1732 });
+    await correr();
+    expect(bajas()).toEqual([]);
+    expect(enCache(8000) && enCache(7247)).toBe(true);
+    expect(woo.llamadas.some((l) => /variations\/\d+$/.test(l.p))).toBe(false);
+    expect(trabajo(1732)).toMatchObject({ estado: 'pendiente', fallos_consecutivos: 1 });
   });
 
   it('una respuesta de variaciones que no es lista es un error reintentable, no «sin variaciones»', async () => {
