@@ -13,10 +13,12 @@ import { mlFetch, bootstrapToken, estadoCooldownMl, estadoErroresMl } from '../l
 import { requireAdmin } from '../lib/auth.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { descontarOrdenVieja, destinoActual, fechaOrdenMs, avisarCancelacionDescontada, avisarCanceladaLuegoPagada } from '../lib/descuentoOrdenVieja.js';
-import { encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
+import { encolarProductoWoo, encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
-import { wooFetch } from './woo.js';
+import { wooFetch, refrescarProductoPuntual } from './woo.js';
+import { skusConBajaWoo, levantarBajasReaparecidas } from '../lib/wooBajas.js';
+import { FILTRO_MARKETPLACE } from '../lib/identidadProductos.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
 import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { norm, tsr } from '../lib/matcherEngine.js';
@@ -1662,6 +1664,39 @@ function persistirCantidadMl(db, clave, sku, cantidad) {
   if (sku && cantidad != null) upsertMlStockEstado(db, clave, sku, cantidad);
 }
 
+/** E-1c: cuando la baja de un SKU ya no está vigente (restaurado o levantada a mano), cierra el incidente de sus publicaciones sin vínculo. */
+function cerrarAvisosBajaLevantada(db, skus) {
+  for (const sku of skus) {
+    const tipoError = `baja_woo_publicacion_sin_vinculo_${sku}`.slice(0, 120);
+    try {
+      if (db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = ? AND estado = 'activo'").get(tipoError)) {
+        confirmarCicloSano(db, { integracion: 'mercadolibre', proceso: 'baja_woo_sin_vinculo', tipoError });
+      }
+    } catch { /* informativo */ }
+  }
+}
+
+/** E-1c: por cada SKU con baja confirmada, abre (idempotente por SKU) un incidente con los item_ids activos que lo usan como `seller_sku` sin vínculo. Informativo: nunca falla el trabajo. */
+function avisarPublicacionesSinVinculoPorBaja(db, skus, clavesVinculadas) {
+  try {
+    const filas = db.prepare(`SELECT clave, item_id, TRIM(seller_sku) AS sku FROM ml_publicaciones_cache
+      WHERE TRIM(COALESCE(seller_sku, '')) IN (${skus.map(() => '?').join(',')}) AND status = 'active' AND ${FILTRO_MARKETPLACE}`).all(...skus);
+    const porSku = new Map();
+    for (const f of filas) {
+      if (clavesVinculadas.has(f.clave)) continue;
+      if (!porSku.has(f.sku)) porSku.set(f.sku, []);
+      porSku.get(f.sku).push(f.item_id ?? f.clave);
+    }
+    for (const [sku, items] of porSku) {
+      const txt = `El producto de Woo con SKU ${sku} fue dado de baja y hay ${items.length} publicación(es) activa(s) de MercadoLibre con ese seller_sku SIN vínculo confirmado (${items.join(', ')}). No se tocó su stock: vinculalas (para que queden en 0) o pausalas a mano.`;
+      abrirOActualizarIncidente(db, {
+        integracion: 'mercadolibre', proceso: 'baja_woo_sin_vinculo', tipoError: `baja_woo_publicacion_sin_vinculo_${sku}`.slice(0, 120), severidad: 'critico',
+        mensajeTecnico: txt, mensajeHumano: txt, contexto: { sku, item_ids: items },
+      });
+    }
+  } catch { /* informativo */ }
+}
+
 /**
  * Conciliación de una bolsa BAJO SUS CANDADOS (los toma el llamador): relee Woo (gestores) y ML (todas las claves), empuja
  * cada clave activa cuyo remoto difiera del deseado y relee ML para confirmar que TODAS publican lo deseado. No usa el
@@ -1673,9 +1708,26 @@ async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = nu
   const cat = db.prepare(`SELECT id_woo, tipo, id_padre FROM catalogo_cache WHERE sku IN (${bolsa.skus.map(() => '?').join(',')})`).all(...bolsa.skus);
   await releerStockGestores(db, wooCfg, [...cat.map((c) => ({ id: c.id_woo, padre: c.tipo === 'variation' ? c.id_padre : null })), ...gestoresExtra], { estricto: false });
   // 2) ML: lectura de toda la bolsa; 3) empuje de lo que difiera del deseado
-  const claves = bolsa.claves;
+  // E-1c: un SKU con baja de Woo CONFIRMADA por relectura va a 0 aunque ya no esté en `catalogo_cache` (el CTE de stock no tiene
+  // fila para él) y aunque haya un caso de identidad abierto. La baja se levanta sola si el SKU reaparece en el catálogo.
+  levantarBajasReaparecidas(db);
+  const bajas = skusConBajaWoo(db, bolsa.skus);
+  cerrarAvisosBajaLevantada(db, bolsa.skus.filter((s) => !bajas.has(s)));
+  // Las publicaciones que solo coinciden por `seller_sku` (sin decisión asignar/confirmar) NO se escriben: una identidad no probada
+  // no justifica tocar ML. Con baja confirmada abren un incidente operativo (idempotente por SKU) para que alguien las vincule o pause.
+  // Supuesto: cuenta de ML única (el `seller_sku` de `ml_publicaciones_cache` pertenece a nuestra cuenta).
+  const claves = [...bolsa.claves];
+  if (bajas.size) avisarPublicacionesSinVinculoPorBaja(db, [...bajas], new Set(claves));
   const remoto = await leerCantidadesMl(db, mlCfg, claves);
-  const computada = (clave) => db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
+  const computada = (clave) => {
+    const row = db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
+    if (!bajas.size) return row;
+    const sku = row?.sku
+      ?? db.prepare(`SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion IN ('asignar','confirmar') AND sku IS NOT NULL AND sku <> ''`).get(clave)?.sku;
+    // El SKU sale SOLO del CTE o de una decisión: el `seller_sku` de una hermana sin decisión no prueba identidad.
+    if (!sku || !bajas.has(sku)) return row;
+    return { ...(row || {}), clave, sku, stock_disponible_ml: 0, baja_woo: true };
+  };
   const pendientes = [];
   for (const clave of claves) {
     const row = computada(clave);
@@ -2037,6 +2089,41 @@ export function encolarOrdenWoo(db, orderId) {
   return encolarTrabajo(db, { tipo: 'order.woo', recurso: String(orderId) });
 }
 
+// ─── E-1c: trabajo `catalog.woo_product_sync` (producto Woo creado/modificado/borrado/restaurado) ──────────────────────
+
+/** Topics de producto que dispara el trabajo `catalog.woo_product_sync`. El topic solo dispara; decide la relectura vigente. */
+export { encolarProductoWoo };
+export const TOPICS_PRODUCTO_WOO = new Set(['product.created', 'product.updated', 'product.deleted', 'product.restored']);
+
+/**
+ * Trabajo `catalog.woo_product_sync` (un job por producto padre). Relee el producto (o su padre) con `refrescarProductoPuntual`:
+ *  - vigente: refresca el caché y encola las bolsas de sus SKUs (padre, variaciones y SKUs anteriores); una variación que
+ *    desapareció del padre recibe la baja confirmada (protección + ML a 0) aunque el aviso haya sido un `product.updated`;
+ *  - 404 `invalid_id` o `status=trash`: baja confirmada del producto y sus variaciones;
+ *  - 5xx / error de red / ilegible: se reencola y NO se baja ni se lleva nada a 0.
+ * Las bolsas se encolan dentro de la transacción del caché. No escribe en Woo; el único efecto remoto es el de `stock.bolsa`.
+ */
+export async function procesarProductoWoo(db, cfg, recurso) {
+  if (!cfg.woo) return { estado: 'reencolar', motivo: 'woo_sin_configurar' };
+  try {
+    const r = await refrescarProductoPuntual(db, cfg.woo, { productoId: Number(recurso), alEscribir: (d, skus) => encolarBolsasDeSkus(d, skus) });
+    if (r.ignorado) {
+      const txt = `Llegó un aviso de producto Woo con el id ${recurso}, que no existe (404) y nunca estuvo en el catálogo local (ni como producto ni como padre): no se dio de baja nada. Puede ser una variación nueva cuyo aviso no trajo el padre; si falta en el catálogo, refrescá el producto padre.`;
+      try {
+        abrirOActualizarIncidente(db, {
+          integracion: 'woocommerce', proceso: 'producto_woo', tipoError: `producto_woo_id_desconocido_${recurso}`.slice(0, 120), severidad: 'advertencia',
+          mensajeTecnico: txt, mensajeHumano: txt, contexto: { id: String(recurso) },
+        });
+      } catch { /* informativo */ }
+      return { estado: 'hecho', motivo: 'id_nunca_visto' };
+    }
+    return { estado: 'hecho', eliminado: r.eliminado, skus: r.skus };
+  } catch (e) {
+    if (e?.code === 'woo_product_invalid_id') return { estado: 'hecho', motivo: 'id_invalido' }; // nunca vuelve a servir: no se reintenta
+    return { estado: 'reencolar', motivo: `woo_products_${e.status || 'error'}: ${String(e.message).slice(0, 120)}` };
+  }
+}
+
 let _trabajosRecursoEnCurso = false;
 
 const tipoErrorTrabajo = (prefijo, t) => `${prefijo}_${t.tipo}_${t.recurso}`.slice(0, 120);
@@ -2096,12 +2183,13 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
   _trabajosRecursoEnCurso = true;
   let procesados = 0;
   try {
-    for (const tipo of ['order.ml', 'order.woo', 'stock.bolsa']) {
+    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'stock.bolsa']) {
       for (const t of reclamarTrabajos(db, [tipo], { limit })) {
         try {
           const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso)
             : tipo === 'order.woo' ? await procesarOrdenWoo(db, cfg, t.recurso)
-              : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
+              : tipo === 'catalog.woo_product_sync' ? await procesarProductoWoo(db, cfg, t.recurso)
+                : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
           if (r.estado === 'reencolar') resolverReintento(db, t, r);
           else {
             // order.woo: el conjunto de SKUs se reemplaza SOLO si el cierre procede (misma transacción, generación vigente).

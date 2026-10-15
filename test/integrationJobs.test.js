@@ -149,20 +149,32 @@ describe('integration jobs: lease, retry y DLQ', () => {
     db.close();
   });
 
-  it('proyecta un webhook Woo de catálogo con relectura puntual y auditoría local', async () => {
+  it('E-1c: el job de integración de un recibo VIEJO de catálogo no refresca ni da de baja: traspasa al trabajo por recurso', async () => {
     const db = openDb(':memory:');
-    refrescarProductoPuntual.mockResolvedValue({ producto_id: 1732, filas: 5 });
     db.prepare(`INSERT INTO integration_events
       (event_id,event_type,channel,source,received_at,correlation_id,dedupe_key,metadata_json)
       VALUES ('woo-p','webhook.received','woo','woocommerce',?,'woo-p','woo-p',?)`)
-      .run(new Date().toISOString(), JSON.stringify({ producto_id: 1732, parent_id: null, eliminado: false }));
+      .run(new Date().toISOString(), JSON.stringify({ producto_id: 7247, parent_id: 1732, eliminado: true }));
     db.prepare("INSERT INTO integration_jobs (event_id,job_type,available_at) VALUES ('woo-p','catalog.woo_product_sync','2000-01-01T00:00:00Z')").run();
     const result = await procesarIntegrationJobs(db, { wooCfg: { url: 'https://woo', ck: 'ck', cs: 'cs' } });
     expect(result.processed).toBe(1);
-    expect(refrescarProductoPuntual).toHaveBeenCalledWith(db, expect.any(Object), {
-      productoId: 1732, parentId: null, eliminado: false,
-    });
+    // ni el topic `deleted` (eliminado:true) ni nada borra: solo queda encolado el trabajo del padre, que releerá Woo
+    expect(refrescarProductoPuntual).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT recurso, estado FROM trabajos_recurso WHERE tipo = 'catalog.woo_product_sync'").all()).toEqual([{ recurso: '1732', estado: 'pendiente' }]);
     expect(db.prepare("SELECT status FROM integration_jobs WHERE event_id='woo-p'").get().status).toBe('completed');
+    db.close();
+  });
+
+  it('E-1c: un recibo NUEVO (ya encolado en el recibo) no vuelve a encolar desde el job de integración', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO integration_events
+      (event_id,event_type,channel,source,received_at,correlation_id,dedupe_key,metadata_json)
+      VALUES ('woo-q','webhook.received','woo','woocommerce',?,'woo-q','woo-q',?)`)
+      .run(new Date().toISOString(), JSON.stringify({ producto_id: 1732, parent_id: null, trabajo_recurso: true }));
+    db.prepare("INSERT INTO integration_jobs (event_id,job_type,available_at) VALUES ('woo-q','catalog.woo_product_sync','2000-01-01T00:00:00Z')").run();
+    await procesarIntegrationJobs(db, { wooCfg: null });
+    expect(db.prepare("SELECT COUNT(*) n FROM trabajos_recurso WHERE tipo = 'catalog.woo_product_sync'").get().n).toBe(0);
+    expect(db.prepare("SELECT status FROM integration_jobs WHERE event_id='woo-q'").get().status).toBe('completed');
     db.close();
   });
 });

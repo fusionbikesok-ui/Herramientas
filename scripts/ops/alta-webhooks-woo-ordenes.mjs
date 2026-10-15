@@ -1,15 +1,19 @@
 #!/usr/bin/env node
-// Alta idempotente de los webhooks de pedidos de WooCommerce que le faltan a E-1b: order.created, order.deleted y order.restored
-// (order.updated ya existe). El handler `/api/woo/webhook/order` los acepta a los cuatro; cualquiera solo dispara el trabajo
+// Alta idempotente de los webhooks de WooCommerce que le faltan a E-1b y E-1c: order.created, order.deleted y order.restored
+// (order.updated ya existe) y product.restored (product.created/updated/deleted ya existen: ids 8/9/10 en la tienda). El handler `/api/woo/webhook/order` los acepta a los cuatro; cualquiera solo dispara el trabajo
 // `order.woo` y la relectura fresca decide, así que registrar estos tres agrega cobertura (pedido creado a mano, borrado y
 // restaurado se enteran al instante) sin cambiar qué se hace con cada uno.
 //
-// CUÁNDO: DESPUÉS de desplegar E-1b. Antes, el handler viejo rechaza esos topics (400) y Woo deshabilitaría el webhook tras
+// E-1c: `product.restored` (sale de la papelera) va al endpoint de producto; el handler lo trata igual que `updated`: dispara el
+// trabajo `catalog.woo_product_sync` y decide la relectura. Sin este webhook propio, un producto restaurado de la papelera solo
+// se entera por el barrido de catálogo. Es idempotente: los de pedidos ya creados quedan "ya_activo" y no se tocan.
+//
+// CUÁNDO: DESPUÉS de desplegar E-1b (pedidos) y E-1c (product.restored). Antes, el handler viejo rechaza esos topics (400) y Woo deshabilitaría el webhook tras
 // varias entregas fallidas. Es decisión de José registrarlos en prod: este script no corre solo.
 //
 // USO (siempre con DB_PATH ABSOLUTO: un DB_PATH relativo apunta a otra base según el cwd, ver notas de deploy):
-//   DB_PATH=/opt/fusionbikes/data/fusion.sqlite node scripts/ops/alta-webhooks-woo-ordenes.mjs --dry-run
-//   DB_PATH=/opt/fusionbikes/data/fusion.sqlite node scripts/ops/alta-webhooks-woo-ordenes.mjs
+//   DB_PATH=/opt/fusionbikes/herramientas/data/fusion.sqlite node scripts/ops/alta-webhooks-woo-ordenes.mjs --dry-run
+//   DB_PATH=/opt/fusionbikes/herramientas/data/fusion.sqlite node scripts/ops/alta-webhooks-woo-ordenes.mjs
 //   ... --reactivar   # además pasa a "active" los que ya existen pero están paused/disabled
 //
 // Variables: WOO_URL, WOO_CK, WOO_CS (credenciales REST), WOO_WEBHOOK_SECRET (secreto de firma, el MISMO que usa el server;
@@ -24,7 +28,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const DELIVERY_URL = 'https://herramientas.fusionbikes.com.ar/api/woo/webhook/order';
+export const DELIVERY_URL_PRODUCTO = 'https://herramientas.fusionbikes.com.ar/api/woo/webhook/product';
 export const TOPICS_NUEVOS = ['order.created', 'order.deleted', 'order.restored'];
+export const TOPICS_PRODUCTO_NUEVOS = ['product.restored'];
 
 const redactar = (texto, secreto) => (secreto ? String(texto ?? '').split(secreto).join('***') : String(texto ?? ''));
 
@@ -50,12 +56,13 @@ async function listarTodos(wooFetch, cfg) {
  * @param {Function} [p.log]
  * @returns {Promise<{acciones: {topic:string, accion:string, id?:number}[]}>}
  */
-export async function altaWebhooksWooOrdenes({ wooFetch, cfg, secreto, dryRun = false, reactivar = false, refrescar = null, log = console.log, deliveryUrl = DELIVERY_URL }) {
+export async function altaWebhooksWooOrdenes({ wooFetch, cfg, secreto, dryRun = false, reactivar = false, refrescar = null, log = console.log, deliveryUrl = DELIVERY_URL, deliveryUrlProducto = DELIVERY_URL_PRODUCTO }) {
   if (!dryRun && !secreto) throw new Error('falta WOO_WEBHOOK_SECRET: sin secreto los webhooks nacerían sin firma válida');
   const lista = await listarTodos(wooFetch, cfg);
   const acciones = [];
   let hubo = false;
-  for (const topic of TOPICS_NUEVOS) {
+  const nuevos = [...TOPICS_NUEVOS.map((topic) => ({ topic, deliveryUrl })), ...TOPICS_PRODUCTO_NUEVOS.map((topic) => ({ topic, deliveryUrl: deliveryUrlProducto }))];
+  for (const { topic, deliveryUrl } of nuevos) {
     const propios = lista.filter((w) => w.topic === topic && String(w.delivery_url) === deliveryUrl);
     const activo = propios.find((w) => w.status === 'active');
     if (activo) { acciones.push({ topic, accion: 'ya_activo', id: activo.id }); log(`${topic}: ya existe y está activo (id ${activo.id}), no se toca`); continue; }
@@ -91,7 +98,7 @@ async function main() {
   if (!dryRun && !secreto) { console.error('Falta WOO_WEBHOOK_SECRET.'); process.exit(2); }
   const { wooFetch } = await import('../../routes/woo.js');
   const cfg = { url: process.env.WOO_URL, ck: process.env.WOO_CK, cs: process.env.WOO_CS };
-  console.log(`alta-webhooks-woo-ordenes: ${dryRun ? 'DRY-RUN (no escribe nada)' : 'APLICANDO'}${reactivar ? ' · --reactivar' : ''} · destino ${DELIVERY_URL}`);
+  console.log(`alta-webhooks-woo-ordenes: ${dryRun ? 'DRY-RUN (no escribe nada)' : 'APLICANDO'}${reactivar ? ' · --reactivar' : ''} · destinos ${DELIVERY_URL} y ${DELIVERY_URL_PRODUCTO}`);
   try {
     const refrescar = dryRun ? null : async () => {
       const { openDb } = await import('../../db/index.js');
