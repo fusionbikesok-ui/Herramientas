@@ -221,3 +221,9 @@ describe('Reintentar la foto de etiqueta', () => {
   });
 });
 
+describe('contenedor de mensaje vacío', () => {
+  it('.ped-nota sin texto se oculta (no deja franja amarilla)', () => {
+    expect(HTML).toMatch(/\.ped-nota:empty\s*\{\s*display:\s*none/);
+  });
+});
+
