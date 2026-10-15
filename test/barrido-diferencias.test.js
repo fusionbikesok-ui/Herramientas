@@ -19,15 +19,16 @@ let db;
 let n = 0;
 
 /** Una publicación con deseado 5 y ML en 3 (diferencia real si está activa). `status` null = sin fila de caché de publicaciones. */
-function seed({ item, status, cantMl = 3, deseado = 5 }) {
+function seed({ item, status, cantMl = 3, deseado = 5, edad = 0 }) {
   const t = new Date().toISOString();
+  const viejo = new Date(Date.now() - edad * 1000).toISOString();
   const sku = `SKU-${item}`;
   const nombre = `Prod ${item}`;
   const id = 1000 + (n++);
   db.prepare("INSERT INTO sku_matcher_decisiones (clave, sku, wc_nombre, accion, actualizado_en) VALUES (?, ?, ?, 'confirmar', ?)").run(`${item}|`, sku, nombre, t);
   if (status) db.prepare("INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, seller_sku, available_quantity, actualizado_en) VALUES (?, ?, '', ?, ?, ?, ?)").run(`${item}|`, item, status, sku, cantMl, t);
   db.prepare('INSERT INTO catalogo_cache (id_woo, nombre, sku, tipo, id_padre, stock, precio, regular_price, actualizado_en) VALUES (?, ?, ?, ?, NULL, ?, 300, 300, ?)').run(id, nombre, sku, 'simple', deseado, t);
-  db.prepare('INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES (?, ?, ?, ?)').run(`${item}|`, sku, cantMl, t);
+  db.prepare('INSERT INTO ml_stock_estado (clave, sku, cantidad_ml, actualizado_en) VALUES (?, ?, ?, ?)').run(`${item}|`, sku, cantMl, viejo);
 }
 const corrida = () => db.prepare("SELECT * FROM barrido_corridas WHERE proceso = 'wc_a_ml' ORDER BY id DESC LIMIT 1").get();
 
@@ -64,6 +65,33 @@ describe('barrido wc_a_ml: qué cuenta como diferencia', () => {
   it('si el estado no se puede consultar (error real) sí cuenta: no se sabe si es activa', async () => {
     seed({ item: 'MLA6', status: null });
     mlFetch.mockImplementation(async (_d, _c, method, path) => (/attributes=status/.test(path) ? { status: 500, data: {}, headers: {} } : { status: 200, data: {}, headers: {} }));
+    await syncWcToMl(db, CFG);
+    expect(corrida().diferencias).toBe(1);
+  });
+});
+
+describe('barrido wc_a_ml: claves no recorridas (corte) cuentan siempre', () => {
+  it('corte por 429: la pendiente que el caché da por pausada SÍ cuenta (nunca se recorrió)', async () => {
+    seed({ item: 'MLA10', status: null, edad: 300 });      // la primera: sin caché, dispara el GET de status
+    seed({ item: 'MLA11', status: 'paused', edad: 200 });  // pendiente según caché
+    mlFetch.mockImplementation(async (_d, _c, method, path) => (/attributes=status/.test(path) ? { status: 429, data: {}, headers: {} } : { status: 200, data: {}, headers: {} }));
+    await syncWcToMl(db, CFG);
+    expect(corrida().diferencias).toBe(2);
+  });
+
+  it('corte por tope de llamadas: las pausadas (según caché) que el tope dejó sin recorrer SÍ cuentan', async () => {
+    seed({ item: 'MLA20', status: null, edad: 300 });      // el GET de status gasta la única llamada permitida
+    seed({ item: 'MLA21', status: 'paused', edad: 200 });
+    seed({ item: 'MLA22', status: 'paused', edad: 100 });
+    mlFetch.mockImplementation(async (_d, _c, method, path) => (/attributes=status/.test(path) ? { status: 200, data: { status: 'active' }, headers: {} } : { status: 200, data: {}, headers: {} }));
+    await syncWcToMl(db, CFG, { maxLlamadas: 1 });
+    expect(corrida().diferencias).toBe(3);
+  });
+
+  it('sin corte, las pausadas recorridas no cuentan aunque haya una activa', async () => {
+    seed({ item: 'MLA30', status: 'paused', edad: 300 });
+    seed({ item: 'MLA31', status: 'paused', edad: 200 });
+    seed({ item: 'MLA32', status: 'active', edad: 100 });
     await syncWcToMl(db, CFG);
     expect(corrida().diferencias).toBe(1);
   });

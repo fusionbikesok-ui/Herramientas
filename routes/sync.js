@@ -2681,7 +2681,14 @@ export async function syncWcToMl(db, cfg, opts = {}) {
     throw e;
   } finally {
     _wcToMlEnCurso = false;
-    // E-3: diferencias del barrido (las claves cuyo estado difería de lo que debía estar en ML) y cuántas no tuvieron evento.
+    // E-3: diferencias del barrido: lo que el barrido PUEDE corregir. Una clave recorrida cuenta si su publicación está activa o su estado no
+    // se pudo consultar; una pausada/cerrada recorrida se descarta sin escribir y no cuenta (en prod eran 1176, todas no activas). Las claves
+    // que el tope de llamadas, un 429 o un error dejaron SIN recorrer cuentan siempre (su estado todavía no se resolvió en esta corrida).
+    if (med.todas) {
+      med.diffs = med.todas
+        .filter((d) => { if (!med.recorridas.has(d.clave)) return true; const st = med.estadoItem.get(partirClaveMl(d.clave).itemId); return st === 'active' || st === 'desconocido'; })
+        .map((d) => ({ clave: d.clave, sku: d.sku }));
+    }
     if (med.diffs) {
       let revisados = 0;
       try { revisados = db.prepare('SELECT COUNT(*) n FROM ml_stock_estado').get().n; } catch { /* medición, no bloquea */ }
@@ -2737,7 +2744,6 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     const esFreno = (d) => d.sin_vinculo || (d.frena_identidad && d.stock_disponible_ml === 0);
     diffs.sort((x, y) => Number(!!esFreno(y)) - Number(!!esFreno(x)));
   }
-  if (opts.__med) opts.__med.diffs = diffs.map((d) => ({ clave: d.clave, sku: d.sku }));
 
   // Cache de estado de publicación por itemId (una consulta por item por corrida).
   // ML rechaza con HTTP 400 cualquier update de stock sobre publicaciones que no
@@ -2772,6 +2778,10 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     }
   } catch (_) { /* cache puede no existir todavía */ }
 
+  // E-3 (fix): claves cuyo estado de publicación se resolvió en ESTA corrida. El wrapper mide con esto (también si el bucle corta o lanza).
+  const recorridas = new Set();
+  if (opts.__med) Object.assign(opts.__med, { todas: diffs, recorridas, estadoItem });
+
   for (const diff of diffs) {
     // Tope por LLAMADAS a ML, no por filas leídas (B1, ronda 2 revisor) — ver comentario de la
     // constante. Se chequea al INICIO de cada iteración, no dentro de ella: una iteración
@@ -2805,6 +2815,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
         await sleep(espera(ML_CALL_DELAY_MS));
       }
       const status = estadoItem.get(itemId);
+      recorridas.add(clave);
       if (status === 'desconocido') {
         // Fallo real de la consulta de status (no un 429 de cooldown, ya cortado arriba):
         // no se puede saber si está activa. Registrar en vez de saltear en silencio, para
@@ -2867,16 +2878,6 @@ async function _syncWcToMl(db, cfg, opts = {}) {
 
     // Delay para respetar rate limits de ML.
     await sleep(espera(ML_CALL_DELAY_MS));
-  }
-
-  // E-3 (fix): lo que se MIDE como diferencia es lo que este barrido puede corregir. Una publicación no activa (paused/closed/under_review)
-  // se descarta arriba sin escribir y reaparecía en cada pasada: en prod eran 1176 "diferencias", todas pausadas, ninguna activa. Quedan
-  // las de estado activo, las de estado no consultable ('desconocido': no se sabe si es activa) y las que el tope de llamadas o un 429
-  // dejó sin evaluar (estado todavía no resuelto).
-  if (opts.__med) {
-    opts.__med.diffs = diffs
-      .filter((d) => { const st = estadoItem.get(partirClaveMl(d.clave).itemId); return !st || st === 'active' || st === 'desconocido'; })
-      .map((d) => ({ clave: d.clave, sku: d.sku }));
   }
 
   if (cortadoPor429) {
