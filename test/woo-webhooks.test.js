@@ -57,6 +57,21 @@ describe('vigilancia de los webhooks de Woo', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(0);
   });
 
+  it('un rechazo de red o timeout devuelve ok:false y no toca el estado', async () => {
+    responder([{ id: 1, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` }]);
+    await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    vi.spyOn(axios, 'request').mockRejectedValue(new Error('timeout of 20000ms exceeded'));
+    const r = await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('timeout');
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(1);
+    // fallo en la página 2 tampoco toca nada
+    const mk = (i) => ({ id: i, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` });
+    vi.spyOn(axios, 'request').mockImplementation(async ({ url }) => { if (url.includes('page=2')) throw new Error('ECONNRESET'); return { status: 200, data: Array.from({ length: 100 }, (_, i) => mk(i + 10)) }; });
+    expect((await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST })).ok).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(1);
+  });
+
   it('distingue los webhooks propios de los de terceros', () => {
     // La tienda tiene webhooks de otros sistemas que no administramos.
     expect(esPropio('https://herramientas.example.com/api/woo/webhook', HOST)).toBe(true);
