@@ -337,7 +337,7 @@ Tres métricas por separado (spec "Recuperación y medición"). Migración 131 (
 - Envío shipped/delivered (o substatus adelantado) → `marcarPreparacionEnviada` (origen `shipment_webhook`).
 - `routes/preparacion.js`: `aplicarEnvioOrdenMl` es la proyección única de orden+envío (la usan `syncPedidoMlPuntual` y este trabajo).
 - Chips en la cola de Preparación (ML): substatus `printed` → "Etiqueta lista"; `stale`/`delayed` → "Demorado".
-- Pendiente fuera de E-4: `TOPICOS_MISSED_FEEDS` y el "sin evento" de barridoCorridas (E-3) no cubren `shipment.project`.
+- Cobertura E-3: `TOPICOS_MISSED_FEEDS` incluye `shipments` (reinyecta como `shipment.project`). El "sin evento" de barridoCorridas es por clave de ítem/SKU y un envío no mapea a esas claves, así que no lo cubre.
 
 ### Hotfix E-1a: ventana por fecha de PAGO (2026-10-14)
 - **Caso real:** la orden 2000018902455242 se creó el 10/10 y se pagó el 13/10; E-1a la tomó como vieja (medía `date_created`), descontó 14→13 sin pedido Woo y abrió un incidente con un texto falso. Era una venta viva.
