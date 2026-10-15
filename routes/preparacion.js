@@ -10,7 +10,7 @@ import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
 import { procesarColaFotos, reintentarFoto } from '../lib/fotosPreparacionCola.js';
 import {
-  normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
+  normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete, TIPO_FOTO_ETIQUETA,
   requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
   clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
@@ -19,7 +19,7 @@ import { tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
-import { asegurarEsquemaEtiquetas } from '../lib/etiquetasPreparacion.js';
+import { asegurarEsquemaEtiquetas, recalcularEtiquetaCargada } from '../lib/etiquetasPreparacion.js';
 
 const TRACKING_META_KEY = '_andreani_tracking';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
@@ -617,6 +617,17 @@ function calcularFaltantesPreparacion(db, prep) {
 function preparacionEstaVerificada(db, prep) {
   const { faltantes, delegadosPendientes, faltaPaquete } = calcularFaltantesPreparacion(db, prep);
   return faltantes.length === 0 && delegadosPendientes.length === 0 && faltaPaquete.length === 0;
+}
+
+// Guarda de «Completar envío» (spec A.3 + v3.2 + v9.1): { error, code } si el tracking no puede cargarse todavía por falta de la foto con etiqueta, null si pasa.
+// «Cargada» = etiqueta_cargada_en (dato durable, sobrevive a la purga de la foto). Si no está y hay una foto subiéndose, el mensaje es otro (se reintenta en segundos).
+export function guardaFotoEtiquetaSeguimiento(db, wcOrderId) {
+  const prep = db.prepare('SELECT id, estado, etiqueta_cargada_en, woo_paso1_incierto, woo_paso2_pendiente FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+  if (!prep || prep.estado !== 'completada' || prep.etiqueta_cargada_en) return null;
+  if ([1, 2].includes(Number(prep.woo_paso1_incierto)) || Number(prep.woo_paso2_pendiente) === 1) return null;
+  const procesando = db.prepare("SELECT 1 FROM preparacion_fotos WHERE preparacion_id=? AND tipo=? AND borrado_en IS NULL AND estado_proceso IN ('pendiente','procesando')").get(prep.id, TIPO_FOTO_ETIQUETA);
+  if (procesando) return { error: 'la foto con la etiqueta se está procesando, reintentá en unos segundos', code: 'FOTO_ETIQUETA_PROCESANDO' };
+  return { error: 'falta la foto del paquete con la etiqueta puesta', code: 'FOTO_ETIQUETA_REQUERIDA' };
 }
 
 // Cierra el lado LOCAL de la preparación una vez que el pedido ya salió en Woo (paso 2 de
@@ -2012,7 +2023,14 @@ export function preparacionRouter(db, cfg) {
     // Cargar el tracking es una acción de despacho: Administración puede resolverla aunque no
     // haya tomado la preparación. Un operario de preparación sigue necesitando su claim vigente
     // para no usurpar la tarea de otro.
-    if (prepExistente && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
+    // Sobre una preparación `completada` no se exige claim (v4.2): la tarea ya cerró y el tracking se carga horas después, por quien despacha.
+    if (prepExistente && prepExistente.estado !== 'completada' && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
+
+    // Guarda de la foto con etiqueta (spec A.3): una preparación web ya cerrada sin etiqueta cargada no despacha hasta tener la foto. Va ANTES de
+    // seguimientosEnCurso.add, de la intención y de cualquier PUT, así que el 409 no deja ningún efecto. No aplica si ya hay una intención registrada
+    // (paso 1 incierto o paso 2 pendiente): no se traba una recuperación. Filas mínimas y pedidos sin fila no se exigen, igual que hoy.
+    const guardaEtiqueta = guardaFotoEtiquetaSeguimiento(db, wcOrderId);
+    if (guardaEtiqueta) return res.status(409).json({ ok: false, ...guardaEtiqueta });
 
     // Se marca recién acá (sin await entre el has() de arriba y este add): un rechazo previo por claim o un
     // error síncrono no deja el pedido trabado con EN_CURSO. El finally del try libera la marca.
@@ -3069,7 +3087,7 @@ export function preparacionRouter(db, cfg) {
   // MulterError se propaga a next() y, al no haber error-handler global que
   // devuelva JSON, Express contesta una página HTML 500 que el frontend no
   // puede parsear (síntoma: "No se pudo subir la foto: error").
-  router.post('/:id/foto', (req, res, next) => {
+  const subidaMultipart = (req, res, next) => {
     upload.single('archivo')(req, res, (err) => {
       if (err) {
         if (err.code === 'LIMIT_FILE_SIZE') {
@@ -3079,12 +3097,21 @@ export function preparacionRouter(db, cfg) {
       }
       next();
     });
-  }, (req, res) => {
+  };
+  // Un solo pipeline para las dos rutas. `modoEtiqueta` (POST /:id/foto-etiqueta): el tipo queda fijo en `paquete_etiquetado`, sin ítem, y la
+  // preparación ya cerrada (`completada`) se acepta SIN claim — la tarea ya no está tomada por nadie (spec v4.2); abierta, exige claim como siempre.
+  const manejarSubidaFoto = (modoEtiqueta) => (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
-    const bloqueo = bloqueoPorEstado(prep);
-    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
+    const cerradaOk = modoEtiqueta && prep.estado === 'completada';
+    if (!cerradaOk) {
+      if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+      const bloqueo = bloqueoPorEstado(prep);
+      if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
+    }
+    if (!modoEtiqueta && String(req.body?.tipo || '') === TIPO_FOTO_ETIQUETA) {
+      return res.status(400).json({ ok: false, error: 'la foto con la etiqueta puesta se sube desde «Falta etiqueta» o «Completar envío»', code: 'USAR_FOTO_ETIQUETA' });
+    }
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
 
     // Detección de HEIC/HEIF: los iPhone al compartir mandan el .heic con mimetype
@@ -3098,7 +3125,9 @@ export function preparacionRouter(db, cfg) {
       return res.status(400).json({ ok: false, error: 'solo imágenes' });
     }
 
-    const { item_id = null, tipo = 'extra', upload_id: uploadId = null } = req.body || {};
+    const { item_id: itemIdBody = null, tipo: tipoBody = 'extra', upload_id: uploadId = null } = req.body || {};
+    const item_id = modoEtiqueta ? null : itemIdBody;
+    const tipo = modoEtiqueta ? TIPO_FOTO_ETIQUETA : tipoBody;
     const itemId = item_id ? parseInt(item_id) : null;
     if (item_id && (!Number.isInteger(itemId) || !db.prepare('SELECT 1 FROM preparacion_items WHERE id=? AND preparacion_id=?').get(itemId, prep.id))) {
       return res.status(400).json({ ok: false, error: 'ítem no pertenece a esta preparación', code: 'ITEM_PREPARACION_INVALIDO' });
@@ -3164,6 +3193,9 @@ export function preparacionRouter(db, cfg) {
           detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: tipo, nombre_archivo: saved.filename, foto_id: id, upload_id: uploadKey, fingerprint },
           failClosed: true,
         });
+        if (modoEtiqueta) {
+          registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'foto_etiqueta_agregada', usuario: req.user?.username, detalle: { foto_id: id, estado_preparacion: prep.estado }, failClosed: true });
+        }
         return id;
       })();
     } catch (e) {
@@ -3186,6 +3218,17 @@ export function preparacionRouter(db, cfg) {
     // criterio fail-open que los crons del resto del repo). Si esto falla, el cron de
     // barrido de server.js (cada 1 min) toma la foto igual — nunca queda huérfana.
     dispararColaFotos();
+  };
+  router.post('/:id/foto', subidaMultipart, manejarSubidaFoto(false));
+  // Foto del paquete con la etiqueta puesta (antes o DESPUÉS del cierre; web y ML). Idempotente: otra foto reemplaza a la vigente recién cuando
+  // llega a `listo` (lo resuelve la cola, lib/fotosPreparacionCola.js). Auditoría: `foto_etiqueta_agregada`.
+  router.post('/:id/foto-etiqueta', subidaMultipart, manejarSubidaFoto(true));
+
+  // Estado de procesamiento de una foto (la UI de «Completar envío» espera a `listo` antes de mandar el tracking).
+  router.get('/fotos/:fotoId/estado', (req, res) => {
+    const foto = db.prepare('SELECT id, preparacion_id, tipo, estado_proceso, borrado_en, ultimo_error FROM preparacion_fotos WHERE id=?').get(Number(req.params.fotoId));
+    if (!foto) return res.status(404).json({ ok: false, error: 'foto no encontrada' });
+    res.json({ ok: true, foto: { id: foto.id, preparacion_id: foto.preparacion_id, tipo: foto.tipo, estado_proceso: foto.estado_proceso, borrada: !!foto.borrado_en, error: foto.estado_proceso === 'error' ? (foto.ultimo_error || 'error') : null } });
   });
 
   // Reintento manual de una foto que agotó sus reintentos automáticos (estado_proceso='error').
@@ -3194,11 +3237,15 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/foto/:fotoId/reintentar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
-    const bloqueo = bloqueoPorEstado(prep);
-    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     const fotoId = parseInt(req.params.fotoId);
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=?').get(fotoId, prep.id);
+    // Preparación cerrada: solo se reintenta una foto con etiqueta y no se exige claim (misma regla que POST /:id/foto-etiqueta).
+    const cerradaOk = prep.estado === 'completada' && foto?.tipo === TIPO_FOTO_ETIQUETA;
+    if (!cerradaOk) {
+      if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+      const bloqueo = bloqueoPorEstado(prep);
+      if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
+    }
     if (!foto) return res.status(404).json({ ok: false, error: 'foto no encontrada' });
     const reseteada = reintentarFoto(db, fotoId);
     if (!reseteada) {
@@ -3219,7 +3266,10 @@ export function preparacionRouter(db, cfg) {
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=? AND borrado_en IS NULL').get(fotoId, prep.id);
     if (!foto) return res.json({ ok: true, borradas: 0 });
 
-    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(now(), fotoId);
+    db.transaction(() => {
+      db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(now(), fotoId);
+      if (foto.tipo === TIPO_FOTO_ETIQUETA) recalcularEtiquetaCargada(db, prep.id);
+    })();
 
     const itemRef = foto.item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(foto.item_id) : null;
     // subida_por: no hay columna dedicada en preparacion_fotos para quién la subió
