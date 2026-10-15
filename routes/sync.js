@@ -14,6 +14,7 @@ import { requireAdmin } from '../lib/auth.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { descontarOrdenVieja, destinoActual, fechaOrdenMs, avisarCancelacionDescontada, avisarCanceladaLuegoPagada } from '../lib/descuentoOrdenVieja.js';
 import { encolarProductoWoo, encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
+import { registrarCorrida } from '../lib/barridoCorridas.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch, refrescarProductoPuntual } from './woo.js';
@@ -2546,11 +2547,21 @@ export async function syncWcToMl(db, cfg, opts = {}) {
   // que syncMlToWc) para que el caller no crea que sincronizó.
   if (_wcToMlEnCurso) return { omitido: true };
   _wcToMlEnCurso = true;
+  const med = { inicio: new Date().toISOString(), diffs: null, error: null };
   try {
-    const bloqueos = await _syncWcToMl(db, cfg, opts);
+    const bloqueos = await _syncWcToMl(db, cfg, { ...opts, __med: med });
     return { omitido: false, bloqueados_contradiccion: bloqueos };
+  } catch (e) {
+    med.error = e.message;
+    throw e;
   } finally {
     _wcToMlEnCurso = false;
+    // E-3: diferencias del barrido (las claves cuyo estado difería de lo que debía estar en ML) y cuántas no tuvieron evento.
+    if (med.diffs) {
+      let revisados = 0;
+      try { revisados = db.prepare('SELECT COUNT(*) n FROM ml_stock_estado').get().n; } catch { /* medición, no bloquea */ }
+      registrarCorrida(db, { proceso: 'wc_a_ml', inicio: med.inicio, revisados, claves: med.diffs, error: med.error });
+    }
   }
 }
 
@@ -2601,6 +2612,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     const esFreno = (d) => d.sin_vinculo || (d.frena_identidad && d.stock_disponible_ml === 0);
     diffs.sort((x, y) => Number(!!esFreno(y)) - Number(!!esFreno(x)));
   }
+  if (opts.__med) opts.__med.diffs = diffs.map((d) => ({ clave: d.clave, sku: d.sku }));
 
   // Cache de estado de publicación por itemId (una consulta por item por corrida).
   // ML rechaza con HTTP 400 cualquier update de stock sobre publicaciones que no
@@ -2771,14 +2783,22 @@ export async function reconciliarStockMl(db, cfg) {
   // Candado anti-solape en el mismo proceso, mismo patrón que _mlToWcEnCurso/_wcToMlEnCurso.
   if (_reconciliarStockEnCurso) return { omitido: true, motivo: 'en_curso' };
   _reconciliarStockEnCurso = true;
+  const med = { inicio: new Date().toISOString(), claves: [], error: null };
+  let res = null;
   try {
-    return await _reconciliarStockMl(db, cfg);
+    res = await _reconciliarStockMl(db, cfg, med);
+    return res;
+  } catch (e) {
+    med.error = e.message;
+    throw e;
   } finally {
     _reconciliarStockEnCurso = false;
+    // E-3: diferencias del barrido de reconciliación (las altas de ml_stock_estado no cuentan: no son diferencias).
+    if (res || med.error) registrarCorrida(db, { proceso: 'reconciliacion_stock_ml', inicio: med.inicio, revisados: res?.revisadas ?? 0, claves: med.claves, error: med.error });
   }
 }
 
-async function _reconciliarStockMl(db, cfg) {
+async function _reconciliarStockMl(db, cfg, med = null) {
   const { ml: mlCfg } = cfg;
 
   // Universo: TODAS las publicaciones con decisión de matcher (asignar/confirmar) que existan
@@ -3162,6 +3182,7 @@ async function _reconciliarStockMl(db, cfg) {
           error: `Reconciliación: ML tenía ${cantidadReal}, ml_stock_estado tenía ${fila.cantidad_ml}. Estado local corregido a ${cantidadReal}; syncWcToMl empujará el stock real de Woo en la próxima corrida.`,
         });
         corregidas++;
+        med?.claves.push({ clave: fila.clave, sku: fila.sku });
       }
     }
   }

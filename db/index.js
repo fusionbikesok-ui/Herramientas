@@ -1006,11 +1006,24 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('woo_bajas_confirmadas_130')").run();
     })();
   }
+  const controlMedido131 = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='control_medido_131'").get();
+  if (!controlMedido131) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '131_control_medido.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('control_medido_131')").run();
+    })();
+  }
   // Columnas de trabajos_recurso agregadas después de la 127/128 (contador de fallos consecutivos, independiente de la generación).
   // Con guarda por PRAGMA: sirve para bases que ya registraron la 128 sin ellas y es idempotente.
   const colsTrabajos = new Set(db.prepare('PRAGMA table_info(trabajos_recurso)').all().map((c) => c.name));
   if (!colsTrabajos.has('fallos_consecutivos')) db.exec('ALTER TABLE trabajos_recurso ADD COLUMN fallos_consecutivos INTEGER NOT NULL DEFAULT 0');
   if (!colsTrabajos.has('primer_fallo_en')) db.exec('ALTER TABLE trabajos_recurso ADD COLUMN primer_fallo_en TEXT');
+  // E-3: desde cuándo la generación vigente del trabajo está sin cerrar (alerta "trabajos no terminados", > 15 min). `creado_en` no
+  // sirve: una fila reabierta conserva la fecha de su primera vida. Las filas abiertas existentes arrancan desde su última actualización.
+  if (!colsTrabajos.has('sin_cerrar_desde')) {
+    db.exec('ALTER TABLE trabajos_recurso ADD COLUMN sin_cerrar_desde TEXT');
+    db.exec("UPDATE trabajos_recurso SET sin_cerrar_desde = actualizado_en WHERE estado IN ('pendiente', 'tomado')");
+  }
   const devolucionesMigration = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='preparacion_devoluciones_102'").get();
   if (!devolucionesMigration) {
     db.transaction(() => {
