@@ -316,6 +316,14 @@ describe('purga de fotos (v5–v16)', () => {
     purgarFotosBorradas(db); expect(cuantas(id)).toBe(0);
   });
 
+  it('preparaciones abiertas (en_preparacion / pendiente_deposito) nunca se purgan, aunque tengan 40 días y foto vigente', () => {
+    for (const estado of ['en_preparacion', 'pendiente_deposito']) {
+      const id = prep({ estado, completado: null });
+      db.prepare('UPDATE preparaciones SET creado_en=? WHERE id=?').run(dias(40), id); conFoto(id, dias(40));
+      purgarFotosBorradas(db); expect(cuantas(id)).toBe(1);
+    }
+  });
+
   it('los estados que no son de cierre conservan la regla de siempre (30 días desde la creación de la preparación)', () => {
     const id = prep({ estado: 'despachada_sin_verificar', completado: dias(50) });
     db.prepare('UPDATE preparaciones SET creado_en=? WHERE id=?').run(dias(50), id); conFoto(id, dias(50));

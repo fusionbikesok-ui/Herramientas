@@ -815,11 +815,11 @@ export function purgarFotosBorradas(db) {
   const limite = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
   // Preparaciones cerradas (`completada`/`anulado_en_woo`, las que pueden estar en «Falta etiqueta»/«Falta seguimiento»): la foto se borra recién 30 días
   // después de la ÚLTIMA resolución (envío confirmado/descartado, o etiqueta cargada si es posterior) y nunca mientras siga pendiente de etiqueta o de envío.
-  // Sin fecha de envío no se purga. El resto de los estados conserva la regla de siempre (30 días desde la creación de la preparación). Los holds mandan siempre.
+  // Sin fecha de envío no se purga. Las abiertas (`en_preparacion`, `pendiente_deposito`) nunca se purgan (v6.2). El resto de los estados conserva la regla de siempre (30 días desde la creación de la preparación). Los holds mandan siempre.
   const vencidas = db.prepare(`SELECT f.id, f.url, f.url_liviana FROM preparacion_fotos f
     JOIN preparaciones p ON p.id=f.preparacion_id
     WHERE (
-        (p.estado NOT IN ('completada','anulado_en_woo') AND p.creado_en < ?)
+        (p.estado NOT IN ('completada','anulado_en_woo','en_preparacion','pendiente_deposito') AND p.creado_en < ?)
         OR (p.estado IN ('completada','anulado_en_woo') AND f.creado_en < ?
             AND COALESCE(p.envio_confirmado_en, p.envio_descartado_en) IS NOT NULL
             AND MAX(COALESCE(p.envio_confirmado_en, p.envio_descartado_en), COALESCE(p.etiqueta_cargada_en, '')) < ?
