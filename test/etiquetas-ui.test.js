@@ -235,6 +235,17 @@ describe('aviso visible de la barra de etiquetas', () => {
     expect(html).toContain('role="status"');
     expect(html).toContain('no se pudo verificar el pack');
   });
+  it('si el navegador bloquea la ventana del PDF no lo da por bajado', async () => {
+    ctx.VISTA = 'otra'; ctx.PEND_STATUS = 'ready'; ctx.PEND_META = {}; ctx.PEND_CACHE = [ml()];
+    ctx.fetch = vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true, pdf_base64: 'JVBERg==', aceptados: ['ml:2001'], rechazados: [] }) }));
+    ctx.window.fetch = ctx.fetch;
+    ctx.URL = { createObjectURL: () => 'blob:x' }; ctx.Blob = Blob; ctx.atob = atob; ctx.Uint8Array = Uint8Array;
+    ctx.window.open = () => null;
+    await ctx.bajarEtiquetasMl(['ml:2001']);
+    const t = ctx.document.getElementById('etq-aviso').textContent;
+    expect(t).not.toContain('PDF bajado');
+    expect(t).toContain('bloqueó la ventana');
+  });
   it('tras re-renderizar con casillas tildadas la barra vuelve a mostrarse', () => {
     const toggles = [];
     ctx.document.getElementById('etq-lote').classList.toggle = (c, on) => toggles.push([c, on]);

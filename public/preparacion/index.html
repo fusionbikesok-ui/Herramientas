@@ -1276,7 +1276,7 @@ async function bajarEtiquetasMl(claves){
       ETQ_SEL={};
     }
     var nOk=(r.body.aceptados||[]).length;
-    etqAviso((nOk?'PDF bajado: '+nOk+' etiqueta(s). ':'No se bajó ninguna etiqueta. ')+(bloqueado?'El navegador bloqueó la ventana del PDF: permitila para imprimir. ':'')+(rech.length?'Rechazadas: '+rech.map(function(x){return x.clave.replace('ml:','#')+' — '+x.motivo;}).join(' · '):''));
+    etqAviso((nOk?(bloqueado?'PDF generado ('+nOk+' etiqueta(s)) pero el navegador bloqueó la ventana: permitila y volvé a bajarlas para imprimir. ':'PDF bajado: '+nOk+' etiqueta(s). '):'No se bajó ninguna etiqueta. ')+(rech.length?'Rechazadas: '+rech.map(function(x){return x.clave.replace('ml:','#')+' — '+x.motivo;}).join(' · '):''));
     if(VISTA==='pendientes')cargarPendientes();
   }catch(e){etqAviso('No se pudieron bajar las etiquetas: '+e.message);}
 }
