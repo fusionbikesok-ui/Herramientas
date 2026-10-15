@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { openDb } from '../db/index.js';
+import { encolarTrabajo } from '../lib/trabajosRecurso.js';
 import { estadoRamp, evaluarRamp, tocaScan, frescuraVigenteMs, medirCoberturaWebhook, proyeccionItemsRota, _LIMPIAS_PARA_SUBIR } from '../lib/mlScanRamp.js';
 
 const limpias = (db, n) => db.prepare('UPDATE ml_scan_ramp SET corridas_limpias=? WHERE id=1').run(n);
@@ -135,6 +136,20 @@ describe('métrica de cobertura del webhook', () => {
     db.prepare(`INSERT INTO integration_jobs (event_id,job_type,available_at,status)
       VALUES ('e2','item.project',?, 'dead_lettered')`).run(new Date().toISOString());
     expect(proyeccionItemsRota(db)).toBe(true);
+    db.close();
+  });
+
+  it('detecta la proyección rota por trabajos_recurso item.project (muerto o fallando reciente)', () => {
+    const db = openDb(':memory:');
+    expect(proyeccionItemsRota(db)).toBe(false);
+    encolarTrabajo(db, { tipo: 'item.project', recurso: 'MLA7' });
+    expect(proyeccionItemsRota(db)).toBe(false);
+    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 2, ultimo_error = 'boom' WHERE recurso = 'MLA7'").run();
+    expect(proyeccionItemsRota(db)).toBe(true);
+    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 0, ultimo_error = NULL, estado = 'muerto' WHERE recurso = 'MLA7'").run();
+    expect(proyeccionItemsRota(db)).toBe(true);
+    db.prepare("UPDATE trabajos_recurso SET actualizado_en = ? WHERE recurso = 'MLA7'").run(new Date(Date.now() - 3 * 3600 * 1000).toISOString());
+    expect(proyeccionItemsRota(db)).toBe(false);
     db.close();
   });
 });
