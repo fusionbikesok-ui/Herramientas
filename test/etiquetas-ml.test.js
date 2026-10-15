@@ -225,3 +225,25 @@ describe('POST /etiquetas-ml', () => {
     expect([401, 403]).toContain(r.status);
   });
 });
+
+describe('GET /pendientes: campos de etiqueta', () => {
+  it('ML: etiqueta_ml (elegible/motivo/última descarga) y chips; «etiqueta ✓» solo con foto vigente', async () => {
+    const a = orden(); const b = orden({ conFotos: false });
+    for (const o of [a, b]) {
+      db.prepare(`INSERT INTO pedidos_cache (clave, canal, ml_order_id, numero_pedido, comprador, fecha, estado_envio, items_json, actualizado_en)
+        VALUES (?, 'ml', ?, ?, 'C', ?, 'pendiente', '[]', ?)`).run(o.clave, o.orderId, o.orderId, new Date().toISOString(), new Date().toISOString());
+    }
+    db.prepare('INSERT INTO etiquetas_ml_descargas (clave, shipment_id, usuario, descargado_en) VALUES (?,?,?,?)').run(a.clave, a.sid, 'ana', '2026-10-15T10:00:00.000Z');
+    db.prepare("UPDATE preparaciones SET etiqueta_cargada_en=?, etiqueta_origen='foto' WHERE id=?").run(new Date().toISOString(), a.id);
+    const r = await request(app).get('/api/preparacion/pendientes');
+    const pa = r.body.data.find((x) => x.ml_order_id === a.orderId);
+    const pb = r.body.data.find((x) => x.ml_order_id === b.orderId);
+    expect(pa.etiqueta_ml).toMatchObject({ elegible: true, descargada_por: 'ana' });
+    expect(pa.etiqueta_foto).toBe(true);
+    expect(pa.falta_etiqueta).toBe(false);
+    expect(pb.etiqueta_ml).toMatchObject({ elegible: false, motivo: 'faltan fotos' });
+    expect(pb.etiqueta_foto).toBe(false);
+    expect(pb.falta_etiqueta).toBe(true);
+  });
+});
+

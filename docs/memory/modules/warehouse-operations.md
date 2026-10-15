@@ -205,3 +205,11 @@ Verificado leyendo el código, no la documentación. Contradice lo que sugieren 
 - El callback diferido de 4,5 segundos fija el ID de preparación al programarse y no usa un PREP
   mutable después de navegación; los errores de envío muestran reintento/estado en vez de excepción
   sin manejar.
+
+## Etiquetas en Preparación (2026-10-15)
+
+- «Falta etiqueta» se deriva de `preparaciones.etiqueta_cargada_en IS NULL` (marca durable, sobrevive a la purga de la foto). Orígenes: `foto`, `historico_inferido` (backfill de la migración 133), `sin_foto` (resolución con motivo).
+- `envio_confirmado_en`: web = paso 2 de Seguimientos; ML = despacho (triggers sobre `despacho_controles`) o salida de lote de miembros confirmados. Un pedido WC creado desde ML jamás se modifica: ninguna salida de lote hace PUT a Woo.
+- Esquema de la 133 en `lib/etiquetasPreparacion.js` (lo llaman la migración, con backfill, y `ensureTables`, sin él).
+- Bajar etiquetas ML: `lib/etiquetasMl.js` + `mlFetchBinario` (`lib/mlClient.js`). Elegibilidad por envío (packs: todas las órdenes con fotos `listo`, membresía consultada a ML, fail-closed).
+- UI: Más → «Etiquetas pendientes»; «Pedidos a preparar» ya no incrusta la lista de recolección (enlace a «Productos a buscar»).

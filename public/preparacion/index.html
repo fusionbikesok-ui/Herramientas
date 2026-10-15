@@ -371,6 +371,7 @@
       <summary class="tab" aria-haspopup="true">Más ▾</summary>
       <div class="mas-panel" role="menu">
         <span class="mas-grupo">Consulta</span>
+        <button class="mas-item" data-v="cierres" onclick="ir('cierres')">Etiquetas pendientes</button>
         <button class="mas-item" data-v="historial" onclick="ir('historial')">Historial</button>
         <button class="mas-item" data-v="hoja-ml" onclick="ir('hoja-ml')">Hoja MercadoLibre</button>
         <span class="mas-grupo">Despacho</span>
@@ -503,6 +504,7 @@ function ir(v){
   else if(v==='hoja-andreani'){DESP.canal='web';cargarHojaDespachos();}
   else if(v==='lotes')cargarLotes();
   else if(v==='etiquetas')cargarEtiquetas();
+  else if(v==='cierres')cargarCierres();
   else if(v==='seguimientos')cargarSeguimientos();
   else if(v==='historial')cargarHistorial();
   else if(v==='cerradas')cargarCerradas();
@@ -967,7 +969,8 @@ function renderPendientes(){
   html+=renderAbiertas();
   if(PEND_STATUS==='ready'){
     html+='<input type="search" class="seg-search pend-buscador" placeholder="Buscá por número, pack o comprador…" value="'+esc(PEND_FILTRO)+'" onchange="PEND_FILTRO=this.value;aplicarFiltroPendientes()" oninput="PEND_FILTRO=this.value;aplicarFiltroPendientes()">';
-    html+=renderListaRecoleccion(visibles);
+    html+=etqBarraLoteHtml();
+    if(visibles.length)html+='<p class="sub" style="margin:6px 0">🔎 '+contarProductosABuscar(visibles)+' productos para buscar → <a href="#" onclick="ir(\'recoleccion\');return false">Ver lista</a></p>';
   }
   if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
   else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini" style="min-height:44px" onclick="cargarPendientes()">Reintentar</button></div>';
@@ -1191,6 +1194,7 @@ function despachoSla(p){
   return '<div class="ped-nota despacho-sla">'+lineas.join(' · ')+'</div>';
 }
 
+function contarProductosABuscar(pedidos){var k={};pedidos.forEach(function(p){(p.items||[]).forEach(function(i){k[i.sku||i.nombre||'']=1;});});return Object.keys(k).length;}
 function cardPendiente(p){
   var nuevoDesde=PEND_NUEVOS[clavePendiente(p)];
   var marcaNuevo=nuevoDesde ? '<span class="ped-nuevo" aria-label="Pedido nuevo, ingresado '+(haceMin(new Date(nuevoDesde).toISOString())||'recién')+'">NUEVO · hace '+(haceMin(new Date(nuevoDesde).toISOString())||'menos de 1 min')+'</span>' : '';
@@ -1198,7 +1202,8 @@ function cardPendiente(p){
   var estado='';
   if(p.estado_preparacion==='en_preparacion')estado='<span class="badge b-warn">en preparación</span>';
   var accion=p.preparacion_id&&p.estado_preparacion==='en_preparacion'?'Continuar →':'Preparar →';
-  if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge b-ok">etiqueta ✓</span>';
+  if(p.canal==='web'&&p.etiqueta_lista)estado+=' <span class="badge">etiqueta generada</span>';
+  estado+=etqChipsHtml(p);
   // E-4: sub-estado del envío ML (llega por webhook `shipments`): etiqueta impresa / envío demorado.
   if(p.canal!=='web'&&p.substatus==='printed')estado+=' <span class="badge b-ok">Etiqueta lista</span>';
   if(p.canal!=='web'&&(p.substatus==='stale'||p.substatus==='delayed'))estado+=' <span class="badge b-warn">Demorado</span>';
@@ -1212,8 +1217,148 @@ function cardPendiente(p){
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
     +nota+despacho
-    +'<div class="ped-foot">'+estado+'<button class="btn mini" style="margin-left:auto">'+accion+'</button></div>'
+    +'<div class="ped-foot" style="flex-wrap:wrap;gap:6px">'+estado+etqBotonMl(p)+'<button class="btn mini" style="margin-left:auto">'+accion+'</button></div>'
     +'</div>';
+}
+
+// ── Etiquetas: bajar PDF de ML y listas de cierre pendiente (spec 2026-10-15-etiquetas-preparacion) ──
+var ETQ_SEL={};   // claves ml: tildadas en "Pedidos a preparar"
+function etqFechaHora(v){try{return new Date(v).toLocaleString('es-AR',{timeZone:'America/Argentina/Buenos_Aires',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return v||'';}}
+function etqChipsHtml(p){
+  var h='';
+  if(p.etiqueta_foto)h+=' <span class="badge b-ok">etiqueta ✓</span>';
+  else if(p.falta_etiqueta&&p.estado_preparacion)h+=' <span class="badge b-warn">Falta etiqueta</span>';
+  return h;
+}
+function etqBotonMl(p){
+  if(p.canal==='web'||!p.etiqueta_ml)return '';
+  var e=p.etiqueta_ml, clave='ml:'+p.ml_order_id;
+  if(!e.elegible)return '<span class="ped-nota" title="No se puede bajar la etiqueta todavía">🖨 Etiqueta: '+esc(e.motivo||'no disponible')+'</span>';
+  var aviso=e.descargada_en?'PDF bajado el '+esc(etqFechaHora(e.descargada_en))+(e.descargada_por?' por '+esc(e.descargada_por):''):(e.impresa_en_ml?'Ya impresa en ML':'');
+  return '<label class="etq-sel" onclick="event.stopPropagation()"><input type="checkbox" '+(ETQ_SEL[clave]?'checked ':'')+'onchange="etqTildar(\''+clave+'\',this.checked)"> elegir</label>'
+    +'<button type="button" class="btn sec mini" style="min-height:44px" onclick="event.stopPropagation();bajarEtiquetasMl([\''+clave+'\'])">🖨 Etiqueta</button>'
+    +(aviso?'<span class="ped-nota">'+aviso+'</span>':'');
+}
+function etqTildar(clave,on){if(on)ETQ_SEL[clave]=true;else delete ETQ_SEL[clave];etqActualizarBarra();}
+function etqActualizarBarra(){
+  var n=Object.keys(ETQ_SEL).length, b=document.getElementById('etq-lote');
+  if(!b)return;
+  b.style.display=n?"flex":"none";b.querySelector('button').textContent='Bajar etiquetas ('+n+')';
+}
+function etqBarraLoteHtml(){return '<div id="etq-lote" class="jornada-note" style="display:none;gap:10px;align-items:center"><button type="button" class="btn" style="min-height:44px" onclick="bajarEtiquetasMl(Object.keys(ETQ_SEL))">Bajar etiquetas</button><span id="etq-msg" role="status"></span></div>';}
+async function bajarEtiquetasMl(claves){
+  if(!claves||!claves.length)return;
+  var msg=document.getElementById('etq-msg');
+  flash('ok','Bajando etiquetas…');
+  try{
+    var r=await api('/etiquetas-ml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({claves:claves})});
+    if(!r.body.ok){flash('err',r.body.error||'No se pudieron bajar las etiquetas');return;}
+    var rech=r.body.rechazados||[];
+    if(r.body.pdf_base64){
+      var bin=atob(r.body.pdf_base64), bytes=new Uint8Array(bin.length);
+      for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+      var url=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
+      var w=window.open(url,'_blank');
+      if(!w)flash('warn','El navegador bloqueó la ventana del PDF: permitila para imprimir.');
+      ETQ_SEL={};
+    }
+    flash(rech.length?'warn':'ok',(r.body.aceptados||[]).length+' etiqueta(s) bajadas'+(rech.length?' · '+rech.length+' rechazada(s): '+rech.map(function(x){return x.clave.replace('ml:','#')+' ('+x.motivo+')';}).join(', '):''));
+    if(msg)msg.textContent=rech.length?'Rechazadas: '+rech.map(function(x){return x.clave.replace('ml:','#')+' — '+x.motivo;}).join(' · '):'';
+    if(VISTA==='pendientes')cargarPendientes();
+  }catch(e){flash('err','No se pudieron bajar las etiquetas: '+e.message);}
+}
+
+// Vista «Etiquetas pendientes»: Falta etiqueta · Falta seguimiento · No salieron con el lote.
+var CIERRES={etq:{items:[],total:0,cursor:null},seg:{items:[],total:0,cursor:null},nos:{items:[],total:0}};
+async function cargarCierres(){
+  var c=document.getElementById('cuerpo'); c.innerHTML='<div class="loading">Cargando…</div>';
+  CIERRES={etq:{items:[],total:0,cursor:null},seg:{items:[],total:0,cursor:null},nos:{items:[],total:0}};
+  try{
+    await Promise.all([cierresMas('etq'),cierresMas('seg'),cierresNoSalieron()]);
+    renderCierres();
+  }catch(e){c.innerHTML='<div class="loading err" role="alert">No se pudo cargar: '+esc(e.message)+'</div>';}
+}
+async function cierresMas(k){
+  var ruta=k==='etq'?'/falta-etiqueta':'/falta-seguimiento', s=CIERRES[k];
+  var r=await api(ruta+'?limit=50'+(s.cursor?'&cursor='+encodeURIComponent(s.cursor):''));
+  if(!r.body.ok)throw new Error(r.body.error||'error');
+  s.items=s.items.concat(r.body.items||[]);s.total=r.body.total||0;s.cursor=r.body.next_cursor||r.body.cursor||null;
+}
+async function cierresNoSalieron(){var r=await api('/no-salieron');if(!r.body.ok)throw new Error(r.body.error||'error');CIERRES.nos={items:r.body.items||[],total:r.body.total||0};}
+function cierreAccionesHtml(f,k){
+  var a=f.acciones||[], id=Number(f.id), h='';
+  if(a.indexOf('subir_foto')>=0||a.indexOf('completar_envio')>=0)h+='<button type="button" class="btn mini" style="min-height:44px" onclick="cierreSubirFoto('+id+')">📷 '+(a.indexOf('completar_envio')>=0?'Completar envío (foto)':'Subir foto con etiqueta')+'</button>';
+  if(f.canal==='web'&&f.wc_order_id&&(a.indexOf('completar_envio')>=0||a.indexOf('confirmar_envio')>=0||a.indexOf('reintentar')>=0))
+    h+='<input id="cierre-trk-'+id+'" class="seg-search" style="max-width:220px" placeholder="Tracking Andreani" aria-label="Tracking" value="'+esc(f.tracking||'')+'"><button type="button" class="btn mini" style="min-height:44px" onclick="cierreTracking('+id+','+Number(f.wc_order_id)+')">Guardar tracking</button>';
+  if(a.indexOf('salio_sin_foto')>=0)h+='<button type="button" class="btn sec mini" style="min-height:44px" onclick="cierreResolver('+id+',\'salio-sin-foto\')">Salió sin foto</button>';
+  if(a.indexOf('descartar')>=0)h+='<button type="button" class="btn sec mini" style="min-height:44px" onclick="cierreResolver('+id+',\'descartar-envio\')">Descartar con motivo</button>';
+  return h;
+}
+function cierreFilaHtml(f,k){
+  var estado={sin_seguimiento:'sin seguimiento',envio_incierto:'envío incierto',abandonado:'tracking abandonado',asociado_sin_confirmar:'tracking sin confirmar',anulado_con_envio_pendiente:'anulado en Woo'}[f.estado_envio]||'';
+  return '<div class="ped" data-prep="'+Number(f.id)+'"><div class="ped-top"><span class="ped-num">#'+esc(f.numero_pedido||f.clave)+'</span><span class="badge '+(f.canal==='web'?'b-web':'b-ml')+'">'+(f.canal==='web'?'WEB':'ML')+'</span></div>'
+    +'<div class="ped-cli">'+esc(f.comprador||'—')+(f.completado_en?' · cerrado '+esc(etqFechaHora(f.completado_en)):'')+'</div>'
+    +(f.foto_etiqueta_pendiente?'<div class="ped-nota">Foto de etiqueta: '+esc(f.foto_etiqueta_pendiente==='error'?'falló, subila de nuevo':'procesándose…')+'</div>':'')
+    +(estado?'<div class="ped-nota">'+esc(estado)+'</div>':'')+(f.salio?'<div class="ped-nota">El envío ya salió</div>':'')
+    +'<div class="ped-foot" style="flex-wrap:wrap;gap:8px">'+cierreAccionesHtml(f,k)+'</div><div class="ped-nota" id="cierre-msg-'+Number(f.id)+'" role="status"></div></div>';
+}
+function renderCierres(){
+  var c=document.getElementById('cuerpo');
+  function seccion(titulo,k,vacio){
+    var s=CIERRES[k];
+    return '<section class="seg-section"><h2>'+titulo+' <span class="seg-count">'+s.total+'</span></h2>'
+      +(s.items.length?'<div class="ped-grid">'+s.items.map(function(f){return cierreFilaHtml(f,k);}).join('')+'</div>':'<div class="seg-ok">'+vacio+'</div>')
+      +(s.cursor&&s.items.length<s.total?'<button type="button" class="btn sec" style="min-height:44px" onclick="cierresCargarMas(\''+k+'\')">Cargar más</button>':'')+'</section>';
+  }
+  var nos=CIERRES.nos;
+  c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarCierres()">Recargar</button></div>'
+    +seccion('Falta etiqueta','etq','✓ Todas las etiquetas están cargadas.')
+    +seccion('Falta seguimiento','seg','✓ No hay envíos web sin seguimiento.')
+    +'<section class="seg-section"><h2>No salieron con el lote <span class="seg-count">'+nos.total+'</span></h2>'
+    +(nos.items.length?'<div class="ped-grid">'+nos.items.map(function(f){var p=(f.preparaciones||[])[0];return p?cierreFilaHtml({id:p.id,canal:p.canal,numero_pedido:p.numero_pedido,comprador:p.comprador,clave:p.clave,acciones:['descartar'],wc_order_id:null},'nos'):'';}).join('')+'</div>':'<div class="seg-ok">✓ Todos los miembros salieron.</div>')+'</section>';
+}
+async function cierresCargarMas(k){try{await cierresMas(k);renderCierres();}catch(e){flash('err',e.message);}}
+function cierreMsg(id,t){var el=document.getElementById('cierre-msg-'+id);if(el)el.textContent=t;}
+function cierreSubirFoto(id){
+  var inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.capture='environment';
+  inp.onchange=async function(){
+    if(!inp.files||!inp.files[0])return;
+    cierreMsg(id,'Subiendo foto…');
+    var fd=new FormData();fd.append('archivo',inp.files[0]);fd.append('upload_id','etq-'+id+'-'+Date.now());
+    try{
+      var r=await fetch('/api/preparacion/'+id+'/foto-etiqueta',{method:'POST',body:fd}), b=await r.json().catch(function(){return{};});
+      if(!r.ok||!b.ok){cierreMsg(id,'No se subió: '+(b.error||('HTTP '+r.status))+'. Volvé a intentar.');return;}
+      cierreMsg(id,'Foto guardada; se está procesando. Cuando termine, actualizá la lista.');
+      flash('ok','Foto con etiqueta guardada');
+    }catch(e){cierreMsg(id,'No se subió: '+e.message+'. Volvé a intentar.');}
+  };
+  inp.click();
+}
+async function cierreTracking(id,wcId){
+  var input=document.getElementById('cierre-trk-'+id), t=(input&&input.value||'').trim();
+  if(!t){cierreMsg(id,'Escribí el tracking.');return;}
+  cierreMsg(id,'Guardando…');
+  try{
+    var r=await enviarTracking(wcId,t);
+    if(r.body.ok){flash('ok','Seguimiento guardado');cargarCierres();return;}
+    if(r.body.code==='FOTO_ETIQUETA_PROCESANDO'){cierreMsg(id,'La foto se está procesando, reintentá en unos segundos (no hace falta volver a subirla).');return;}
+    if(r.body.code==='FOTO_ETIQUETA_REQUERIDA'){cierreMsg(id,'Falta la foto con la etiqueta: subila primero.');return;}
+    cierreMsg(id,r.body.incierto||r.body.colgado?mensajeResultadoTracking(r.body):('No se guardó: '+(r.body.error||'error')));
+  }catch(e){cierreMsg(id,'No se guardó: '+e.message);}
+}
+function cierreResolver(id,ruta){
+  var el=document.getElementById('cierre-msg-'+id); if(!el)return;
+  el.innerHTML='<input id="cierre-motivo-'+id+'" class="seg-search" style="max-width:260px" maxlength="300" aria-label="Motivo" placeholder="Motivo (obligatorio)"> <button type="button" class="btn mini" style="min-height:44px" onclick="cierreConfirmar('+id+',\''+ruta+'\')">Confirmar</button>';
+  var i=document.getElementById('cierre-motivo-'+id); if(i)i.focus();
+}
+async function cierreConfirmar(id,ruta){
+  var i=document.getElementById('cierre-motivo-'+id), m=(i&&i.value||'').trim();
+  if(!m){cierreMsg(id,'El motivo es obligatorio.');return;}
+  try{
+    var r=await api('/'+id+'/'+ruta,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:m})});
+    if(r.body.ok){flash('ok','Resuelto');cargarCierres();return;}
+    cierreMsg(id,'No se pudo: '+(r.body.error||'error'));
+  }catch(e){cierreMsg(id,'No se pudo: '+e.message);}
 }
 
 async function cargarHorarios(){
@@ -2568,7 +2713,11 @@ async function completarPreparacion(){
 function completarTrasRespuesta(body){
   if(body.ok){
     if(body.estado==='pendiente_deposito')alert('Quedó PENDIENTE DE DEPÓSITO: el depósito completa los ítems delegados desde su celular (Historial → pendientes de depósito).');
-    if(body.estado==='completada'&&PREP.canal==='web')abrirFlujoTracking();
+    if(body.estado==='completada'&&PREP.canal==='web'&&body.falta_etiqueta){
+      // Sin foto con etiqueta no se abre el tracking (el servidor lo rechazaría): se deriva a «Etiquetas pendientes».
+      flash('warn','Preparación cerrada — falta la foto con etiqueta. Completala en Más → Etiquetas pendientes.');
+      refrescarDetalle();
+    }else if(body.estado==='completada'&&PREP.canal==='web')abrirFlujoTracking();
     else refrescarDetalle();
   }else flash('bad',body.error||'error');
 }

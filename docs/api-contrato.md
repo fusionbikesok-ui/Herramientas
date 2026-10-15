@@ -3808,3 +3808,16 @@ Modo Publicación ML de la pestaña Vínculos. Sin parámetros de paginación la
   (~12–23 ms); página de 200 no se midió por separado (el test exige < 200 KB); respuesta vieja ≈ 8.8 MB (~140 ms, sin contar el JSON
   real de ~21 MB).
 - Reemplazo por vínculo (2026-10-11): si la marca `omitir` de la clave se reemplaza por un vínculo (saga de `decidirCasoIdentidad` o alineación local), las pausas `bloqueada_impacto` de esa clave pasan a `cancelada` con `ultimo_error` `"reemplazada por vínculo"` (historial con `variante_nueva: 'vinculo'`) y se cierra la alerta si no queda otra bloqueada.
+
+## Etiquetas en Preparación (2026-10-15)
+
+Spec: `docs/superpowers/specs/2026-10-15-etiquetas-preparacion-design.md` (v3–v23 prevalecen). Migración 133.
+
+- `POST /api/preparacion/:id/foto-etiqueta` (multipart `archivo`, `upload_id`): única vía para `paquete_etiquetado` (`POST /:id/foto` responde 400 `USAR_FOTO_ETIQUETA`). Acepta preparación abierta o `completada`; la foto vigente anterior se retira solo cuando la nueva llega a `listo`. `GET /api/preparacion/fotos/:fotoId/estado` informa `estado_proceso`.
+- `POST /api/preparacion/seguimientos/:wcOrderId`: nuevos 409 `FOTO_ETIQUETA_REQUERIDA` / `FOTO_ETIQUETA_PROCESANDO` (antes de tocar Woo).
+- `GET /api/preparacion/falta-etiqueta` y `/falta-seguimiento?cursor=&limit=50` → `{ ok, items, total, next_cursor }`; `GET /api/preparacion/no-salieron` → `{ ok, total, items }`. Cada item trae `acciones`.
+- `POST /api/preparacion/:id/salio-sin-foto` y `/:id/descartar-envio` `{ motivo, lote_id? }`: resolución con motivo, atómica y auditada (409 `ESTADO_INVALIDO`, `ENVIO_NO_CONFIRMADO`, `ETIQUETA_YA_CARGADA`, `ENVIO_YA_RESUELTO`).
+- `POST /api/preparacion/etiquetas-ml` `{ claves: ["ml:<orden>", ...] }` (1..50) → `{ ok, pdf_base64|null, aceptados:[clave], rechazados:[{clave,motivo}] }`; 502 si ML no está disponible (429/5xx/red), sin registrar nada. Registra `etiquetas_ml_descargas` («PDF bajado», no «impresa»).
+- `GET /api/preparacion/pendientes`: campos nuevos `etiqueta_foto`, `falta_etiqueta` y, en ML, `etiqueta_ml:{elegible,motivo,impresa_en_ml,descargada_en,descargada_por}`.
+- `POST /:id/completar`: la respuesta `completada` incluye `falta_etiqueta`.
+- La salida de lote ML devuelve `advertencias:[{clave,motivo:'falta_etiqueta'}]` y nunca escribe en Woo; el job `dispatch.woo` es un no-op.

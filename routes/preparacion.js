@@ -6,7 +6,7 @@ import multer from 'multer';
 import { wooFetch } from './woo.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { mlFetch } from '../lib/mlClient.js';
-import { bajarEtiquetasMl, MAX_CLAVES_ETIQUETAS } from '../lib/etiquetasMl.js';
+import { bajarEtiquetasMl, evaluarEnvioMlLocal, MAX_CLAVES_ETIQUETAS } from '../lib/etiquetasMl.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
 import { procesarColaFotos, reintentarFoto } from '../lib/fotosPreparacionCola.js';
@@ -1354,6 +1354,20 @@ export function preparacionRouter(db, cfg) {
         .catch(e => console.error('[preparacion] error disparando cola de fotos:', e.message))
     : () => {};
 
+  // Chips de etiqueta (spec A.9): «etiqueta ✓» = SOLO foto con etiqueta vigente; «Falta etiqueta» = la marca durable sigue sin cargar.
+  const chipsEtiqueta = (prep) => ({
+    etiqueta_foto: prep?.etiqueta_origen === 'foto',
+    falta_etiqueta: !!prep && !prep.etiqueta_cargada_en,
+  });
+  // Estado de la etiqueta ML para la tarjeta (botón «Etiqueta»): elegibilidad local y última descarga. La validación final (packs, ML) la hace POST /etiquetas-ml.
+  const etiquetaMlDeCard = (prep) => {
+    if (!prep) return { elegible: false, motivo: 'faltan fotos' };
+    const ev = evaluarEnvioMlLocal(db, prep);
+    const motivo = ev.motivo || faltanFotosParaPdf(prep);
+    const ultima = db.prepare('SELECT usuario, descargado_en FROM etiquetas_ml_descargas WHERE clave=? ORDER BY id DESC LIMIT 1').get(prep.clave || `ml:${prep.ml_order_id}`);
+    return { elegible: !motivo, motivo: motivo || null, impresa_en_ml: !!ev.impresaEnMl, descargada_en: ultima?.descargado_en || null, descargada_por: ultima?.usuario || null };
+  };
+
   // ── Pendientes: lee de pedidos_cache (sincronizada por cron cada 5 min) ──
   router.get('/pendientes', (req, res) => {
     try {
@@ -1375,7 +1389,7 @@ export function preparacionRouter(db, cfg) {
       const RESUELTAS = ['completada', 'pendiente_deposito', 'cerrada_sin_evidencia', 'despachada_sin_verificar', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado'];
       const data = rows
         .map(row => {
-          const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(row.clave);
+          const prep = db.prepare('SELECT id, estado, etiqueta_lista, ml_order_id, etiqueta_cargada_en, etiqueta_origen FROM preparaciones WHERE clave=?').get(row.clave);
           return { row, prep };
         })
         .filter(({ prep }) => !prep || !RESUELTAS.includes(prep.estado))
@@ -1403,6 +1417,7 @@ export function preparacionRouter(db, cfg) {
             preparacion_id: prep?.id || null,
             estado_preparacion: prep?.estado || null,
             etiqueta_lista: prep?.etiqueta_lista || 0,
+            ...chipsEtiqueta(prep),
           };
         }
         return {
@@ -1423,6 +1438,8 @@ export function preparacionRouter(db, cfg) {
           items,
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
+          ...chipsEtiqueta(prep),
+          etiqueta_ml: etiquetaMlDeCard(prep),
         };
       });
       const ultimoLog = db.prepare(
@@ -3533,7 +3550,7 @@ export function preparacionRouter(db, cfg) {
     if (!completada) {
       return res.status(409).json({ ok: false, error: 'la preparación cambió de estado mientras se completaba, volvé a intentarlo' });
     }
-    res.json({ ok: true, estado: 'completada' });
+    res.json({ ok: true, estado: 'completada', falta_etiqueta: !db.prepare('SELECT etiqueta_cargada_en FROM preparaciones WHERE id=?').get(prep.id)?.etiqueta_cargada_en });
   });
 
   // ── Reabrir una preparación cerrada sin evidencia ──
