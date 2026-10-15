@@ -44,9 +44,10 @@ export function allowedTarget(raw, method='GET') {
   if(u.pathname==='/andreani/'&&[...u.searchParams.keys()].every(k=>['status','from','to','order_id','page'].includes(k)&&u.searchParams.getAll(k).length===1))return {kind:'andreani',local};
   if(u.pathname==='/andreani/api'&&!u.search)return {kind:'andreani-api',local};
   if(u.pathname==='/andreani/download'&&[...u.searchParams.keys()].join(',')==='id')return {kind:'andreani-download',local};
-  if (['/assets/management.css', '/assets/catalog-ui.js', '/assets/directory.js', '/assets/directory.css','/assets/metrics.js','/assets/metrics.css','/assets/sales-core.js'].includes(u.pathname)) return { kind: 'asset', local };
+  if (['/assets/management.css', '/assets/catalog-ui.js', '/assets/directory.js', '/assets/directory.css','/assets/metrics.js','/assets/metrics.css','/assets/sales-core.js','/assets/stock-report.js','/assets/stock-report.css'].includes(u.pathname)) return { kind: 'asset', local };
+  if (u.pathname === '/ventas/stock/' && !u.search) return { kind: 'stock-page', local };
   if (u.pathname === '/ventas/' && !u.search) return { kind: 'metrics', local };
-  if (u.pathname === '/ventas/api' && [...u.searchParams.keys()].every(k=>['kind','from','to','statuses[]','bike_categories[]','brand','model','page','generation','filter_kind','filter_brands[]','currency','category','country','state','city','search','mode','channel','modelKey','variant','quality','saleState','category[]'].includes(k))) return { kind: 'metrics-api', local };
+  if (u.pathname === '/ventas/api' && [...u.searchParams.keys()].every(k=>['kind','from','to','statuses[]','bike_categories[]','brand','model','page','generation','filter_kind','filter_brands[]','currency','category','country','state','city','search','mode','channel','modelKey','variant','quality','saleState','category[]','days','cover'].includes(k))) return { kind: 'metrics-api', local };
   if (u.pathname === '/directory/' && !u.search) return { kind: 'directory', local };
   if (u.pathname === '/directory/api' && [...u.searchParams.keys()].every(k=>['kind','q','page','id'].includes(k))) return { kind: 'directory-api', local };
   if (u.pathname.startsWith('/wp-json/')) {
@@ -101,7 +102,7 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
   if (!secret || secret.length < 64) throw new Error('Missing signing key');
   const catalog = createLocalCatalog({ port: authPort, ...(catalogRead ? { read: catalogRead } : {}) });
   const directory = directoryRead || createDirectory();
-  const metrics = metricsRead || createMetrics();
+  const metrics = metricsRead || createMetrics({authPort,catalogRead});
   const andreani=andreaniHandle||createAndreani({worker:createAndreaniWorker({secret,host:upstreamHost,port:upstreamPort})});
   const pdf=pdfHandle||createPdfProxy(secret);
   const pos=posHandle||createPos({catalog});
@@ -125,6 +126,8 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
     ['/assets/directory.js', ['directory.js', 'text/javascript']],
     ['/assets/directory.css', ['directory.css', 'text/css']],
     ['/assets/metrics.js', ['metrics.js', 'text/javascript']],
+    ['/assets/stock-report.js', ['stock-report.js', 'text/javascript']],
+    ['/assets/stock-report.css', ['stock-report.css', 'text/css']],
     ['/assets/sales-core.js', ['sales-core.js', 'text/javascript']],
     ['/assets/metrics.css', ['metrics.css', 'text/css']],
     ['/assets/andreani.js', ['andreani.js', 'text/javascript']],
@@ -217,6 +220,7 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
       }
       if (target.kind === 'home') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : home); }
       if (target.kind === 'directory') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('./directory.html', import.meta.url))); }
+      if (target.kind === 'stock-page') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('./stock-report.html', import.meta.url))); }
       if (target.kind === 'metrics') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('./metrics.html', import.meta.url))); }
       const asset = assets.get(new URL(target.local, 'http://private.invalid').pathname);
       if (asset) {
@@ -226,7 +230,7 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
       }
       const localMetrics = metricsRoute(target.local);
       if (localMetrics) {
-        try { const data=metrics(localMetrics);res.setHeader('X-Fusion-Metrics-Source','vps-local');if(typeof data.csv==='string'){res.writeHead(200,{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="fusion-ventas-detalle.csv"'});return res.end(req.method==='HEAD'?'':data.csv);}return json(res,200,req.method==='HEAD'?null:data); }
+        try { const data=await metrics(localMetrics,req.headers.cookie || '');res.setHeader('X-Fusion-Metrics-Source','vps-local');if(typeof data.csv==='string'){res.writeHead(200,{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="fusion-ventas-detalle.csv"'});return res.end(req.method==='HEAD'?'':data.csv);}return json(res,200,req.method==='HEAD'?null:data); }
         catch(error) { return json(res,error instanceof MetricsError?error.status:503,{success:false,data:error instanceof MetricsError?error.message:'No se pudo consultar la copia local de ventas.'}); }
       }
       const localDirectory = directoryRoute(target.local);

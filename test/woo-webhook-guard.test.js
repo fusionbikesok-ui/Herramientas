@@ -91,6 +91,18 @@ describe('guardia de webhooks Woo', () => {
     expect(l).toHaveBeenCalledTimes(1);
   });
 
+  it('alta de los 3 webhooks nuevos (created/deleted/restored): con la lista fresca el primer aviso es un 401 TRANSITORIO (Woo reintenta) y a los 30 s los acepta', async () => {
+    // La lista se leyó hace poco y todavía no incluía los IDs recién creados por el script de alta.
+    const l = vi.fn().mockResolvedValueOnce([7]).mockResolvedValue([7, 21, 22, 23]);
+    await verificarWebhookWoo(db, {}, req(JSON_PEDIDO), 'order', { listar: l });
+    const primero = await verificarWebhookWoo(db, {}, req(JSON_PEDIDO, { topic: 'order.created', id: '21' }), 'order', { listar: l });
+    expect(primero).toMatchObject({ ok: false, status: 401 }); // 401 y no 4xx definitivo: Woo reintenta la entrega
+    _envejecerListaWooWebhookAuth(31_000);
+    for (const [topic, id] of [['order.created', '21'], ['order.deleted', '22'], ['order.restored', '23']]) {
+      expect(await verificarWebhookWoo(db, {}, req(JSON_PEDIDO, { topic, id }), 'order', { listar: l })).toEqual({ ok: true });
+    }
+  });
+
   it('single-flight: avisos simultáneos comparten UNA lectura de la lista', async () => {
     let n = 0;
     const l = vi.fn(async () => { n++; await new Promise((r) => setTimeout(r, 30)); return [7]; });

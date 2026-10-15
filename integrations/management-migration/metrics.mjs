@@ -1,3 +1,6 @@
+import {createStockReport,StockReportError} from './stock-report.mjs';
+import {readLocalCatalog} from './local-catalog.mjs';
+import {createCommercial,CommercialError} from './commercial.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
@@ -23,7 +26,7 @@ export function lineRows(order,products,options,query){
    order:order.id,date:order.date,currency:order.currency,country:order.country,state:options.states?.[order.country]?.[order.state]||order.state,city:order.city,quantity:item.quantity,amount:item.amount};
  });
 }
-export function createMetrics({path=fileURLToPath(new URL('./directory-cache/metrics.sqlite',import.meta.url)),statusPath=fileURLToPath(new URL('./directory-cache/metrics-status.json',import.meta.url)),batchSize=500}={}){
+function createLegacyMetrics({path=fileURLToPath(new URL('./directory-cache/metrics.sqlite',import.meta.url)),statusPath=fileURLToPath(new URL('./directory-cache/metrics-status.json',import.meta.url)),batchSize=500}={}){
  return params=>{
   const allowed=['kind','from','to','statuses[]','bike_categories[]','brand','model','page','generation','filter_kind','filter_brands[]','currency','category','country','state','city','search'];
   for(const key of params.keys())if(!allowed.includes(key)||(!key.endsWith('[]')&&params.getAll(key).length!==1))invalid('Parámetro inválido.');
@@ -58,4 +61,11 @@ export function createMetrics({path=fileURLToPath(new URL('./directory-cache/met
    return {success:true,data:{rows,pages:Math.ceil(total/batchSize),total,unassigned:orders.filter(o=>o.unassigned).length,snapshot}};
   }finally{db.close();}
  };
+}
+
+export function createMetrics(options={}){
+ const legacy=createLegacyMetrics(options),commercial=createCommercial({metricsPath:options.path,mlPath:options.mlPath,statusPath:options.statusPath});
+ const stock=createStockReport({readSales:commercial,readCatalog:options.catalogRead||((cookie)=>readLocalCatalog(cookie,options.authPort||3001)),now:options.now});
+ const fail=e=>{if(e instanceof CommercialError||e instanceof StockReportError)throw new MetricsError(e.message,e.status);throw e;};
+ return (params,cookie='')=>{try{if(params.get('mode')==='stock')return stock(params,cookie).catch(fail);return params.get('mode')==='commercial'?commercial(params):legacy(params);}catch(e){return fail(e);}};
 }

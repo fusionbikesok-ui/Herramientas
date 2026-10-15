@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="../lib/theme.css">
   <link rel="stylesheet" href="../lib/components.css">
   <link rel="stylesheet" href="./style.css?v=24c2add48961">
-  <script type="module" src="./app.js?v=6361528eda4d"></script>
+  <script type="module" src="./app.js?v=83f76fa0c5f1"></script>
 </head>
 <body>
   <a class="skip-link" href="#inbox">Ir a conversaciones</a>
@@ -66,7 +66,7 @@
           <p id="composer-help" class="composer-help"></p>
           <div id="reply-context" class="reply-context" hidden><div><strong>Respondiendo a</strong><p id="reply-context-text"></p></div><button type="button" id="reply-cancel" class="ui-btn" aria-label="Cancelar respuesta citada">×</button></div><label class="sr-only" for="message-input">Escribir respuesta</label><textarea id="message-input" class="ui-input message-input" rows="2" maxlength="4096" placeholder="Escribí tu respuesta…" aria-describedby="composer-help keyboard-help"></textarea>
           <div id="recording-panel" class="recording-panel" hidden><div class="recording-top"><strong id="recording-status" role="status"></strong><div class="recording-actions"><button id="stop-recording" class="ui-btn" type="button">■ Detener</button><button id="discard-recording" class="ui-btn" type="button">Descartar audio</button></div></div><audio id="recording-preview" controls preload="metadata" aria-label="Escuchar el audio antes de enviarlo" hidden></audio><p id="recording-help" class="meta">El audio se envía únicamente al pulsar Enviar audio.</p></div>
-          <div id="attachment" class="attachment" hidden><img id="attachment-image" class="attachment-image" alt="Foto del producto adjunta" hidden><span id="attachment-name"></span><button id="remove-file" type="button" class="ui-btn" aria-label="Quitar archivo adjunto">Quitar</button></div>
+          <div id="attachment" class="attachment" hidden><img id="attachment-image" class="attachment-image" alt="Vista previa de la imagen adjunta" hidden><span id="attachment-name"></span><button id="remove-file" type="button" class="ui-btn" aria-label="Quitar archivo adjunto">Quitar</button></div>
           <div class="composer-bottom"><div class="file-controls" role="group" aria-label="Compartir en la conversación"><button id="attach" type="button" class="ui-btn">+ Archivo</button><button id="record-audio" type="button" class="ui-btn" title="Grabar un mensaje de voz">+ Audio</button><button id="share-product" type="button" class="ui-btn">+ Producto</button><button id="share-invoice" type="button" class="ui-btn" aria-describedby="commerce-help">+ Factura</button><button id="share-tracking" type="button" class="ui-btn">+ Seguimiento</button><button id="use-template" type="button" class="ui-btn" hidden>+ Plantilla</button><input id="file-input" type="file" accept="image/jpeg,image/png,image/webp,application/pdf,audio/mpeg,audio/ogg,audio/mp4,audio/aac,video/mp4,.m4a,.ogg" hidden><span id="file-help" class="sr-only">Imagen, audio, video o PDF</span></div><button id="send" class="ui-btn ui-btn--primario" type="submit">Enviar respuesta</button></div><p id="commerce-help" class="commerce-help" hidden></p><p id="keyboard-help" class="keyboard-help">Enter envía · Shift + Enter agrega una línea</p>
         </form>
       </div>

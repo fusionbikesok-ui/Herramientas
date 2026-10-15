@@ -183,6 +183,7 @@ describe('db schema', () => {
       'warranty_events',
       'warranty_stock_commitments',
       'warranty_woo_outbox',
+      'woo_orden_skus',
       'woo_webhooks_estado',
       'workshop_events',
       'workshop_evidence',
