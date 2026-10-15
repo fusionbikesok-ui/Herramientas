@@ -2794,10 +2794,14 @@ export function preparacionRouter(db, cfg) {
       db.prepare('UPDATE preparaciones SET envio_descartado_en=?, envio_descartado_motivo=?, envio_descartado_por=?, woo_paso2_pendiente=0 WHERE id=?').run(ts, motivo, req.user.username, m.id);
       registrarEvento(db, { preparacionId: m.id, itemId: null, tipo: 'envio_descartado', usuario: req.user.username, detalle: { motivo, estado: m.estado }, failClosed: true });
     }
+    // Constancia en el historial del lote: el `lote_id` pedido y, además, todo lote con salida confirmada del que este grupo quedó como miembro no confirmado
+    // (así el descarte desde «No salieron con el lote» siempre deja evento, aunque el cliente no mande el id).
+    const lotes = new Set(db.prepare(`SELECT l.id FROM despacho_lote_items li JOIN despacho_lotes l ON l.id=li.lote_id
+      JOIN despacho_controles d ON d.id=li.control_id
+      WHERE d.grupo_clave=? AND l.salida_confirmada_en IS NOT NULL AND li.estado<>'confirmado'`).all(grupo).map((r) => r.id));
     const loteId = Number(req.body?.lote_id);
-    if (Number.isInteger(loteId) && loteId > 0 && db.prepare('SELECT 1 FROM despacho_lotes WHERE id=?').get(loteId)) {
-      eventoLote(loteId, 'miembro_descartado', req.user.username, { grupo_clave: grupo, motivo });
-    }
+    if (Number.isInteger(loteId) && loteId > 0 && db.prepare('SELECT 1 FROM despacho_lotes WHERE id=?').get(loteId)) lotes.add(loteId);
+    for (const id of lotes) eventoLote(id, 'miembro_descartado', req.user.username, { grupo_clave: grupo, motivo });
     return { descartadas: miembros.length };
   }));
 

@@ -137,6 +137,16 @@ describe('POST /:id/descartar-envio', () => {
     expect(fila(b).envio_descartado_en).toBeTruthy();
     expect(db.prepare("SELECT 1 FROM despacho_lote_eventos WHERE lote_id=? AND tipo='miembro_descartado'").get(lote)).toBeTruthy();
   });
+
+  it('sin lote_id en el cuerpo, el evento igual queda en el lote del que el grupo salió sin confirmar', async () => {
+    const a = prep({ canal: 'ml' });
+    const lote = db.prepare("INSERT INTO despacho_lotes (canal, fecha_jornada, estado, creado_en, creado_por, salida_confirmada_en) VALUES ('ml','2026-10-01','cerrado',?,?,?)").run(dias(3), 'u', dias(2)).lastInsertRowid;
+    const c = db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en) VALUES (?, 'pendiente', ?, ?)").run(fila(a).clave, dias(3), dias(3)).lastInsertRowid;
+    db.prepare("INSERT INTO despacho_lote_items (lote_id, control_id, estado, agregado_en) VALUES (?,?,'esperado',?)").run(lote, c, dias(3));
+    const r = await request(app).post(`/api/preparacion/${a}/descartar-envio`).send({ motivo: 'no salió' });
+    expect(r.status).toBe(200);
+    expect(db.prepare("SELECT 1 FROM despacho_lote_eventos WHERE lote_id=? AND tipo='miembro_descartado'").get(lote)).toBeTruthy();
+  });
 });
 
 describe('POST /:id/salio-sin-foto', () => {

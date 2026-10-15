@@ -138,3 +138,56 @@ describe('cerrar una preparación web', () => {
   });
 });
 
+describe('Completar envío: polling de la foto y tracking automático', () => {
+  const respuesta = (body, status = 200) => Promise.resolve({ status, ok: status < 400, json: () => Promise.resolve(body) });
+  function fila(id, wc) {
+    ctx.document.querySelector = (sel) => (sel.includes(`data-prep="${id}"`) ? { getAttribute: () => String(wc) } : null);
+    ctx.document.getElementById(`cierre-trk-${id}`).value = '360003042094910';
+  }
+  it('al llegar a listo manda el tracking tipeado con el mismo POST /seguimientos', async () => {
+    fila(5, 55);
+    const estados = ['procesando', 'listo'];
+    ctx.fetch = vi.fn((url) => String(url).includes('/estado')
+      ? respuesta({ ok: true, foto: { estado_proceso: estados.shift() } })
+      : respuesta({ ok: true }));
+    ctx.window.fetch = ctx.fetch;
+    ctx.CIERRE_SONDEO_MS = 1;
+    ctx.cargarCierres = vi.fn();
+    await ctx.cierreEsperarFoto(5, 9);
+    const post = ctx.fetch.mock.calls.find(([u]) => String(u).endsWith('/seguimientos/55'));
+    expect(post).toBeTruthy();
+    expect(JSON.parse(post[1].body)).toEqual({ tracking: '360003042094910' });
+  });
+  it('si la foto queda en error ofrece Reintentar, no manda el tracking y no pierde lo tipeado', async () => {
+    fila(6, 66);
+    ctx.fetch = vi.fn(() => respuesta({ ok: true, foto: { estado_proceso: 'error', error: 'boom' } }));
+    ctx.window.fetch = ctx.fetch;
+    await ctx.cierreEsperarFoto(6, 10);
+    expect(ctx.document.getElementById('cierre-msg-6').innerHTML).toContain('Reintentar');
+    expect(ctx.fetch.mock.calls.some(([u]) => String(u).includes('/seguimientos/'))).toBe(false);
+    expect(ctx.document.getElementById('cierre-trk-6').value).toBe('360003042094910');
+  });
+  it('si se agota la espera también ofrece Reintentar', async () => {
+    fila(7, 77);
+    ctx.CIERRE_ESPERA_MS = 5; ctx.CIERRE_SONDEO_MS = 1;
+    ctx.fetch = vi.fn(() => respuesta({ ok: true, foto: { estado_proceso: 'procesando' } }));
+    ctx.window.fetch = ctx.fetch;
+    await ctx.cierreEsperarFoto(7, 11);
+    expect(ctx.document.getElementById('cierre-msg-7').innerHTML).toContain('sigue procesándose');
+  });
+});
+
+describe('«No salieron con el lote»: Descartar conserva el lote', () => {
+  it('el botón lleva el lote_id y el POST lo manda junto al motivo', async () => {
+    const html = ctx.cierreFilaHtml({ id: 12, canal: 'ml', numero_pedido: '1', acciones: ['descartar'], lote_id: 31 });
+    expect(html).toContain("cierreResolver(12,'descartar-envio',31)");
+    ctx.cierreResolver(12, 'descartar-envio', 31);
+    ctx.document.getElementById('cierre-motivo-12').value = 'no salió';
+    ctx.fetch = vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true }) }));
+    ctx.window.fetch = ctx.fetch; ctx.cargarCierres = vi.fn();
+    await ctx.cierreConfirmar(12, 'descartar-envio');
+    const post = ctx.fetch.mock.calls.find(([u]) => String(u).includes('/12/descartar-envio'));
+    expect(JSON.parse(post[1].body)).toEqual({ motivo: 'no salió', lote_id: 31 });
+  });
+});
+

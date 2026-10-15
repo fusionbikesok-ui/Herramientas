@@ -75,6 +75,7 @@
   .b-web{background:rgba(45,184,232,.14);color:var(--azul);}
   .b-ml{background:rgba(245,185,66,.14);color:var(--amber);}
   .btn-44{min-height:44px;}
+  .ml-auto{margin-left:auto;}
   .etq-barra{display:none;gap:10px;align-items:center;}
   .etq-barra.on{display:flex;}
   .foot-wrap{flex-wrap:wrap;gap:8px;}
@@ -980,7 +981,7 @@ function renderPendientes(){
     if(visibles.length)html+='<p class="sub sub-tight">🔎 '+contarProductosABuscar(visibles)+' productos para buscar → <a href="#" onclick="ir(\'recoleccion\');return false">Ver lista</a></p>';
   }
   if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
-  else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini" style="min-height:44px" onclick="cargarPendientes()">Reintentar</button></div>';
+  else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini btn-44" onclick="cargarPendientes()">Reintentar</button></div>';
   else if(!visibles.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
   else html+='<div class="ped-grid">'+visibles.map(cardPendiente).join('')+'</div>';
   c.innerHTML=html;
@@ -1224,7 +1225,7 @@ function cardPendiente(p){
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
     +nota+despacho
-    +'<div class="ped-foot foot-wrap">'+estado+etqBotonMl(p)+'<button class="btn mini" style="margin-left:auto">'+accion+'</button></div>'
+    +'<div class="ped-foot foot-wrap">'+estado+etqBotonMl(p)+'<button class="btn mini ml-auto">'+accion+'</button></div>'
     +'</div>';
 }
 
@@ -1298,12 +1299,12 @@ function cierreAccionesHtml(f,k){
   if(f.canal==='web'&&f.wc_order_id&&(a.indexOf('completar_envio')>=0||a.indexOf('confirmar_envio')>=0||a.indexOf('reintentar')>=0))
     h+='<input id="cierre-trk-'+id+'" class="seg-search inp-trk" placeholder="Tracking Andreani" aria-label="Tracking" value="'+esc(f.tracking||'')+'"><button type="button" class="btn mini btn-44" onclick="cierreTracking('+id+','+Number(f.wc_order_id)+')">Guardar tracking</button>';
   if(a.indexOf('salio_sin_foto')>=0)h+='<button type="button" class="btn sec mini btn-44" onclick="cierreResolver('+id+',\'salio-sin-foto\')">Salió sin foto</button>';
-  if(a.indexOf('descartar')>=0)h+='<button type="button" class="btn sec mini btn-44" onclick="cierreResolver('+id+',\'descartar-envio\')">Descartar con motivo</button>';
+  if(a.indexOf('descartar')>=0)h+='<button type="button" class="btn sec mini btn-44" onclick="cierreResolver('+id+',\'descartar-envio\','+Number(f.lote_id||0)+')">Descartar con motivo</button>';
   return h;
 }
 function cierreFilaHtml(f,k){
   var estado={sin_seguimiento:'sin seguimiento',envio_incierto:'envío incierto',abandonado:'tracking abandonado',asociado_sin_confirmar:'tracking sin confirmar',anulado_con_envio_pendiente:'anulado en Woo'}[f.estado_envio]||'';
-  return '<div class="ped" data-prep="'+Number(f.id)+'"><div class="ped-top"><span class="ped-num">#'+esc(f.numero_pedido||f.clave)+'</span><span class="badge '+(f.canal==='web'?'b-web':'b-ml')+'">'+(f.canal==='web'?'WEB':'ML')+'</span></div>'
+  return '<div class="ped" data-prep="'+Number(f.id)+'" data-wc="'+Number(f.wc_order_id||0)+'"><div class="ped-top"><span class="ped-num">#'+esc(f.numero_pedido||f.clave)+'</span><span class="badge '+(f.canal==='web'?'b-web':'b-ml')+'">'+(f.canal==='web'?'WEB':'ML')+'</span></div>'
     +'<div class="ped-cli">'+esc(f.comprador||'—')+(f.completado_en?' · cerrado '+esc(etqFechaHora(f.completado_en)):'')+'</div>'
     +(f.foto_etiqueta_pendiente?'<div class="ped-nota">Foto de etiqueta: '+esc(f.foto_etiqueta_pendiente==='error'?'falló, subila de nuevo':'procesándose…')+'</div>':'')
     +(estado?'<div class="ped-nota">'+esc(estado)+'</div>':'')+(f.salio?'<div class="ped-nota">El envío ya salió</div>':'')
@@ -1322,10 +1323,11 @@ function renderCierres(){
     +seccion('Falta etiqueta','etq','✓ Todas las etiquetas están cargadas.')
     +seccion('Falta seguimiento','seg','✓ No hay envíos web sin seguimiento.')
     +'<section class="seg-section"><h2>No salieron con el lote <span class="seg-count">'+nos.total+'</span></h2>'
-    +(nos.items.length?'<div class="ped-grid">'+nos.items.map(function(f){var p=(f.preparaciones||[])[0];return p?cierreFilaHtml({id:p.id,canal:p.canal,numero_pedido:p.numero_pedido,comprador:p.comprador,clave:p.clave,acciones:['descartar'],wc_order_id:null},'nos'):'';}).join('')+'</div>':'<div class="seg-ok">✓ Todos los miembros salieron.</div>')+'</section>';
+    +(nos.items.length?'<div class="ped-grid">'+nos.items.map(function(f){var p=(f.preparaciones||[])[0];return p?cierreFilaHtml({id:p.id,canal:p.canal,numero_pedido:p.numero_pedido,comprador:p.comprador,clave:p.clave,acciones:['descartar'],wc_order_id:null,lote_id:f.lote_id},'nos'):'';}).join('')+'</div>':'<div class="seg-ok">✓ Todos los miembros salieron.</div>')+'</section>';
 }
 async function cierresCargarMas(k){try{await cierresMas(k);renderCierres();}catch(e){flash('err',e.message);}}
 function cierreMsg(id,t){var el=document.getElementById('cierre-msg-'+id);if(el)el.textContent=t;}
+var CIERRE_ESPERA_MS=60000, CIERRE_SONDEO_MS=2000;
 function cierreSubirFoto(id){
   var inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.capture='environment';
   inp.onchange=async function(){
@@ -1334,12 +1336,36 @@ function cierreSubirFoto(id){
     var fd=new FormData();fd.append('archivo',inp.files[0]);fd.append('upload_id','etq-'+id+'-'+Date.now());
     try{
       var r=await fetch('/api/preparacion/'+id+'/foto-etiqueta',{method:'POST',body:fd}), b=await r.json().catch(function(){return{};});
-      if(!r.ok||!b.ok){cierreMsg(id,'No se subió: '+(b.error||('HTTP '+r.status))+'. Volvé a intentar.');return;}
-      cierreMsg(id,'Foto guardada; se está procesando. Cuando termine, actualizá la lista.');
+      if(!r.ok||!b.ok||!b.foto){cierreMsg(id,'No se subió: '+(b.error||('HTTP '+r.status))+'. Volvé a intentar.');return;}
       flash('ok','Foto con etiqueta guardada');
+      cierreEsperarFoto(id,b.foto.id);
     }catch(e){cierreMsg(id,'No se subió: '+e.message+'. Volvé a intentar.');}
   };
   inp.click();
+}
+// Sondea la foto cada 2 s hasta `listo` (entonces manda el tracking tipeado, si lo hay), `error` o agotar la espera (60 s): el tracking tipeado no se pierde.
+async function cierreEsperarFoto(id,fotoId){
+  var limite=Date.now()+CIERRE_ESPERA_MS;
+  cierreMsg(id,'Foto guardada; procesándola…');
+  while(Date.now()<limite){
+    var estado=null;
+    try{var r=await api('/fotos/'+fotoId+'/estado');estado=r.body&&r.body.foto;}catch(e){estado=null;}
+    if(estado&&estado.estado_proceso==='listo'){cierreFotoLista(id);return;}
+    if(estado&&estado.estado_proceso==='error'){cierreErrorFoto(id,fotoId,'La foto no se pudo procesar'+(estado.error?': '+estado.error:'')+'.');return;}
+    await new Promise(function(ok){setTimeout(ok,CIERRE_SONDEO_MS);});
+  }
+  cierreErrorFoto(id,fotoId,'La foto sigue procesándose.');
+}
+function cierreFotoLista(id){
+  var input=document.getElementById('cierre-trk-'+id), fila=document.querySelector('[data-prep="'+id+'"]');
+  var wcId=fila&&Number(fila.getAttribute('data-wc'));
+  if(input&&wcId&&input.value.trim()){cierreTracking(id,wcId);return;}
+  cierreMsg(id,input?'Foto lista. Escribí el tracking y guardalo.':'Foto lista.');
+  if(!input)cargarCierres();
+}
+function cierreErrorFoto(id,fotoId,texto){
+  var el=document.getElementById('cierre-msg-'+id); if(!el)return;
+  el.innerHTML=esc(texto)+' <button type="button" class="btn mini btn-44" onclick="cierreEsperarFoto('+Number(id)+','+Number(fotoId)+')">Reintentar</button>';
 }
 async function cierreTracking(id,wcId){
   var input=document.getElementById('cierre-trk-'+id), t=(input&&input.value||'').trim();
@@ -1353,7 +1379,9 @@ async function cierreTracking(id,wcId){
     cierreMsg(id,r.body.incierto||r.body.colgado?mensajeResultadoTracking(r.body):('No se guardó: '+(r.body.error||'error')));
   }catch(e){cierreMsg(id,'No se guardó: '+e.message);}
 }
-function cierreResolver(id,ruta){
+var CIERRE_LOTE={};   // prep id → lote del que salió sin él (para dejar constancia en el historial del lote)
+function cierreResolver(id,ruta,loteId){
+  if(loteId)CIERRE_LOTE[id]=loteId;
   var el=document.getElementById('cierre-msg-'+id); if(!el)return;
   el.innerHTML='<input id="cierre-motivo-'+id+'" class="seg-search inp-motivo" maxlength="300" aria-label="Motivo" placeholder="Motivo (obligatorio)"> <button type="button" class="btn mini btn-44" onclick="cierreConfirmar('+id+',\''+ruta+'\')">Confirmar</button>';
   var i=document.getElementById('cierre-motivo-'+id); if(i)i.focus();
@@ -1362,7 +1390,7 @@ async function cierreConfirmar(id,ruta){
   var i=document.getElementById('cierre-motivo-'+id), m=(i&&i.value||'').trim();
   if(!m){cierreMsg(id,'El motivo es obligatorio.');return;}
   try{
-    var r=await api('/'+id+'/'+ruta,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({motivo:m})});
+    var r=await api('/'+id+'/'+ruta,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(CIERRE_LOTE[id]?{motivo:m,lote_id:CIERRE_LOTE[id]}:{motivo:m})});
     if(r.body.ok){flash('ok','Resuelto');cargarCierres();return;}
     cierreMsg(id,'No se pudo: '+(r.body.error||'error'));
   }catch(e){cierreMsg(id,'No se pudo: '+e.message);}
