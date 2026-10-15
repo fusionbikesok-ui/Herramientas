@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { protegerPorBajaWoo } from '../lib/identidadProductos.js';
+import { registrarBajasWoo } from '../lib/wooBajas.js';
 import express from 'express';
 import { normalizarProductoWc, normalizarVariacionWc, filaCatalogo } from '../lib/modelos/producto.js';
 import { mapConLimite } from '../lib/concurrencia.js';
@@ -514,50 +515,85 @@ export async function refrescarCatalogo(db, cfg, opts = {}) {
   }
 }
 
+/** 404 de Woo por producto inexistente (`..._invalid_id`). Un 404 genérico (ruta rota, plugin apagado) NO prueba que no exista. */
+export function esProductoWooInexistente(err) {
+  return err?.status === 404 && /invalid_id/i.test(String(err?.cuerpo || ''));
+}
+
+const skuLimpio = (v) => String(v ?? '').trim();
+
+/**
+ * Aplica una baja de Woo ya CONFIRMADA por una relectura: protege las claves de ML, registra la baja para que `stock.bolsa`
+ * lleve ML a 0 (aunque el producto ya no esté en el caché) y avisa a `alEscribir` con los SKUs para encolar sus bolsas.
+ * Todo corre dentro de la transacción del llamador. La protección es best-effort (su fallo no impide el 0 de stock).
+ */
+function aplicarBajasConfirmadas(db, bajas, { alEscribir = null, otrosSkus = [], motivo = 'baja_woo' } = {}) {
+  let protegidas = 0;
+  for (const b of bajas) {
+    try {
+      const r = protegerPorBajaWoo(db, { idWoo: b.id_woo, sku: b.sku, motivo, confirmado: true }, 'webhook_woo');
+      if (r.ok) protegidas += r.claves;
+    } catch (e) {
+      // La protección no puede impedir que el catálogo local refleje la baja ni que ML vaya a 0.
+      console.error('[woo] proteccion por baja no aplicada para', b.id_woo, '-', e.message);
+    }
+  }
+  const registrados = registrarBajasWoo(db, bajas, motivo);
+  const skus = [...new Set([...registrados, ...otrosSkus.map(skuLimpio).filter(Boolean)])];
+  if (alEscribir && skus.length) alEscribir(db, skus);
+  return { protegidas, skus, bajas: registrados };
+}
+
 /**
  * Relee una sola entidad de Woo tras un webhook de producto. Las variaciones no son recursos
  * independientes para el catálogo: ante un evento de una de ellas se relee su padre completo,
  * lo que elimina del cache las hermanas que Woo ya no devuelve sin afectar otros productos.
  *
- * Esta función nunca escribe en Woo. Un `product.deleted` ya es una confirmación firmada del
- * origen, por lo que retira únicamente la fila afectada (y sus hijas si era el padre).
+ * El topic NUNCA decide una baja: solo la relectura. Con `eliminado: true` el LLAMADOR ya confirmó la baja (la usa solo el
+ * propio flujo de relectura); sin él se lee el padre y:
+ *  - 404 `invalid_id` o `status=trash` → baja confirmada del padre y de todas sus variaciones;
+ *  - cualquier otro error (5xx, red) se propaga: no se baja ni se lleva nada a 0;
+ *  - vigente → se refresca y, como `routes/woo.js` borra las hijas antes de reinsertarlas, se compara el conjunto de
+ *    variaciones de antes con el de después: cada una que desapareció recibe la baja confirmada (con su SKU anterior).
+ * `alEscribir(db, skus)` se llama DENTRO de la transacción del caché (así un corte no deja el caché cambiado sin las bolsas
+ * encoladas) con todos los SKUs afectados, incluidos los anteriores. Esta función nunca escribe en Woo.
  */
-export async function refrescarProductoPuntual(db, cfg, { productoId, parentId = null, eliminado = false } = {}) {
+export async function refrescarProductoPuntual(db, cfg, { productoId, parentId = null, eliminado = false, alEscribir = null } = {}) {
   const id = Number(productoId);
   const parent = Number(parentId || productoId);
   if (!Number.isInteger(id) || id <= 0 || !Number.isInteger(parent) || parent <= 0) {
     throw Object.assign(new Error('webhook Woo de producto sin id válido'), { retryable: false, code: 'woo_product_invalid_id' });
   }
 
-  if (eliminado) {
+  const darDeBaja = (soloVariacion) => {
     // El SKU se lee ANTES de borrar la fila: después de borrarla no hay de dónde sacarlo, y sin
     // SKU no se pueden encontrar las publicaciones de ML ni los pedidos que quedaron colgando.
-    const bajas = parentId
+    const bajas = soloVariacion
       ? db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_woo=?').all(id)
       : db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_woo=? OR id_padre=?').all(id, id);
+    let r;
     db.transaction(() => {
-      if (parentId) db.prepare('DELETE FROM catalogo_cache WHERE id_woo=?').run(id);
+      if (soloVariacion) db.prepare('DELETE FROM catalogo_cache WHERE id_woo=?').run(id);
       else db.prepare('DELETE FROM catalogo_cache WHERE id_woo=? OR id_padre=?').run(id, id);
+      r = aplicarBajasConfirmadas(db, bajas, { alEscribir });
     })();
-    // PM-104: un `product.deleted` firmado por Woo ya es la confirmación del origen, así que no
-    // hace falta releer. Esta mitad marca y retiene; poner stock cero y bloquear en ML es una
-    // escritura remota y va en una entrega aparte.
-    let protegidas = 0;
-    for (const b of bajas) {
-      try {
-        const r = protegerPorBajaWoo(db, { idWoo: b.id_woo, sku: b.sku, motivo: 'baja_woo', confirmado: true }, 'webhook_woo');
-        if (r.ok) protegidas += r.claves;
-      } catch (e) {
-        // La protección no puede impedir que el catálogo local refleje la baja: si falla, la
-        // fila ya se borró y el detector de publicaciones sin respaldo lo sigue viendo.
-        console.error('[woo] proteccion por baja no aplicada para', b.id_woo, '-', e.message);
-      }
-    }
     dispararAuditoriaPrecios(db, { origen: 'woo' });
-    return { producto_id: id, parent_id: parentId ? parent : null, eliminado: true, filas: 0, claves_protegidas: protegidas };
-  }
+    return { producto_id: id, parent_id: soloVariacion ? parent : null, eliminado: true, filas: 0, claves_protegidas: r.protegidas, skus: r.skus };
+  };
 
-  const productoResp = await wooFetch(cfg, `/products/${parent}?context=view`);
+  if (eliminado) return darDeBaja(Boolean(parentId));
+
+  let productoResp;
+  try {
+    productoResp = await wooFetch(cfg, `/products/${parent}?context=view`);
+  } catch (e) {
+    if (esProductoWooInexistente(e)) return darDeBaja(false); // baja CONFIRMADA por la relectura (404 con invalid_id)
+    throw e; // 5xx, red, 403…: no prueba nada, el trabajo reintenta; jamás se lleva a 0 por esto
+  }
+  if (productoResp?.data?.status === 'trash') {
+    // En la papelera el producto sigue existiendo para la API, pero para la tienda ya no: baja del padre y de sus variaciones.
+    return darDeBaja(false);
+  }
   const padre = normalizarProductoWc(productoResp.data);
   const filas = [padre];
   if (padre.tipo === 'variable') {
@@ -585,13 +621,25 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
       precio=excluded.precio, regular_price=excluded.regular_price, atributos_json=excluded.atributos_json,
       marca=excluded.marca, gtin=excluded.gtin, actualizado_en=excluded.actualizado_en
   `);
+  let resultado;
   db.transaction(() => {
+    // Foto de las variaciones ANTES de borrarlas: las que el padre vigente ya no devuelve son bajas confirmadas.
+    const previas = db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_padre=?').all(parent);
+    const skuPadrePrevio = db.prepare('SELECT sku FROM catalogo_cache WHERE id_woo=?').get(parent)?.sku;
     // Si el padre dejó de ser variable, también se retiran las hijas que el origen ya no expone.
     db.prepare('DELETE FROM catalogo_cache WHERE id_padre=?').run(parent);
     for (const fila of filas) upsert.run(filaCatalogo(fila, actualizadoEn));
+    const vigentes = new Set(filas.map((f) => Number(f.id_woo ?? f.id)));
+    const desaparecidas = previas.filter((v) => !vigentes.has(Number(v.id_woo)));
+    const skusAhora = filas.map((f) => skuLimpio(f.sku)).filter(Boolean);
+    const skusAntes = [...previas.map((v) => v.sku), skuPadrePrevio];
+    resultado = desaparecidas.length
+      ? aplicarBajasConfirmadas(db, desaparecidas, { alEscribir, otrosSkus: [...skusAhora, ...skusAntes] })
+      : { protegidas: 0, skus: [...new Set([...skusAhora, ...skusAntes.map(skuLimpio).filter(Boolean)])], bajas: [] };
+    if (!desaparecidas.length && alEscribir && resultado.skus.length) alEscribir(db, resultado.skus);
   })();
   dispararAuditoriaPrecios(db, { origen: 'woo' });
-  return { producto_id: id, parent_id: parent, eliminado: false, filas: filas.length };
+  return { producto_id: id, parent_id: parent, eliminado: false, filas: filas.length, claves_protegidas: resultado.protegidas, skus: resultado.skus, bajas: resultado.bajas };
 }
 
 async function _refrescarCatalogo(db, cfg, { forzarCompleto = false } = {}) {

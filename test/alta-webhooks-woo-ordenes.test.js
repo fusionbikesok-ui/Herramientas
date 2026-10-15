@@ -1,6 +1,6 @@
 // E-1b: script de alta idempotente de los webhooks de pedidos de Woo (Woo simulado).
 import { describe, it, expect, vi } from 'vitest';
-import { altaWebhooksWooOrdenes, DELIVERY_URL, TOPICS_NUEVOS } from '../scripts/ops/alta-webhooks-woo-ordenes.mjs';
+import { altaWebhooksWooOrdenes, DELIVERY_URL, DELIVERY_URL_PRODUCTO, TOPICS_NUEVOS, TOPICS_PRODUCTO_NUEVOS } from '../scripts/ops/alta-webhooks-woo-ordenes.mjs';
 
 const SECRETO = 'super-secreto-que-no-se-imprime';
 const CFG = { url: 'https://x.test', ck: 'a', cs: 'b' };
@@ -29,20 +29,32 @@ const correr = (woo, extra = {}) => {
 const updated = { id: 7, topic: 'order.updated', status: 'active', delivery_url: DELIVERY_URL };
 
 describe('alta-webhooks-woo-ordenes', () => {
-  it('crea los 3 webhooks (created/deleted/restored) activos, con el delivery_url y el secreto, y refresca la lista', async () => {
+  it('crea los 3 webhooks de pedido + product.restored (al endpoint de producto) activos, con su delivery_url y el secreto, y refresca la lista', async () => {
     const woo = wooSimulado([updated]);
     const r = await correr(woo);
-    expect(woo.estado.posts.map((b) => b.topic)).toEqual(TOPICS_NUEVOS);
-    for (const b of woo.estado.posts) expect(b).toMatchObject({ status: 'active', delivery_url: DELIVERY_URL, secret: SECRETO });
+    expect(woo.estado.posts.map((b) => b.topic)).toEqual([...TOPICS_NUEVOS, ...TOPICS_PRODUCTO_NUEVOS]);
+    for (const b of woo.estado.posts) {
+      expect(b).toMatchObject({ status: 'active', delivery_url: b.topic.startsWith('product.') ? DELIVERY_URL_PRODUCTO : DELIVERY_URL, secret: SECRETO });
+    }
+    expect(DELIVERY_URL_PRODUCTO).toMatch(/\/api\/woo\/webhook\/product$/);
     expect(r.acciones.every((a) => a.accion === 'creado')).toBe(true);
     expect(r.refrescar).toHaveBeenCalledTimes(1);
+  });
+
+  it('con los de pedido ya creados (prod hoy: ids 17/18/19) y product.created/updated/deleted propios, solo crea product.restored', async () => {
+    const pedidos = TOPICS_NUEVOS.map((topic, i) => ({ id: 17 + i, topic, status: 'active', delivery_url: DELIVERY_URL }));
+    const productos = ['product.created', 'product.updated', 'product.deleted'].map((topic, i) => ({ id: 8 + i, topic, status: 'active', delivery_url: DELIVERY_URL_PRODUCTO }));
+    const woo = wooSimulado([updated, ...pedidos, ...productos]);
+    const r = await correr(woo);
+    expect(woo.estado.posts.map((b) => b.topic)).toEqual(['product.restored']);
+    expect(r.acciones.filter((a) => a.accion === 'ya_activo')).toHaveLength(3);
   });
 
   it('una segunda corrida no hace nada (idempotente) ni refresca', async () => {
     const woo = wooSimulado([updated]);
     await correr(woo);
     const r2 = await correr(woo);
-    expect(woo.estado.posts).toHaveLength(3);
+    expect(woo.estado.posts).toHaveLength(4);
     expect(r2.acciones.every((a) => a.accion === 'ya_activo')).toBe(true);
     expect(r2.refrescar).not.toHaveBeenCalled();
   });
@@ -50,12 +62,12 @@ describe('alta-webhooks-woo-ordenes', () => {
   it('un webhook existente pero deshabilitado NO se duplica; con --reactivar se activa', async () => {
     const woo = wooSimulado([updated, { id: 31, topic: 'order.created', status: 'disabled', delivery_url: DELIVERY_URL }]);
     const r = await correr(woo);
-    expect(woo.estado.posts.map((b) => b.topic)).toEqual(['order.deleted', 'order.restored']);
+    expect(woo.estado.posts.map((b) => b.topic)).toEqual(['order.deleted', 'order.restored', 'product.restored']);
     expect(r.acciones.find((a) => a.topic === 'order.created')).toMatchObject({ accion: 'existe_inactivo', id: 31 });
     const r2 = await correr(woo, { reactivar: true });
     expect(woo.estado.puts).toEqual([{ id: 31, body: { status: 'active' } }]);
     expect(r2.acciones.find((a) => a.topic === 'order.created')).toMatchObject({ accion: 'reactivado' });
-    expect(woo.estado.posts).toHaveLength(2);
+    expect(woo.estado.posts).toHaveLength(3);
   });
 
   it('un webhook del mismo topic hacia OTRO delivery_url no cuenta como existente', async () => {

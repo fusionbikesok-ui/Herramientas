@@ -361,7 +361,7 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
   );
 
   // ── Webhook WooCommerce → catálogo puntual durable ──────────────────────────
-  // Configurar en Woo los topics product.created, product.updated y product.deleted hacia
+  // Configurar en Woo los topics product.created, product.updated, product.deleted y product.restored hacia
   // esta ruta. El ACK solo se emite tras persistir evento+job: un reinicio posterior no pierde
   // el cambio y el worker relee Woo como fuente de verdad.
   app.post('/api/woo/webhook/product',
@@ -380,7 +380,14 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
           sombra: Boolean(colaSombra),
         });
         engancharSombra(res, persistido);
-        return res.status(200).json({ ok: true, duplicate: persistido.duplicate, event_id: persistido.eventId });
+        res.status(200).json({ ok: true, duplicate: persistido.duplicate, event_id: persistido.eventId });
+        // E-1c: el trabajo durable `catalog.woo_product_sync` ya quedó encolado con el recibo. Acelerador no durable: si el
+        // proceso muere, el cron de cada minuto toma el trabajo. El topic solo dispara; decide la relectura vigente.
+        if (!persistido.duplicate) {
+          procesarTrabajosRecurso(app._db, syncCfg)
+            .catch(err => console.error('[webhook-woo] procesarTrabajosRecurso error:', err.message));
+        }
+        return undefined;
       } catch (err) {
         const status = err.code === 'woo_product_topic_invalid' || err.code === 'woo_product_id_invalid' ? 400 : 503;
         return res.status(status).json({ ok: false, error: err.message });
