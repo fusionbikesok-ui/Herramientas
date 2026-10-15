@@ -166,4 +166,27 @@ describe('backfill 133 (acotado por canal, v8.4 / v10 / v20.2 / v21)', () => {
     expect(col('web:43', 'etiqueta_cargada_en')).toBeTruthy();
     expect(c && d).toBeTruthy();
   });
+
+  it('registra migracion_133_historico también cuando solo el envío fue inferido (etiqueta ya cargada)', () => {
+    const id = prep({ clave: 'web:60', tracking: 'A', completado: T(9) });
+    const otra = prep({ clave: 'web:61', tracking: null });          // nada inferido de envío; etiqueta sí (historico)
+    reiniciarMarcas();
+    db.prepare("UPDATE preparaciones SET etiqueta_cargada_en=?, etiqueta_origen='foto' WHERE id=?").run(T(9), id);
+    backfillEtiquetas133(db);
+    const n = (i) => db.prepare("SELECT COUNT(*) n FROM preparacion_eventos WHERE preparacion_id=? AND tipo='migracion_133_historico'").get(i).n;
+    expect(col('web:60', 'etiqueta_origen')).toBe('foto');
+    expect(n(id)).toBe(1);
+    expect(n(otra)).toBe(1);
+  });
+
+  it('no queda marcado como asegurado si despacho_controles todavía no existe (los triggers se crean después)', () => {
+    const d = new Database(':memory:');
+    d.exec('CREATE TABLE preparaciones (id INTEGER PRIMARY KEY, canal TEXT, clave TEXT, pack_id TEXT, estado TEXT, creado_en TEXT, completado_en TEXT)');
+    asegurarEsquemaEtiquetas(d);
+    expect(d.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='trigger'").get().n).toBe(0);
+    d.exec('CREATE TABLE despacho_controles (id INTEGER PRIMARY KEY, grupo_clave TEXT, confirmado_en TEXT)');
+    asegurarEsquemaEtiquetas(d);
+    expect(d.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='trigger'").get().n).toBe(2);
+    d.close();
+  });
 });

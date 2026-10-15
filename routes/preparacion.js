@@ -71,7 +71,7 @@ function registrarSalidaLote(db, lote, ts) {
   const advertencias = [];
   if (lote.canal !== 'ml') return advertencias;
   const fechar = db.prepare(`UPDATE preparaciones SET envio_confirmado_en = COALESCE(envio_confirmado_en, ?) WHERE canal='ml' AND (clave=? OR pack_id=?)`);
-  const sinEtiqueta = db.prepare(`SELECT clave FROM preparaciones WHERE canal='ml' AND (clave=? OR pack_id=?) AND etiqueta_cargada_en IS NULL AND envio_descartado_en IS NULL AND estado IN ('completada','despachada_sin_verificar')`);
+  const sinEtiqueta = db.prepare(`SELECT clave FROM preparaciones WHERE canal='ml' AND (clave=? OR pack_id=?) AND etiqueta_cargada_en IS NULL AND envio_descartado_en IS NULL AND estado = 'completada'`);
   for (const m of miembros) {
     fechar.run(ts, m.grupo_clave, m.grupo_clave);
     for (const f of sinEtiqueta.all(m.grupo_clave, m.grupo_clave)) advertencias.push({ clave: f.clave, motivo: 'falta_etiqueta' });

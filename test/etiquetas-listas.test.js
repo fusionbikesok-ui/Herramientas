@@ -186,6 +186,14 @@ describe('salida de lote: no escribe en Woo, fecha solo ML y avisa', () => {
     expect(wooFetch).not.toHaveBeenCalled();
   });
 
+  it('la advertencia falta_etiqueta no incluye despachada_sin_verificar (la UI no lo puede resolver)', async () => {
+    const a = prep({ canal: 'ml', estado: 'despachada_sin_verificar' });
+    const l = lote('ml', [[fila(a).clave, 'confirmado']]);
+    const r = await salida(l);
+    expect(r.status).toBe(200);
+    expect(r.body.advertencias).toEqual([]);
+  });
+
   it('lote web: no fecha nada (la fecha web es el paso 2) y tampoco escribe en Woo', async () => {
     const a = prep({ canal: 'web', tracking: 'A' });
     const l = lote('web', [[fila(a).clave, 'confirmado']]);
@@ -263,6 +271,15 @@ describe('purga de fotos (v5–v16)', () => {
   it('los holds siguen mandando aunque el envío esté confirmado hace 40 días; al cerrar el hold se purga', () => {
     const id = prep({ completado: dias(60), confirmado: dias(40), cargada: dias(40) }); conFoto(id, dias(60));
     db.prepare("INSERT INTO preparacion_fotos_holds (preparacion_id, motivo, creado_en) VALUES (?, 'reclamo', ?)").run(id, dias(1));
+    purgarFotosBorradas(db); expect(cuantas(id)).toBe(1);
+    db.prepare('DELETE FROM preparacion_fotos_holds WHERE preparacion_id=?').run(id);
+    purgarFotosBorradas(db); expect(cuantas(id)).toBe(0);
+  });
+
+  it('la rama de fotos ya borradas (soft-delete) también respeta los holds', () => {
+    const id = prep({ completado: dias(60), confirmado: dias(40), cargada: dias(40) }); conFoto(id, dias(60));
+    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE preparacion_id=?').run(dias(40), id);
+    db.prepare("INSERT INTO preparacion_fotos_holds (preparacion_id, motivo, creado_en) VALUES (?, 'garantia', ?)").run(id, dias(1));
     purgarFotosBorradas(db); expect(cuantas(id)).toBe(1);
     db.prepare('DELETE FROM preparacion_fotos_holds WHERE preparacion_id=?').run(id);
     purgarFotosBorradas(db); expect(cuantas(id)).toBe(0);

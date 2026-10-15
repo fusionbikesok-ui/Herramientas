@@ -74,6 +74,13 @@
   .badge{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;vertical-align:middle;}
   .b-web{background:rgba(45,184,232,.14);color:var(--azul);}
   .b-ml{background:rgba(245,185,66,.14);color:var(--amber);}
+  .btn-44{min-height:44px;}
+  .etq-barra{display:none;gap:10px;align-items:center;}
+  .etq-barra.on{display:flex;}
+  .foot-wrap{flex-wrap:wrap;gap:8px;}
+  .inp-trk{max-width:220px;}
+  .inp-motivo{max-width:260px;}
+  .sub-tight{margin:6px 0;}
   .b-ok{background:rgba(52,211,153,.14);color:var(--green);}
   .b-warn{background:rgba(245,185,66,.14);color:var(--amber);}
   .b-red{background:rgba(248,113,113,.14);color:var(--red);}
@@ -970,7 +977,7 @@ function renderPendientes(){
   if(PEND_STATUS==='ready'){
     html+='<input type="search" class="seg-search pend-buscador" placeholder="Buscá por número, pack o comprador…" value="'+esc(PEND_FILTRO)+'" onchange="PEND_FILTRO=this.value;aplicarFiltroPendientes()" oninput="PEND_FILTRO=this.value;aplicarFiltroPendientes()">';
     html+=etqBarraLoteHtml();
-    if(visibles.length)html+='<p class="sub" style="margin:6px 0">🔎 '+contarProductosABuscar(visibles)+' productos para buscar → <a href="#" onclick="ir(\'recoleccion\');return false">Ver lista</a></p>';
+    if(visibles.length)html+='<p class="sub sub-tight">🔎 '+contarProductosABuscar(visibles)+' productos para buscar → <a href="#" onclick="ir(\'recoleccion\');return false">Ver lista</a></p>';
   }
   if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
   else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini" style="min-height:44px" onclick="cargarPendientes()">Reintentar</button></div>';
@@ -1217,7 +1224,7 @@ function cardPendiente(p){
     +'<div class="ped-cli">'+esc(p.comprador||'—')+' · '+fecha(p.fecha)+'</div>'
     +'<div class="ped-items">'+items+'</div>'
     +nota+despacho
-    +'<div class="ped-foot" style="flex-wrap:wrap;gap:6px">'+estado+etqBotonMl(p)+'<button class="btn mini" style="margin-left:auto">'+accion+'</button></div>'
+    +'<div class="ped-foot foot-wrap">'+estado+etqBotonMl(p)+'<button class="btn mini" style="margin-left:auto">'+accion+'</button></div>'
     +'</div>';
 }
 
@@ -1236,16 +1243,16 @@ function etqBotonMl(p){
   if(!e.elegible)return '<span class="ped-nota" title="No se puede bajar la etiqueta todavía">🖨 Etiqueta: '+esc(e.motivo||'no disponible')+'</span>';
   var aviso=e.descargada_en?'PDF bajado el '+esc(etqFechaHora(e.descargada_en))+(e.descargada_por?' por '+esc(e.descargada_por):''):(e.impresa_en_ml?'Ya impresa en ML':'');
   return '<label class="etq-sel" onclick="event.stopPropagation()"><input type="checkbox" '+(ETQ_SEL[clave]?'checked ':'')+'onchange="etqTildar(\''+clave+'\',this.checked)"> elegir</label>'
-    +'<button type="button" class="btn sec mini" style="min-height:44px" onclick="event.stopPropagation();bajarEtiquetasMl([\''+clave+'\'])">🖨 Etiqueta</button>'
+    +'<button type="button" class="btn sec mini btn-44" onclick="event.stopPropagation();bajarEtiquetasMl([\''+clave+'\'])">🖨 Etiqueta</button>'
     +(aviso?'<span class="ped-nota">'+aviso+'</span>':'');
 }
 function etqTildar(clave,on){if(on)ETQ_SEL[clave]=true;else delete ETQ_SEL[clave];etqActualizarBarra();}
 function etqActualizarBarra(){
   var n=Object.keys(ETQ_SEL).length, b=document.getElementById('etq-lote');
   if(!b)return;
-  b.style.display=n?"flex":"none";b.querySelector('button').textContent='Bajar etiquetas ('+n+')';
+  b.classList.toggle("on",!!n);b.querySelector('button').textContent='Bajar etiquetas ('+n+')';
 }
-function etqBarraLoteHtml(){return '<div id="etq-lote" class="jornada-note" style="display:none;gap:10px;align-items:center"><button type="button" class="btn" style="min-height:44px" onclick="bajarEtiquetasMl(Object.keys(ETQ_SEL))">Bajar etiquetas</button><span id="etq-msg" role="status"></span></div>';}
+function etqBarraLoteHtml(){return '<div id="etq-lote" class="jornada-note etq-barra"><button type="button" class="btn btn-44" onclick="bajarEtiquetasMl(Object.keys(ETQ_SEL))">Bajar etiquetas</button><span id="etq-msg" role="status"></span></div>';}
 async function bajarEtiquetasMl(claves){
   if(!claves||!claves.length)return;
   var msg=document.getElementById('etq-msg');
@@ -1287,11 +1294,11 @@ async function cierresMas(k){
 async function cierresNoSalieron(){var r=await api('/no-salieron');if(!r.body.ok)throw new Error(r.body.error||'error');CIERRES.nos={items:r.body.items||[],total:r.body.total||0};}
 function cierreAccionesHtml(f,k){
   var a=f.acciones||[], id=Number(f.id), h='';
-  if(a.indexOf('subir_foto')>=0||a.indexOf('completar_envio')>=0)h+='<button type="button" class="btn mini" style="min-height:44px" onclick="cierreSubirFoto('+id+')">📷 '+(a.indexOf('completar_envio')>=0?'Completar envío (foto)':'Subir foto con etiqueta')+'</button>';
+  if(a.indexOf('subir_foto')>=0||a.indexOf('completar_envio')>=0)h+='<button type="button" class="btn mini btn-44" onclick="cierreSubirFoto('+id+')">📷 '+(a.indexOf('completar_envio')>=0?'Completar envío (foto)':'Subir foto con etiqueta')+'</button>';
   if(f.canal==='web'&&f.wc_order_id&&(a.indexOf('completar_envio')>=0||a.indexOf('confirmar_envio')>=0||a.indexOf('reintentar')>=0))
-    h+='<input id="cierre-trk-'+id+'" class="seg-search" style="max-width:220px" placeholder="Tracking Andreani" aria-label="Tracking" value="'+esc(f.tracking||'')+'"><button type="button" class="btn mini" style="min-height:44px" onclick="cierreTracking('+id+','+Number(f.wc_order_id)+')">Guardar tracking</button>';
-  if(a.indexOf('salio_sin_foto')>=0)h+='<button type="button" class="btn sec mini" style="min-height:44px" onclick="cierreResolver('+id+',\'salio-sin-foto\')">Salió sin foto</button>';
-  if(a.indexOf('descartar')>=0)h+='<button type="button" class="btn sec mini" style="min-height:44px" onclick="cierreResolver('+id+',\'descartar-envio\')">Descartar con motivo</button>';
+    h+='<input id="cierre-trk-'+id+'" class="seg-search inp-trk" placeholder="Tracking Andreani" aria-label="Tracking" value="'+esc(f.tracking||'')+'"><button type="button" class="btn mini btn-44" onclick="cierreTracking('+id+','+Number(f.wc_order_id)+')">Guardar tracking</button>';
+  if(a.indexOf('salio_sin_foto')>=0)h+='<button type="button" class="btn sec mini btn-44" onclick="cierreResolver('+id+',\'salio-sin-foto\')">Salió sin foto</button>';
+  if(a.indexOf('descartar')>=0)h+='<button type="button" class="btn sec mini btn-44" onclick="cierreResolver('+id+',\'descartar-envio\')">Descartar con motivo</button>';
   return h;
 }
 function cierreFilaHtml(f,k){
@@ -1300,7 +1307,7 @@ function cierreFilaHtml(f,k){
     +'<div class="ped-cli">'+esc(f.comprador||'—')+(f.completado_en?' · cerrado '+esc(etqFechaHora(f.completado_en)):'')+'</div>'
     +(f.foto_etiqueta_pendiente?'<div class="ped-nota">Foto de etiqueta: '+esc(f.foto_etiqueta_pendiente==='error'?'falló, subila de nuevo':'procesándose…')+'</div>':'')
     +(estado?'<div class="ped-nota">'+esc(estado)+'</div>':'')+(f.salio?'<div class="ped-nota">El envío ya salió</div>':'')
-    +'<div class="ped-foot" style="flex-wrap:wrap;gap:8px">'+cierreAccionesHtml(f,k)+'</div><div class="ped-nota" id="cierre-msg-'+Number(f.id)+'" role="status"></div></div>';
+    +'<div class="ped-foot foot-wrap">'+cierreAccionesHtml(f,k)+'</div><div class="ped-nota" id="cierre-msg-'+Number(f.id)+'" role="status"></div></div>';
 }
 function renderCierres(){
   var c=document.getElementById('cuerpo');
@@ -1308,7 +1315,7 @@ function renderCierres(){
     var s=CIERRES[k];
     return '<section class="seg-section"><h2>'+titulo+' <span class="seg-count">'+s.total+'</span></h2>'
       +(s.items.length?'<div class="ped-grid">'+s.items.map(function(f){return cierreFilaHtml(f,k);}).join('')+'</div>':'<div class="seg-ok">'+vacio+'</div>')
-      +(s.cursor&&s.items.length<s.total?'<button type="button" class="btn sec" style="min-height:44px" onclick="cierresCargarMas(\''+k+'\')">Cargar más</button>':'')+'</section>';
+      +(s.cursor&&s.items.length<s.total?'<button type="button" class="btn sec btn-44" onclick="cierresCargarMas(\''+k+'\')">Cargar más</button>':'')+'</section>';
   }
   var nos=CIERRES.nos;
   c.innerHTML='<div class="desp-toolbar"><button class="btn sec" onclick="cargarCierres()">Recargar</button></div>'
@@ -1348,7 +1355,7 @@ async function cierreTracking(id,wcId){
 }
 function cierreResolver(id,ruta){
   var el=document.getElementById('cierre-msg-'+id); if(!el)return;
-  el.innerHTML='<input id="cierre-motivo-'+id+'" class="seg-search" style="max-width:260px" maxlength="300" aria-label="Motivo" placeholder="Motivo (obligatorio)"> <button type="button" class="btn mini" style="min-height:44px" onclick="cierreConfirmar('+id+',\''+ruta+'\')">Confirmar</button>';
+  el.innerHTML='<input id="cierre-motivo-'+id+'" class="seg-search inp-motivo" maxlength="300" aria-label="Motivo" placeholder="Motivo (obligatorio)"> <button type="button" class="btn mini btn-44" onclick="cierreConfirmar('+id+',\''+ruta+'\')">Confirmar</button>';
   var i=document.getElementById('cierre-motivo-'+id); if(i)i.focus();
 }
 async function cierreConfirmar(id,ruta){

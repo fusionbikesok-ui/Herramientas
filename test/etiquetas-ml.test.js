@@ -154,9 +154,38 @@ describe('POST /etiquetas-ml', () => {
 
   it('pack con orden sin preparación local: «pack con orden sin preparar #id»', async () => {
     const a = orden({ shipment: 'PACK3' });
+    db.prepare(`INSERT INTO gestion_pedidos (fuente, external_id, estado_comercial, estado_operativo, ml_shipment_id, importado_en, actualizado_en) VALUES ('mercadolibre','777','confirmado','importado','PACK3',?,?)`).run('x', 'x');
     mlFetch.mockResolvedValueOnce(itemsDe(a.orderId, '777'));
     const r = await post([a.clave]);
     expect(r.body.rechazados[0].motivo).toBe('pack con orden sin preparar #777');
+  });
+
+  it('hermana sin fila comercial en gestion_pedidos: «pack con orden sin confirmar #id» (fail-closed)', async () => {
+    const a = orden({ shipment: 'PACK4' });
+    const h = orden({ shipment: 'PACK4b' });   // tiene preparación con fotos, pero le quitamos la fila comercial
+    db.prepare('DELETE FROM gestion_pedidos WHERE external_id=?').run(h.orderId);
+    mlFetch.mockResolvedValueOnce(itemsDe(a.orderId, h.orderId));
+    const r = await post([a.clave]);
+    expect(r.body.rechazados[0].motivo).toBe(`pack con orden sin confirmar #${h.orderId}`);
+    expect(mlFetchBinario).not.toHaveBeenCalled();
+  });
+
+  it('membresía vacía, o que no incluye la orden propia, no verifica el pack', async () => {
+    const a = orden();
+    mlFetch.mockResolvedValueOnce({ status: 200, data: [] });
+    expect((await post([a.clave])).body.rechazados[0].motivo).toBe('no se pudo verificar el pack');
+    mlFetch.mockResolvedValueOnce(itemsDe('424242'));
+    expect((await post([a.clave])).body.rechazados[0].motivo).toBe('no se pudo verificar el pack');
+    expect(mlFetchBinario).not.toHaveBeenCalled();
+  });
+
+  it('hermana con preparación cancelada sin retiro no frena el envío (igual que una orden cancelada)', async () => {
+    const a = orden({ shipment: 'PACK5' });
+    const h = orden({ shipment: 'PACK5', conFotos: false });
+    db.prepare("UPDATE preparaciones SET estado='cancelada_sin_retiro' WHERE id=?").run(h.id);
+    mlFetchBinario.mockResolvedValueOnce(ok());
+    const r = await post([a.clave]);
+    expect(r.body.aceptados).toEqual([a.clave]);
   });
 
   it('fail-closed: si ML no responde la membresía del pack, rechaza («no se pudo verificar el pack»)', async () => {
