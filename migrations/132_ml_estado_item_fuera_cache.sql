@@ -3,6 +3,7 @@
 -- resuelto con un TTL de 24 h (lib/mlEstadoItemFueraCache.js). ml_publicaciones_cache manda siempre; un aviso de items de ML invalida la fila.
 CREATE TABLE IF NOT EXISTS ml_estado_item_fuera_cache (
   item_id TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
-  actualizado_en TEXT NOT NULL
+  status TEXT, -- NULL = invalidada por un aviso de ML (lápida): no vale como status
+  actualizado_en TEXT NOT NULL,
+  invalidada_en TEXT -- instante del último aviso; un GET iniciado antes de esto no puede repoblar la fila
 );

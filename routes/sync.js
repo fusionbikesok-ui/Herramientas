@@ -2797,6 +2797,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
       }
       if (!estadoItem.has(itemId)) {
         llamadasMl++;
+        const consultadoEn = new Date().toISOString(); // inicio del GET: si un aviso invalida durante la espera, no se guarda
         const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
         if (est.status === 429) {
           // Cooldown global activo (real o sintético): TODAS las consultas de status que
@@ -2808,7 +2809,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
           break;
         }
         estadoItem.set(itemId, est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido');
-        recordarEstadoFueraDeCache(db, itemId, estadoItem.get(itemId));
+        recordarEstadoFueraDeCache(db, itemId, estadoItem.get(itemId), consultadoEn);
         await sleep(espera(ML_CALL_DELAY_MS));
       }
       const status = estadoItem.get(itemId);

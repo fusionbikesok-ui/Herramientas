@@ -93,13 +93,40 @@ describe('ml_estado_item_fuera_cache', () => {
   it('un aviso de items de ML invalida la fila del ítem (el cambio de estado se ve enseguida)', () => {
     db.prepare("INSERT INTO ml_estado_item_fuera_cache (item_id, status, actualizado_en) VALUES ('MLA6', 'closed', ?), ('MLA7', 'closed', ?)").run(new Date().toISOString(), new Date().toISOString());
     registrarWebhookMl(db, { _id: 'n-1', topic: 'items', resource: '/items/MLA6', user_id: 99999, application_id: 1, attempts: 1 });
-    expect(fila('MLA6')).toBeUndefined();
+    expect(fila('MLA6').status).toBeNull();
     expect(fila('MLA7')).toBeTruthy();
   });
 
   it('cualquier encolado de item.project invalida la fila', () => {
     db.prepare("INSERT INTO ml_estado_item_fuera_cache (item_id, status, actualizado_en) VALUES ('MLA8', 'closed', ?)").run(new Date().toISOString());
     encolarItemMl(db, 'MLA8');
-    expect(fila('MLA8')).toBeUndefined();
+    expect(fila('MLA8').status).toBeNull();
+  });
+
+  it('carrera: un GET iniciado antes del aviso NO repuebla la fila al volver', async () => {
+    seed({ item: 'MLA9', status: null });
+    let soltar;
+    mlFetch.mockImplementation(async (_d, _c, method, path) => {
+      if (method === 'get' && /attributes=status/.test(path)) {
+        await new Promise((r) => { soltar = r; }); // el GET queda en vuelo
+        return { status: 200, data: { status: 'closed' }, headers: {} };
+      }
+      return { status: 200, data: {}, headers: {} };
+    });
+    const corrida = syncWcToMl(db, CFG);
+    while (!soltar) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 5));
+    encolarItemMl(db, 'MLA9'); // llega el aviso mientras el GET espera
+    soltar();
+    await corrida;
+    expect(fila('MLA9').status).toBeNull();
+  });
+
+  it('un GET iniciado después del aviso sí se recuerda', async () => {
+    seed({ item: 'MLA10', status: null });
+    encolarItemMl(db, 'MLA10');
+    await new Promise((r) => setTimeout(r, 5));
+    await syncWcToMl(db, CFG);
+    expect(fila('MLA10').status).toBe('closed');
   });
 });
