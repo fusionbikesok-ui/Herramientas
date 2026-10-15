@@ -49,6 +49,8 @@ Comprobación a las **23:21 UTC**: salud de PostgreSQL, worker, scheduler y arch
 
 Comprobación posterior: envíos avanzó a 173 páginas a las 23:22 y 193 a las 23:23; la corrida `21068` terminó a las **23:25:09 UTC** con 220 recursos. Su duración total de 13,5 minutos mezcla ambos repartos y no se usa como medida de una vuelta íntegra con el cupo nuevo. A las 23:25:35, `/healthz` del legado respondió 200 y el worker no registraba advertencias/errores desde el despliegue, ni reinicios ni OOM. La próxima vuelta de mensajes conserva su calendario original.
 
+A las **23:32:49 UTC**, las primeras vueltas iniciadas íntegramente con el nuevo reparto (23:26:44) avanzaban sin error: envíos `21075`, 140 páginas/recursos; mensajes `21076`, 194 páginas y 85 recursos capturados. Pedidos, reclamos y preguntas ya habían terminado correctamente; los siguientes barridos incrementales de pedidos y productos Woo también. Las siete bajas permanecían `succeeded`, la salud de todos los componentes era correcta y el worker seguía sin reinicios ni OOM. Esta medición acredita avance y continuidad de las otras corrientes, no sustituye la duración final de ambas vueltas ni las 24–48 horas de observación.
+
 ## Reversión
 
 Respaldo privado: `/opt/fusionbikes/backups/sombra-recuperacion-20261015`. `woo-before-r3.json` contiene siete inbox, siete DLQ y 28 representaciones; `legacy-before-cupos.env` contiene la configuración anterior con permisos restringidos desde su creación; `worker-before-r3.override.yml` conserva el override.
