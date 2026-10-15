@@ -213,6 +213,18 @@ describe('ml.messages: vuelta liviana + control diario', () => {
     expect(p2.at(-1)!.cursorAfter.avisos_recortados).toBe(false);
   });
 
+  it('una fila con t == windowTo exacto se lee una sola vez en 2 corridas (cierre en (windowTo, id máximo))', async () => {
+    const exacta = { id: 'msgExacta', t: AHORA };
+    const base = { ...reciente, last_full_at: new Date(AHORA.getTime() - H).toISOString() };
+    const m1 = montar({ senales: [exacta], cambiados: [{ id: 'P0555', t: AHORA }] });
+    const p1 = await correr(m1.a, contexto(base));
+    const c1 = p1.at(-1)!.cursorAfter;
+    expect(m1.llamadas.filter((l) => l.includes('msgExacta') || l.includes('/packs/P0555/')).length).toBeGreaterThanOrEqual(2);
+    const m2 = montar({ senales: [exacta], cambiados: [{ id: 'P0555', t: AHORA }] });
+    await correr(m2.a, contexto({ ...base, last_light_at: c1.last_light_at, light: c1.light }, new Date(AHORA.getTime() + 20 * 60_000)));
+    expect(m2.llamadas.some((l) => l.includes('msgExacta') || l.includes('/packs/P0555/'))).toBe(false);
+  });
+
   it('un registro posterior al inicio de la corrida (> windowTo) no se lee ni adelanta el cursor', async () => {
     const despues = { id: 'msgFuturo', t: new Date(AHORA.getTime() + 1000) };
     const m = montar({ senales: ['msgViejo', despues], cambiados: [{ id: 'P0777', t: new Date(AHORA.getTime() + 5000) }] });

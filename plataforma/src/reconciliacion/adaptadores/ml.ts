@@ -283,6 +283,7 @@ const MAX_PACKS_CAMBIADOS = 500;
 const PREFIJO_MENSAJE = 'msg:';
 /** Punto de reanudación (t, id) de cada consulta liviana: se consulta con `(t, id) > (luz.t, luz.id)`, así que más filas
  *  empatadas en `t` que el tope no frenan la ventana. */
+const ID_MAXIMO = '￿';   // mayor que cualquier id (son ASCII) bajo COLLATE "C"
 interface PuntoLuz { t: string; id: string }
 interface Luz { avisos: PuntoLuz; pedidos: PuntoLuz }
 const esPunto = (v: unknown): v is PuntoLuz => esRegistro(v) && typeof v.t === 'string' && Number.isFinite(Date.parse(v.t)) && typeof v.id === 'string';
@@ -368,6 +369,8 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
             GROUP BY 1 ORDER BY MIN(received_at), 1 LIMIT $5`,
           [ctx.corrida.channelAccountId, new Date(punto.avisos.t), punto.avisos.id, ctx.windowTo, MAX_AVISOS_WEBHOOK + 1],
         );
+        // Reagrupado (intencional, en ambas consultas): el filtro de clave es por FILA y se agrupa después. Un resource_id /
+        // target_id ya leído que reciba una fila nueva posterior al cursor vuelve a aparecer: nueva actividad = releer.
         // Pedidos que cambiaron en la ventana de la corrida, con la misma clave.
         const cambiados = await dep.db.query<{ target_id: string; t: Date | string }>(
           `SELECT target_id COLLATE "C" AS target_id, MIN(last_seen_at) AS t FROM integrations.resource_relations
@@ -376,7 +379,9 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
             GROUP BY 1 ORDER BY MIN(last_seen_at), 1 LIMIT $5`,
           [ctx.corrida.channelAccountId, new Date(punto.pedidos.t), punto.pedidos.id, ctx.windowTo, MAX_PACKS_CAMBIADOS + 1],
         );
-        const fin: PuntoLuz = { t: iso(ctx.windowTo.getTime()), id: '' };
+        // Cierre sin recorte: todo lo que tenga t <= windowTo ya se leyó, incluso una fila con t == windowTo exacto, así que el
+        // punto queda en (windowTo, id máximo): ningún id lo supera y esa fila no se relee en la corrida siguiente.
+        const fin: PuntoLuz = { t: iso(ctx.windowTo.getTime()), id: ID_MAXIMO };
         const luz: Luz = { avisos: fin, pedidos: fin }; let recortados = false;
         const recortar = <T extends { t: Date | string }>(filas: T[], tope: number, clave: keyof Luz, idDe: (f: T) => string): T[] => {
           if (filas.length <= tope) return filas;
