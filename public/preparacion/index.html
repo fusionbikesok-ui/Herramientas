@@ -1246,7 +1246,7 @@ function etqBotonMl(p){
   if(p.canal==='web'||!p.etiqueta_ml)return '';
   var e=p.etiqueta_ml, clave='ml:'+p.ml_order_id;
   if(!e.elegible)return '<span class="ped-nota" title="No se puede bajar la etiqueta todavía">🖨 Etiqueta: '+esc(e.motivo||'no disponible')+'</span>';
-  var aviso=e.descargada_en?'PDF bajado el '+esc(etqFechaHora(e.descargada_en))+(e.descargada_por?' por '+esc(e.descargada_por):''):(e.impresa_en_ml?'Ya impresa en ML':'');
+  var aviso=e.descargada_en?'PDF generado el '+esc(etqFechaHora(e.descargada_en))+(e.descargada_por?' por '+esc(e.descargada_por):''):(e.impresa_en_ml?'Ya impresa en ML':'');
   return '<label class="etq-sel" onclick="event.stopPropagation()"><input type="checkbox" '+(ETQ_SEL[clave]?'checked ':'')+'onchange="etqTildar(\''+clave+'\',this.checked)"> elegir</label>'
     +'<button type="button" class="btn sec mini btn-44" onclick="event.stopPropagation();bajarEtiquetasMl([\''+clave+'\'])">🖨 Etiqueta</button>'
     +(aviso?'<span class="ped-nota">'+aviso+'</span>':'');

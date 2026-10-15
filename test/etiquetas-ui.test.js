@@ -76,7 +76,7 @@ describe('botón «Etiqueta» de ML', () => {
     const html = ctx.cardPendiente(ml({ etiqueta_ml: { elegible: true, descargada_en: '2026-10-15T15:00:00Z', descargada_por: 'ana' } }));
     expect(html).toContain('🖨 Etiqueta');
     expect(html).toContain("bajarEtiquetasMl(['ml:2001'])");
-    expect(html).toContain('PDF bajado el');
+    expect(html).toContain('PDF generado el');
     expect(html).toContain('por ana');
   });
   it('no elegible: muestra el motivo corto y ningún botón', () => {
