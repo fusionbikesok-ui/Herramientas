@@ -64,7 +64,21 @@ describe('missed_feeds de ML', () => {
     expect(r.topicos.find((t) => t.topic === 'orders_v2').nuevos).toBe(2);
     expect(db.prepare("SELECT COUNT(*) n FROM trabajos_recurso WHERE tipo='order.ml'").get().n).toBe(2);
     expect(db.prepare("SELECT COUNT(*) n FROM trabajos_recurso WHERE tipo='item.project'").get().n).toBe(1);
-    expect(db.prepare('SELECT COUNT(*) n FROM missed_feeds_corridas').get().n).toBe(4);
+    expect(db.prepare('SELECT COUNT(*) n FROM missed_feeds_corridas').get().n).toBe(5);
+  });
+
+  it('E-4: shipments se enumera y se reinyecta como shipment.project (descarta recurso ajeno o ilegible)', async () => {
+    mlFetch.mockImplementation(async (_db, _cfg, _m, ruta) => {
+      if (ruta.includes('topic=shipments')) return { status: 200, data: { messages: [
+        { _id: 's-1', topic: 'shipments', resource: '/shipments/4444', user_id: 99999 },
+        { _id: 's-2', topic: 'shipments', resource: '/shipments/abc', user_id: 99999 },
+        { _id: 's-3', topic: 'shipments', resource: '/shipments/5555', user_id: 11111 },
+      ], total: 3 } };
+      return { status: 200, data: { messages: [], total: 0 } };
+    });
+    const r = await reinyectarMissedFeeds(db, ML);
+    expect(r.topicos.find((x) => x.topic === 'shipments')).toMatchObject({ enumerados: 3, nuevos: 1, excluidos: 2 });
+    expect(db.prepare("SELECT recurso FROM trabajos_recurso WHERE tipo='shipment.project'").all()).toEqual([{ recurso: '4444' }]);
   });
 
   it('es idempotente: repetir la ronda no duplica (el fingerprint incluye el _id)', async () => {

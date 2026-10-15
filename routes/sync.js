@@ -2373,6 +2373,130 @@ export async function procesarLoteItemsMl(db, cfg, recursos) {
   return res;
 }
 
+// ─── E-4: trabajo `shipment.project` (envío de ML creado/modificado) ───────────────────────────────────────────────────
+/** Veces que se difiere un envío cerrado por `closed_by_user` (cambio de tipo de envío) esperando que ML asigne el nuevo. */
+const ESPERAS_CAMBIO_ENVIO = 5;
+/** Veces que se difiere un envío cuya orden no se puede identificar antes de cerrarlo con un aviso. */
+const ESPERAS_ENVIO_SIN_ORDEN = 12;
+
+/**
+ * Órdenes ML de un envío: primero `gestion_pedidos.ml_shipment_id`; si no está (orden aún no importada), `/shipments/{id}/items`.
+ * Un 404 de `/items` equivale a "sin orden conocida" (el envío no existe o no es nuestro).
+ */
+async function ordenesDeEnvioMl(db, mlCfg, sid) {
+  const filas = db.prepare("SELECT external_id FROM gestion_pedidos WHERE fuente = 'mercadolibre' AND ml_shipment_id = ?").all(sid);
+  if (filas.length) return { ids: [...new Set(filas.map((f) => String(f.external_id)))] };
+  const r = await mlFetch(db, mlCfg, 'get', `/shipments/${encodeURIComponent(sid)}/items`, null, { headers: { 'x-format-new': 'true' } });
+  if (r.status === 429) return { error: 'ml_429', diferido: true };
+  if (r.status === 404) return { ids: [] };
+  if (r.status !== 200 || !Array.isArray(r.data)) return { error: `shipment_items_http_${r.status}` };
+  return { ids: [...new Set(r.data.map((i) => String(i?.order_id ?? '')).filter(Boolean))] };
+}
+
+/**
+ * Efecto del aviso `shipments`: relee el envío (x-format-new) y lo aplica a Preparación SOLO si es el `shipping.id` vigente de su
+ * orden (un envío obsoleto por cambio de logística no cancela nada; se encola el vigente). Decisiones de José (2026-10-15):
+ *  - envío `cancelled` con la preparación en curso → misma ruta que la cancelación de la orden (devolución pendiente si hay ítems
+ *    levantados, si no "cancelada sin retiro") + incidente de aviso;
+ *  - `closed_by_user` (cambio de tipo de envío) NUNCA cancela por tiempo: solo cancela la orden ML cancelada (ruta de orden). Tras
+ *    ${ESPERAS_CAMBIO_ENVIO} esperas con el mismo `shipping.id` se abre `envio_cerrado_sin_resolver_<orden>` y la preparación no se toca;
+ *  - la logística cambia y sigue siendo local → se actualizan tipo y horario límite sin frenar; pasa a Full → sale de la cola + aviso
+ *    (haya o no preparación en curso);
+ *  - `printed` / `stale` / `delayed` solo viajan en `pedidos_cache.substatus` (chips "Etiqueta lista" / "Demorado").
+ * Volumen: sin orden conocida no se relee el envío; un aviso repetido (misma firma status+substatus+logística ya aplicada) no relee la orden.
+ * @returns {Promise<{estado:'hecho'}|{estado:'reencolar', motivo:string, diferido?:boolean, demoraMs?:number}>}
+ */
+export async function procesarEnvioMl(db, cfg, shipmentId) {
+  if (!mlCfgOk(cfg)) return { estado: 'reencolar', motivo: 'ml_sin_configurar' };
+  const sid = String(shipmentId);
+  const prepa = await import('./preparacion.js');
+  prepa.ensureTables(db);
+  const dif = db.prepare("SELECT diferidos FROM trabajos_recurso WHERE tipo = 'shipment.project' AND recurso = ?").get(sid)?.diferidos || 0;
+
+  // 1) Mapeo a órdenes ANTES de releer el envío: sin orden conocida alcanza con /items (no se gasta otro GET por reintento).
+  const mapa = await ordenesDeEnvioMl(db, cfg.ml, sid);
+  if (mapa.error) return { estado: 'reencolar', motivo: mapa.error, diferido: Boolean(mapa.diferido) };
+  if (!mapa.ids.length) {
+    if (dif < ESPERAS_ENVIO_SIN_ORDEN) return { estado: 'reencolar', diferido: true, demoraMs: 2 * 60 * 1000, motivo: 'envio_sin_orden_conocida' };
+    abrirOActualizarIncidente(db, {
+      integracion: 'mercadolibre', proceso: 'shipment_project', tipoError: `envio_sin_orden_${sid}`.slice(0, 120), severidad: 'advertencia',
+      mensajeTecnico: `shipment ${sid}: sin orden conocida tras ${dif} esperas`,
+      mensajeHumano: `El envío ML ${sid} avisó un cambio pero no se pudo identificar su orden. Revisalo a mano si hay una venta sin reflejar.`,
+      contexto: { shipment_id: sid },
+    });
+    return { estado: 'hecho', motivo: 'envio_sin_orden' };
+  }
+
+  // 2) Relectura del envío.
+  const resp = await mlFetch(db, cfg.ml, 'get', `/shipments/${encodeURIComponent(sid)}`, null, { headers: { 'x-format-new': 'true' } });
+  if (resp.status === 429) return { estado: 'reencolar', diferido: true, motivo: 'ml_429' };
+  if (resp.status === 404) return { estado: 'hecho', motivo: 'envio_inexistente' };
+  if (resp.status !== 200 || !resp.data?.status) return { estado: 'reencolar', motivo: `ml_shipments_http_${resp.status}${resp.status === 200 ? '_sin_status' : ''}` };
+  const envio = resp.data;
+  const logisticType = tipoLogisticaMl(envio);
+  const firma = `${envio.status}|${envio.substatus || ''}|${logisticType || ''}`;
+  if (db.prepare('SELECT firma FROM ml_envio_visto WHERE shipment_id = ?').get(sid)?.firma === firma) return { estado: 'hecho', motivo: 'sin_cambios' };
+
+  // 3) Cada orden del envío.
+  let esperar = false;
+  for (const oid of mapa.ids) {
+    const ordResp = await mlFetch(db, cfg.ml, 'get', `/orders/${encodeURIComponent(oid)}`);
+    if (ordResp.status === 429) return { estado: 'reencolar', diferido: true, motivo: 'ml_429' };
+    if (ordResp.status !== 200 || !ordResp.data) return { estado: 'reencolar', motivo: `ml_orders_http_${ordResp.status}` };
+    const orden = ordResp.data;
+    const vigente = orden.shipping?.id != null ? String(orden.shipping.id) : null;
+    if (vigente !== sid) {
+      // Aviso de un envío que ya no es el de la orden (cambio de logística): no se aplica, y se asegura el vigente.
+      if (vigente) encolarTrabajo(db, { tipo: 'shipment.project', recurso: vigente });
+      continue;
+    }
+    const clave = `ml:${orden.id}`;
+    const prep = db.prepare('SELECT * FROM preparaciones WHERE clave = ?').get(clave);
+    if (envio.status === 'cancelled' && envio.substatus === 'closed_by_user') {
+      // Cambio de tipo de envío: ML cierra el viejo y asigna otro. Nunca se cancela por tiempo; solo la orden cancelada (otra ruta).
+      if (orden.status === 'cancelled') continue;
+      if (dif < ESPERAS_CAMBIO_ENVIO) { esperar = true; continue; } // se sigue con las demás órdenes del envío; el reintento es del conjunto
+      abrirOActualizarIncidente(db, {
+        integracion: 'mercadolibre', proceso: 'preparacion', tipoError: `envio_cerrado_sin_resolver_${orden.id}`.slice(0, 120), severidad: 'advertencia',
+        mensajeTecnico: `shipment ${sid} cerrado por el usuario y la orden ${orden.id} sigue apuntando a él tras ${dif} esperas`,
+        mensajeHumano: `El envío ML del pedido #${orden.id} quedó cerrado (cambio de tipo de envío) y ML todavía no asignó el nuevo. La preparación no se tocó: revisalo en ML.`,
+        contexto: { ml_order_id: String(orden.id), shipment_id: sid, esperas: dif },
+      });
+      continue;
+    }
+    if (envio.status === 'cancelled') {
+      db.prepare(`INSERT INTO ml_shipment_estado (shipment_id, status, substatus, logistic_type, actualizado_en) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(shipment_id) DO UPDATE SET status=excluded.status, substatus=excluded.substatus, logistic_type=excluded.logistic_type, actualizado_en=excluded.actualizado_en`)
+        .run(sid, envio.status, envio.substatus || null, logisticType || null, new Date().toISOString());
+      prepa.invalidarCacheMlNoElegible(db, orden.id, orden.status, envio.status, logisticType);
+      if (prep?.estado === 'en_preparacion' && prepa.aplicarCancelacionReconciliada(db, prep, `envio:cancelled/${envio.substatus || '-'}`)) {
+        const despues = db.prepare('SELECT estado FROM preparaciones WHERE id = ?').get(prep.id)?.estado;
+        const texto = `El envío ML del pedido #${orden.id} se canceló (${envio.substatus || 'sin detalle'}) con la preparación en curso. `
+          + (despues === 'cancelada_pendiente_devolucion' ? 'Quedó "devolución pendiente": hay productos levantados que volver a su lugar.' : 'Quedó "cancelada sin retiro": no había productos levantados.');
+        abrirOActualizarIncidente(db, {
+          integracion: 'mercadolibre', proceso: 'preparacion', tipoError: `envio_cancelado_${orden.id}`.slice(0, 120), severidad: 'advertencia',
+          mensajeTecnico: texto, mensajeHumano: texto, contexto: { ml_order_id: String(orden.id), shipment_id: sid, substatus: envio.substatus || null, estado: despues },
+        });
+      }
+      continue;
+    }
+    const enCola = Boolean(db.prepare("SELECT 1 FROM pedidos_cache WHERE clave = ? AND estado_envio = 'pendiente'").get(clave)) || prep?.estado === 'en_preparacion';
+    const r = await prepa.aplicarEnvioOrdenMl(db, cfg.ml, orden, envio, { marcarSalida: true });
+    if (r.accion === 'invalidada' && r.motivo === 'logistica_externa' && enCola) {
+      const texto = `El pedido #${orden.id} pasó a logística Full (${logisticType}) y salió de la cola de Preparación.`
+        + (prep?.estado === 'en_preparacion' ? ' Tenía la preparación en curso: revisá si ya está armado.' : '');
+      abrirOActualizarIncidente(db, {
+        integracion: 'mercadolibre', proceso: 'preparacion', tipoError: `envio_pasa_a_full_${orden.id}`.slice(0, 120), severidad: 'advertencia',
+        mensajeTecnico: texto, mensajeHumano: texto, contexto: { ml_order_id: String(orden.id), shipment_id: sid, logistic_type: logisticType },
+      });
+    }
+  }
+  if (esperar) return { estado: 'reencolar', diferido: true, demoraMs: 3 * 60 * 1000, motivo: 'envio_cerrado_por_cambio_de_tipo' };
+  db.prepare(`INSERT INTO ml_envio_visto (shipment_id, firma, actualizado_en) VALUES (?, ?, ?)
+    ON CONFLICT(shipment_id) DO UPDATE SET firma = excluded.firma, actualizado_en = excluded.actualizado_en`).run(sid, firma, new Date().toISOString());
+  return { estado: 'hecho' };
+}
+
 let _trabajosRecursoEnCurso = false;
 
 const tipoErrorTrabajo = (prefijo, t) => `${prefijo}_${t.tipo}_${t.recurso}`.slice(0, 120);
@@ -2432,7 +2556,7 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
   _trabajosRecursoEnCurso = true;
   let procesados = 0;
   try {
-    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'item.project', 'stock.bolsa']) {
+    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'shipment.project', 'item.project', 'stock.bolsa']) {
       if (tipo === 'item.project') {
         // E-2: lote de hasta 20 ítems = UNA llamada /items/bulk (no una por aviso). Va antes de stock.bolsa para que, en la
         // misma pasada, las bolsas que encola se concilien.
@@ -2454,6 +2578,7 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
           const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso)
             : tipo === 'order.woo' ? await procesarOrdenWoo(db, cfg, t.recurso)
               : tipo === 'catalog.woo_product_sync' ? await procesarProductoWoo(db, cfg, t.recurso)
+                : tipo === 'shipment.project' ? await procesarEnvioMl(db, cfg, t.recurso)
                 : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
           if (r.estado === 'reencolar') resolverReintento(db, t, r);
           else {

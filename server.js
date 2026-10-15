@@ -613,13 +613,26 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       return;
     }
 
+    // E-4: shipments → trabajo durable `shipment.project` (ya encolado antes del ACK). Acelerador no durable con debounce de 3 s
+    // (una ráfaga del mismo envío se lee una vez); si el proceso muere, el cron de cada minuto lo toma.
+    if (topic === 'shipments') {
+      if (!app._aceleradorEnviosMl) {
+        app._aceleradorEnviosMl = setTimeout(() => {
+          app._aceleradorEnviosMl = null;
+          procesarTrabajosRecurso(app._db, syncCfg).catch(err => console.error('[notif-ml] shipment.project error:', err.message));
+        }, 3000);
+        app._aceleradorEnviosMl.unref?.();
+      }
+      return;
+    }
+
     // Topic post_purchase: la proyección real vive en el worker (procesarIntegrationJobs).
     // Aquí solo persistimos el evento; no hay logs informativos.
     if (topic === 'post_purchase') {
       return;
     }
 
-    // Topic sin función todavía (shipments, orders_feedback, items, invoices) —
+    // Topic sin función todavía (orders_feedback, invoices) —
     // se descarta en silencio, a propósito. (orders_v2 sí tiene función: ver más arriba,
     // camino puntual vía syncPedidoMlPuntual.)
   });
