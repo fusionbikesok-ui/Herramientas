@@ -343,6 +343,10 @@ Tres métricas por separado (spec "Recuperación y medición"). Migración 131 (
 - Chips en la cola de Preparación (ML): substatus `printed` → "Etiqueta lista"; `stale`/`delayed` → "Demorado".
 - Cobertura E-3: `TOPICOS_MISSED_FEEDS` incluye `shipments` (reinyecta como `shipment.project`). El "sin evento" de barridoCorridas es por clave de ítem/SKU y un envío no mapea a esas claves, así que no lo cubre.
 
+## Status de ítems fuera de `ml_publicaciones_cache` (migración 132, 2026-10-15)
+- `refrescarPublicacionesMl` solo trae active/paused, así que las publicaciones cerradas/en revisión quedan fuera y `syncWcToMl` hacía un `GET /items/{id}?attributes=status` por corrida (~3.170/día con 22 ítems).
+- `ml_estado_item_fuera_cache(item_id, status, actualizado_en)` (lib/mlEstadoItemFueraCache.js) recuerda ese status 24 h. Reglas: (1) `ml_publicaciones_cache` manda siempre (la tabla solo se mira si el ítem no está en `estadoItem`); (2) `encolarItemMl` (todo aviso `items`) borra la fila; (3) un ítem resuelto desde la tabla entra en `estadoItem`, así que cuenta como recorrido con su status para la medición del barrido. Un GET fallido (status ≠ 200 / 'desconocido') no se guarda.
+
 ### Hotfix E-1a: ventana por fecha de PAGO (2026-10-14)
 - **Caso real:** la orden 2000018902455242 se creó el 10/10 y se pagó el 13/10; E-1a la tomó como vieja (medía `date_created`), descontó 14→13 sin pedido Woo y abrió un incidente con un texto falso. Era una venta viva.
 - **Fecha de referencia** (`fechaBaseOrden` / `fechaOrdenMs` en `lib/descuentoOrdenVieja.js`): el MÁXIMO `payments[].date_approved` de los pagos con `status='approved'`; si no hay, `date_closed`; si tampoco, `date_created`. UTC (sin offset se asume UTC). Los pagos no aprobados no cuentan.
