@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { procesarEnvioMl, procesarTrabajosRecurso } from '../routes/sync.js';
-import { ensureTables } from '../routes/preparacion.js';
+import { ensureTables, syncPedidosCache } from '../routes/preparacion.js';
 import { registrarWebhookMl } from '../lib/workerIntegrationJobs.js';
 import { encolarTrabajo } from '../lib/trabajosRecurso.js';
 
@@ -12,7 +12,7 @@ vi.mock('../lib/mlClient.js', async () => {
   const actual = await vi.importActual('../lib/mlClient.js');
   return { ...actual, mlFetch: vi.fn(), estadoCooldownMl: () => ({ activo: false }) };
 });
-vi.mock('../routes/woo.js', () => ({ wooFetch: vi.fn() }));
+vi.mock('../routes/woo.js', () => ({ wooFetch: vi.fn(async () => ({ data: [] })) }));
 import { mlFetch } from '../lib/mlClient.js';
 
 const TEST_DB = `./test/tmp-shipment-project.${process.pid}.sqlite`;
@@ -85,13 +85,43 @@ describe('E-4: envío cancelado con la preparación en curso', () => {
     expect(incidente('envio_cancelado_')).toHaveLength(0);
   });
 
-  it('closed_by_user agotadas las esperas → se trata como cancelación', async () => {
-    const id = seedPrep(db); seedGestion(db);
+  it('closed_by_user agotadas las esperas NO cancela: abre envio_cerrado_sin_resolver y deja la preparación', async () => {
+    const id = seedPrep(db, { levantado: true }); seedGestion(db);
     encolarTrabajo(db, { tipo: 'shipment.project', recurso: '555' });
     db.prepare("UPDATE trabajos_recurso SET diferidos = 5 WHERE tipo = 'shipment.project' AND recurso = '555'").run();
     instalarMl({ envio: { status: 'cancelled', substatus: 'closed_by_user' } });
+    const r = await procesarEnvioMl(db, CFG, '555');
+    expect(r.estado).toBe('hecho');
+    expect(estadoPrep(id)).toBe('en_preparacion');
+    expect(incidente('envio_cerrado_sin_resolver_ORD-1')).toHaveLength(1);
+    expect(incidente('envio_cancelado_')).toHaveLength(0);
+  });
+
+  it('closed_by_user con la orden cancelled lo resuelve la ruta de orden: el envío no toca la preparación', async () => {
+    const id = seedPrep(db); seedGestion(db);
+    instalarMl({ envio: { status: 'cancelled', substatus: 'closed_by_user' }, orden: { status: 'cancelled' } });
+    const r = await procesarEnvioMl(db, CFG, '555');
+    expect(r.estado).toBe('hecho');
+    expect(estadoPrep(id)).toBe('en_preparacion');
+    expect(incidente('envio_')).toHaveLength(0);
+  });
+
+  it('closed_by_user con shipping.id nuevo en la orden procesa el envío nuevo', async () => {
+    const id = seedPrep(db); seedGestion(db);
+    instalarMl({ envio: { status: 'cancelled', substatus: 'closed_by_user' }, orden: { shipping: { id: 888 } } });
     await procesarEnvioMl(db, CFG, '555');
-    expect(estadoPrep(id)).toBe('cancelada_sin_retiro_registrado');
+    expect(estadoPrep(id)).toBe('en_preparacion');
+    expect(trabajo('888')).toBeTruthy();
+  });
+
+  it('doble cancelled del mismo envío: una sola devolución y un solo incidente', async () => {
+    const id = seedPrep(db, { levantado: true }); seedGestion(db);
+    instalarMl({ envio: { status: 'cancelled', substatus: 'pack_splitted' } });
+    await procesarEnvioMl(db, CFG, '555');
+    await procesarEnvioMl(db, CFG, '555');
+    expect(estadoPrep(id)).toBe('cancelada_pendiente_devolucion');
+    expect(db.prepare('SELECT COUNT(*) AS n FROM preparacion_devoluciones WHERE preparacion_id = ?').get(id).n).toBe(1);
+    expect(incidente('envio_cancelado_ORD-1')).toHaveLength(1);
   });
 
   it('un envío obsoleto (la orden ya tiene otro) no cancela y encola el vigente', async () => {
@@ -125,6 +155,16 @@ describe('E-4: cambio de logística', () => {
   });
 });
 
+describe('E-4: Full sin preparación en curso', () => {
+  it('sale de la cola y avisa aunque no haya preparación', async () => {
+    seedGestion(db);
+    db.prepare("INSERT INTO pedidos_cache (clave, canal, ml_order_id, estado_envio, items_json, actualizado_en) VALUES ('ml:ORD-1', 'ml', 'ORD-1', 'pendiente', '[]', ?)").run(ts());
+    instalarMl({ envio: { logistic_type: 'fulfillment' } });
+    await procesarEnvioMl(db, CFG, '555');
+    expect(incidente('envio_pasa_a_full_ORD-1')).toHaveLength(1);
+  });
+});
+
 describe('E-4: ya salió, mapeo y errores', () => {
   it('envío shipped marca la preparación como enviada', async () => {
     const id = seedPrep(db); seedGestion(db);
@@ -145,6 +185,7 @@ describe('E-4: ya salió, mapeo y errores', () => {
   it('sin orden conocida difiere; agotadas las esperas cierra con aviso', async () => {
     instalarMl({ items: [] });
     expect(await procesarEnvioMl(db, CFG, '555')).toMatchObject({ estado: 'reencolar', diferido: true });
+    expect(ml.gets.filter((p) => /^\/shipments\/555$/.test(p))).toHaveLength(0); // solo /items mientras queden reintentos
     encolarTrabajo(db, { tipo: 'shipment.project', recurso: '555' });
     db.prepare("UPDATE trabajos_recurso SET diferidos = 12 WHERE tipo = 'shipment.project' AND recurso = '555'").run();
     expect((await procesarEnvioMl(db, CFG, '555')).estado).toBe('hecho');
@@ -159,6 +200,49 @@ describe('E-4: ya salió, mapeo y errores', () => {
     expect((await procesarEnvioMl(db, CFG, '555')).estado).toBe('hecho');
     ml.http.envio = 500;
     expect(await procesarEnvioMl(db, CFG, '555')).toMatchObject({ estado: 'reencolar' });
+  });
+});
+
+describe('E-4: volumen', () => {
+  it('un aviso repetido con la misma firma no relee la orden', async () => {
+    seedPrep(db); seedGestion(db);
+    instalarMl({ envio: { substatus: 'printed' } });
+    await procesarEnvioMl(db, CFG, '555');
+    const ordenes = () => ml.gets.filter((p) => p.startsWith('/orders/')).length;
+    expect(ordenes()).toBe(1);
+    await procesarEnvioMl(db, CFG, '555');
+    expect(ordenes()).toBe(1);
+    ml.envio.substatus = 'delayed';
+    await procesarEnvioMl(db, CFG, '555');
+    expect(ordenes()).toBe(2);
+  });
+});
+
+describe('E-4: carrera con syncPedidosCache', () => {
+  it('un volcado que arrancó antes no repone en la cola un envío que el webhook retiró', async () => {
+    seedPrep(db); seedGestion(db);
+    db.prepare("INSERT INTO pedidos_cache (clave, canal, ml_order_id, estado_envio, items_json, actualizado_en) VALUES ('ml:ORD-1', 'ml', 'ORD-1', 'pendiente', '[]', ?)").run(ts());
+    const woo = (await import('../routes/woo.js')).wooFetch;
+    woo.mockResolvedValue({ data: [] });
+    instalarMl({});
+    const base = mlFetch.getMockImplementation();
+    let reentrando = false;
+    mlFetch.mockImplementation(async (d, c, m, path, ...resto) => {
+      if (path.startsWith('/orders/search')) {
+        return { status: 200, data: { results: [{ id: 'ORD-1', status: 'paid', date_created: '2026-07-20T00:00:00Z', buyer: { nickname: 'x' }, shipping: { id: 555 }, order_items: [] }], paging: { total: 1 } }, headers: {} };
+      }
+      if (path === '/shipments/555' && !reentrando) {
+        // El barrido lee el envío (todavía ready_to_ship) y, ANTES de volcar, llega el webhook con el envío cancelado.
+        reentrando = true;
+        const lecturaVieja = { status: 200, data: { id: 555, status: 'ready_to_ship', logistic_type: 'self_service' }, headers: {} };
+        ml.envio = { id: 555, status: 'cancelled', substatus: 'pack_splitted', logistic_type: 'self_service' };
+        await procesarEnvioMl(db, CFG, '555');
+        return lecturaVieja;
+      }
+      return base(d, c, m, path, ...resto);
+    });
+    await syncPedidosCache(db, { ...CFG, andreaniStatus: 'lpaandreani', enviadoAndreaniStatus: 'enviadoandreani' });
+    expect(db.prepare("SELECT estado_envio FROM pedidos_cache WHERE clave = 'ml:ORD-1'").get().estado_envio).toBe('no_elegible');
   });
 });
 

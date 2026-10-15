@@ -255,6 +255,15 @@ export function ensureTables(db) {
     shipment_limite_original TEXT
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_pedidos_cache_estado ON pedidos_cache(estado_envio)').run();
+  // E-4: marca de la última proyección hecha por el trabajo `shipment.project` / aviso de orden. Un volcado de `syncPedidosCache`
+  // que arrancó ANTES de esa marca no puede pisarla (su lectura de ML es más vieja que la del webhook).
+  db.prepare(`CREATE TABLE IF NOT EXISTS ml_envio_proyeccion (
+    clave TEXT PRIMARY KEY, estado TEXT NOT NULL, actualizado_en TEXT NOT NULL
+  )`).run();
+  // E-4: firma (status|substatus|logística) ya aplicada por el trabajo, para no releer la orden ante avisos repetidos.
+  db.prepare(`CREATE TABLE IF NOT EXISTS ml_envio_visto (
+    shipment_id TEXT PRIMARY KEY, firma TEXT NOT NULL, actualizado_en TEXT NOT NULL
+  )`).run();
   try { asegurarEsquemaHorarios(db); db.prepare(`CREATE TABLE IF NOT EXISTS despacho_horarios (
     dia INTEGER PRIMARY KEY CHECK (dia BETWEEN 1 AND 7), habilitado INTEGER NOT NULL DEFAULT 0 CHECK (habilitado IN (0,1)),
     hora_corte TEXT NOT NULL DEFAULT '16:00', actualizado_en TEXT NOT NULL
@@ -3702,6 +3711,16 @@ function logSyncPedidos(db, estado, error) {
   `).run(estado, error ?? null, now(), now());
 }
 
+/** E-4: deja constancia de que el webhook proyectó (o retiró) esta clave ML. */
+function marcarProyeccionEnvio(db, clave, estado) {
+  db.prepare(`INSERT INTO ml_envio_proyeccion (clave, estado, actualizado_en) VALUES (?, ?, ?)
+    ON CONFLICT(clave) DO UPDATE SET estado = excluded.estado, actualizado_en = excluded.actualizado_en`).run(clave, estado, now());
+}
+/** ¿El webhook proyectó/retiró esta clave después de `inicio`? Entonces el volcado de una corrida que arrancó antes no la toca. */
+function proyectadoDespues(db, clave, inicio) {
+  return Boolean(db.prepare('SELECT 1 FROM ml_envio_proyeccion WHERE clave = ? AND actualizado_en > ?').get(clave, inicio));
+}
+
 function upsertPedidoCache(db, row) {
   const sla = row.sla || calcularSlaPreparacion({ canal: row.canal, logisticType: row.logistic_type, shipment: row.shipment, ahora: new Date() });
   const fechaDespacho = sla.fecha_local ?? null;
@@ -3757,6 +3776,7 @@ export async function syncPedidosCache(db, cfg) {
   ensureTables(db);
   if (_pedidosCacheEnCurso) return;
   _pedidosCacheEnCurso = true;
+  const inicioCorrida = now();
   try {
     const andreaniStatus = cfg?.andreaniStatus || 'lpaandreani';
     const enviadoAndreaniStatus = cfg?.enviadoAndreaniStatus || 'enviadoandreani';
@@ -3804,6 +3824,8 @@ export async function syncPedidosCache(db, cfg) {
       const clavesVigentesMl = new Set(mlPend.map((p) => `ml:${p.ml_order_id}`));
       const txMl = db.transaction(() => {
         for (const p of mlPend) {
+          // E-4: si el webhook de envío proyectó/retiró esta clave después de que arrancó la corrida, su dato es más nuevo.
+          if (proyectadoDespues(db, `ml:${p.ml_order_id}`, inicioCorrida)) continue;
           upsertPedidoCache(db, {
             clave: `ml:${p.ml_order_id}`,
             canal: 'ml',
@@ -3911,6 +3933,7 @@ export function invalidarCacheMlNoElegible(db, mlOrderId, estadoOrden, estadoEnv
   const detalle = estadoEnvio ? `${estadoOrden}/${estadoEnvio}/${logisticType || 'sin-logistica'}` : estadoOrden;
   db.prepare("UPDATE pedidos_cache SET estado_envio='no_elegible', estado_wc=?, logistic_type=?, actualizado_en=? WHERE clave=? AND estado_envio='pendiente'")
     .run(detalle || null, logisticType, now(), `ml:${mlOrderId}`);
+  marcarProyeccionEnvio(db, `ml:${mlOrderId}`, 'retirado');
 }
 
 /**
@@ -4109,5 +4132,6 @@ export async function aplicarEnvioOrdenMl(db, mlCfg, orden, envio, { marcarSalid
     items_json: JSON.stringify(itemsDesdeOrdenMl(db, orden)),
     actualizado_en: now(),
   });
+  marcarProyeccionEnvio(db, `ml:${ov.ml_order_id}`, 'vigente');
   return { accion: 'proyectada' };
 }

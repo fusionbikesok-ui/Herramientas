@@ -332,10 +332,14 @@ Tres métricas por separado (spec "Recuperación y medición"). Migración 131 (
 - Solo se aplica si el id es el `order.shipping.id` VIGENTE; un envío obsoleto se ignora y se encola el vigente.
 - Envío `cancelled` con la preparación `en_preparacion` → `aplicarCancelacionReconciliada` (misma ruta que la cancelación de orden: ítems
   levantados → `cancelada_pendiente_devolucion`, si no `cancelada_sin_retiro_registrado`) + incidente `envio_cancelado_<orden>` (advertencia).
-  `closed_by_user` (cambio de tipo de envío) espera hasta 5 pasadas de ~3 min antes de tratarse como cancelación.
+  `closed_by_user` (cambio de tipo de envío) NUNCA cancela por tiempo: espera hasta 5 pasadas de ~3 min y luego abre `envio_cerrado_sin_resolver_<orden>` sin tocar la preparación (cancela solo la orden ML cancelled, por su ruta).
 - Cambio de logística: sigue local → se actualizan tipo y horario límite sin frenar; pasa a Full → sale de la cola + incidente `envio_pasa_a_full_<orden>`.
 - Envío shipped/delivered (o substatus adelantado) → `marcarPreparacionEnviada` (origen `shipment_webhook`).
 - `routes/preparacion.js`: `aplicarEnvioOrdenMl` es la proyección única de orden+envío (la usan `syncPedidoMlPuntual` y este trabajo).
+- **Carrera con `syncPedidosCache`:** el trabajo deja una marca en `ml_envio_proyeccion` (clave, retirado/vigente, hora). El volcado del barrido
+  salta toda fila ML con marca posterior al inicio de su corrida (su lectura de ML es más vieja). Test con barrido arrancado antes y volcado después.
+- **Volumen:** sin orden conocida solo se llama `/shipments/{id}/items` (no se relee el envío); un aviso con la misma firma status|substatus|logística
+  ya aplicada (`ml_envio_visto`) no relee `/orders/{id}`. El aviso "pasa a Full" se abre siempre que el pedido sale de la cola (haya o no preparación).
 - Chips en la cola de Preparación (ML): substatus `printed` → "Etiqueta lista"; `stale`/`delayed` → "Demorado".
 - Cobertura E-3: `TOPICOS_MISSED_FEEDS` incluye `shipments` (reinyecta como `shipment.project`). El "sin evento" de barridoCorridas es por clave de ítem/SKU y un envío no mapea a esas claves, así que no lo cubre.
 
