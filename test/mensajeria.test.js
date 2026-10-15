@@ -26,6 +26,14 @@ describe('Mensajería: identidad, permisos y proxy firmado',()=>{
  async function login(id){const agent=request.agent(app);await agent.get(`/test-login/${id}`);const boot=await agent.get('/api/mensajeria/bootstrap');return{agent,boot,csrf:boot.body.csrf};}
  const command=()=>({key:'whatsapp:number:customer',revision:1,request_id:crypto.randomUUID(),action:'send',text:'Consulta ficticia'});
  const send=(a,path,body,csrf)=>a.post('/api/mensajeria'+path).set('Origin',env.INBOX_PUBLIC_ORIGIN).set('X-CSRF-Token',csrf).send(body);
+ it('abrir asigna sólo con identidad de sesión y protege el POST con CSRF y permisos',async()=>{
+  const a=await login(3),body={...command(),action:'open',actor:{id:'herramientas:99',role:'supervisor'}};
+  expect((await a.agent.post('/api/mensajeria/command').send(body)).status).toBe(403);
+  const reader=await login(8);expect((await send(reader.agent,'/command',body,reader.csrf)).status).toBe(403);
+  expect((await send(a.agent,'/command',body,a.csrf)).status).toBe(200);
+  const signed=JSON.parse(fetcher.mock.calls.at(-1)[1].body);
+  expect(signed.action).toBe('open');expect(signed.actor).toEqual({id:'herramientas:3',name:'Miguel',role:'agent'});
+ });
  it.each(['agent','reader'])('administrador recupera sólo su propia supervisión desde %s',async(role)=>{
   db.prepare('UPDATE mensajeria_roles SET role=? WHERE user_id=1').run(role);
   const a=await login(1);expect(a.boot.body.actor.can_restore_supervision).toBe(true);

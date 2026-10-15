@@ -8,7 +8,8 @@
   <link rel="stylesheet" href="../lib/theme.css">
   <link rel="stylesheet" href="../lib/components.css">
   <link rel="stylesheet" href="./style.css?v=24c2add48961">
-  <script type="module" src="./app.js?v=83f76fa0c5f1"></script>
+  <link rel="stylesheet" href="./prospects.css?v=1">
+  <script type="module" src="./app.js?v=94a681d91ffe"></script>
 </head>
 <body>
   <a class="skip-link" href="#inbox">Ir a conversaciones</a>
@@ -27,14 +28,16 @@
       <div class="inbox-toolbar"><div class="section-heading"><h2 id="inbox-heading">Conversaciones</h2><div class="heading-actions"><button id="new-chat" type="button" class="ui-btn" disabled>＋ Nuevo chat</button><button id="refresh" type="button" class="ui-btn refresh-button" aria-label="Actualizar bandeja" title="Actualizar bandeja">↻</button></div></div>
         <label class="search-field"><span class="sr-only">Buscar por nombre, número o texto</span><input id="search" class="ui-input" type="search" placeholder="Buscar nombre, número o texto" autocomplete="off" maxlength="200"></label>
         <details class="source-disclosure"><summary id="source-summary">Todos los canales y números</summary><div class="source-fields"><label class="channel-field"><span class="ui-label">Canal</span><select id="channel" class="ui-input"><option value="all">Todos</option><option value="web">Chat web</option><option value="whatsapp">WhatsApp</option></select></label><label id="number-field" class="number-field"><span class="ui-label">Número de WhatsApp</span><select id="number" class="ui-input"><option value="">Todos los números</option></select></label></div></details>
+        <label class="prospect-filter"><span class="sr-only">Origen comercial</span><select id="prospect-source" class="ui-input"><option value="all">Todos los contactos y chats</option><option value="gift">🎁 Popup de regalo</option><option value="cart">Carritos abandonados</option><option value="contact">Solicitudes de contacto</option></select></label><p id="prospect-sync" class="meta" role="status"></p>
         <div id="filters" class="filter-grid" role="group" aria-label="Filtrar conversaciones">
-          <button type="button" class="ui-btn" data-filter="unread" aria-pressed="true" title="Conversaciones con mensajes sin leer">Pendientes <span data-count="unread"></span></button>
+          <button type="button" class="ui-btn" data-filter="unread" aria-pressed="true" title="Conversaciones abiertas sin responsable, hasta que un operador las tome">Pendientes <span data-count="unread"></span></button>
           <button type="button" class="ui-btn" data-filter="all" aria-pressed="false">Todas <span data-count="all"></span></button>
           <button type="button" class="ui-btn" data-filter="unassigned" aria-pressed="false">Sin asignar <span data-count="unassigned"></span></button>
           <button type="button" class="ui-btn" data-filter="mine" aria-pressed="false">Mías <span data-count="mine"></span></button>
           <button type="button" class="ui-btn" data-filter="closed" aria-pressed="false">Cerradas <span data-count="closed"></span></button>
         </div>
       </div>
+      <p id="filter-help" class="meta" style="margin:0;padding:0.35rem 1rem" aria-live="polite"></p>
       <p id="list-state" class="list-state" role="status">Cargando conversaciones…</p>
       <div id="thread-list" class="thread-list" aria-label="Lista de conversaciones"></div>
       <button id="load-list" type="button" class="ui-btn list-more" hidden>Cargar más conversaciones</button>
@@ -42,7 +45,7 @@
     </section>
     <div id="inbox-divider" class="inbox-divider" role="separator" tabindex="0" aria-label="Ajustar ancho de la lista de chats" aria-orientation="vertical" aria-controls="inbox" aria-valuemin="260" aria-valuemax="620" aria-valuenow="370" title="Arrastrá para ajustar el ancho. Flechas para ajustar; doble clic para restablecer."><span aria-hidden="true"></span></div>
     <section class="conversation" aria-labelledby="conversation-heading">
-      <div id="welcome" class="welcome"><div class="welcome-symbol" aria-hidden="true">☏</div><h2 id="conversation-heading">Tu próxima conversación, acá</h2><p>Elegí un chat de la bandeja para consultar su historial o tomar la atención.</p><p class="meta">Las consultas del chat web y de WhatsApp se atienden desde esta misma bandeja.</p></div>
+      <div id="welcome" class="welcome"><div class="welcome-symbol" aria-hidden="true">☏</div><h2 id="conversation-heading">Tu próxima conversación, acá</h2><p>Al abrir un chat sin responsable queda a tu cargo. Si ya lo atiende otra persona, conserva su asignación.</p><p class="meta">Las consultas del chat web y de WhatsApp se atienden desde esta misma bandeja.</p></div>
       <div id="thread-view" class="thread-view" hidden>
         <header class="thread-header"><button id="back" type="button" class="ui-btn back-button">← Bandeja</button><div class="contact-title"><h2 id="contact-name" tabindex="-1"></h2><p id="contact-meta" class="meta"></p></div><button id="copy-phone" type="button" class="ui-btn" title="Copiar teléfono de contacto">Copiar teléfono</button><div id="thread-badges" class="thread-badges"></div></header>
         <div class="thread-controls"><p id="ownership" class="ownership"></p><div class="actions" aria-label="Acciones de conversación">
@@ -55,6 +58,7 @@
           <button type="button" id="resume" class="ui-btn" hidden>Reanudar IA</button>
         </div></div>
         <details id="web-context" class="web-context" hidden><summary>Contexto del chat web</summary><div id="web-context-content"></div></details>
+        <details id="prospect-context" class="web-context prospect-context" hidden open><summary>Interés del cliente</summary><div></div></details>
         <div id="thread-notice" class="thread-notice ui-aviso" role="status" hidden></div>
         <div id="history" class="history" tabindex="0" aria-label="Historial de la conversación">
           <div class="history-start"><button id="load-older" class="ui-btn" type="button" hidden>Cargar mensajes anteriores</button><p id="history-state" class="meta" role="status"></p></div>
