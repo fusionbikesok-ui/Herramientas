@@ -113,9 +113,19 @@ describe('métrica de cobertura del webhook', () => {
     pub(db, 'MLA1|', 'FB-1', 3);
     medirCoberturaWebhook(db, '1970-01-01');
     pub(db, 'MLA1|', 'FB-1', 9);
-    db.prepare(`INSERT INTO integration_events (event_id,event_type,channel,source,resource_id,received_at,correlation_id,dedupe_key)
-      VALUES ('e1','webhook.received','ml','mercadolibre','/items/MLA1',?,'c1','d1')`).run(new Date().toISOString());
+    encolarTrabajo(db, { tipo: 'item.project', recurso: 'MLA1' }); // aviso llegó y sigue abierto: cubierto
     expect(medirCoberturaWebhook(db, '1970-01-01')).toMatchObject({ cambios: 1, cambiosSinAviso: 0 });
+    db.close();
+  });
+
+  it('un trabajo item.project cerrado ANTES del escaneo anterior no cubre el cambio', () => {
+    const db = openDb(':memory:');
+    pub(db, 'MLA1|', 'FB-1', 3);
+    medirCoberturaWebhook(db, '1970-01-01');
+    pub(db, 'MLA1|', 'FB-1', 9);
+    encolarTrabajo(db, { tipo: 'item.project', recurso: 'MLA1' });
+    db.prepare("UPDATE trabajos_recurso SET estado='hecho', cerrado_en=? WHERE recurso='MLA1'").run(new Date(Date.now() - 3600 * 1000).toISOString());
+    expect(medirCoberturaWebhook(db, new Date().toISOString())).toMatchObject({ cambios: 1, cambiosSinAviso: 1 });
     db.close();
   });
 

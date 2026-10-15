@@ -97,6 +97,17 @@ describe('missed_feeds de ML', () => {
     expect(r.topicos[0]).toMatchObject({ excluidos: 3, nuevos: 1 });
   });
 
+  it('al llegar al tope de páginas abre un incidente de advertencia con el conteo (sin subir el tope)', async () => {
+    let n = 0;
+    mlFetch.mockImplementation(async () => ({ status: 200, data: { messages: [aviso(++n)], total: 99999 } }));
+    const r = await reinyectarMissedFeeds(db, ML, { topicos: ['orders_v2'] });
+    expect(mlFetch).toHaveBeenCalledTimes(20);
+    expect(r.topicos[0].tope).toBe(true);
+    const inc = incidente('ml_missed_feeds_tope_orders_v2');
+    expect(inc.severidad).toBe('advertencia');
+    expect(inc.mensaje_humano).toContain('20 enumerados');
+  });
+
   it('sin credenciales de ML no llama a nadie', async () => {
     const r = await reinyectarMissedFeeds(db, { clientId: '', userId: '' });
     expect(r.omitido).toBe(true);
@@ -184,13 +195,22 @@ describe('trabajos no terminados', () => {
     expect(vigilarTrabajosNoTerminados(db).total).toBe(0);
   });
 
-  it('un job legado en dead-letter reciente abre incidente; uno viejo no', () => {
-    db.prepare("INSERT INTO integration_events (event_id, event_type, channel, source, resource_id, status, received_at, correlation_id, dedupe_key) VALUES ('e1','order','ml','webhook','/orders/1','dead_lettered',?, 'c1','d1')").run(haceMin(5));
-    db.prepare("INSERT INTO integration_jobs (event_id, job_type, available_at, status) VALUES ('e1','order.sync',?, 'dead_lettered')").run(haceMin(10));
-    expect(vigilarTrabajosNoTerminados(db).total).toBe(1);
-    db.prepare("UPDATE integration_jobs SET available_at = ?").run(haceMin(60 * 48));
-    expect(vigilarTrabajosNoTerminados(db).total).toBe(0);
+  it('dead-letters: los anteriores a la marca de agua no cuentan; los posteriores cuentan SIN vencimiento', () => {
+    const ev = (id) => db.prepare("INSERT INTO integration_events (event_id, event_type, channel, source, resource_id, status, received_at, correlation_id, dedupe_key) VALUES (?,'x','ml','webhook','/orders/1','dead_lettered',?, ?, ?)").run(id, haceMin(5), `c${id}`, `d${id}`);
+    ev('hist'); ev('nuevo');
+    db.prepare("INSERT INTO integration_jobs (event_id, job_type, available_at, status) VALUES ('hist','message.project',?, 'dead_lettered')").run(haceMin(60 * 24 * 40));
+    expect(vigilarTrabajosNoTerminados(db).total).toBe(0); // primera corrida: fija la marca, el histórico no abre incidente
+    expect(incidente('trabajos_sin_terminar')).toBeFalsy();
+    const marca = db.prepare("SELECT valor FROM sync_estado WHERE clave='e3_dead_letter_marca'").get().valor;
+    db.prepare("INSERT INTO integration_jobs (event_id, job_type, available_at, status) VALUES ('nuevo','order.sync',?, 'dead_lettered')").run(new Date(Date.parse(marca) + 1000).toISOString());
+    // pasan 3 días y sigue sin resolverse: sigue contando
+    expect(vigilarTrabajosNoTerminados(db, { ahoraMs: Date.now() + 3 * 24 * 3600 * 1000 }).total).toBe(1);
+    expect(incidente('trabajos_sin_terminar').severidad).toBe('critico');
+    db.prepare("UPDATE integration_jobs SET status='completed' WHERE event_id='nuevo'").run();
+    vigilarTrabajosNoTerminados(db);
+    expect(incidente('trabajos_sin_terminar')).toBeFalsy();
   });
+
 });
 
 describe('instrumentación de los barridos', () => {
