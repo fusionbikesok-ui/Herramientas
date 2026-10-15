@@ -1544,7 +1544,7 @@ describe('registrarAlertasStockNegativo', () => {
       categories: [], attributes: [], images: [], brands: [],
     } }).mockResolvedValueOnce({ status: 200, headers: {}, data: [{
       id: 7247, sku: 'FB-7247', stock_quantity: 1, attributes: [{ name: 'Diseño', option: 'Halcón' }], image: null,
-    }] });
+    }] }).mockResolvedValueOnce({ status: 404, headers: {}, data: { code: 'woocommerce_rest_product_variation_invalid_id' } }); // E-1c: confirma la hija perdida (1 de 1)
     const r = await refrescarProductoPuntual(db, { url: 'https://fusionbikes.com.ar', ck: 'ck', cs: 'cs' }, { productoId: 1732 });
     expect(r).toMatchObject({ producto_id: 1732, filas: 2 });
     expect(db.prepare('SELECT sku FROM catalogo_cache WHERE id_woo=7247').get().sku).toBe('FB-7247');

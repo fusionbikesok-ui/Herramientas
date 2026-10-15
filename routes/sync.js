@@ -17,7 +17,8 @@ import { encolarProductoWoo, encolarTrabajo, reclamarTrabajos, cerrarTrabajo, re
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch, refrescarProductoPuntual } from './woo.js';
-import { skusConBajaWoo } from '../lib/wooBajas.js';
+import { skusConBajaWoo, levantarBajasReaparecidas } from '../lib/wooBajas.js';
+import { FILTRO_MARKETPLACE } from '../lib/identidadProductos.js';
 import { netoMl, veredictoNeto, precioWebClave, precioContado, totalContado } from '../lib/mlPrecios.js';
 import { senalesDeVinculo } from '../lib/vinculosSenales.js';
 import { norm, tsr } from '../lib/matcherEngine.js';
@@ -1674,18 +1675,26 @@ async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = nu
   const cat = db.prepare(`SELECT id_woo, tipo, id_padre FROM catalogo_cache WHERE sku IN (${bolsa.skus.map(() => '?').join(',')})`).all(...bolsa.skus);
   await releerStockGestores(db, wooCfg, [...cat.map((c) => ({ id: c.id_woo, padre: c.tipo === 'variation' ? c.id_padre : null })), ...gestoresExtra], { estricto: false });
   // 2) ML: lectura de toda la bolsa; 3) empuje de lo que difiera del deseado
-  const claves = bolsa.claves;
+  // E-1c: un SKU con baja de Woo CONFIRMADA por relectura va a 0 aunque ya no esté en `catalogo_cache` (el CTE de stock no tiene
+  // fila para él) y aunque haya un caso de identidad abierto. La baja se levanta sola si el SKU reaparece en el catálogo.
+  levantarBajasReaparecidas(db);
+  const bajas = skusConBajaWoo(db, bolsa.skus);
+  // Solo para una baja confirmada: también las publicaciones activas con ESE seller_sku que no tienen decisión de vínculo
+  // (la bolsa solo enumera las vinculadas). No amplía el universo del sync en general.
+  const claves = [...bolsa.claves];
+  if (bajas.size) {
+    const lista = [...bajas];
+    const extra = db.prepare(`SELECT clave FROM ml_publicaciones_cache
+      WHERE TRIM(COALESCE(seller_sku, '')) IN (${lista.map(() => '?').join(',')}) AND status = 'active' AND ${FILTRO_MARKETPLACE}`).all(...lista);
+    for (const e of extra) if (!claves.includes(e.clave)) claves.push(e.clave);
+  }
   const remoto = await leerCantidadesMl(db, mlCfg, claves);
   const computada = (clave) => {
     const row = db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
-    return conBajaWoo(row, clave);
-  };
-  // E-1c: un SKU con baja de Woo CONFIRMADA por relectura va a 0 aunque ya no esté en `catalogo_cache` (el CTE no tiene fila
-  // para él) y aunque haya un caso de identidad abierto. La baja se levanta sola si el SKU reaparece en el catálogo.
-  const bajas = skusConBajaWoo(db, bolsa.skus);
-  const conBajaWoo = (row, clave) => {
     if (!bajas.size) return row;
-    const sku = row?.sku ?? db.prepare(`SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion IN ('asignar','confirmar') AND sku IS NOT NULL AND sku <> ''`).get(clave)?.sku;
+    const sku = row?.sku
+      ?? db.prepare(`SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion IN ('asignar','confirmar') AND sku IS NOT NULL AND sku <> ''`).get(clave)?.sku
+      ?? String(db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = ?').get(clave)?.seller_sku ?? '').trim();
     if (!sku || !bajas.has(sku)) return row;
     return { ...(row || {}), clave, sku, stock_disponible_ml: 0, baja_woo: true };
   };

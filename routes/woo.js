@@ -527,7 +527,11 @@ const skuLimpio = (v) => String(v ?? '').trim();
  * lleve ML a 0 (aunque el producto ya no esté en el caché) y avisa a `alEscribir` con los SKUs para encolar sus bolsas.
  * Todo corre dentro de la transacción del llamador. La protección es best-effort (su fallo no impide el 0 de stock).
  */
-function aplicarBajasConfirmadas(db, bajas, { alEscribir = null, otrosSkus = [], motivo = 'baja_woo' } = {}) {
+function aplicarBajasConfirmadas(db, bajasCandidatas, { alEscribir = null, otrosSkus = [], motivo = 'baja_woo' } = {}) {
+  // Baja = SKU que ya NO figura en ninguna fila de catalogo_cache (de ningún id_woo): un SKU que sigue vigente (movido a otra
+  // fila, o de una variación que sigue) ni se protege ni se lleva a 0. Se llama con el caché ya mutado.
+  const vivos = new Set(db.prepare("SELECT DISTINCT sku FROM catalogo_cache WHERE COALESCE(sku, '') <> ''").all().map((r) => r.sku));
+  const bajas = bajasCandidatas.filter((b) => skuLimpio(b.sku) && !vivos.has(skuLimpio(b.sku)));
   let protegidas = 0;
   for (const b of bajas) {
     try {
@@ -596,12 +600,16 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
   }
   const padre = normalizarProductoWc(productoResp.data);
   const filas = [padre];
+  const idsDevueltos = new Set(); // todas las variaciones que Woo devolvió, con o sin SKU
   if (padre.tipo === 'variable') {
     let page = 1;
     while (page <= 20) {
       const varsResp = await wooFetch(cfg, `/products/${parent}/variations?per_page=100&page=${page}&status=any`);
-      const variaciones = Array.isArray(varsResp.data) ? varsResp.data : [];
+      // Una respuesta que no es lista NO es «sin variaciones»: error reintentable (no se convierte en []).
+      if (!Array.isArray(varsResp.data)) throw Object.assign(new Error('Woo devolvió una forma inesperada en las variaciones'), { retryable: true, code: 'woo_variations_shape' });
+      const variaciones = varsResp.data;
       for (const variacion of variaciones) {
+        idsDevueltos.add(Number(variacion.id));
         // Se conserva el contrato del refresco general: variaciones sin SKU no entran al
         // catálogo vendible ni pueden convertirse en identidad Fusion.
         if (variacion.sku) filas.push(normalizarVariacionWc(variacion, padre));
@@ -610,6 +618,38 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
       page += 1;
     }
   }
+
+  // Foto de la familia ANTES de borrar las hijas (el refresco las borra y reinserta).
+  const previas = db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_padre=?').all(parent);
+  const padrePrevio = db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_woo=?').get(parent);
+  // Candidatas a baja: variaciones que la lista ya no trae. Si el padre dejó de ser variable, las hijas se retiran sin más.
+  let faltantes = previas.filter((v) => !idsDevueltos.has(Number(v.id_woo)));
+  if (padre.tipo === 'variable' && previas.length && faltantes.length * 2 >= previas.length) {
+    // Pérdida total o de la mayoría (lista vacía por un 200 anómalo, paginación rota…): no alcanza con la lista. Se confirma
+    // CADA faltante con su propia lectura; solo 404 `invalid_id` o `status=trash` la da de baja. Una que sigue vigente se
+    // conserva (se vuelve a insertar). Un error de lectura aborta el refresco entero (reintenta): no se borra ni se lleva a 0.
+    const confirmadas = [];
+    for (const v of faltantes) {
+      let detalle = null;
+      try {
+        detalle = (await wooFetch(cfg, `/products/${parent}/variations/${v.id_woo}`)).data;
+      } catch (e) {
+        if (!esProductoWooInexistente(e)) throw e;
+      }
+      if (detalle && detalle.status !== 'trash' && detalle.id) {
+        idsDevueltos.add(Number(v.id_woo));
+        if (detalle.sku) filas.push(normalizarVariacionWc(detalle, padre));
+      } else {
+        confirmadas.push(v);
+      }
+    }
+    faltantes = confirmadas;
+  }
+  // Cambio de SKU de una variación que sigue (mismo id, otro SKU): el SKU viejo es candidato; si ya no existe en el catálogo, baja.
+  const nuevosPorId = new Map(filas.map((f) => [Number(f.id_woo), skuLimpio(f.sku)]));
+  const cambiadas = previas.filter((v) => nuevosPorId.has(Number(v.id_woo)) && skuLimpio(v.sku) && nuevosPorId.get(Number(v.id_woo)) !== skuLimpio(v.sku));
+  const candidatas = [...faltantes, ...cambiadas];
+  if (padrePrevio && skuLimpio(padrePrevio.sku) && skuLimpio(padre.sku) !== skuLimpio(padrePrevio.sku)) candidatas.push(padrePrevio);
 
   const actualizadoEn = new Date().toISOString();
   const upsert = db.prepare(`
@@ -623,20 +663,13 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
   `);
   let resultado;
   db.transaction(() => {
-    // Foto de las variaciones ANTES de borrarlas: las que el padre vigente ya no devuelve son bajas confirmadas.
-    const previas = db.prepare('SELECT id_woo, sku FROM catalogo_cache WHERE id_padre=?').all(parent);
-    const skuPadrePrevio = db.prepare('SELECT sku FROM catalogo_cache WHERE id_woo=?').get(parent)?.sku;
     // Si el padre dejó de ser variable, también se retiran las hijas que el origen ya no expone.
     db.prepare('DELETE FROM catalogo_cache WHERE id_padre=?').run(parent);
     for (const fila of filas) upsert.run(filaCatalogo(fila, actualizadoEn));
-    const vigentes = new Set(filas.map((f) => Number(f.id_woo ?? f.id)));
-    const desaparecidas = previas.filter((v) => !vigentes.has(Number(v.id_woo)));
     const skusAhora = filas.map((f) => skuLimpio(f.sku)).filter(Boolean);
-    const skusAntes = [...previas.map((v) => v.sku), skuPadrePrevio];
-    resultado = desaparecidas.length
-      ? aplicarBajasConfirmadas(db, desaparecidas, { alEscribir, otrosSkus: [...skusAhora, ...skusAntes] })
-      : { protegidas: 0, skus: [...new Set([...skusAhora, ...skusAntes.map(skuLimpio).filter(Boolean)])], bajas: [] };
-    if (!desaparecidas.length && alEscribir && resultado.skus.length) alEscribir(db, resultado.skus);
+    const skusAntes = [...previas.map((v) => v.sku), padrePrevio?.sku].map(skuLimpio).filter(Boolean);
+    resultado = aplicarBajasConfirmadas(db, candidatas, { alEscribir: null, otrosSkus: [...skusAhora, ...skusAntes] });
+    if (alEscribir && resultado.skus.length) alEscribir(db, resultado.skus);
   })();
   dispararAuditoriaPrecios(db, { origen: 'woo' });
   return { producto_id: id, parent_id: parent, eliminado: false, filas: filas.length, claves_protegidas: resultado.protegidas, skus: resultado.skus, bajas: resultado.bajas };
