@@ -2869,6 +2869,16 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     await sleep(espera(ML_CALL_DELAY_MS));
   }
 
+  // E-3 (fix): lo que se MIDE como diferencia es lo que este barrido puede corregir. Una publicación no activa (paused/closed/under_review)
+  // se descarta arriba sin escribir y reaparecía en cada pasada: en prod eran 1176 "diferencias", todas pausadas, ninguna activa. Quedan
+  // las de estado activo, las de estado no consultable ('desconocido': no se sabe si es activa) y las que el tope de llamadas o un 429
+  // dejó sin evaluar (estado todavía no resuelto).
+  if (opts.__med) {
+    opts.__med.diffs = diffs
+      .filter((d) => { const st = estadoItem.get(partirClaveMl(d.clave).itemId); return !st || st === 'active' || st === 'desconocido'; })
+      .map((d) => ({ clave: d.clave, sku: d.sku }));
+  }
+
   if (cortadoPor429) {
     // Un solo evento por corrida (no uno por clave pendiente): con cientos de diffs
     // encadenar cooldowns generaría cientos de filas de "error" que procesarReintentos
