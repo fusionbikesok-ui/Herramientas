@@ -1434,6 +1434,16 @@ export function openDb(dbPath) {
     `);
   } catch (_) {}
 
+  // migrations/134 — Taller y Garantías con permiso propio (copia pedidos/stock-exceptions).
+  // Va acá porque user_permisos se crea más arriba.
+  const permisosTallerGarantias134 = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='permisos_taller_garantias_134'").get();
+  if (!permisosTallerGarantias134) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '134_permisos_taller_garantias.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('permisos_taller_garantias_134')").run();
+    })();
+  }
+
   // Fase 0 (higiene) — Tarea 1: productos "no contables" (servicios, cargos, gift cards)
   // que ensucian el universo de inventario físico. Nunca se borran ni se excluyen del
   // catálogo en general: solo se sacan del alcance de una sesión de conteo.

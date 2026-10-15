@@ -627,7 +627,7 @@ fetch('/api/auth/me').then(function(r) {
     ]},
     { titulo: 'Vender y despachar', color: 'ingreso', tools: [
       { tool: 'preparacion', href: 'preparacion', t: 'Preparación de pedidos', d: 'Buscá los productos, escaneá cada unidad, embalá y dejá el pedido listo para despachar.', tag: 'Picking · Embalaje · Evidencia' },
-      { tool: 'gestion-pedidos', href: 'gestion-pedidos', t: 'Gestión de pedidos', d: 'Todos los pedidos de la web y de MercadoLibre en un solo lugar, con su estado y su cliente.', tag: 'Woo · ML · Clientes' },
+      { tool: 'pedidos', href: 'gestion-pedidos', t: 'Gestión de pedidos', d: 'Todos los pedidos de la web y de MercadoLibre en un solo lugar, con su estado y su cliente.', tag: 'Woo · ML · Clientes' },
       { tool: 'etiquetas', href: 'etiquetas', t: 'Etiquetas de productos', d: 'Cola de etiquetas para imprimir con el SKU y el código de barras.', tag: 'Impresión · SKU' },
     ]},
     { titulo: 'Stock y depósito', color: 'ingreso', tools: [
@@ -649,10 +649,10 @@ fetch('/api/auth/me').then(function(r) {
       { tool: 'sync-ml', href: 'sync-ml', t: 'Sincronización ML', d: 'Estado del stock y los pedidos entre MercadoLibre y la web, y qué necesita atención.', tag: 'Stock · Pedidos · Reactivación' },
       { tool: 'config-ml', href: 'config-ml', t: 'Config ML — reservas', d: 'Cuánto stock reservás para el local y qué política sigue cada SKU.', tag: 'Reservas · Política' },
     ]},
-    { titulo: 'Posventa', color: 'control', adminOnly: true, tools: [
+    { titulo: 'Posventa', color: 'control', tools: [
       { tool: 'taller', href: 'taller', t: 'Taller', d: 'Trabajos, diagnóstico y repuestos.', tag: 'Trabajos · Diagnóstico', parcial: 'sin alta de trabajos' },
       { tool: 'garantias', href: 'garantias', t: 'Garantías', d: 'Casos, inspecciones y compromisos de reemplazo.', tag: 'Casos · Inspección', parcial: 'sin alta de casos' },
-      { tool: 'excepciones', href: 'excepciones', t: 'Excepciones físicas', d: 'Incidentes, daños y devoluciones a proveedor.', tag: 'Incidentes · Proveedor', parcial: 'sin alta de incidentes' },
+      { tool: 'stock-exceptions', href: 'excepciones', t: 'Excepciones físicas', d: 'Incidentes, daños y devoluciones a proveedor.', tag: 'Incidentes · Proveedor', parcial: 'sin alta de incidentes' },
     ]},
     { titulo: 'Administración', color: 'control', adminOnly: true, tools: [
       { tool: 'usuarios', href: 'usuarios', t: 'Usuarios y permisos', d: 'Las cuentas del equipo y qué herramienta puede abrir cada una.', tag: 'Cuentas · Permisos' },

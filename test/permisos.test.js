@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { openDb } from '../db/index.js';
 import { HERRAMIENTAS, resolvePermiso, permiteAcceso } from '../lib/permisos.js';
 
 describe('permiso consulta-precios', () => {
@@ -142,5 +145,62 @@ describe('permiso config-ml masivo (reservas locales por lote)', () => {
     expect(permiteAcceso([{ herramienta: 'config-ml', nivel: 'read' }], req)).toBe(false);
     expect(permiteAcceso([{ herramienta: 'config-ml', nivel: 'write' }], req)).toBe(true);
     expect(permiteAcceso([{ herramienta: 'sync-ml', nivel: 'write' }], req)).toBe(false);
+  });
+});
+
+describe('permisos taller y garantías (migración 134)', () => {
+  it('están en HERRAMIENTAS con niveles', () => {
+    for (const id of ['taller', 'garantias']) expect(HERRAMIENTAS.find(x => x.id === id)?.niveles).toBe(true);
+  });
+
+  it('/workshop y /warranties piden taller / garantias, no pedidos ni stock-exceptions', () => {
+    expect(resolvePermiso('GET', '/workshop')).toEqual({ anyOf: ['taller'], nivel: 'read' });
+    expect(resolvePermiso('POST', '/workshop/1')).toEqual({ anyOf: ['taller'], nivel: 'write' });
+    expect(resolvePermiso('GET', '/warranties')).toEqual({ anyOf: ['garantias'], nivel: 'read' });
+    expect(resolvePermiso('POST', '/warranties/3/adjuntos')).toEqual({ anyOf: ['garantias'], nivel: 'write' });
+    expect(permiteAcceso([{ herramienta: 'pedidos', nivel: 'write' }], resolvePermiso('GET', '/workshop'))).toBe(false);
+    expect(permiteAcceso([{ herramienta: 'garantias', nivel: 'read' }], resolvePermiso('POST', '/warranties'))).toBe(false);
+  });
+
+  it('las tarjetas del home usan ids que existen en HERRAMIENTAS y Posventa ya no es solo-admin', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/home/index.html'), 'utf8');
+    const ids = new Set(HERRAMIENTAS.map(h => h.id));
+    for (const t of ['taller', 'garantias', 'stock-exceptions', 'pedidos']) expect(ids.has(t)).toBe(true);
+    expect(html).toMatch(/tool: 'stock-exceptions', href: 'excepciones'/);
+    expect(html).toMatch(/tool: 'pedidos', href: 'gestion-pedidos'/);
+    expect(html).not.toMatch(/tool: 'excepciones'|tool: 'gestion-pedidos'/);
+    expect(html).not.toMatch(/titulo: 'Posventa'[^\n]*adminOnly/);
+  });
+
+  describe('la migración copia el acceso', () => {
+    const FILE = './test/tmp-permisos-134.sqlite';
+    let db;
+    const SQL = fs.readFileSync(path.resolve(__dirname, '../migrations/134_permisos_taller_garantias.sql'), 'utf8');
+    beforeEach(() => { db = openDb(FILE); });
+    afterEach(() => { try { db.close(); } catch { /* ya cerrada */ } for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`); });
+    const usuario = (n) => db.prepare("INSERT INTO users (username,pass_hash,is_admin,activo,creado_en,actualizado_en) VALUES (?,'x',0,1,'t','t')").run(n).lastInsertRowid;
+    const dar = (u, h, n) => db.prepare('INSERT INTO user_permisos (user_id,herramienta,nivel) VALUES (?,?,?)').run(u, h, n);
+    const de = (u) => Object.fromEntries(db.prepare("SELECT herramienta,nivel FROM user_permisos WHERE user_id=? AND herramienta IN ('taller','garantias')").all(u).map(r => [r.herramienta, r.nivel]));
+
+    it('queda registrada al abrir la base', () => {
+      expect(db.prepare("SELECT 1 FROM _schema_migrations WHERE key='permisos_taller_garantias_134'").get()).toBeTruthy();
+    });
+
+    it('write gana entre pedidos y stock-exceptions, no pisa lo existente, no toca a otros e es idempotente', () => {
+      const a = usuario('a'), b = usuario('b'), c = usuario('c'), d = usuario('d'), e = usuario('e');
+      dar(a, 'pedidos', 'read'); dar(a, 'stock-exceptions', 'write');
+      dar(b, 'pedidos', 'read');
+      dar(c, 'pedidos', 'write'); dar(c, 'taller', 'read');
+      dar(d, 'stock', 'write');
+      dar(e, 'stock-exceptions', 'read'); dar(e, 'pedidos', 'read');
+      db.exec(SQL);
+      expect(de(a)).toEqual({ taller: 'write', garantias: 'write' });
+      expect(de(b)).toEqual({ taller: 'read', garantias: 'read' });
+      expect(de(c)).toEqual({ taller: 'read', garantias: 'write' });
+      expect(de(d)).toEqual({});
+      expect(de(e)).toEqual({ taller: 'read', garantias: 'read' });
+      db.exec(SQL);
+      expect(de(a)).toEqual({ taller: 'write', garantias: 'write' });
+    });
   });
 });
