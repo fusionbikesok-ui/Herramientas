@@ -599,6 +599,20 @@ export function buildApp({ dbPath, sessionSecret, wooCfg, geminiKey, mlCfg, mobi
       return;
     }
 
+    // E-2: items / user_products / stock-location → trabajo durable `item.project` (ya encolado antes del ACK). Acelerador no
+    // durable con debounce de 5 s: las notificaciones de una ráfaga se leen JUNTAS en un /items/bulk (hasta 20 ids), no una
+    // llamada por aviso (la cuenta ya fue bloqueada una vez por exceso de llamadas). Si el proceso muere, el cron de cada minuto lo toma.
+    if (topic === 'items' || /^(user[-_]products?|stock[-_]locations?)$/i.test(String(topic))) {
+      if (!app._aceleradorItemsMl) {
+        app._aceleradorItemsMl = setTimeout(() => {
+          app._aceleradorItemsMl = null;
+          procesarTrabajosRecurso(app._db, syncCfg).catch(err => console.error('[notif-ml] item.project error:', err.message));
+        }, 5000);
+        app._aceleradorItemsMl.unref?.();
+      }
+      return;
+    }
+
     // Topic post_purchase: la proyección real vive en el worker (procesarIntegrationJobs).
     // Aquí solo persistimos el evento; no hay logs informativos.
     if (topic === 'post_purchase') {

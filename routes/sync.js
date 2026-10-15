@@ -1728,29 +1728,43 @@ async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = nu
     if (!sku || !bajas.has(sku)) return row;
     return { ...(row || {}), clave, sku, stock_disponible_ml: 0, baja_woo: true };
   };
-  const pendientes = [];
-  for (const clave of claves) {
-    const row = computada(clave);
-    const rem = remoto.get(clave);
-    if (!row || !rem) continue; // fuera del conjunto que nuestro sync escribe
-    persistirCantidadMl(db, clave, row.sku, rem.cantidad);
-    if (rem.status !== 'active' || rem.cantidad == null) continue;
-    const deseado = Math.max(0, Math.round(row.stock_disponible_ml));
-    if (rem.cantidad !== deseado) pendientes.push({ row, rem });
-  }
-  for (const { row, rem } of pendientes) {
-    const res = await _empujarClaveMl(db, mlCfg, row.sku, { clave: row.clave, stock_disponible_ml: row.stock_disponible_ml, cantidad_ml: rem.cantidad }, { barreraId, candadoToken: candado.token });
-    if (res.estado !== 'sincronizado') return { ok: false, motivo: `${row.clave}: ${res.detalle}`, bloqueado: Boolean(res.bloqueado) };
-  }
-  // 4) Relectura de confirmación: TODAS las claves deben publicar lo deseado
-  const remoto2 = await leerCantidadesMl(db, mlCfg, claves);
+  // E-2: las publicaciones HERMANAS (mismo `user_product_id`) comparten UNA cantidad en ML. Se escribe UNA vez por user_product,
+  // con el valor deseado más restrictivo del grupo (reservas o modos distintos con el mismo SKU: gana el menor); las demás hermanas
+  // se confirman por la relectura. Sin `user_product_id` cada clave es su propio grupo. (SKUs distintos en la bolsa ya se cortaron arriba.)
+  const upDe = db.prepare('SELECT user_product_id FROM ml_publicaciones_cache WHERE clave = ?');
+  const filasClaves = [];
   for (const clave of claves) {
     const row = computada(clave);
     if (!row) continue;
-    const rem = remoto2.get(clave);
-    if (!rem) return { ok: false, motivo: `${clave}: sin lectura de ML` };
+    const up = String(upDe.get(clave)?.user_product_id ?? '').trim();
+    filasClaves.push({ clave, row, grupo: up ? `up:${up}` : `solo:${clave}` });
+  }
+  const deseadoDeGrupo = new Map();
+  for (const f of filasClaves) {
+    const d = Math.max(0, Math.round(f.row.stock_disponible_ml));
+    deseadoDeGrupo.set(f.grupo, Math.min(deseadoDeGrupo.get(f.grupo) ?? Infinity, d));
+  }
+  const pendientes = [];
+  const escritosGrupo = new Set();
+  for (const f of filasClaves) {
+    const rem = remoto.get(f.clave);
+    if (!rem) continue; // fuera del conjunto que nuestro sync escribe
+    persistirCantidadMl(db, f.clave, f.row.sku, rem.cantidad);
     if (rem.status !== 'active' || rem.cantidad == null) continue;
-    if (rem.cantidad !== Math.max(0, Math.round(row.stock_disponible_ml))) return { ok: false, motivo: `${clave}: ML publica ${rem.cantidad}` };
+    // Eco: si lo que ML publica ya es lo deseado (p. ej. el cambio observado es el que escribimos nosotros) no se escribe.
+    if (rem.cantidad !== deseadoDeGrupo.get(f.grupo) && !escritosGrupo.has(f.grupo)) { escritosGrupo.add(f.grupo); pendientes.push({ row: f.row, rem, deseado: deseadoDeGrupo.get(f.grupo) }); }
+  }
+  for (const { row, rem, deseado } of pendientes) {
+    const res = await _empujarClaveMl(db, mlCfg, row.sku, { clave: row.clave, stock_disponible_ml: deseado, cantidad_ml: rem.cantidad }, { barreraId, candadoToken: candado.token });
+    if (res.estado !== 'sincronizado') return { ok: false, motivo: `${row.clave}: ${res.detalle}`, bloqueado: Boolean(res.bloqueado) };
+  }
+  // 4) Relectura de confirmación: TODAS las claves deben publicar lo deseado de su grupo
+  const remoto2 = await leerCantidadesMl(db, mlCfg, claves);
+  for (const f of filasClaves) {
+    const rem = remoto2.get(f.clave);
+    if (!rem) return { ok: false, motivo: `${f.clave}: sin lectura de ML` };
+    if (rem.status !== 'active' || rem.cantidad == null) continue;
+    if (rem.cantidad !== deseadoDeGrupo.get(f.grupo)) return { ok: false, motivo: `${f.clave}: ML publica ${rem.cantidad}` };
   }
   return { ok: true, empujadas: pendientes.length };
 }
@@ -2124,6 +2138,135 @@ export async function procesarProductoWoo(db, cfg, recurso) {
   }
 }
 
+// ─── E-2: trabajo `item.project` (publicación de ML creada/modificada, o su user_product cambió de stock) ───────────────
+
+/** Cuántos `item.project` se releen juntos: ML permite 20 ids por /items/bulk. */
+export const LOTE_ITEMS_ML = 20;
+const CAMPOS_ITEM_QUE_ENCOLAN_BOLSA = ['available_quantity', 'status', 'user_product_id'];
+
+function fotoItemsMl(db, ids) {
+  const marcas = ids.map(() => '?').join(',');
+  const filas = db.prepare(`SELECT clave,item_id,seller_sku,available_quantity,status,sub_status,precio,user_product_id,gtin
+    FROM ml_publicaciones_cache WHERE item_id IN (${marcas})`).all(...ids);
+  const dec = new Map();
+  if (filas.length) {
+    for (const d of db.prepare(`SELECT clave, sku FROM sku_matcher_decisiones WHERE accion IN ${ACCIONES_VINCULO} AND sku IS NOT NULL AND sku <> ''
+      AND clave IN (${filas.map(() => '?').join(',')})`).all(...filas.map((f) => f.clave))) dec.set(d.clave, d.sku);
+  }
+  return { filas, dec };
+}
+
+/** SKUs vinculados (decisión asignar/confirmar) de todas las claves de unos ítems, leídos del estado actual de las decisiones. */
+function skusVinculadosDeItems(db, ids) {
+  const marcas = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT DISTINCT d.sku FROM sku_matcher_decisiones d
+    WHERE d.accion IN ${ACCIONES_VINCULO} AND d.sku IS NOT NULL AND d.sku <> ''
+      AND substr(d.clave, 1, instr(d.clave || '|', '|') - 1) IN (${marcas})`).all(...ids).map((r) => r.sku);
+}
+
+/** Compara la foto previa con el estado actual de un ítem: ¿cambió cantidad, estado, user_product o vínculo? Devuelve los SKUs a conciliar. */
+function skusAfectadosPorItem(db, itemId, antes) {
+  const despues = fotoItemsMl(db, [itemId]);
+  const previas = new Map(antes.filas.filter((f) => f.item_id === itemId).map((f) => [f.clave, f]));
+  let cambio = false;
+  const skus = new Set();
+  for (const f of despues.filas) {
+    const a = previas.get(f.clave);
+    const skuAntes = antes.dec.get(f.clave) ?? null;
+    const skuAhora = despues.dec.get(f.clave) ?? null;
+    if (!a || skuAntes !== skuAhora || CAMPOS_ITEM_QUE_ENCOLAN_BOLSA.some((c) => String(a[c] ?? '') !== String(f[c] ?? ''))) {
+      cambio = true;
+      if (skuAntes) skus.add(skuAntes);
+      if (skuAhora) skus.add(skuAhora);
+    }
+  }
+  for (const [clave, a] of previas) { // clave que desapareció
+    if (!despues.filas.some((f) => f.clave === clave)) { cambio = true; const s = antes.dec.get(clave); if (s) skus.add(s); }
+  }
+  return cambio ? [...skus] : [];
+}
+
+/**
+ * Lote de trabajos `item.project`: UNA relectura `/items/bulk` (hasta 20 ids) por lote, con el Vigía, el autovínculo y la
+ * auditoría de precios que ya incluye `refrescarPublicacionesMlAcotado`. Encola `stock.bolsa` de las claves del ítem SOLO si
+ * cambió `available_quantity`, `status`, `user_product_id` o el vínculo. Cada elemento se trata por su status_code:
+ *  - 200: se proyecta; 404: baja solo si `GET /items/{id}` también da 404 (retira el caché y encola la bolsa);
+ *  - 403: incidente, sin tocar el caché, y se reencola; 429, 5xx u otro (o ausente): se reencola ese id con backoff.
+ * Un elemento no-200 nunca cierra su trabajo como hecho. No escribe stock: solo `stock.bolsa` escribe.
+ * @returns {Map<string, {estado:'hecho'}|{estado:'reencolar', motivo:string, diferido?:boolean, demoraMs?:number}>} por recurso
+ */
+export async function procesarLoteItemsMl(db, cfg, recursos) {
+  const res = new Map();
+  const ids = [...new Set(recursos.map(String))];
+  if (!mlCfgOk(cfg)) { for (const id of ids) res.set(id, { estado: 'reencolar', motivo: 'ml_sin_configurar' }); return res; }
+  const antes = fotoItemsMl(db, ids);
+  const { refrescarPublicacionesMlAcotado } = await import('./matcher.js');
+  let r;
+  try {
+    r = await refrescarPublicacionesMlAcotado(db, cfg.ml, ids);
+  } catch (e) {
+    // Todo el lote falló (5xx, cooldown, red): se reencola cada id. El cooldown propio es una espera, no un fallo.
+    const espera = e.__cooldownSintetico || e.__sinCupo || e.status === 429;
+    for (const id of ids) res.set(id, { estado: 'reencolar', diferido: Boolean(espera), motivo: `ml_items_bulk_${e.status || 'error'}: ${String(e.message).slice(0, 120)}` });
+    return res;
+  }
+  const noOk = new Map((r.noOk || []).map((x) => [x.id, x.status_code]));
+  const skusAEncolar = new Set();
+  // Un corte entre el refresco del caché y el encolado dejaría el diff invisible en el reintento (el caché ya está al día):
+  // los SKUs pendientes se anotan en el contexto del trabajo ANTES de encolar y se retoman al releerlo.
+  for (const id of ids) {
+    try {
+      const c = JSON.parse(db.prepare("SELECT contexto_json FROM trabajos_recurso WHERE tipo = 'item.project' AND recurso = ?").get(id)?.contexto_json || 'null');
+      for (const s of c?.skus_pendientes || []) skusAEncolar.add(s);
+    } catch { /* sin contexto */ }
+  }
+  const porItem = new Map();
+  for (const id of ids) {
+    if (!noOk.has(id)) {
+      try { const sk = skusAfectadosPorItem(db, id, antes); porItem.set(id, sk); for (const s of sk) skusAEncolar.add(s); } catch (e) { res.set(id, { estado: 'reencolar', motivo: `diff_item: ${String(e.message).slice(0, 120)}` }); continue; }
+      try { // telemetría (no decide nada): fail-open
+        const { registrarCambiosObservados } = await import('../lib/workerIntegrationJobs.js');
+        registrarCambiosObservados(db, id, antes.filas.filter((f) => f.item_id === id), 'webhook');
+      } catch { /* fail-open */ }
+      res.set(id, { estado: 'hecho' });
+      continue;
+    }
+    const code = noOk.get(id);
+    if (code === 404) {
+      const ind = await mlFetch(db, cfg.ml, 'get', `/items/${id}?attributes=id,status`);
+      if (ind.status === 404) {
+        const skus = skusVinculadosDeItems(db, [id]);
+        db.transaction(() => {
+          db.prepare('DELETE FROM ml_publicaciones_cache WHERE item_id = ?').run(id);
+          if (skus.length) encolarBolsasDeSkus(db, skus);
+        })();
+        res.set(id, { estado: 'hecho', motivo: 'item_404_confirmado' });
+      } else {
+        res.set(id, { estado: 'reencolar', motivo: ind.status === 200 ? 'item_404_en_bulk_pero_existe' : `item_404_sin_confirmar_http_${ind.status}`, diferido: ind.status === 429 });
+      }
+      continue;
+    }
+    if (code === 403) {
+      const txt = `MercadoLibre respondió 403 al leer el ítem ${id} (ítem ajeno o token sin permiso). No se tocó el caché; se reintenta cada 30 min.`;
+      try {
+        abrirOActualizarIncidente(db, {
+          integracion: 'mercadolibre', proceso: 'item_project', tipoError: `item_ml_403_${id}`.slice(0, 120), severidad: 'advertencia',
+          mensajeTecnico: txt, mensajeHumano: txt, contexto: { item_id: id },
+        });
+      } catch { /* informativo */ }
+      res.set(id, { estado: 'reencolar', motivo: 'item_403', demoraMs: 30 * 60 * 1000 });
+      continue;
+    }
+    res.set(id, { estado: 'reencolar', motivo: `item_bulk_${code ?? 'ausente'}`, diferido: code === 429 });
+  }
+  for (const [id, sk] of porItem) if (sk.length) { try { guardarContextoTrabajo(db, 'item.project', id, { skus_pendientes: sk }); } catch { /* optimización */ } }
+  if (skusAEncolar.size) {
+    encolarBolsasDeSkus(db, [...skusAEncolar]);
+    for (const id of ids) { try { db.prepare("UPDATE trabajos_recurso SET contexto_json = NULL WHERE tipo = 'item.project' AND recurso = ?").run(id); } catch { /* ya encolado */ } }
+  }
+  return res;
+}
+
 let _trabajosRecursoEnCurso = false;
 
 const tipoErrorTrabajo = (prefijo, t) => `${prefijo}_${t.tipo}_${t.recurso}`.slice(0, 120);
@@ -2183,7 +2326,23 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
   _trabajosRecursoEnCurso = true;
   let procesados = 0;
   try {
-    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'stock.bolsa']) {
+    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'item.project', 'stock.bolsa']) {
+      if (tipo === 'item.project') {
+        // E-2: lote de hasta 20 ítems = UNA llamada /items/bulk (no una por aviso). Va antes de stock.bolsa para que, en la
+        // misma pasada, las bolsas que encola se concilien.
+        const lote = reclamarTrabajos(db, [tipo], { limit: LOTE_ITEMS_ML });
+        if (!lote.length) continue;
+        let resultados;
+        try { resultados = await procesarLoteItemsMl(db, cfg, lote.map((t) => t.recurso)); }
+        catch (e) { resultados = new Map(lote.map((t) => [t.recurso, { estado: 'reencolar', motivo: String(e.message).slice(0, 200) }])); }
+        for (const t of lote) {
+          const r = resultados.get(t.recurso) || { estado: 'reencolar', motivo: 'sin_resultado' };
+          if (r.estado === 'reencolar') resolverReintento(db, t, r);
+          else if (cerrarTrabajo(db, t).cerrado) cerrarIncidentesDeTrabajo(db, t);
+          procesados++;
+        }
+        continue;
+      }
       for (const t of reclamarTrabajos(db, [tipo], { limit })) {
         try {
           const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso)
