@@ -4,7 +4,7 @@
 --
 -- Que nadie pierda acceso: quien hoy tenga 'pedidos' o 'stock-exceptions' recibe 'taller' y
 -- 'garantias' con el nivel más alto que tenga entre ambos (write gana). Si ya tiene el permiso
--- nuevo, ese gana (no se pisa). Idempotente por el NOT EXISTS.
+-- nuevo, no se baja nunca (solo se eleva read→write). Idempotente.
 
 INSERT INTO user_permisos (user_id, herramienta, nivel)
 SELECT p.user_id, h.herramienta,
@@ -17,3 +17,16 @@ SELECT p.user_id, h.herramienta,
          WHERE x.user_id = p.user_id AND x.herramienta = h.herramienta
    )
  GROUP BY p.user_id, h.herramienta;
+
+-- Nunca se baja un permiso: si ya tenía taller/garantias en 'read' y alguna fuente está en 'write',
+-- se eleva a 'write'. Idempotente.
+UPDATE user_permisos
+   SET nivel = 'write'
+ WHERE herramienta IN ('taller', 'garantias')
+   AND nivel = 'read'
+   AND EXISTS (
+        SELECT 1 FROM user_permisos s
+         WHERE s.user_id = user_permisos.user_id
+           AND s.herramienta IN ('pedidos', 'stock-exceptions')
+           AND s.nivel = 'write'
+   );

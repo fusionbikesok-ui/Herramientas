@@ -166,9 +166,23 @@ describe('permisos taller y garantías (migración 134)', () => {
     const html = fs.readFileSync(path.resolve(__dirname, '../public/home/index.html'), 'utf8');
     const ids = new Set(HERRAMIENTAS.map(h => h.id));
     for (const t of ['taller', 'garantias', 'stock-exceptions', 'pedidos']) expect(ids.has(t)).toBe(true);
-    expect(html).toMatch(/tool: 'stock-exceptions', href: 'excepciones'/);
     expect(html).toMatch(/tool: 'pedidos', href: 'gestion-pedidos'/);
     expect(html).not.toMatch(/tool: 'excepciones'|tool: 'gestion-pedidos'/);
+    // Excepciones: la API acepta stock-exceptions o stock, la tarjeta se ve con cualquiera de los dos.
+    expect(html).toMatch(/tools: \['stock-exceptions', 'stock'\], href: 'excepciones'/);
+    expect(html).toContain('(x.tools || []).some(tienePermiso)');
+  });
+
+  it('Gestión de pedidos oculta «Enviar a preparación» sin preparacion:write (admin siempre puede)', () => {
+    const html = fs.readFileSync(path.resolve(__dirname, '../public/gestion-pedidos/index.html'), 'utf8');
+    const fn = html.match(/function puedeCrearLote\(me\) \{[\s\S]*?\n  \}/)[0];
+    const puede = new Function(`${fn}; return puedeCrearLote;`)();
+    expect(puede({ ok: true, is_admin: true })).toBe(true);
+    expect(puede({ ok: true, permisos: [{ herramienta: 'preparacion', nivel: 'write' }] })).toBe(true);
+    expect(puede({ ok: true, permisos: [{ herramienta: 'preparacion', nivel: 'read' }] })).toBe(false);
+    expect(puede({ ok: true, permisos: [{ herramienta: 'pedidos', nivel: 'write' }] })).toBe(false);
+    expect(puede(null)).toBe(false);
+    expect(html).toContain("$('btn-lote').style.display = 'none'");
     expect(html).not.toMatch(/titulo: 'Posventa'[^\n]*adminOnly/);
   });
 
@@ -181,6 +195,13 @@ describe('permisos taller y garantías (migración 134)', () => {
     const usuario = (n) => db.prepare("INSERT INTO users (username,pass_hash,is_admin,activo,creado_en,actualizado_en) VALUES (?,'x',0,1,'t','t')").run(n).lastInsertRowid;
     const dar = (u, h, n) => db.prepare('INSERT INTO user_permisos (user_id,herramienta,nivel) VALUES (?,?,?)').run(u, h, n);
     const de = (u) => Object.fromEntries(db.prepare("SELECT herramienta,nivel FROM user_permisos WHERE user_id=? AND herramienta IN ('taller','garantias')").all(u).map(r => [r.herramienta, r.nivel]));
+
+    it('no baja un write existente aunque las fuentes sean read', () => {
+      const u = usuario('w');
+      dar(u, 'pedidos', 'read'); dar(u, 'taller', 'write');
+      db.exec(SQL);
+      expect(de(u)).toEqual({ taller: 'write', garantias: 'read' });
+    });
 
     it('queda registrada al abrir la base', () => {
       expect(db.prepare("SELECT 1 FROM _schema_migrations WHERE key='permisos_taller_garantias_134'").get()).toBeTruthy();
@@ -196,7 +217,7 @@ describe('permisos taller y garantías (migración 134)', () => {
       db.exec(SQL);
       expect(de(a)).toEqual({ taller: 'write', garantias: 'write' });
       expect(de(b)).toEqual({ taller: 'read', garantias: 'read' });
-      expect(de(c)).toEqual({ taller: 'read', garantias: 'write' });
+      expect(de(c)).toEqual({ taller: 'write', garantias: 'write' });   // read existente se eleva; nunca se baja
       expect(de(d)).toEqual({});
       expect(de(e)).toEqual({ taller: 'read', garantias: 'read' });
       db.exec(SQL);

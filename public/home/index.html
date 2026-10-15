@@ -652,7 +652,7 @@ fetch('/api/auth/me').then(function(r) {
     { titulo: 'Posventa', color: 'control', tools: [
       { tool: 'taller', href: 'taller', t: 'Taller', d: 'Trabajos, diagnóstico y repuestos.', tag: 'Trabajos · Diagnóstico', parcial: 'sin alta de trabajos' },
       { tool: 'garantias', href: 'garantias', t: 'Garantías', d: 'Casos, inspecciones y compromisos de reemplazo.', tag: 'Casos · Inspección', parcial: 'sin alta de casos' },
-      { tool: 'stock-exceptions', href: 'excepciones', t: 'Excepciones físicas', d: 'Incidentes, daños y devoluciones a proveedor.', tag: 'Incidentes · Proveedor', parcial: 'sin alta de incidentes' },
+      { tool: 'stock-exceptions', tools: ['stock-exceptions', 'stock'], href: 'excepciones', t: 'Excepciones físicas', d: 'Incidentes, daños y devoluciones a proveedor.', tag: 'Incidentes · Proveedor', parcial: 'sin alta de incidentes' },
     ]},
     { titulo: 'Administración', color: 'control', adminOnly: true, tools: [
       { tool: 'usuarios', href: 'usuarios', t: 'Usuarios y permisos', d: 'Las cuentas del equipo y qué herramienta puede abrir cada una.', tag: 'Cuentas · Permisos' },
@@ -684,7 +684,7 @@ fetch('/api/auth/me').then(function(r) {
     var html = '';
     GRUPOS.forEach(function (g) {
       if (g.adminOnly && !isAdmin) return;
-      var visibles = g.tools.filter(function (x) { return tienePermiso(x.tool); });
+      var visibles = g.tools.filter(function (x) { return tienePermiso(x.tool) || (x.tools || []).some(tienePermiso); });
       if (!visibles.length) return;
       html += '<section class="category"><div class="category-header">'
         + '<span class="category-label label-' + g.color + '">' + escHtml(g.titulo) + '</span>'
