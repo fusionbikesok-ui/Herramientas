@@ -294,6 +294,26 @@ describe('stock.bolsa con una baja Woo confirmada', () => {
     expect(incs()).toHaveLength(1);
     expect(ml.puts.filter((p) => p.item === 'MLA600')).toEqual([]);
   });
+
+  it('el incidente de publicaciones sin vínculo se cierra cuando la baja se levanta', async () => {
+    db.prepare("INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, seller_sku, available_quantity, actualizado_en) VALUES ('MLA600|', 'MLA600', '', 'active', 'S-500', 5, ?)").run(ts());
+    ml.qty.MLA600 = 5;
+    await procesarStockBolsa(db, CFG, 'S-500');
+    const estado = () => db.prepare("SELECT estado FROM incidentes_operativos WHERE tipo_error = 'baja_woo_publicacion_sin_vinculo_S-500'").get()?.estado;
+    expect(estado()).toBe('activo');
+    db.prepare('DELETE FROM woo_bajas_confirmadas').run();
+    await procesarStockBolsa(db, CFG, 'S-500');
+    expect(estado()).not.toBe('activo');
+  });
+
+  it('una hermana (mismo user_product_id) sin decisión cuyo seller_sku es el dado de baja NO se lleva a 0 si la vinculada tiene otro SKU vivo', async () => {
+    db.prepare("UPDATE ml_publicaciones_cache SET user_product_id = 'UP1' WHERE clave IN ('MLA7247|', 'MLA500|')").run(); // vinculada a FB-7247 y a la dada de baja: SKUs distintos en una bolsa
+    db.prepare("INSERT INTO ml_publicaciones_cache (clave, item_id, variation_id, status, seller_sku, user_product_id, available_quantity, actualizado_en) VALUES ('MLA600|', 'MLA600', '', 'active', 'S-500', 'UP1', 5, ?)").run(ts());
+    ml.qty.MLA600 = 5;
+    await procesarStockBolsa(db, CFG, 'FB-7247');
+    await procesarStockBolsa(db, CFG, 'S-500');
+    expect(ml.puts.filter((p) => p.item === 'MLA600' || p.item === 'MLA7247')).toEqual([]);
+  });
 });
 
 describe('guarda contra una lista de variaciones anómala', () => {

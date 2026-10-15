@@ -1664,6 +1664,18 @@ function persistirCantidadMl(db, clave, sku, cantidad) {
   if (sku && cantidad != null) upsertMlStockEstado(db, clave, sku, cantidad);
 }
 
+/** E-1c: cuando la baja de un SKU ya no está vigente (restaurado o levantada a mano), cierra el incidente de sus publicaciones sin vínculo. */
+function cerrarAvisosBajaLevantada(db, skus) {
+  for (const sku of skus) {
+    const tipoError = `baja_woo_publicacion_sin_vinculo_${sku}`.slice(0, 120);
+    try {
+      if (db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = ? AND estado = 'activo'").get(tipoError)) {
+        confirmarCicloSano(db, { integracion: 'mercadolibre', proceso: 'baja_woo_sin_vinculo', tipoError });
+      }
+    } catch { /* informativo */ }
+  }
+}
+
 /** E-1c: por cada SKU con baja confirmada, abre (idempotente por SKU) un incidente con los item_ids activos que lo usan como `seller_sku` sin vínculo. Informativo: nunca falla el trabajo. */
 function avisarPublicacionesSinVinculoPorBaja(db, skus, clavesVinculadas) {
   try {
@@ -1700,6 +1712,7 @@ async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = nu
   // fila para él) y aunque haya un caso de identidad abierto. La baja se levanta sola si el SKU reaparece en el catálogo.
   levantarBajasReaparecidas(db);
   const bajas = skusConBajaWoo(db, bolsa.skus);
+  cerrarAvisosBajaLevantada(db, bolsa.skus.filter((s) => !bajas.has(s)));
   // Las publicaciones que solo coinciden por `seller_sku` (sin decisión asignar/confirmar) NO se escriben: una identidad no probada
   // no justifica tocar ML. Con baja confirmada abren un incidente operativo (idempotente por SKU) para que alguien las vincule o pause.
   // Supuesto: cuenta de ML única (el `seller_sku` de `ml_publicaciones_cache` pertenece a nuestra cuenta).
@@ -1710,8 +1723,8 @@ async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = nu
     const row = db.prepare(`${computedStockCte()} SELECT * FROM computed WHERE clave = ?`).get(clave);
     if (!bajas.size) return row;
     const sku = row?.sku
-      ?? db.prepare(`SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion IN ('asignar','confirmar') AND sku IS NOT NULL AND sku <> ''`).get(clave)?.sku
-      ?? String(db.prepare('SELECT seller_sku FROM ml_publicaciones_cache WHERE clave = ?').get(clave)?.seller_sku ?? '').trim();
+      ?? db.prepare(`SELECT sku FROM sku_matcher_decisiones WHERE clave = ? AND accion IN ('asignar','confirmar') AND sku IS NOT NULL AND sku <> ''`).get(clave)?.sku;
+    // El SKU sale SOLO del CTE o de una decisión: el `seller_sku` de una hermana sin decisión no prueba identidad.
     if (!sku || !bajas.has(sku)) return row;
     return { ...(row || {}), clave, sku, stock_disponible_ml: 0, baja_woo: true };
   };
