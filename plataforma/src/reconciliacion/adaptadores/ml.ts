@@ -11,13 +11,14 @@ import {
 export interface DependenciasMl {
   transporte: TransporteCanal; db: Consultable; sellerId: string;
   /** Inyectables para test: la espera entre reintentos/páginas y el azar del jitter. */
-  esperar?: (ms: number) => Promise<void>; azar?: () => number;
+  esperar?: (ms: number) => Promise<void>; azar?: () => number; ahora?: () => number;
 }
 
-const LOTE_INDIVIDUAL = 20;
+// Una llamada por página: el motor confirma el avance antes del siguiente consumo de cupo.
+const LOTE_INDIVIDUAL = 1;
 /** Relecturas de un segmento de órdenes antes de declararlo inestable y dejar el cursor quieto. */
 const MAX_RELECTURAS_SEGMENTO = 3;
-const LOTE_PACKS = 10;
+const LOTE_PACKS = 1;
 const LIMITE_BUSQUEDA = 50;
 
 function versionHash(proyeccion: unknown): string {
@@ -146,6 +147,8 @@ export function adaptadorEnviosMl(dep: DependenciasMl): AdaptadorBarrido {
       )).rows.map((f) => f.target_id);
       const resources: RecursoRemoto[] = [];
       const esperar = dep.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+      // Al separar el lote en páginas, conservar la pausa entre envíos de la implementación anterior.
+      if (despuesDe && ids.length) await esperar(PAUSA_ENTRE_PAGINAS_MS);
       for (let i = 0; i < ids.length; i++) {
         const r = await dep.transporte.get(`/shipments/${encodeURIComponent(ids[i]!)}`, { headers: { 'x-format-new': 'true' } });
         if (r.status !== 404) resources.push(envioMl(r.body));
@@ -397,27 +400,42 @@ export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
     // Items no tiene filtro por modificación: su única corriente es la vuelta completa diaria.
     topic: 'ml.items', cursorKind: 'full_scan', fullScan: true, versionKind: 'temporal',
     async listar(ctx, posicion): Promise<PaginaRemota> {
-      // Un solo presupuesto para TODA la página (scan + todos sus bulk secuenciales): son parte de la misma
-      // ventana de 5 minutos del scroll_id, no pedidos independientes con 90s cada uno (hallazgo de Codex).
-      const presupuesto = nuevoPresupuesto();
-      const q = new URLSearchParams({ search_type: 'scan', limit: '100' });
+      // El scan y cada bulk son páginas DURABLES distintas. Si se agota el cupo, el motor ya
+      // conservó los IDs enumerados y los bulk anteriores; nunca vuelve a gastar el scan para
+      // reconstruir una página que necesita más permisos que los disponibles.
+      const ahora = (dep.ahora ?? Date.now)();
       const scroll = textoPosicion(posicion, 'scroll_id');
-      if (scroll) {
-        q.set('scroll_id', scroll);
-        await (dep.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(PAUSA_ENTRE_PAGINAS_MS);
+      const scrollEn = typeof posicion?.scroll_en === 'number' ? posicion.scroll_en : null;
+      if (scroll && scrollEn !== null && ahora - scrollEn >= 5 * 60_000) {
+        // Terminal para ESTA vuelta: el motor no ejecuta declararBajas y la próxima comienza de cero.
+        throw new ErrorCanalTerminal('SCROLL_VENCIDO ml.items');
       }
-      const ruta = `/users/${encodeURIComponent(dep.sellerId)}/items/search?${q}`;
-      const body = exigirRegistro(exigirOk(await conReintento(dep, presupuesto, () => dep.transporte.get(ruta)), 'items/search'), 'items/search');
-      const ids = exigirLista(body.results, 'items/search results').map(idTexto);
-      if (ids.some((id) => !id)) throw new ErrorCanalTerminal('ID_INVALIDO items/search');
-      const lotes: string[][] = [];
-      for (let i = 0; i < ids.length; i += LOTE_MULTIGET) lotes.push(ids.slice(i, i + LOTE_MULTIGET));
-      // `/items/bulk?ids=` (sonda autenticada 2026-09-16): cada elemento trae su `status_code`.
-      // De a uno, no en paralelo: cinco bulk simultáneos por página eran la ráfaga que la guía de ML desaconseja.
-      const respuestas: RespuestaCanal[] = [];
-      for (const lote of lotes) {
-        respuestas.push(await conReintento(dep, presupuesto, () => dep.transporte.get(`/items/bulk?ids=${lote.map(encodeURIComponent).join(',')}`)));
+      const presupuesto = { gastadoMs: numeroPosicion(posicion, 'reintento_ms', 0) };
+      if (posicion?.fase !== 'contenido') {
+        const q = new URLSearchParams({ search_type: 'scan', limit: '100' });
+        if (scroll) {
+          q.set('scroll_id', scroll);
+          await (dep.esperar ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(PAUSA_ENTRE_PAGINAS_MS);
+        }
+        // El presupuesto se reinicia por página de SCAN, no por bulk.
+        const presupuestoScan = nuevoPresupuesto();
+        const ruta = `/users/${encodeURIComponent(dep.sellerId)}/items/search?${q}`;
+        const body = exigirRegistro(exigirOk(await conReintento(dep, presupuestoScan, () => dep.transporte.get(ruta)), 'items/search'), 'items/search');
+        const ids = exigirLista(body.results, 'items/search results').map(idTexto);
+        if (ids.some((id) => !id)) throw new ErrorCanalTerminal('ID_INVALIDO items/search');
+        const siguiente = typeof body.scroll_id === 'string' && body.scroll_id ? body.scroll_id : null;
+        return {
+          resources: [],
+          nextPosition: ids.length ? { fase: 'contenido', pendientes: ids, scroll_id: siguiente,
+            scroll_en: (dep.ahora ?? Date.now)(), reintento_ms: presupuestoScan.gastadoMs } : null,
+          cursorAfter: cursorGeneracion(ctx.windowTo),
+        };
       }
+      const ids = exigirLista(posicion.pendientes, 'items pendientes').map(idTexto);
+      if (!ids.length || ids.some((id) => !id)) throw new ErrorCanalTerminal('ID_INVALIDO items pendientes');
+      const lote = ids.slice(0, LOTE_MULTIGET);
+      const respuesta = await conReintento(dep, presupuesto, () => dep.transporte.get(`/items/bulk?ids=${lote.map(encodeURIComponent).join(',')}`));
+      const respuestas = [respuesta];
       const resources: RecursoRemoto[] = [];
       const presentes: string[] = [];
       for (const r of respuestas) {
@@ -428,12 +446,15 @@ export function adaptadorItemsMl(dep: DependenciasMl): AdaptadorBarrido {
           if (e.status_code === 200) { resources.push(itemMl(e.body)); continue; }
           // Fallo parcial de un elemento: no invalida el lote ni lo da de baja; queda presente sin contenido.
           const id = idTexto(e.id);
-          if (!id || !ids.includes(id)) throw new ErrorCanalTerminal('BULK_ID_INVALIDO /items/bulk');
+          if (!id || !lote.includes(id)) throw new ErrorCanalTerminal('BULK_ID_INVALIDO /items/bulk');
           presentes.push(id);
         }
       }
-      const siguiente = typeof body.scroll_id === 'string' && body.scroll_id && ids.length > 0 ? body.scroll_id : null;
-      return { resources, presentes, nextPosition: siguiente ? { scroll_id: siguiente } : null, cursorAfter: cursorGeneracion(ctx.windowTo) };
+      const resto = ids.slice(LOTE_MULTIGET);
+      const nextPosition = resto.length
+        ? { ...posicion, pendientes: resto, reintento_ms: presupuesto.gastadoMs }
+        : scroll ? { scroll_id: scroll, scroll_en: scrollEn } : null;
+      return { resources, presentes, nextPosition, cursorAfter: cursorGeneracion(ctx.windowTo) };
     },
   };
 }

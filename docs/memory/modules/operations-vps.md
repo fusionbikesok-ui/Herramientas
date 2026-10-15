@@ -1,5 +1,15 @@
 # Operación del VPS y despliegue
 
+## Recuperación de Sombra — 2026-10-15
+
+La firma Woo quedó reparada conservando el secreto efectivo del proceso: `.env` usa comillas para que shell y dotenv lo interpreten igual. Webhooks 17–20 alineados y activos; pings autenticados 200. El monitor fue refrescado desde Woo y comprobó los ocho webhooks propios sin caídos ni ausentes. El ping prueba autenticación; la recuperación de entregas de negocio se verifica con tráfico natural, sin generar pedidos de prueba.
+
+Respaldo de la configuración de firma: `/opt/fusionbikes/backups/sombra-firma-2026-10-15T18-11-47-971Z`. Respaldo previo de PostgreSQL/configuraciones: `/opt/fusionbikes/backups/sombra-recuperacion-20261015`. Worker definitivo publicado a las 18:26 UTC con `fusion-plataforma:sombra-recuperacion-20261015-r2`, imagen `sha256:20ee28ac78969751eae524728b51e6b96468160c3b85d6eb97d416cd8c1fae28`. Compose debe incluir `/opt/fusionbikes/plataforma-prod/sombra-worker.override.yml`; API/scheduler conservaron sus contenedores, legado no se reinició. Evidencia y rollback compatible en `docs/superpowers/evidence/e1/2026-10-15-recuperacion-sombra.md`; no implica aceptación de E1.
+
+Decisión de José: conservar la captura para consumidores futuros. La medición `scripts/ops/medir-recuperacion-sombra.sql` distingue esos pendientes sin intentos de los errores de consumidores activos. Antes de siete días verdes falta comprobar capacidad: los 470 packs medidos no caben en 20 minutos al cupo actual de 10 RPM. No reducir crons para ocultar el atraso.
+
+La verificación de avance detectó que la imagen heredada no incluía el motor reanudable presente en Git. La reparación requiere publicar juntos `adaptadores/ml.ts`, `relectura.ts`, `motor.ts` y `corridas.ts`; comprobar sólo los adaptadores no basta. El artefacto debe probarse con su propio código extraído y el avance debe verificarse en `integrations.sweep_runs.cursor_after`.
+
 ## Operación vigente POS y ARCA — regreso a la web, 2026-10-06
 
 POS y Facturador ARCA vuelven a operar exclusivamente en fusionbikes.com.ar, por decisión del usuario. Herramientas ofrece accesos directos; los informes, directorio y etiquetas Andreani/corrector PDF permanecen en el VPS. Los enlaces antiguos ?fm_module=pos/facturador redirigen a la web. El gateway con FUSION_SALES_LOCATION=web bloquea las API antiguas de POS, facturación y envíos manuales del VPS; los enlaces PDF ya compartidos conservan su vigencia original.
