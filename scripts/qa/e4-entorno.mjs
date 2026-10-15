@@ -42,18 +42,35 @@ function esNuestroServidor(pid, dbPath) {
   } catch { return false; }
 }
 
+const vivo = (pid) => fs.existsSync(`/proc/${pid}`);
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Apaga el entorno. Borra el directorio SOLO si el proceso ya no existe o se mató verificado. Si el pid sigue vivo y no se puede
+ * verificar que es nuestro (o el estado es ilegible), aborta SIN borrar nada, conserva estado.json y devuelve false.
+ */
 async function down() {
-  try {
-    const e = JSON.parse(fs.readFileSync(estadoPath, 'utf8'));
-    if (esNuestroServidor(e.pid, e.db)) process.kill(e.pid, 'SIGTERM');
-    else console.log(`pid ${e.pid} no es el servidor de este entorno: no se mata`);
-  } catch { /* sin estado */ }
+  let e = null;
+  try { e = JSON.parse(fs.readFileSync(estadoPath, 'utf8')); } catch (err) {
+    if (err.code !== 'ENOENT') { console.error(`down: estado.json ilegible (${err.message}); no se borra nada`); return false; }
+  }
+  if (e && Number.isInteger(e.pid) && vivo(e.pid)) {
+    if (!esNuestroServidor(e.pid, e.db)) {
+      console.error(`down: el pid ${e.pid} sigue vivo y no se pudo verificar que sea el servidor de este entorno; no se mata ni se borra nada (estado.json conservado)`);
+      return false;
+    }
+    process.kill(e.pid, 'SIGTERM');
+    for (let i = 0; i < 50 && vivo(e.pid); i++) await dormir(100);
+    if (vivo(e.pid) && esNuestroServidor(e.pid, e.db)) { process.kill(e.pid, 'SIGKILL'); for (let i = 0; i < 20 && vivo(e.pid); i++) await dormir(100); }
+    if (vivo(e.pid)) { console.error(`down: el pid ${e.pid} no terminó; se conserva el estado`); return false; }
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('entorno E2E apagado');
+  return true;
 }
 
 async function up() {
-  await down();
+  if (!(await down())) process.exit(1);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const dbPath = path.join(dir, 'fusion.sqlite');
   const port = await puertoLibre();
@@ -103,5 +120,5 @@ async function up() {
 
 const cmd = process.argv[2];
 if (cmd === 'up') await up();
-else if (cmd === 'down') await down();
+else if (cmd === 'down') process.exit((await down()) ? 0 : 1);
 else { console.error('uso: e4-entorno.mjs up|down'); process.exit(2); }
