@@ -1728,31 +1728,50 @@ async function _conciliarClavesDeBolsa(db, cfg, bolsa, candado, { barreraId = nu
     if (!sku || !bajas.has(sku)) return row;
     return { ...(row || {}), clave, sku, stock_disponible_ml: 0, baja_woo: true };
   };
-  const pendientes = [];
-  for (const clave of claves) {
-    const row = computada(clave);
-    const rem = remoto.get(clave);
-    if (!row || !rem) continue; // fuera del conjunto que nuestro sync escribe
-    persistirCantidadMl(db, clave, row.sku, rem.cantidad);
-    if (rem.status !== 'active' || rem.cantidad == null) continue;
-    const deseado = Math.max(0, Math.round(row.stock_disponible_ml));
-    if (rem.cantidad !== deseado) pendientes.push({ row, rem });
-  }
-  for (const { row, rem } of pendientes) {
-    const res = await _empujarClaveMl(db, mlCfg, row.sku, { clave: row.clave, stock_disponible_ml: row.stock_disponible_ml, cantidad_ml: rem.cantidad }, { barreraId, candadoToken: candado.token });
-    if (res.estado !== 'sincronizado') return { ok: false, motivo: `${row.clave}: ${res.detalle}`, bloqueado: Boolean(res.bloqueado) };
-  }
-  // 4) Relectura de confirmación: TODAS las claves deben publicar lo deseado
-  const remoto2 = await leerCantidadesMl(db, mlCfg, claves);
+  // E-2: las publicaciones HERMANAS (mismo `user_product_id`) comparten UNA cantidad en ML. Se escribe UNA vez por user_product,
+  // con el valor deseado más restrictivo del grupo (reservas o modos distintos con el mismo SKU: gana el menor); las demás hermanas
+  // se confirman por la relectura. Sin `user_product_id` cada clave es su propio grupo. (SKUs distintos en la bolsa ya se cortaron arriba.)
+  const upDe = db.prepare('SELECT user_product_id FROM ml_publicaciones_cache WHERE clave = ?');
+  const filasClaves = [];
   for (const clave of claves) {
     const row = computada(clave);
     if (!row) continue;
-    const rem = remoto2.get(clave);
-    if (!rem) return { ok: false, motivo: `${clave}: sin lectura de ML` };
-    if (rem.status !== 'active' || rem.cantidad == null) continue;
-    if (rem.cantidad !== Math.max(0, Math.round(row.stock_disponible_ml))) return { ok: false, motivo: `${clave}: ML publica ${rem.cantidad}` };
+    const up = String(upDe.get(clave)?.user_product_id ?? '').trim();
+    filasClaves.push({ clave, row, grupo: up ? `up:${up}` : `solo:${clave}` });
   }
-  return { ok: true, empujadas: pendientes.length };
+  const deseadoDeGrupo = new Map();
+  for (const f of filasClaves) {
+    const d = Math.max(0, Math.round(f.row.stock_disponible_ml));
+    deseadoDeGrupo.set(f.grupo, Math.min(deseadoDeGrupo.get(f.grupo) ?? Infinity, d));
+  }
+  const pendientes = [];
+  const escritosGrupo = new Set();
+  for (const f of filasClaves) {
+    const rem = remoto.get(f.clave);
+    if (!rem) continue; // fuera del conjunto que nuestro sync escribe
+    persistirCantidadMl(db, f.clave, f.row.sku, rem.cantidad);
+    if (rem.status !== 'active' || rem.cantidad == null) continue;
+    // Eco: si lo que ML publica ya es lo deseado (p. ej. el cambio observado es el que escribimos nosotros) no se escribe.
+    if (rem.cantidad !== deseadoDeGrupo.get(f.grupo) && !escritosGrupo.has(f.grupo)) { escritosGrupo.add(f.grupo); pendientes.push({ row: f.row, rem, deseado: deseadoDeGrupo.get(f.grupo) }); }
+  }
+  for (const { row, rem, deseado } of pendientes) {
+    const res = await _empujarClaveMl(db, mlCfg, row.sku, { clave: row.clave, stock_disponible_ml: deseado, cantidad_ml: rem.cantidad }, { barreraId, candadoToken: candado.token });
+    if (res.estado !== 'sincronizado') return { ok: false, motivo: `${row.clave}: ${res.detalle}`, bloqueado: Boolean(res.bloqueado) };
+  }
+  // 4) Relectura de confirmación: TODAS las claves deben publicar lo deseado de su grupo
+  const remoto2 = await leerCantidadesMl(db, mlCfg, claves);
+  for (const f of filasClaves) {
+    const rem = remoto2.get(f.clave);
+    if (!rem) return { ok: false, motivo: `${f.clave}: sin lectura de ML` };
+    if (rem.status !== 'active' || rem.cantidad == null) continue;
+    if (rem.cantidad !== deseadoDeGrupo.get(f.grupo)) return { ok: false, motivo: `${f.clave}: ML publica ${rem.cantidad}` };
+  }
+  const instantanea = {};
+  for (const f of filasClaves) {
+    const rem = remoto2.get(f.clave);
+    if (rem?.status === 'active' && rem.cantidad != null) instantanea[f.clave] = { deseado: deseadoDeGrupo.get(f.grupo), remoto: rem.cantidad };
+  }
+  return { ok: true, empujadas: pendientes.length, instantanea };
 }
 
 /**
@@ -2014,7 +2033,7 @@ export async function procesarStockBolsa(db, cfg, sku) {
   const r = await conCandados(db, bolsa.skus, async (candado) => {
     if (filasBarrera(db, bolsa.skus).length) return { estado: 'reencolar', diferido: true, motivo: 'barrera' };
     const c = await _conciliarClavesDeBolsa(db, cfg, bolsa, candado, {});
-    if (c.ok) return { estado: 'hecho', empujadas: c.empujadas };
+    if (c.ok) return { estado: 'hecho', empujadas: c.empujadas, instantanea: c.instantanea };
     return c.bloqueado ? { estado: 'hecho', motivo: 'bloqueado_por_identidad' } : { estado: 'reencolar', motivo: c.motivo };
   });
   if (r.ocupado) return { estado: 'reencolar', diferido: true, motivo: 'candados_ocupados' };
@@ -2124,6 +2143,235 @@ export async function procesarProductoWoo(db, cfg, recurso) {
   }
 }
 
+// ─── E-2: trabajo `item.project` (publicación de ML creada/modificada, o su user_product cambió de stock) ───────────────
+
+/** Cuántos `item.project` se releen juntos: ML permite 20 ids por /items/bulk. */
+export const LOTE_ITEMS_ML = 20;
+const CAMPOS_ITEM_QUE_ENCOLAN_BOLSA = ['available_quantity', 'status', 'user_product_id'];
+
+function fotoItemsMl(db, ids) {
+  const marcas = ids.map(() => '?').join(',');
+  const filas = db.prepare(`SELECT clave,item_id,seller_sku,available_quantity,status,sub_status,precio,user_product_id,gtin
+    FROM ml_publicaciones_cache WHERE item_id IN (${marcas})`).all(...ids);
+  const dec = new Map();
+  if (filas.length) {
+    for (const d of db.prepare(`SELECT clave, sku FROM sku_matcher_decisiones WHERE accion IN ${ACCIONES_VINCULO} AND sku IS NOT NULL AND sku <> ''
+      AND clave IN (${filas.map(() => '?').join(',')})`).all(...filas.map((f) => f.clave))) dec.set(d.clave, d.sku);
+  }
+  return { filas, dec };
+}
+
+/** SKUs vinculados (decisión asignar/confirmar) de todas las claves de unos ítems, leídos del estado actual de las decisiones. */
+function skusVinculadosDeItems(db, ids) {
+  const marcas = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT DISTINCT d.sku FROM sku_matcher_decisiones d
+    WHERE d.accion IN ${ACCIONES_VINCULO} AND d.sku IS NOT NULL AND d.sku <> ''
+      AND substr(d.clave, 1, instr(d.clave || '|', '|') - 1) IN (${marcas})`).all(...ids).map((r) => r.sku);
+}
+
+/**
+ * Carrera con el scan u otro refresco: si el caché ya estaba al día, el diff `antes/después` sale vacío aunque el remoto no sea lo
+ * deseado (el scan corrige `ml_stock_estado`, no encola bolsas). Se compara también contra el deseado calculado LOCAL (sin llamar
+ * a ML): una publicación activa y vinculada cuya cantidad difiere de `stock_disponible_ml` encola su bolsa.
+ */
+function remotoDifiereDelDeseado(db, f, skuVinculado, deseados) {
+  if (!skuVinculado || f.status !== 'active' || f.available_quantity == null) return false;
+  // Si la última bolsa de este SKU terminó SIN escribir hace poco, una diferencia local no la vuelve a disparar (evita lecturas
+  // a ML en cada aviso por un falso positivo persistente). Un cambio real de cantidad/estado/vínculo sí dispara (otra rama del diff).
+  const deseado = deseados.get(f.clave);
+  if (deseado == null) return false;
+  if (Number(f.available_quantity) === deseado) return false;
+  // La supresión vale SOLO si el deseado efectivo y la cantidad remota de esta clave son IGUALES a los que verificó esa bolsa:
+  // cualquier cambio (Woo o ML), aunque el scan ya haya actualizado el caché, dispara la bolsa.
+  const marca = leerEstado(db, `bolsa_sin_escritura:${skuVinculado}`);
+  if (!marca || Date.now() - new Date(marca.actualizado_en).getTime() >= VENTANA_SIN_ESCRITURA_MS) return true;
+  let verificado = null;
+  try { verificado = JSON.parse(marca.valor)?.claves?.[f.clave] ?? null; } catch { /* marca vieja o ilegible: no suprime */ }
+  return !(verificado && verificado.deseado === deseado && verificado.remoto === Number(f.available_quantity));
+}
+
+/** Recuerda, por clave, el deseado efectivo y la cantidad remota que verificó una bolsa que terminó sin escribir. */
+function marcarBolsaSinEscritura(db, sku, instantanea) {
+  // Se guarda la instantánea VERIFICADA por la bolsa (deseado y remoto con que confirmó), sin releer nada: si Woo cambió entre la
+  // confirmación y el cierre, la marca conserva el valor viejo y el próximo item.project ve la diferencia y dispara.
+  guardarEstado(db, `bolsa_sin_escritura:${sku}`, JSON.stringify({ claves: instantanea || {} }));
+}
+
+/**
+ * Deseado EFECTIVO por clave para un lote, calculado UNA vez con `computedStockCte() ... IN (...)` (no una consulta por clave).
+ * Las hermanas (mismo `user_product_id`) comparten una cantidad en ML: el deseado de cada una es el MÍNIMO del grupo, igual que
+ * en la bolsa, así que dos hermanas con deseados distintos no generan un falso positivo persistente.
+ */
+function deseadosEfectivosDeItems(db, ids) {
+  const out = new Map();
+  const base = fotoItemsMl(db, ids).filas;
+  if (!base.length) return out;
+  const ups = [...new Set(base.map((f) => String(f.user_product_id ?? '').trim()).filter(Boolean))];
+  const hermanas = ups.length
+    ? db.prepare(`SELECT clave, user_product_id FROM ml_publicaciones_cache WHERE user_product_id IN (${ups.map(() => '?').join(',')})`).all(...ups)
+    : [];
+  const upDe = new Map(base.map((f) => [f.clave, String(f.user_product_id ?? '').trim()]));
+  for (const h of hermanas) upDe.set(h.clave, String(h.user_product_id ?? '').trim());
+  const claves = [...upDe.keys()];
+  const calc = new Map();
+  for (const r of db.prepare(`${computedStockCte()} SELECT clave, stock_disponible_ml FROM computed WHERE clave IN (${claves.map(() => '?').join(',')})`).all(...claves)) {
+    if (r.stock_disponible_ml != null) calc.set(r.clave, Math.max(0, Math.round(r.stock_disponible_ml)));
+  }
+  const minGrupo = new Map();
+  for (const [clave, d] of calc) {
+    const up = upDe.get(clave);
+    if (up) minGrupo.set(up, Math.min(minGrupo.get(up) ?? Infinity, d));
+  }
+  for (const f of base) {
+    const up = upDe.get(f.clave);
+    const d = up ? minGrupo.get(up) : calc.get(f.clave);
+    if (d != null && d !== Infinity) out.set(f.clave, d);
+  }
+  return out;
+}
+
+/** Compara la foto previa con el estado actual de un ítem: ¿cambió cantidad, estado, user_product o vínculo? Devuelve los SKUs a conciliar. */
+function skusAfectadosPorItem(db, itemId, antes, deseados) {
+  const despues = fotoItemsMl(db, [itemId]);
+  const previas = new Map(antes.filas.filter((f) => f.item_id === itemId).map((f) => [f.clave, f]));
+  let cambio = false;
+  const skus = new Set();
+  for (const f of despues.filas) {
+    const a = previas.get(f.clave);
+    const skuAntes = antes.dec.get(f.clave) ?? null;
+    const skuAhora = despues.dec.get(f.clave) ?? null;
+    if (!a || skuAntes !== skuAhora || CAMPOS_ITEM_QUE_ENCOLAN_BOLSA.some((c) => String(a[c] ?? '') !== String(f[c] ?? '')) || remotoDifiereDelDeseado(db, f, skuAhora, deseados)) {
+      cambio = true;
+      if (skuAntes) skus.add(skuAntes);
+      if (skuAhora) skus.add(skuAhora);
+    }
+  }
+  for (const [clave, a] of previas) { // clave que desapareció
+    if (!despues.filas.some((f) => f.clave === clave)) { cambio = true; const s = antes.dec.get(clave); if (s) skus.add(s); }
+  }
+  return cambio ? [...skus] : [];
+}
+
+const VENTANA_SIN_ESCRITURA_MS = 10 * 60 * 1000; // tras una bolsa sin escritura, no se re-dispara por diferencia local
+/**
+ * Un solo incidente `item_ml_403` con la lista VIGENTE de ids: une los de antes con los de este lote y saca los que ya dieron
+ * 200 (o 404 confirmado). Si la lista queda vacía, el incidente se cierra.
+ */
+function actualizarIncidente403(db, ids403, idsResueltos) {
+  try {
+    const previo = db.prepare("SELECT contexto_json FROM incidentes_operativos WHERE tipo_error = 'item_ml_403' AND estado = 'activo'").get();
+    let previos = [];
+    try { previos = JSON.parse(previo?.contexto_json || 'null')?.item_ids || []; } catch { /* sin contexto */ }
+    const resueltos = new Set(idsResueltos);
+    const vigentes = [...new Set([...previos, ...ids403])].filter((id) => !resueltos.has(id) || ids403.includes(id));
+    if (!vigentes.length) {
+      if (previo) confirmarCicloSano(db, { integracion: 'mercadolibre', proceso: 'item_project', tipoError: 'item_ml_403' });
+      return;
+    }
+    const txt = `MercadoLibre respondió 403 al leer ${vigentes.length} ítem(s): ${vigentes.join(', ')} (ítem ajeno o token sin permiso). No se tocó el caché; se reintenta cada 30 min.`;
+    abrirOActualizarIncidente(db, {
+      integracion: 'mercadolibre', proceso: 'item_project', tipoError: 'item_ml_403', severidad: 'advertencia',
+      mensajeTecnico: txt, mensajeHumano: txt, contexto: { item_ids: vigentes },
+    });
+  } catch { /* informativo */ }
+}
+
+const TOPE_GET_404_POR_PASE = 5; // GET individuales de confirmación por pase; el resto se reencola
+
+/**
+ * Lote de trabajos `item.project`: UNA relectura `/items/bulk` (hasta 20 ids) por lote, con el Vigía, el autovínculo y la
+ * auditoría de precios que ya incluye `refrescarPublicacionesMlAcotado`. Encola `stock.bolsa` de las claves del ítem SOLO si
+ * cambió `available_quantity`, `status`, `user_product_id` o el vínculo. Cada elemento se trata por su status_code:
+ *  - 200: se proyecta; 404: baja solo si `GET /items/{id}` también da 404 (retira el caché y encola la bolsa);
+ *  - 403: incidente, sin tocar el caché, y se reencola; 429, 5xx u otro (o ausente): se reencola ese id con backoff.
+ * Un elemento no-200 nunca cierra su trabajo como hecho. No escribe stock: solo `stock.bolsa` escribe.
+ * @returns {Map<string, {estado:'hecho'}|{estado:'reencolar', motivo:string, diferido?:boolean, demoraMs?:number}>} por recurso
+ */
+export async function procesarLoteItemsMl(db, cfg, recursos) {
+  const res = new Map();
+  const ids = [...new Set(recursos.map(String))];
+  if (!mlCfgOk(cfg)) { for (const id of ids) res.set(id, { estado: 'reencolar', motivo: 'ml_sin_configurar' }); return res; }
+  const antes = fotoItemsMl(db, ids);
+  const { refrescarPublicacionesMlAcotado } = await import('./matcher.js');
+  let r;
+  try {
+    r = await refrescarPublicacionesMlAcotado(db, cfg.ml, ids);
+  } catch (e) {
+    // Todo el lote falló (5xx, cooldown, red): se reencola cada id. El cooldown propio es una espera, no un fallo.
+    const espera = e.__cooldownSintetico || e.__sinCupo || e.status === 429;
+    for (const id of ids) res.set(id, { estado: 'reencolar', diferido: Boolean(espera), motivo: `ml_items_bulk_${e.status || 'error'}: ${String(e.message).slice(0, 120)}` });
+    return res;
+  }
+  const noOk = new Map((r.noOk || []).map((x) => [x.id, x.status_code]));
+  const skusAEncolar = new Set();
+  // Un corte entre el refresco del caché y el encolado dejaría el diff invisible en el reintento (el caché ya está al día):
+  // los SKUs pendientes se anotan en el contexto del trabajo ANTES de encolar y se retoman al releerlo.
+  const previosPorItem = new Map();
+  for (const id of ids) {
+    try {
+      const c = JSON.parse(db.prepare("SELECT contexto_json FROM trabajos_recurso WHERE tipo = 'item.project' AND recurso = ?").get(id)?.contexto_json || 'null');
+      const previos = c?.skus_pendientes || [];
+      previosPorItem.set(id, previos);
+      for (const s of previos) skusAEncolar.add(s);
+    } catch { /* sin contexto */ }
+  }
+  let deseados = new Map();
+  try { deseados = deseadosEfectivosDeItems(db, ids.filter((id) => !noOk.has(id))); } catch { /* sin deseado local: solo dispara el diff de campos */ }
+  const ids403 = [];
+  let getsIndividuales = 0;
+  for (const id of ids) {
+    try { // un fallo en un ítem no pierde lo ya calculado de los otros (sus skus_pendientes ya están en el contexto)
+      if (!noOk.has(id)) {
+        const sk = skusAfectadosPorItem(db, id, antes, deseados);
+        for (const s of sk) skusAEncolar.add(s);
+        // ANTES de encolar: un corte no pierde el diff. Es la UNIÓN con los pendientes de intentos anteriores (dos cortes seguidos
+        // no pisan el SKU del primero); solo se limpian cuando la bolsa de TODOS ellos quedó encolada (abajo).
+        if (sk.length) guardarContextoTrabajo(db, 'item.project', id, { skus_pendientes: [...new Set([...(previosPorItem.get(id) || []), ...sk])] });
+        try { // telemetría (no decide nada): fail-open
+          const { registrarCambiosObservados } = await import('../lib/workerIntegrationJobs.js');
+          registrarCambiosObservados(db, id, antes.filas.filter((f) => f.item_id === id), 'webhook');
+        } catch { /* fail-open */ }
+        res.set(id, { estado: 'hecho' });
+        continue;
+      }
+      const code = noOk.get(id);
+      if (code === 404) {
+        if (getsIndividuales >= TOPE_GET_404_POR_PASE) { // presupuesto: no se multiplican las llamadas a ML por un lote de 404
+          res.set(id, { estado: 'reencolar', motivo: 'item_404_presupuesto', diferido: true, demoraMs: 2 * 60 * 1000 });
+          continue;
+        }
+        getsIndividuales++;
+        const ind = await mlFetch(db, cfg.ml, 'get', `/items/${id}?attributes=id,status`);
+        if (ind.status === 404) {
+          const skus = skusVinculadosDeItems(db, [id]);
+          db.transaction(() => {
+            db.prepare('DELETE FROM ml_publicaciones_cache WHERE item_id = ?').run(id);
+            if (skus.length) encolarBolsasDeSkus(db, skus);
+          })();
+          res.set(id, { estado: 'hecho', motivo: 'item_404_confirmado' });
+        } else {
+          res.set(id, { estado: 'reencolar', motivo: ind.status === 200 ? 'item_404_en_bulk_pero_existe' : `item_404_sin_confirmar_http_${ind.status}`, diferido: ind.status === 429 });
+        }
+        continue;
+      }
+      if (code === 403) {
+        ids403.push(id);
+        res.set(id, { estado: 'reencolar', motivo: 'item_403', demoraMs: 30 * 60 * 1000 });
+        continue;
+      }
+      res.set(id, { estado: 'reencolar', motivo: `item_bulk_${code ?? 'ausente'}`, diferido: code === 429 });
+    } catch (e) {
+      res.set(id, { estado: 'reencolar', motivo: `item_error: ${String(e.message).slice(0, 120)}`, diferido: Boolean(e.__cooldownSintetico || e.__sinCupo || e.status === 429) });
+    }
+  }
+  actualizarIncidente403(db, ids403, ids.filter((id) => res.get(id)?.estado === 'hecho'));
+  if (skusAEncolar.size) {
+    encolarBolsasDeSkus(db, [...skusAEncolar]);
+    for (const id of ids) { try { db.prepare("UPDATE trabajos_recurso SET contexto_json = NULL WHERE tipo = 'item.project' AND recurso = ?").run(id); } catch { /* ya encolado */ } }
+  }
+  return res;
+}
+
 let _trabajosRecursoEnCurso = false;
 
 const tipoErrorTrabajo = (prefijo, t) => `${prefijo}_${t.tipo}_${t.recurso}`.slice(0, 120);
@@ -2183,7 +2431,23 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
   _trabajosRecursoEnCurso = true;
   let procesados = 0;
   try {
-    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'stock.bolsa']) {
+    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'item.project', 'stock.bolsa']) {
+      if (tipo === 'item.project') {
+        // E-2: lote de hasta 20 ítems = UNA llamada /items/bulk (no una por aviso). Va antes de stock.bolsa para que, en la
+        // misma pasada, las bolsas que encola se concilien.
+        const lote = reclamarTrabajos(db, [tipo], { limit: LOTE_ITEMS_ML });
+        if (!lote.length) continue;
+        let resultados;
+        try { resultados = await procesarLoteItemsMl(db, cfg, lote.map((t) => t.recurso)); }
+        catch (e) { resultados = new Map(lote.map((t) => [t.recurso, { estado: 'reencolar', motivo: String(e.message).slice(0, 200) }])); }
+        for (const t of lote) {
+          const r = resultados.get(t.recurso) || { estado: 'reencolar', motivo: 'sin_resultado' };
+          if (r.estado === 'reencolar') resolverReintento(db, t, r);
+          else if (cerrarTrabajo(db, t).cerrado) cerrarIncidentesDeTrabajo(db, t);
+          procesados++;
+        }
+        continue;
+      }
       for (const t of reclamarTrabajos(db, [tipo], { limit })) {
         try {
           const r = tipo === 'order.ml' ? await procesarOrdenMl(db, cfg, t.recurso)
@@ -2198,7 +2462,18 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
                 ON CONFLICT(order_id) DO UPDATE SET skus_json = excluded.skus_json, actualizado_en = excluded.actualizado_en`)
                 .run(t.recurso, JSON.stringify(r.skusActuales || []), new Date().toISOString());
             } : null;
-            if (cerrarTrabajo(db, t, { enCierre }).cerrado) cerrarIncidentesDeTrabajo(db, t);
+            const cierre = cerrarTrabajo(db, t, { enCierre });
+            if (cierre.cerrado) cerrarIncidentesDeTrabajo(db, t);
+            // E-2: recuerda si esta bolsa terminó sin escribir (ver remotoDifiereDelDeseado); una escritura real lo borra.
+            // Solo si el trabajo cerró como hecho, y con la instantánea que la propia bolsa verificó.
+            if (tipo === 'stock.bolsa' && r.estado === 'hecho' && r.empujadas !== undefined) {
+              const skuB = t.recurso.replace(/^sku:/, '');
+              try {
+                if (r.empujadas > 0) guardarEstado(db, `bolsa_sin_escritura:${skuB}`, 'escribio');
+                else if (cierre.cerrado && r.instantanea) marcarBolsaSinEscritura(db, skuB, r.instantanea);
+                else guardarEstado(db, `bolsa_sin_escritura:${skuB}`, 'sin_marca');
+              } catch { /* optimización */ }
+            }
           }
           procesados++;
         } catch (e) {

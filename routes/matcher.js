@@ -548,6 +548,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
 
   const filas = [];
   const creadas = new Map();
+  const noOk = []; // elementos del multiget que no vinieron 200: { id, status_code } (null = ausente en la respuesta)
   for (let i = 0; i < ids.length; i += MULTIGET_CHUNK) {
     const chunk = ids.slice(i, i + MULTIGET_CHUNK);
     const resp = await mlFetchConReintento(
@@ -564,11 +565,20 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
       if (resp.__sinCupo) err.__sinCupo = true;
       throw err;
     }
+    const vistos = new Set();
     for (const entry of resp.data) {
-      if ((entry.status_code ?? entry.code) !== 200 || !entry.body) continue;
+      const code = entry.status_code ?? entry.code;
+      if (code !== 200 || !entry.body) {
+        // E-2: el llamador decide qué hacer con cada elemento que no vino 200 (404 se confirma, 403 incidente, 429/5xx reintenta).
+        const idNoOk = String(entry.body?.id ?? entry.id ?? '');
+        if (idNoOk && chunk.includes(idNoOk)) { vistos.add(idNoOk); noOk.push({ id: idNoOk, status_code: code ?? null }); }
+        continue;
+      }
+      vistos.add(String(entry.body.id));
       filas.push(...aplanarItemMl(entry.body));
       if (entry.body.date_created) creadas.set(String(entry.body.id), entry.body.date_created);
     }
+    for (const id of chunk) if (!vistos.has(id)) noOk.push({ id, status_code: null }); // ML no devolvió el elemento
     onProgress?.({ phase: 'trayendo', done: Math.min(i + MULTIGET_CHUNK, ids.length), total: ids.length });
     await sleep(espera(CALL_DELAY_MS));
   }
@@ -595,7 +605,7 @@ export async function refrescarPublicacionesMlAcotado(db, cfg, itemIds, onProgre
   // Este camino también lo llama el worker de webhooks directamente, sin pasar por
   // dispararRefrescoMl: proyectar ahora evita que un cambio puntual de precio espere el scan.
   dispararAuditoriaPrecios(db, { origen: 'ml_acotado', itemIds: ids, podar: true, mlCfg: cfg });
-  return { total: filas.length, items: ids.length, variaciones, vigia, auto_vinculadas: autoVinculadas };
+  return { total: filas.length, items: ids.length, variaciones, vigia, auto_vinculadas: autoVinculadas, noOk };
 }
 
 /**

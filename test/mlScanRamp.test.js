@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { openDb } from '../db/index.js';
+import { encolarTrabajo } from '../lib/trabajosRecurso.js';
 import { estadoRamp, evaluarRamp, tocaScan, frescuraVigenteMs, medirCoberturaWebhook, proyeccionItemsRota, _LIMPIAS_PARA_SUBIR } from '../lib/mlScanRamp.js';
 
 const limpias = (db, n) => db.prepare('UPDATE ml_scan_ramp SET corridas_limpias=? WHERE id=1').run(n);
@@ -135,6 +136,33 @@ describe('métrica de cobertura del webhook', () => {
     db.prepare(`INSERT INTO integration_jobs (event_id,job_type,available_at,status)
       VALUES ('e2','item.project',?, 'dead_lettered')`).run(new Date().toISOString());
     expect(proyeccionItemsRota(db)).toBe(true);
+    db.close();
+  });
+
+  it('detecta la proyección rota por trabajos_recurso item.project: muerto, o varios ítems distintos fallando', () => {
+    const db = openDb(':memory:');
+    for (const r of ['MLA7', 'MLA8', 'MLA9']) encolarTrabajo(db, { tipo: 'item.project', recurso: r });
+    expect(proyeccionItemsRota(db)).toBe(false);
+    const fallar = (r, err = 'boom') => db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 2, ultimo_error = ? WHERE recurso = ?").run(err, r);
+    fallar('MLA7'); fallar('MLA8'); // dos ítems fallando: todavía no es sistémico
+    expect(proyeccionItemsRota(db)).toBe(false);
+    fallar('MLA9');
+    expect(proyeccionItemsRota(db)).toBe(true);
+    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 0, ultimo_error = NULL").run();
+    db.prepare("UPDATE trabajos_recurso SET estado = 'muerto', ultimo_error = 'boom' WHERE recurso = 'MLA7'").run();
+    expect(proyeccionItemsRota(db)).toBe(true);
+    db.prepare("UPDATE trabajos_recurso SET actualizado_en = ? WHERE recurso = 'MLA7'").run(new Date(Date.now() - 3 * 3600 * 1000).toISOString());
+    expect(proyeccionItemsRota(db)).toBe(false);
+    db.close();
+  });
+
+  it('un 403 o un 404 sin confirmar son datos: no congelan la rampa, ni muertos ni persistentes', () => {
+    const db = openDb(':memory:');
+    for (const r of ['MLA1', 'MLA2', 'MLA3', 'MLA4']) encolarTrabajo(db, { tipo: 'item.project', recurso: r });
+    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 5, ultimo_error = 'item_403' WHERE recurso IN ('MLA1','MLA2')").run();
+    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 5, ultimo_error = 'item_404_sin_confirmar_http_500' WHERE recurso = 'MLA3'").run();
+    db.prepare("UPDATE trabajos_recurso SET estado = 'muerto', ultimo_error = 'item_403' WHERE recurso = 'MLA4'").run();
+    expect(proyeccionItemsRota(db)).toBe(false);
     db.close();
   });
 });
