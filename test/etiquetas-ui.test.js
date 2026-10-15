@@ -19,6 +19,7 @@ function documentoFake() {
       return elementos.get(id);
     },
     querySelectorAll() { return []; },
+    querySelector() { return null; },
     addEventListener() {},
   };
 }
@@ -188,6 +189,35 @@ describe('«No salieron con el lote»: Descartar conserva el lote', () => {
     await ctx.cierreConfirmar(12, 'descartar-envio');
     const post = ctx.fetch.mock.calls.find(([u]) => String(u).includes('/12/descartar-envio'));
     expect(JSON.parse(post[1].body)).toEqual({ motivo: 'no salió', lote_id: 31 });
+  });
+});
+
+describe('Reintentar la foto de etiqueta', () => {
+  const resp = (body, status = 200) => Promise.resolve({ status, json: () => Promise.resolve(body) });
+  it('en error: primero POST /:id/foto/:fotoId/reintentar y recién después sondea', async () => {
+    const orden = [];
+    ctx.fetch = vi.fn((url, opts) => {
+      orden.push(`${opts?.method || 'GET'} ${url}`);
+      return String(url).includes('/estado') ? resp({ ok: true, foto: { estado_proceso: 'listo' } }) : resp({ ok: true });
+    });
+    ctx.window.fetch = ctx.fetch; ctx.cargarCierres = vi.fn();
+    await ctx.cierreReintentarFoto(4, 20, true);
+    expect(orden[0]).toBe('POST /api/preparacion/4/foto/20/reintentar');
+    expect(orden[1]).toContain('/api/preparacion/fotos/20/estado');
+  });
+  it('si el servidor rechaza el reintento no sondea y vuelve a ofrecer Reintentar', async () => {
+    ctx.fetch = vi.fn(() => resp({ ok: false, error: 'no' }, 409));
+    ctx.window.fetch = ctx.fetch;
+    await ctx.cierreReintentarFoto(4, 20, true);
+    expect(ctx.fetch.mock.calls.some(([u]) => String(u).includes('/estado'))).toBe(false);
+    expect(ctx.document.getElementById('cierre-msg-4').innerHTML).toContain('Reintentar');
+  });
+  it('por timeout (sigue pendiente): solo re-sondea, sin POST de reintento', async () => {
+    ctx.fetch = vi.fn(() => resp({ ok: true, foto: { estado_proceso: 'listo' } }));
+    ctx.window.fetch = ctx.fetch; ctx.cargarCierres = vi.fn();
+    await ctx.cierreReintentarFoto(4, 20, false);
+    expect(ctx.fetch.mock.calls.every(([, o]) => !o || o.method !== 'POST')).toBe(true);
+    expect(ctx.fetch.mock.calls.some(([u]) => String(u).includes('/estado'))).toBe(true);
   });
 });
 

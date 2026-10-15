@@ -132,10 +132,31 @@ describe('POST /:id/descartar-envio', () => {
   it('descarta todo el grupo (pack) y deja constancia en el historial del lote', async () => {
     const a = prep({ canal: 'ml', pack: 'PKD' }); const b = prep({ canal: 'ml', pack: 'PKD' });
     const lote = db.prepare("INSERT INTO despacho_lotes (canal, fecha_jornada, estado, creado_en, creado_por, salida_confirmada_en) VALUES ('ml','2026-10-01','cerrado',?,?,?)").run(dias(3), 'u', dias(2)).lastInsertRowid;
+    const c = db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en) VALUES ('PKD', 'pendiente', ?, ?)").run(dias(3), dias(3)).lastInsertRowid;
+    db.prepare("INSERT INTO despacho_lote_items (lote_id, control_id, estado, agregado_en) VALUES (?,?,'esperado',?)").run(lote, c, dias(3));
     const r = await request(app).post(`/api/preparacion/${a}/descartar-envio`).send({ motivo: 'no salió', lote_id: lote });
     expect(r.body.descartadas).toBe(2);
     expect(fila(b).envio_descartado_en).toBeTruthy();
     expect(db.prepare("SELECT 1 FROM despacho_lote_eventos WHERE lote_id=? AND tipo='miembro_descartado'").get(lote)).toBeTruthy();
+  });
+
+  it('lote_id ajeno (no es miembro, ya confirmado o sin salida confirmada): 409 LOTE_AJENO y no escribe nada', async () => {
+    const a = prep({ canal: 'ml' });
+    const mk = (salida) => db.prepare("INSERT INTO despacho_lotes (canal, fecha_jornada, estado, creado_en, creado_por, salida_confirmada_en) VALUES ('ml','2026-10-01','cerrado',?,?,?)").run(dias(3), 'u', salida).lastInsertRowid;
+    const ctl = db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en) VALUES (?, 'pendiente', ?, ?)").run(fila(a).clave, dias(3), dias(3)).lastInsertRowid;
+    const ajeno = mk(dias(2));                                     // sin ser miembro
+    const sinSalida = mk(null); db.prepare("INSERT INTO despacho_lote_items (lote_id, control_id, estado, agregado_en) VALUES (?,?,'esperado',?)").run(sinSalida, ctl, dias(3));
+    const b = prep({ canal: 'ml' });
+    const ctlB = db.prepare("INSERT INTO despacho_controles (grupo_clave, estado, creado_en, actualizado_en) VALUES (?, 'pendiente', ?, ?)").run(fila(b).clave, dias(3), dias(3)).lastInsertRowid;
+    const confirmado = mk(dias(2)); db.prepare("INSERT INTO despacho_lote_items (lote_id, control_id, estado, agregado_en) VALUES (?,?,'confirmado',?)").run(confirmado, ctlB, dias(3));
+    for (const [id, lote_id] of [[a, ajeno], [a, sinSalida], [a, 'abc'], [b, confirmado]]) {
+      const r = await request(app).post(`/api/preparacion/${id}/descartar-envio`).send({ motivo: 'x', lote_id });
+      expect(r.status).toBe(409); expect(r.body.code).toBe('LOTE_AJENO');
+    }
+    expect(fila(b).envio_descartado_en).toBeNull();
+    expect(fila(a).envio_descartado_en).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) n FROM despacho_lote_eventos WHERE tipo='miembro_descartado'").get().n).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM preparacion_eventos WHERE tipo='envio_descartado'").get().n).toBe(0);
   });
 
   it('sin lote_id en el cuerpo, el evento igual queda en el lote del que el grupo salió sin confirmar', async () => {

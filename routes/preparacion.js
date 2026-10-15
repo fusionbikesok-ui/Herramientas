@@ -2787,6 +2787,14 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/descartar-envio', (req, res) => resolverConMotivo(req, res, (prep, motivo) => {
     if (!['completada', ESTADO_ANULADO_EN_WOO].includes(prep.estado)) return { error: 'solo se descarta el envío de una preparación cerrada', code: 'ESTADO_INVALIDO' };
     const grupo = prep.pack_id || prep.clave;
+    // `lote_id` pedido: el grupo debe ser miembro NO confirmado de un lote con salida confirmada; si no, nada se escribe (fail-closed).
+    const loteIdPedido = req.body?.lote_id;
+    if (loteIdPedido != null && loteIdPedido !== '') {
+      const ok = Number.isInteger(Number(loteIdPedido)) && db.prepare(`SELECT 1 FROM despacho_lote_items li JOIN despacho_lotes l ON l.id=li.lote_id
+        JOIN despacho_controles d ON d.id=li.control_id
+        WHERE li.lote_id=? AND d.grupo_clave=? AND li.estado<>'confirmado' AND l.salida_confirmada_en IS NOT NULL`).get(Number(loteIdPedido), grupo);
+      if (!ok) return { error: 'el grupo no es miembro sin confirmar de ese lote (o el lote no tiene salida confirmada)', code: 'LOTE_AJENO', status: 409 };
+    }
     const miembros = db.prepare('SELECT id, estado FROM preparaciones WHERE (clave=? OR pack_id=?) AND envio_confirmado_en IS NULL AND envio_descartado_en IS NULL').all(grupo, grupo);
     if (!miembros.length) return { error: 'el envío ya está resuelto', code: 'ENVIO_YA_RESUELTO' };
     const ts = now();

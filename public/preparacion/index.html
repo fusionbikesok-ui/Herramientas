@@ -1351,7 +1351,7 @@ async function cierreEsperarFoto(id,fotoId){
     var estado=null;
     try{var r=await api('/fotos/'+fotoId+'/estado');estado=r.body&&r.body.foto;}catch(e){estado=null;}
     if(estado&&estado.estado_proceso==='listo'){cierreFotoLista(id);return;}
-    if(estado&&estado.estado_proceso==='error'){cierreErrorFoto(id,fotoId,'La foto no se pudo procesar'+(estado.error?': '+estado.error:'')+'.');return;}
+    if(estado&&estado.estado_proceso==='error'){cierreErrorFoto(id,fotoId,'La foto no se pudo procesar'+(estado.error?': '+estado.error:'')+'.',true);return;}
     await new Promise(function(ok){setTimeout(ok,CIERRE_SONDEO_MS);});
   }
   cierreErrorFoto(id,fotoId,'La foto sigue procesándose.');
@@ -1363,9 +1363,20 @@ function cierreFotoLista(id){
   cierreMsg(id,input?'Foto lista. Escribí el tracking y guardalo.':'Foto lista.');
   if(!input)cargarCierres();
 }
-function cierreErrorFoto(id,fotoId,texto){
+function cierreErrorFoto(id,fotoId,texto,enError){
   var el=document.getElementById('cierre-msg-'+id); if(!el)return;
-  el.innerHTML=esc(texto)+' <button type="button" class="btn mini btn-44" onclick="cierreEsperarFoto('+Number(id)+','+Number(fotoId)+')">Reintentar</button>';
+  el.innerHTML=esc(texto)+' <button type="button" class="btn mini btn-44" onclick="cierreReintentarFoto('+Number(id)+','+Number(fotoId)+','+(enError?'true':'false')+')">Reintentar</button>';
+}
+// Foto en error → se pide el reintento al servidor (endpoint existente) y recién después se vuelve a sondear; si solo se agotó la espera, nada más se re-sondea.
+async function cierreReintentarFoto(id,fotoId,enError){
+  if(enError){
+    cierreMsg(id,'Reintentando la foto…');
+    try{
+      var r=await api('/'+id+'/foto/'+fotoId+'/reintentar',{method:'POST'});
+      if(!r.body.ok){cierreErrorFoto(id,fotoId,'No se pudo reintentar: '+(r.body.error||'error')+'.',true);return;}
+    }catch(e){cierreErrorFoto(id,fotoId,'No se pudo reintentar: '+e.message+'.',true);return;}
+  }
+  cierreEsperarFoto(id,fotoId);
 }
 async function cierreTracking(id,wcId){
   var input=document.getElementById('cierre-trk-'+id), t=(input&&input.value||'').trim();
