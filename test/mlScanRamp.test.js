@@ -139,16 +139,29 @@ describe('métrica de cobertura del webhook', () => {
     db.close();
   });
 
-  it('detecta la proyección rota por trabajos_recurso item.project (muerto o fallando reciente)', () => {
+  it('detecta la proyección rota por trabajos_recurso item.project: muerto, o varios ítems distintos fallando', () => {
     const db = openDb(':memory:');
+    for (const r of ['MLA7', 'MLA8', 'MLA9']) encolarTrabajo(db, { tipo: 'item.project', recurso: r });
     expect(proyeccionItemsRota(db)).toBe(false);
-    encolarTrabajo(db, { tipo: 'item.project', recurso: 'MLA7' });
+    const fallar = (r, err = 'boom') => db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 2, ultimo_error = ? WHERE recurso = ?").run(err, r);
+    fallar('MLA7'); fallar('MLA8'); // dos ítems fallando: todavía no es sistémico
     expect(proyeccionItemsRota(db)).toBe(false);
-    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 2, ultimo_error = 'boom' WHERE recurso = 'MLA7'").run();
+    fallar('MLA9');
     expect(proyeccionItemsRota(db)).toBe(true);
-    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 0, ultimo_error = NULL, estado = 'muerto' WHERE recurso = 'MLA7'").run();
+    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 0, ultimo_error = NULL").run();
+    db.prepare("UPDATE trabajos_recurso SET estado = 'muerto', ultimo_error = 'boom' WHERE recurso = 'MLA7'").run();
     expect(proyeccionItemsRota(db)).toBe(true);
     db.prepare("UPDATE trabajos_recurso SET actualizado_en = ? WHERE recurso = 'MLA7'").run(new Date(Date.now() - 3 * 3600 * 1000).toISOString());
+    expect(proyeccionItemsRota(db)).toBe(false);
+    db.close();
+  });
+
+  it('un 403 o un 404 sin confirmar son datos: no congelan la rampa, ni muertos ni persistentes', () => {
+    const db = openDb(':memory:');
+    for (const r of ['MLA1', 'MLA2', 'MLA3', 'MLA4']) encolarTrabajo(db, { tipo: 'item.project', recurso: r });
+    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 5, ultimo_error = 'item_403' WHERE recurso IN ('MLA1','MLA2')").run();
+    db.prepare("UPDATE trabajos_recurso SET fallos_consecutivos = 5, ultimo_error = 'item_404_sin_confirmar_http_500' WHERE recurso = 'MLA3'").run();
+    db.prepare("UPDATE trabajos_recurso SET estado = 'muerto', ultimo_error = 'item_403' WHERE recurso = 'MLA4'").run();
     expect(proyeccionItemsRota(db)).toBe(false);
     db.close();
   });

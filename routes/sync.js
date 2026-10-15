@@ -2164,6 +2164,18 @@ function skusVinculadosDeItems(db, ids) {
       AND substr(d.clave, 1, instr(d.clave || '|', '|') - 1) IN (${marcas})`).all(...ids).map((r) => r.sku);
 }
 
+/**
+ * Carrera con el scan u otro refresco: si el caché ya estaba al día, el diff `antes/después` sale vacío aunque el remoto no sea lo
+ * deseado (el scan corrige `ml_stock_estado`, no encola bolsas). Se compara también contra el deseado calculado LOCAL (sin llamar
+ * a ML): una publicación activa y vinculada cuya cantidad difiere de `stock_disponible_ml` encola su bolsa.
+ */
+function remotoDifiereDelDeseado(db, f, skuVinculado) {
+  if (!skuVinculado || f.status !== 'active' || f.available_quantity == null) return false;
+  const row = db.prepare(`${computedStockCte()} SELECT stock_disponible_ml FROM computed WHERE clave = ?`).get(f.clave);
+  if (!row || row.stock_disponible_ml == null) return false;
+  return Number(f.available_quantity) !== Math.max(0, Math.round(row.stock_disponible_ml));
+}
+
 /** Compara la foto previa con el estado actual de un ítem: ¿cambió cantidad, estado, user_product o vínculo? Devuelve los SKUs a conciliar. */
 function skusAfectadosPorItem(db, itemId, antes) {
   const despues = fotoItemsMl(db, [itemId]);
@@ -2174,7 +2186,7 @@ function skusAfectadosPorItem(db, itemId, antes) {
     const a = previas.get(f.clave);
     const skuAntes = antes.dec.get(f.clave) ?? null;
     const skuAhora = despues.dec.get(f.clave) ?? null;
-    if (!a || skuAntes !== skuAhora || CAMPOS_ITEM_QUE_ENCOLAN_BOLSA.some((c) => String(a[c] ?? '') !== String(f[c] ?? ''))) {
+    if (!a || skuAntes !== skuAhora || CAMPOS_ITEM_QUE_ENCOLAN_BOLSA.some((c) => String(a[c] ?? '') !== String(f[c] ?? '')) || remotoDifiereDelDeseado(db, f, skuAhora)) {
       cambio = true;
       if (skuAntes) skus.add(skuAntes);
       if (skuAhora) skus.add(skuAhora);
@@ -2185,6 +2197,8 @@ function skusAfectadosPorItem(db, itemId, antes) {
   }
   return cambio ? [...skus] : [];
 }
+
+const TOPE_GET_404_POR_PASE = 5; // GET individuales de confirmación por pase; el resto se reencola
 
 /**
  * Lote de trabajos `item.project`: UNA relectura `/items/bulk` (hasta 20 ids) por lote, con el Vigía, el autovínculo y la
@@ -2220,46 +2234,60 @@ export async function procesarLoteItemsMl(db, cfg, recursos) {
       for (const s of c?.skus_pendientes || []) skusAEncolar.add(s);
     } catch { /* sin contexto */ }
   }
-  const porItem = new Map();
+  const ids403 = [];
+  let getsIndividuales = 0;
   for (const id of ids) {
-    if (!noOk.has(id)) {
-      try { const sk = skusAfectadosPorItem(db, id, antes); porItem.set(id, sk); for (const s of sk) skusAEncolar.add(s); } catch (e) { res.set(id, { estado: 'reencolar', motivo: `diff_item: ${String(e.message).slice(0, 120)}` }); continue; }
-      try { // telemetría (no decide nada): fail-open
-        const { registrarCambiosObservados } = await import('../lib/workerIntegrationJobs.js');
-        registrarCambiosObservados(db, id, antes.filas.filter((f) => f.item_id === id), 'webhook');
-      } catch { /* fail-open */ }
-      res.set(id, { estado: 'hecho' });
-      continue;
-    }
-    const code = noOk.get(id);
-    if (code === 404) {
-      const ind = await mlFetch(db, cfg.ml, 'get', `/items/${id}?attributes=id,status`);
-      if (ind.status === 404) {
-        const skus = skusVinculadosDeItems(db, [id]);
-        db.transaction(() => {
-          db.prepare('DELETE FROM ml_publicaciones_cache WHERE item_id = ?').run(id);
-          if (skus.length) encolarBolsasDeSkus(db, skus);
-        })();
-        res.set(id, { estado: 'hecho', motivo: 'item_404_confirmado' });
-      } else {
-        res.set(id, { estado: 'reencolar', motivo: ind.status === 200 ? 'item_404_en_bulk_pero_existe' : `item_404_sin_confirmar_http_${ind.status}`, diferido: ind.status === 429 });
+    try { // un fallo en un ítem no pierde lo ya calculado de los otros (sus skus_pendientes ya están en el contexto)
+      if (!noOk.has(id)) {
+        const sk = skusAfectadosPorItem(db, id, antes);
+        for (const s of sk) skusAEncolar.add(s);
+        if (sk.length) guardarContextoTrabajo(db, 'item.project', id, { skus_pendientes: sk }); // ANTES de encolar: un corte no pierde el diff
+        try { // telemetría (no decide nada): fail-open
+          const { registrarCambiosObservados } = await import('../lib/workerIntegrationJobs.js');
+          registrarCambiosObservados(db, id, antes.filas.filter((f) => f.item_id === id), 'webhook');
+        } catch { /* fail-open */ }
+        res.set(id, { estado: 'hecho' });
+        continue;
       }
-      continue;
+      const code = noOk.get(id);
+      if (code === 404) {
+        if (getsIndividuales >= TOPE_GET_404_POR_PASE) { // presupuesto: no se multiplican las llamadas a ML por un lote de 404
+          res.set(id, { estado: 'reencolar', motivo: 'item_404_presupuesto', diferido: true, demoraMs: 2 * 60 * 1000 });
+          continue;
+        }
+        getsIndividuales++;
+        const ind = await mlFetch(db, cfg.ml, 'get', `/items/${id}?attributes=id,status`);
+        if (ind.status === 404) {
+          const skus = skusVinculadosDeItems(db, [id]);
+          db.transaction(() => {
+            db.prepare('DELETE FROM ml_publicaciones_cache WHERE item_id = ?').run(id);
+            if (skus.length) encolarBolsasDeSkus(db, skus);
+          })();
+          res.set(id, { estado: 'hecho', motivo: 'item_404_confirmado' });
+        } else {
+          res.set(id, { estado: 'reencolar', motivo: ind.status === 200 ? 'item_404_en_bulk_pero_existe' : `item_404_sin_confirmar_http_${ind.status}`, diferido: ind.status === 429 });
+        }
+        continue;
+      }
+      if (code === 403) {
+        ids403.push(id);
+        res.set(id, { estado: 'reencolar', motivo: 'item_403', demoraMs: 30 * 60 * 1000 });
+        continue;
+      }
+      res.set(id, { estado: 'reencolar', motivo: `item_bulk_${code ?? 'ausente'}`, diferido: code === 429 });
+    } catch (e) {
+      res.set(id, { estado: 'reencolar', motivo: `item_error: ${String(e.message).slice(0, 120)}`, diferido: Boolean(e.__cooldownSintetico || e.__sinCupo || e.status === 429) });
     }
-    if (code === 403) {
-      const txt = `MercadoLibre respondió 403 al leer el ítem ${id} (ítem ajeno o token sin permiso). No se tocó el caché; se reintenta cada 30 min.`;
-      try {
-        abrirOActualizarIncidente(db, {
-          integracion: 'mercadolibre', proceso: 'item_project', tipoError: `item_ml_403_${id}`.slice(0, 120), severidad: 'advertencia',
-          mensajeTecnico: txt, mensajeHumano: txt, contexto: { item_id: id },
-        });
-      } catch { /* informativo */ }
-      res.set(id, { estado: 'reencolar', motivo: 'item_403', demoraMs: 30 * 60 * 1000 });
-      continue;
-    }
-    res.set(id, { estado: 'reencolar', motivo: `item_bulk_${code ?? 'ausente'}`, diferido: code === 429 });
   }
-  for (const [id, sk] of porItem) if (sk.length) { try { guardarContextoTrabajo(db, 'item.project', id, { skus_pendientes: sk }); } catch { /* optimización */ } }
+  if (ids403.length) { // un solo incidente con la lista (no uno por ítem)
+    const txt = `MercadoLibre respondió 403 al leer ${ids403.length} ítem(s): ${ids403.join(', ')} (ítem ajeno o token sin permiso). No se tocó el caché; se reintenta cada 30 min.`;
+    try {
+      abrirOActualizarIncidente(db, {
+        integracion: 'mercadolibre', proceso: 'item_project', tipoError: 'item_ml_403', severidad: 'advertencia',
+        mensajeTecnico: txt, mensajeHumano: txt, contexto: { item_ids: ids403 },
+      });
+    } catch { /* informativo */ }
+  }
   if (skusAEncolar.size) {
     encolarBolsasDeSkus(db, [...skusAEncolar]);
     for (const id of ids) { try { db.prepare("UPDATE trabajos_recurso SET contexto_json = NULL WHERE tipo = 'item.project' AND recurso = ?").run(id); } catch { /* ya encolado */ } }

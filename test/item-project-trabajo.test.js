@@ -72,6 +72,7 @@ function instalarMocks() {
       }) };
     }
     const m = /^\/items\/(MLA\d+)\?/.exec(p);
+    if (m && ml.lanzar?.[m[1]]) throw new Error('red caída');
     if (m) return { status: ml.individual[m[1]] ?? 200, data: { id: m[1], status: 'active' } };
     return { status: 404, data: {} };
   });
@@ -231,7 +232,42 @@ describe('item.project: cada elemento del bulk se trata por su status_code', () 
     const r = await lote('MLA500');
     expect(r.get('MLA500')).toMatchObject({ estado: 'reencolar', motivo: 'item_403' });
     expect(db.prepare("SELECT COUNT(*) n FROM ml_publicaciones_cache WHERE item_id = 'MLA500'").get().n).toBe(1);
-    expect(db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = 'item_ml_403_MLA500'").get()).toBeTruthy();
+    expect(db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = 'item_ml_403'").get()).toBeTruthy();
+  });
+
+  it('varios 403 en un lote abren UN solo incidente con la lista de ids', async () => {
+    ml.codigos.MLA500 = 403; ml.codigos.MLA501 = 403;
+    await lote('MLA500', 'MLA501');
+    const inc = db.prepare("SELECT mensaje_tecnico FROM incidentes_operativos WHERE tipo_error LIKE 'item_ml_403%'").all();
+    expect(inc).toHaveLength(1);
+    expect(inc[0].mensaje_tecnico).toContain('MLA500');
+    expect(inc[0].mensaje_tecnico).toContain('MLA501');
+  });
+
+  it('presupuesto: solo 5 GET individuales de confirmación por pase; el resto se difiere sin tocar el caché', async () => {
+    const ids = [];
+    for (let i = 0; i < 8; i++) { const id = `MLA7${i}`; ids.push(id); ml.codigos[id] = 404; }
+    const r = await lote(...ids);
+    const gets = mlFetch.mock.calls.filter((c) => c[2] === 'get' && /^\/items\/MLA\d+\?/.test(c[3]));
+    expect(gets).toHaveLength(5);
+    expect([...r.values()].filter((x) => x.motivo === 'item_404_presupuesto')).toHaveLength(3);
+    expect(r.get('MLA77')).toMatchObject({ estado: 'reencolar', diferido: true });
+  });
+
+  it('una excepción en el ítem 2 no pierde la bolsa del ítem 1 (ni cierra el 2 como hecho)', async () => {
+    ml.qty.MLA500 = 9; // cambió en ML
+    ml.codigos.MLA501 = 404; ml.lanzar = { MLA501: true }; // el GET de confirmación del 2 revienta
+    const r = await lote('MLA500', 'MLA501');
+    expect(r.get('MLA500').estado).toBe('hecho');
+    expect(r.get('MLA501').estado).toBe('reencolar');
+    expect(bolsas()).toEqual(['sku:S-500']);
+  });
+
+  it('carrera con el scan: el caché ya estaba al día pero el remoto difiere del deseado → igual encola la bolsa', async () => {
+    db.prepare("UPDATE ml_publicaciones_cache SET available_quantity = 9 WHERE item_id = 'MLA500'").run(); // el scan ya lo había leído
+    ml.qty.MLA500 = 9; // Woo dice 5 → deseado 5
+    await lote('MLA500');
+    expect(bolsas()).toEqual(['sku:S-500']);
   });
 
   it.each([429, 500, 502, 418])('status_code %i: reencola ese id y nunca lo cierra como hecho; los demás del lote sí avanzan', async (code) => {
