@@ -616,6 +616,7 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
   const padre = normalizarProductoWc(productoResp.data);
   const filas = [padre];
   const idsDevueltos = new Set(); // todas las variaciones que Woo devolvió, con o sin SKU
+  const skuVigentePorId = new Map(); // id → SKU actual (vacío incluido) de TODA variación vigente, venga de la lista o de su GET
   if (padre.tipo === 'variable') {
     let page = 1;
     while (page <= 20) {
@@ -625,6 +626,7 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
       const variaciones = varsResp.data;
       for (const variacion of variaciones) {
         idsDevueltos.add(Number(variacion.id));
+        skuVigentePorId.set(Number(variacion.id), skuLimpio(variacion.sku));
         // Se conserva el contrato del refresco general: variaciones sin SKU no entran al
         // catálogo vendible ni pueden convertirse en identidad Fusion.
         if (variacion.sku) filas.push(normalizarVariacionWc(variacion, padre));
@@ -664,12 +666,15 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
     for (const r of veredictos) {
       if (r.baja) { confirmadas.push(r.v); continue; }
       idsDevueltos.add(Number(r.v.id_woo));
+      skuVigentePorId.set(Number(r.v.id_woo), skuLimpio(r.detalle.sku));
       if (r.detalle.sku) filas.push(normalizarVariacionWc(r.detalle, padre));
     }
     faltantes = confirmadas;
   }
   // Cambio de SKU de una variación que sigue (mismo id, otro SKU): el SKU viejo es candidato; si ya no existe en el catálogo, baja.
-  const nuevosPorId = new Map(filas.map((f) => [Number(f.id_woo), skuLimpio(f.sku)]));
+  // Una variación vigente que queda con SKU vacío (de la lista o de su GET) es un cambio de SKU a vacío: no entra a `filas`, así que
+  // se borra del caché; su SKU viejo es candidato y, si ya no figura en ninguna fila, recibe la baja confirmada.
+  const nuevosPorId = new Map([...filas.map((f) => [Number(f.id_woo), skuLimpio(f.sku)]), ...skuVigentePorId]);
   const cambiadas = previas.filter((v) => nuevosPorId.has(Number(v.id_woo)) && skuLimpio(v.sku) && nuevosPorId.get(Number(v.id_woo)) !== skuLimpio(v.sku));
   const candidatas = [...faltantes, ...cambiadas];
   if (padrePrevio && skuLimpio(padrePrevio.sku) && skuLimpio(padre.sku) !== skuLimpio(padrePrevio.sku)) candidatas.push(padrePrevio);

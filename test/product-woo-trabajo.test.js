@@ -415,13 +415,22 @@ describe('guarda contra una lista de variaciones anómala', () => {
 });
 
 describe('diff por SKU, no por id', () => {
-  it('variación presente con SKU vacío: no es baja (su SKU no se lleva a 0)', async () => {
+  it('variación presente que queda con SKU vacío: es un cambio de SKU a vacío; el SKU viejo, que sale del caché, recibe la baja y su ML va a 0', async () => {
     woo.variaciones[1732] = [{ id: 7247, sku: 'FB-7247', stock_quantity: 5, type: 'variation', attributes: [] }, { id: 7248, sku: '', stock_quantity: 5, type: 'variation', attributes: [] }];
     encolarProductoWoo(db, { productoId: 1732 });
     await correr();
-    expect(bajas()).toEqual([]);
-    expect(casosWoo()).toEqual([]);
-    expect(ml.puts).toEqual([]);
+    expect(bajas()).toEqual(['FB-7248']);
+    expect(ml.puts).toEqual([{ item: 'MLA7248', cantidad: 0 }]);
+  });
+
+  it('una hija ausente de la lista que su GET confirma vigente pero con SKU vacío pasa por el mismo diff: SKU viejo en baja y bolsa conciliada', async () => {
+    woo.variaciones[1732] = [{ id: 7247, sku: 'FB-7247', stock_quantity: 5, type: 'variation', attributes: [] }];
+    woo.varDetalle = { 7248: { id: 7248, sku: '', stock_quantity: 5, type: 'variation', attributes: [] } };
+    encolarProductoWoo(db, { productoId: 1732 });
+    await correr();
+    expect(enCache(7248)).toBe(false);
+    expect(bajas()).toEqual(['FB-7248']);
+    expect(ml.puts).toEqual([{ item: 'MLA7248', cantidad: 0 }]);
   });
 
   it('variación que cambia de SKU (mismo id): el SKU viejo, que ya no existe, queda como baja y su ML va a 0', async () => {
