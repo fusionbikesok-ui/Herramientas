@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { migrateMlClaims } from '../migrations/028_ml_reclamos_campos_tipo_razon.mjs';
 import { migrateClaimsBackbone } from '../migrations/029_claims_backbone_p1.mjs';
+import { asegurarEsquemaEtiquetas, backfillEtiquetas133 } from '../lib/etiquetasPreparacion.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1018,6 +1019,16 @@ export function openDb(dbPath) {
     db.transaction(() => {
       db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '132_ml_estado_item_fuera_cache.sql'), 'utf8'));
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_estado_item_fuera_cache_132')").run();
+    })();
+  }
+  // 133 — etiquetas en Preparación: tabla de descargas de PDF de ML + columnas/triggers de preparaciones + backfills (una sola vez, acotados por canal).
+  const etiquetasPrep133 = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='etiquetas_preparacion_133'").get();
+  if (!etiquetasPrep133) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '133_etiquetas_preparacion.sql'), 'utf8'));
+      asegurarEsquemaEtiquetas(db);
+      backfillEtiquetas133(db);
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('etiquetas_preparacion_133')").run();
     })();
   }
   // Columnas de trabajos_recurso agregadas después de la 127/128 (contador de fallos consecutivos, independiente de la generación).

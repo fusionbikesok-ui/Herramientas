@@ -53,6 +53,7 @@ describe('db schema', () => {
       'ean_sku',
       'errores_descartados',
       'etiquetas_cola',
+      'etiquetas_ml_descargas',
       'gestion_pedido_cambios',
       'gestion_pedido_clientes',
       'gestion_pedido_entregas',

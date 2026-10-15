@@ -19,6 +19,7 @@ import { tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
+import { asegurarEsquemaEtiquetas } from '../lib/etiquetasPreparacion.js';
 
 const TRACKING_META_KEY = '_andreani_tracking';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
@@ -466,6 +467,8 @@ export function ensureTables(db) {
     UNIQUE (pedido_a_clave, pedido_b_clave)
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_vinculos_claves ON preparacion_vinculos(pedido_a_clave, pedido_b_clave)').run();
+  // Etiquetas en Preparación (migración 133): columnas de envío/etiqueta, índices y triggers de fecha ML. Después de pack_id y despacho_controles.
+  asegurarEsquemaEtiquetas(db);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -631,7 +634,10 @@ function preparacionEstaVerificada(db, prep) {
 // `woo_paso2_pendiente` se limpia siempre (es un flag del lado Woo, no del de
 // verificación) — incluso si la preparación resultó ser 'cerrada_sin_evidencia'.
 export function marcarPreparacionEnviada(db, clave, { usuario = null, detalle = {} } = {}) {
-  db.prepare('UPDATE preparaciones SET woo_paso2_pendiente=0 WHERE clave=?').run(clave);
+  // v22/v23: el paso 2 OK limpia el indicador y, SOLO en web, fecha el envío en la MISMA sentencia (las dos columnas o ninguna). ML se fecha por
+  // despacho (trigger de despacho_controles); las llamadas del barrido/proyección ML no fechan nada.
+  db.prepare(`UPDATE preparaciones SET woo_paso2_pendiente=0,
+    envio_confirmado_en = CASE WHEN canal='web' THEN COALESCE(envio_confirmado_en, ?) ELSE envio_confirmado_en END WHERE clave=?`).run(now(), clave);
   const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(clave);
   if (!prep || !['en_preparacion', 'pendiente_deposito'].includes(prep.estado)) return null;
 
