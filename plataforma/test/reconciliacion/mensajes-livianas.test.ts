@@ -27,12 +27,13 @@ function montar(opciones: {
         const conocidos = new Set(opciones.conocidos ?? []);
         return { rows: (args[1] as string[]).filter((id) => conocidos.has(id)).map((resource_id) => ({ resource_id })) };
       }
-      const ordenadas = (filas: Fila[]) => filas.map(fila).filter((f) => f.t.getTime() >= (args[1] as Date).getTime())
-        .sort((x, y) => x.t.getTime() - y.t.getTime() || (x.id < y.id ? -1 : 1)).slice(0, Number(args[2]));
+      // Consultas livianas: args = [cuenta, luz.t, luz.id, windowTo, limite]; clave (t, id) estricta y acotada a windowTo.
+      const ordenadas = (filas: Fila[]) => filas.map(fila)
+        .filter((f) => f.t.getTime() <= (args[3] as Date).getTime()
+          && (f.t.getTime() > (args[1] as Date).getTime() || (f.t.getTime() === (args[1] as Date).getTime() && f.id > String(args[2]))))
+        .sort((x, y) => x.t.getTime() - y.t.getTime() || (x.id < y.id ? -1 : 1)).slice(0, Number(args[4]));
       if (sql.includes('reconciliation_signals')) return { rows: ordenadas(opciones.senales ?? []).map((f) => ({ resource_id: f.id, t: f.t })) };
-      // Con ventana (liviana) → sólo los cambiados; recorrido de 30 días → los 470 en orden, paginados por `despuesDe`.
-      const barrido30 = (args[1] as Date).getTime() <= AHORA.getTime() - 29 * 24 * H;
-      if (!barrido30) return { rows: ordenadas(opciones.cambiados ?? []).map((f) => ({ target_id: f.id, t: f.t })) };
+      if (sql.includes('GROUP BY')) return { rows: ordenadas(opciones.cambiados ?? []).map((f) => ({ target_id: f.id, t: f.t })) };
       return { rows: TODOS.filter((p) => p > String(args[2])).slice(0, Number(args[3])).map((target_id) => ({ target_id })) };
     },
   };
@@ -140,11 +141,11 @@ describe('ml.messages: vuelta liviana + control diario', () => {
     const c1 = p1.at(-1)!.cursorAfter;
     expect(c1.avisos_recortados).toBe(true);
     expect(c1.last_light_at).toBe(senales[99]!.t.toISOString());
-    // La corrida siguiente arranca desde ese punto y encuentra los 30 que faltaban (más el empate del último).
+    // La corrida siguiente arranca desde ese punto y encuentra los 30 que faltaban (clave estricta: sin repetir el último).
     const m2 = montar({ senales });
-    const p2 = await correr(m2.a, contexto({ ...base, last_light_at: c1.last_light_at }));
+    const p2 = await correr(m2.a, contexto({ ...base, last_light_at: c1.last_light_at, light: c1.light }));
     const pedidos = m2.llamadas.filter((l) => l.startsWith('/messages/msg')).map((l) => l.split('/')[2]!.split('?')[0]);
-    expect(pedidos).toEqual(senales.slice(99).map((x) => x.id));
+    expect(pedidos).toEqual(senales.slice(100).map((x) => x.id));
     expect(p2.at(-1)!.cursorAfter.avisos_recortados).toBe(false);
     expect(p2.at(-1)!.cursorAfter.last_light_at).toBe(AHORA.toISOString());
   });
@@ -191,6 +192,36 @@ describe('ml.messages: vuelta liviana + control diario', () => {
     const a2 = montar({ unread: ['P0011'] });
     await correr(a2.a, contexto({ last_unread_at: new Date(AHORA.getTime() - 5 * H).toISOString(), last_light_at: reciente.last_light_at, last_full_at: new Date(AHORA.getTime() - H).toISOString() }));
     expect(a2.llamadas.filter((l) => l.startsWith('/messages/unread'))).toHaveLength(0);
+  });
+
+  it('130 avisos con el MISMO received_at, persistentes: en 2 corridas se leen los 130 sin repetir (cursor por (t, id))', async () => {
+    const t = new Date(AHORA.getTime() - 5 * 60_000);
+    const senales = Array.from({ length: 130 }, (_, i) => ({ id: `msg${String(i).padStart(3, '0')}`, t }));
+    const base = { ...reciente, last_light_at: new Date(AHORA.getTime() - 3 * 24 * H).toISOString(), last_full_at: new Date(AHORA.getTime() - H).toISOString() };
+    const leidos = (ll: string[]) => ll.filter((l) => l.startsWith('/messages/msg')).map((l) => l.split('/')[2]!.split('?')[0]!);
+    const m1 = montar({ senales });
+    const p1 = await correr(m1.a, contexto(base));
+    const c1 = p1.at(-1)!.cursorAfter;
+    expect(leidos(m1.llamadas)).toHaveLength(100);
+    expect(c1.avisos_recortados).toBe(true);
+    expect(c1.light).toMatchObject({ avisos: { t: t.toISOString(), id: 'msg099' } });
+    const m2 = montar({ senales });   // las señales siguen en la tabla (el simulador no las borra al leer)
+    const p2 = await correr(m2.a, contexto({ ...base, last_light_at: c1.last_light_at, light: c1.light }));
+    const segundos = leidos(m2.llamadas);
+    expect(segundos).toHaveLength(30);
+    expect(new Set([...leidos(m1.llamadas), ...segundos]).size).toBe(130);   // todos, sin repetir
+    expect(p2.at(-1)!.cursorAfter.avisos_recortados).toBe(false);
+  });
+
+  it('un registro posterior al inicio de la corrida (> windowTo) no se lee ni adelanta el cursor', async () => {
+    const despues = { id: 'msgFuturo', t: new Date(AHORA.getTime() + 1000) };
+    const m = montar({ senales: ['msgViejo', despues], cambiados: [{ id: 'P0777', t: new Date(AHORA.getTime() + 5000) }] });
+    const paginas = await correr(m.a, contexto({ ...reciente, last_full_at: new Date(AHORA.getTime() - H).toISOString() }));
+    expect(m.llamadas.some((l) => l.includes('msgFuturo'))).toBe(false);
+    expect(m.llamadas.some((l) => l.includes('/packs/P0777/'))).toBe(false);
+    const c = paginas.at(-1)!.cursorAfter;
+    expect(c.last_light_at).toBe(AHORA.toISOString());
+    expect(c.avisos_recortados).toBe(false);
   });
 
   it('un 404 de pack avanza sin cortar la vuelta', async () => {

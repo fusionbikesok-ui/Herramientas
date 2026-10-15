@@ -281,6 +281,15 @@ const INTERVALO_COMPLETA_MS = DIA_MS;
 const MAX_AVISOS_WEBHOOK = 100;
 const MAX_PACKS_CAMBIADOS = 500;
 const PREFIJO_MENSAJE = 'msg:';
+/** Punto de reanudación (t, id) de cada consulta liviana: se consulta con `(t, id) > (luz.t, luz.id)`, así que más filas
+ *  empatadas en `t` que el tope no frenan la ventana. */
+interface PuntoLuz { t: string; id: string }
+interface Luz { avisos: PuntoLuz; pedidos: PuntoLuz }
+const esPunto = (v: unknown): v is PuntoLuz => esRegistro(v) && typeof v.t === 'string' && Number.isFinite(Date.parse(v.t)) && typeof v.id === 'string';
+function luzDe(v: unknown, respaldo: string): Luz {
+  const base: PuntoLuz = { t: respaldo, id: '' };
+  return esRegistro(v) ? { avisos: esPunto(v.avisos) ? v.avisos : base, pedidos: esPunto(v.pedidos) ? v.pedidos : base } : { avisos: base, pedidos: base };
+}
 const rutaPack = (pack: string, vendedor: string): string => `/packs/${encodeURIComponent(pack)}/sellers/${encodeURIComponent(vendedor)}`;
 const packDeRecurso = (recurso: string): string => decodeURIComponent(recurso.split('/')[2]!);
 
@@ -315,7 +324,6 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
       const antes = ctx.corrida.cursorBefore;
       const ultimoUnread = instante(antes?.last_unread_at);
       const ultimaCompleta = instante(antes?.last_full_at);
-      const ultimaLiviana = instante(antes?.last_light_at);
       const comprobarUnread = !Number.isFinite(ultimoUnread) || ctx.windowTo.getTime() - ultimoUnread >= INTERVALO_UNREAD_MS;
       const completa = posicionInicial === null
         ? !Number.isFinite(ultimaCompleta) || ctx.windowTo.getTime() - ultimaCompleta >= INTERVALO_COMPLETA_MS
@@ -324,10 +332,12 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
       const iso = (n: number) => new Date(n).toISOString();
       // `last_light_at` es hasta dónde la vuelta liviana cubrió TODO: si un tope recortó la lista, no llega a windowTo.
       // El motor persiste este cursor sólo al cerrar la corrida (por página guarda únicamente la posición).
-      const armarCursor = (luz: string, recortados: boolean, perdidos: number) => ({
+      const armarCursor = (luz: Luz, recortados: boolean, perdidos: number) => ({
         ...cursorGeneracion(ctx.windowTo),
         last_unread_at: comprobarUnread ? ctx.windowTo.toISOString() : iso(ultimoUnread),
-        last_light_at: luz,
+        // `light` es el punto exacto por consulta; `last_light_at` es el más atrasado de los dos (informativo).
+        last_light_at: Date.parse(luz.avisos.t) <= Date.parse(luz.pedidos.t) ? luz.avisos.t : luz.pedidos.t,
+        light: luz,
         ...(completa ? { last_full_at: ctx.windowTo.toISOString() } : Number.isFinite(ultimaCompleta) ? { last_full_at: iso(ultimaCompleta) } : {}),
         // Mensajes que sólo el recorrido de control encontró y la sombra no tenía: lo que la vuelta liviana no avisó.
         avisos_perdidos: perdidos,
@@ -336,7 +346,10 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
 
       if (posicionInicial === null) {
         // Vuelta liviana: sólo los packs con motivo. El recorrido de 30 días queda para la vuelta de control.
-        const desde = new Date(Number.isFinite(ultimaLiviana) ? ultimaLiviana : ctx.windowTo.getTime() - DIA_MS);
+        // Cursor sin `light` (versión anterior): se arranca de `last_light_at`, o de un día atrás si no hay nada.
+        const inicial = typeof antes?.last_light_at === 'string' && Number.isFinite(Date.parse(antes.last_light_at))
+          ? antes.last_light_at : iso(ctx.windowTo.getTime() - DIA_MS);
+        const punto = luzDe(antes?.light, inicial);
         const candidatos: string[] = [];
         if (comprobarUnread) {
           const body = exigirRegistro(exigirOk(await dep.transporte.get('/messages/unread?role=seller&tag=post_sale'), '/messages/unread'), '/messages/unread');
@@ -346,43 +359,46 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
             if (RECURSO_PACK.test(recurso)) candidatos.push(recurso);
           }
         }
-        // Avisos por webhook que todavía no se convirtieron en mensaje (los `succeeded` ya están leídos). Del más
-        // viejo al más nuevo y con tope+1: si hay más, el cursor no avanza más allá del último procesado.
+        // Avisos por webhook que todavía no se convirtieron en mensaje (los `succeeded` ya están leídos). Del más viejo al
+        // más nuevo, acotados a la ventana congelada de la corrida (`<= windowTo`), por clave (t, id) y con tope+1.
         const avisos = await dep.db.query<{ resource_id: string; t: Date | string }>(
           `SELECT resource_id COLLATE "C" AS resource_id, MIN(received_at) AS t FROM integrations.reconciliation_signals
-            WHERE channel_account_id=$1 AND topic='ml.messages' AND received_at >= $2 AND status <> 'succeeded'
-            GROUP BY 1 ORDER BY MIN(received_at), 1 LIMIT $3`,
-          [ctx.corrida.channelAccountId, desde, MAX_AVISOS_WEBHOOK + 1],
+            WHERE channel_account_id=$1 AND topic='ml.messages' AND status <> 'succeeded'
+              AND received_at <= $4 AND (received_at, resource_id COLLATE "C") > ($2::timestamptz, $3::text)
+            GROUP BY 1 ORDER BY MIN(received_at), 1 LIMIT $5`,
+          [ctx.corrida.channelAccountId, new Date(punto.avisos.t), punto.avisos.id, ctx.windowTo, MAX_AVISOS_WEBHOOK + 1],
         );
-        // Pedidos que cambiaron en la ventana de la corrida, también del más viejo al más nuevo.
+        // Pedidos que cambiaron en la ventana de la corrida, con la misma clave.
         const cambiados = await dep.db.query<{ target_id: string; t: Date | string }>(
-          `SELECT target_id COLLATE "C" AS target_id, MAX(last_seen_at) AS t FROM integrations.resource_relations
-            WHERE channel_account_id=$1 AND relation_type='order_pack' AND target_topic='ml.messages' AND last_seen_at >= $2
-            GROUP BY 1 ORDER BY MAX(last_seen_at), 1 LIMIT $3`,
-          [ctx.corrida.channelAccountId, desde, MAX_PACKS_CAMBIADOS + 1],
+          `SELECT target_id COLLATE "C" AS target_id, MIN(last_seen_at) AS t FROM integrations.resource_relations
+            WHERE channel_account_id=$1 AND relation_type='order_pack' AND target_topic='ml.messages'
+              AND last_seen_at <= $4 AND (last_seen_at, target_id COLLATE "C") > ($2::timestamptz, $3::text)
+            GROUP BY 1 ORDER BY MIN(last_seen_at), 1 LIMIT $5`,
+          [ctx.corrida.channelAccountId, new Date(punto.pedidos.t), punto.pedidos.id, ctx.windowTo, MAX_PACKS_CAMBIADOS + 1],
         );
-        let luz = ctx.windowTo.getTime(); let recortados = false;
-        const recortar = <T extends { t: Date | string }>(filas: T[], tope: number): T[] => {
+        const fin: PuntoLuz = { t: iso(ctx.windowTo.getTime()), id: '' };
+        const luz: Luz = { avisos: fin, pedidos: fin }; let recortados = false;
+        const recortar = <T extends { t: Date | string }>(filas: T[], tope: number, clave: keyof Luz, idDe: (f: T) => string): T[] => {
           if (filas.length <= tope) return filas;
           recortados = true;
-          const ultimo = filas[tope - 1]!.t;
-          luz = Math.min(luz, ultimo instanceof Date ? ultimo.getTime() : Date.parse(String(ultimo)));
+          const ultimo = filas[tope - 1]!;
+          luz[clave] = { t: iso(ultimo.t instanceof Date ? ultimo.t.getTime() : Date.parse(String(ultimo.t))), id: idDe(ultimo) };
           return filas.slice(0, tope);
         };
-        for (const f of recortar(avisos.rows, MAX_AVISOS_WEBHOOK)) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);
-        for (const f of recortar(cambiados.rows, MAX_PACKS_CAMBIADOS)) candidatos.push(rutaPack(f.target_id, dep.sellerId));
+        for (const f of recortar(avisos.rows, MAX_AVISOS_WEBHOOK, 'avisos', (x) => x.resource_id)) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);
+        for (const f of recortar(cambiados.rows, MAX_PACKS_CAMBIADOS, 'pedidos', (x) => x.target_id)) candidatos.push(rutaPack(f.target_id, dep.sellerId));
         const pendientes = [...new Set(candidatos)];
         const vistos = [...new Set(pendientes.filter((p) => p.startsWith('/packs/')).map(packDeRecurso))];
         return {
           resources: [],
           // Liviana sin nada que leer: la vuelta termina acá, sin una página vacía de más.
           nextPosition: !completa && !pendientes.length ? null
-            : { pendientes, despuesDe: '', completa, vistos, perdidos: perdidosPrevios, luz: iso(luz), recortados },
-          cursorAfter: armarCursor(iso(luz), recortados, perdidosPrevios),
+            : { pendientes, despuesDe: '', completa, vistos, perdidos: perdidosPrevios, luz, recortados },
+          cursorAfter: armarCursor(luz, recortados, perdidosPrevios),
         };
       }
 
-      const luz = textoPosicion(posicionInicial, 'luz') ?? ctx.windowTo.toISOString();
+      const luz = luzDe(posicionInicial.luz, ctx.windowTo.toISOString());
       const recortados = posicionInicial.recortados === true;
       const pendientesPrevios = Array.isArray(posicionInicial.pendientes) ? posicionInicial.pendientes.filter((p): p is string => typeof p === 'string') : [];
       const vistos = new Set(Array.isArray(posicionInicial.vistos) ? posicionInicial.vistos.filter((p): p is string => typeof p === 'string') : []);
