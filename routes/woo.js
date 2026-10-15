@@ -594,8 +594,20 @@ export async function refrescarProductoPuntual(db, cfg, { productoId, parentId =
   try {
     productoResp = await wooFetch(cfg, `/products/${parent}?context=view`);
   } catch (e) {
-    if (esProductoWooInexistente(e)) return darDeBaja(false); // baja CONFIRMADA por la relectura (404 con invalid_id)
+    if (esProductoWooInexistente(e)) {
+      // Un id que NUNCA estuvo en el caché (ni como producto ni como padre de alguna hija) no es una baja de nada: p. ej. una
+      // variación nueva cuyo aviso no trajo `parent_id`. Se ignora sin baja y el llamador deja constancia.
+      const conocido = db.prepare('SELECT 1 FROM catalogo_cache WHERE id_woo = ? OR id_padre = ? LIMIT 1').get(parent, parent);
+      if (!conocido) return { producto_id: id, parent_id: null, eliminado: false, ignorado: true, motivo: 'id_nunca_visto', filas: 0, skus: [] };
+      return darDeBaja(false); // baja CONFIRMADA por la relectura (404 con invalid_id)
+    }
     throw e; // 5xx, red, 403…: no prueba nada, el trabajo reintenta; jamás se lleva a 0 por esto
+  }
+  // Una VARIACIÓN no es un producto del catálogo: si la relectura la devuelve (type=variation o con parent_id), se procesa su padre real.
+  const padreReal = Number(productoResp?.data?.parent_id) || 0;
+  if (productoResp?.data?.type === 'variation' || padreReal > 0) {
+    if (!padreReal || padreReal === parent) throw Object.assign(new Error(`Woo devolvió la variación ${parent} sin padre`), { retryable: true, code: 'woo_variation_sin_padre' });
+    return refrescarProductoPuntual(db, cfg, { productoId: padreReal, alEscribir });
   }
   if (productoResp?.data?.status === 'trash') {
     // En la papelera el producto sigue existiendo para la API, pero para la tienda ya no: baja del padre y de sus variaciones.

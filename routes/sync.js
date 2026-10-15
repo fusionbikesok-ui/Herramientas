@@ -2107,6 +2107,16 @@ export async function procesarProductoWoo(db, cfg, recurso) {
   if (!cfg.woo) return { estado: 'reencolar', motivo: 'woo_sin_configurar' };
   try {
     const r = await refrescarProductoPuntual(db, cfg.woo, { productoId: Number(recurso), alEscribir: (d, skus) => encolarBolsasDeSkus(d, skus) });
+    if (r.ignorado) {
+      const txt = `Llegó un aviso de producto Woo con el id ${recurso}, que no existe (404) y nunca estuvo en el catálogo local (ni como producto ni como padre): no se dio de baja nada. Puede ser una variación nueva cuyo aviso no trajo el padre; si falta en el catálogo, refrescá el producto padre.`;
+      try {
+        abrirOActualizarIncidente(db, {
+          integracion: 'woocommerce', proceso: 'producto_woo', tipoError: `producto_woo_id_desconocido_${recurso}`.slice(0, 120), severidad: 'advertencia',
+          mensajeTecnico: txt, mensajeHumano: txt, contexto: { id: String(recurso) },
+        });
+      } catch { /* informativo */ }
+      return { estado: 'hecho', motivo: 'id_nunca_visto' };
+    }
     return { estado: 'hecho', eliminado: r.eliminado, skus: r.skus };
   } catch (e) {
     if (e?.code === 'woo_product_invalid_id') return { estado: 'hecho', motivo: 'id_invalido' }; // nunca vuelve a servir: no se reintenta

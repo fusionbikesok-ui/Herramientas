@@ -442,6 +442,28 @@ describe('diff por SKU, no por id', () => {
   });
 });
 
+describe('aviso de una variación nueva que el caché no conoce y sin parent_id', () => {
+  it('si Woo devuelve la variación (type=variation, parent_id), se procesa el padre real: la variación entra al caché', async () => {
+    woo.variaciones[1732].push({ id: 9001, sku: 'FB-9001', stock_quantity: 3, type: 'variation', attributes: [] });
+    woo.productos[9001] = productoWoo(9001, { type: 'variation', parent_id: 1732, sku: 'FB-9001' });
+    encolarProductoWoo(db, { productoId: 9001 });
+    await correr();
+    expect(enCache(9001)).toBe(true);
+    expect(bajas()).toEqual([]);
+    expect(trabajo(9001)).toMatchObject({ estado: 'hecho' });
+  });
+
+  it('404 invalid_id de un id que NUNCA estuvo en el caché: cierra sin baja de nada y deja un incidente', async () => {
+    encolarProductoWoo(db, { productoId: 9002 });
+    await correr();
+    expect(trabajo(9002)).toMatchObject({ estado: 'hecho' });
+    expect(bajas()).toEqual([]);
+    expect(enCache(7247) && enCache(7248) && enCache(500)).toBe(true);
+    expect(ml.puts).toEqual([]);
+    expect(db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error = 'producto_woo_id_desconocido_9002'").get()).toBeTruthy();
+  });
+});
+
 describe('recibo → trabajo', () => {
   it('el recibo encola el trabajo en la misma transacción (antes del ACK) y marca el evento para que el job viejo no lo repita', () => {
     const r = registrarWebhookWooProducto(db, { id: 500 }, { topic: 'product.updated', deliveryId: 'x1' });
