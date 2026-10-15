@@ -221,6 +221,48 @@ describe('Reintentar la foto de etiqueta', () => {
   });
 });
 
+describe('aviso visible de la barra de etiquetas', () => {
+  it('muestra rechazos con motivo y el éxito dentro de la vista (role=status), y sobrevive al re-render', async () => {
+    ctx.VISTA = 'pendientes'; ctx.PEND_STATUS = 'ready'; ctx.PEND_META = {}; ctx.PEND_CACHE = [ml()];
+    ctx.cargarPendientes = vi.fn();
+    ctx.fetch = vi.fn(() => Promise.resolve({ status: 200, json: () => Promise.resolve({ ok: true, pdf_base64: null, aceptados: [], rechazados: [{ clave: 'ml:2001', motivo: 'no se pudo verificar el pack' }] }) }));
+    ctx.window.fetch = ctx.fetch;
+    await ctx.bajarEtiquetasMl(['ml:2001']);
+    expect(ctx.document.getElementById('etq-aviso').textContent).toContain('#2001 — no se pudo verificar el pack');
+    ctx.renderPendientes();
+    const html = ctx.document.getElementById('cuerpo').innerHTML;
+    expect(html).toContain('id="etq-aviso"');
+    expect(html).toContain('role="status"');
+    expect(html).toContain('no se pudo verificar el pack');
+  });
+  it('tras re-renderizar con casillas tildadas la barra vuelve a mostrarse', () => {
+    const toggles = [];
+    ctx.document.getElementById('etq-lote').classList.toggle = (c, on) => toggles.push([c, on]);
+    ctx.PEND_STATUS = 'ready'; ctx.PEND_META = {}; ctx.PEND_CACHE = [ml()];
+    ctx.ETQ_SEL = { 'ml:2001': true };
+    ctx.renderPendientes();
+    expect(toggles).toContainEqual(['on', true]);
+  });
+  it('«Ver lista» usa clase con color de tokens', () => {
+    ctx.PEND_STATUS = 'ready'; ctx.PEND_META = {}; ctx.PEND_CACHE = [ml()];
+    ctx.renderPendientes();
+    expect(ctx.document.getElementById('cuerpo').innerHTML).toContain('class="lnk-tema"');
+  });
+});
+
+describe('Descartar con motivo vacío', () => {
+  it('mantiene el campo abierto y le devuelve el foco', async () => {
+    ctx.cierreResolver(12, 'descartar-envio', 31);
+    const input = ctx.document.getElementById('cierre-motivo-12');
+    input.value = '   '; input.focus = vi.fn(); input.parentNode = { appendChild() {} };
+    ctx.document.createElement = () => ({});
+    const antes = ctx.document.getElementById('cierre-msg-12').innerHTML;
+    await ctx.cierreConfirmar(12, 'descartar-envio');
+    expect(input.focus).toHaveBeenCalled();
+    expect(ctx.document.getElementById('cierre-msg-12').innerHTML).toBe(antes);
+  });
+});
+
 describe('contenedor de mensaje vacío', () => {
   it('.ped-nota sin texto se oculta (no deja franja amarilla)', () => {
     expect(HTML).toMatch(/\.ped-nota:empty\s*\{\s*display:\s*none/);

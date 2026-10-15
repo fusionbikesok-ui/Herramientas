@@ -82,6 +82,8 @@
   .inp-trk{max-width:220px;}
   .ped-nota:empty{display:none;}
   .inp-motivo{max-width:260px;}
+  .lnk-tema{color:var(--accent);text-decoration:underline;}
+  .etq-aviso:empty{display:none;}
   .sub-tight{margin:6px 0;}
   .b-ok{background:rgba(52,211,153,.14);color:var(--green);}
   .b-warn{background:rgba(245,185,66,.14);color:var(--amber);}
@@ -979,13 +981,14 @@ function renderPendientes(){
   if(PEND_STATUS==='ready'){
     html+='<input type="search" class="seg-search pend-buscador" placeholder="Buscá por número, pack o comprador…" value="'+esc(PEND_FILTRO)+'" onchange="PEND_FILTRO=this.value;aplicarFiltroPendientes()" oninput="PEND_FILTRO=this.value;aplicarFiltroPendientes()">';
     html+=etqBarraLoteHtml();
-    if(visibles.length)html+='<p class="sub sub-tight">🔎 '+contarProductosABuscar(visibles)+' productos para buscar → <a href="#" onclick="ir(\'recoleccion\');return false">Ver lista</a></p>';
+    if(visibles.length)html+='<p class="sub sub-tight">🔎 '+contarProductosABuscar(visibles)+' productos para buscar → <a href="#" class="lnk-tema" onclick="ir(\'recoleccion\');return false">Ver lista</a></p>';
   }
   if(PEND_STATUS==='loading')html+='<div class="loading">Cargando pedidos…</div>';
   else if(PEND_STATUS==='error')html+='<div class="loading err">No se pudo cargar la cola. <button class="btn sec mini btn-44" onclick="cargarPendientes()">Reintentar</button></div>';
   else if(!visibles.length)html+='<div class="loading">No hay pedidos para preparar 🎉</div>';
   else html+='<div class="ped-grid">'+visibles.map(cardPendiente).join('')+'</div>';
   c.innerHTML=html;
+  etqActualizarBarra();
   aplicarFiltroPendientes();
 }
 function renderPendientesSinInterrumpir(){
@@ -1254,27 +1257,28 @@ function etqActualizarBarra(){
   if(!b)return;
   b.classList.toggle("on",!!n);b.querySelector('button').textContent='Bajar etiquetas ('+n+')';
 }
-function etqBarraLoteHtml(){return '<div id="etq-lote" class="jornada-note etq-barra"><button type="button" class="btn btn-44" onclick="bajarEtiquetasMl(Object.keys(ETQ_SEL))">Bajar etiquetas</button><span id="etq-msg" role="status"></span></div>';}
+function etqBarraLoteHtml(){return '<div id="etq-lote" class="jornada-note etq-barra"><button type="button" class="btn btn-44" onclick="bajarEtiquetasMl(Object.keys(ETQ_SEL))">Bajar etiquetas</button></div><div id="etq-aviso" class="jornada-note etq-aviso" role="status" aria-live="polite">'+esc(ETQ_AVISO)+'</div>';}
+var ETQ_AVISO='';
+function etqAviso(t){ETQ_AVISO=t||'';var el=document.getElementById('etq-aviso');if(el)el.textContent=ETQ_AVISO;}
 async function bajarEtiquetasMl(claves){
   if(!claves||!claves.length)return;
-  var msg=document.getElementById('etq-msg');
-  flash('ok','Bajando etiquetas…');
+  etqAviso('Bajando etiquetas…');
   try{
     var r=await api('/etiquetas-ml',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({claves:claves})});
-    if(!r.body.ok){flash('err',r.body.error||'No se pudieron bajar las etiquetas');return;}
-    var rech=r.body.rechazados||[];
+    if(!r.body.ok){etqAviso(r.body.error||'No se pudieron bajar las etiquetas');return;}
+    var rech=r.body.rechazados||[], bloqueado=false;
     if(r.body.pdf_base64){
       var bin=atob(r.body.pdf_base64), bytes=new Uint8Array(bin.length);
       for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
       var url=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
       var w=window.open(url,'_blank');
-      if(!w)flash('warn','El navegador bloqueó la ventana del PDF: permitila para imprimir.');
+      if(!w)bloqueado=true;
       ETQ_SEL={};
     }
-    flash(rech.length?'warn':'ok',(r.body.aceptados||[]).length+' etiqueta(s) bajadas'+(rech.length?' · '+rech.length+' rechazada(s): '+rech.map(function(x){return x.clave.replace('ml:','#')+' ('+x.motivo+')';}).join(', '):''));
-    if(msg)msg.textContent=rech.length?'Rechazadas: '+rech.map(function(x){return x.clave.replace('ml:','#')+' — '+x.motivo;}).join(' · '):'';
+    var nOk=(r.body.aceptados||[]).length;
+    etqAviso((nOk?'PDF bajado: '+nOk+' etiqueta(s). ':'No se bajó ninguna etiqueta. ')+(bloqueado?'El navegador bloqueó la ventana del PDF: permitila para imprimir. ':'')+(rech.length?'Rechazadas: '+rech.map(function(x){return x.clave.replace('ml:','#')+' — '+x.motivo;}).join(' · '):''));
     if(VISTA==='pendientes')cargarPendientes();
-  }catch(e){flash('err','No se pudieron bajar las etiquetas: '+e.message);}
+  }catch(e){etqAviso('No se pudieron bajar las etiquetas: '+e.message);}
 }
 
 // Vista «Etiquetas pendientes»: Falta etiqueta · Falta seguimiento · No salieron con el lote.
@@ -1400,7 +1404,14 @@ function cierreResolver(id,ruta,loteId){
 }
 async function cierreConfirmar(id,ruta){
   var i=document.getElementById('cierre-motivo-'+id), m=(i&&i.value||'').trim();
-  if(!m){cierreMsg(id,'El motivo es obligatorio.');return;}
+  if(!m){
+    if(i){
+      var er=document.getElementById('cierre-motivo-err-'+id);
+      if(!er){er=document.createElement('div');er.id='cierre-motivo-err-'+id;er.className='sub sub-tight';i.parentNode.appendChild(er);}
+      er.textContent='El motivo es obligatorio.'; i.focus();
+    } else cierreMsg(id,'El motivo es obligatorio.');
+    return;
+  }
   try{
     var r=await api('/'+id+'/'+ruta,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(CIERRE_LOTE[id]?{motivo:m,lote_id:CIERRE_LOTE[id]}:{motivo:m})});
     if(r.body.ok){flash('ok','Resuelto');cargarCierres();return;}
