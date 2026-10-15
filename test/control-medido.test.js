@@ -20,6 +20,7 @@ const ML = { clientId: '123456', clientSecret: 'cs', userId: '99999' };
 const limpiarDb = () => { for (const suf of ['', '-wal', '-shm', '-journal']) fs.rmSync(TEST_DB + suf, { force: true }); };
 const haceMin = (m) => new Date(Date.now() - m * 60 * 1000).toISOString();
 let db;
+const fin0 = () => new Date().toISOString();
 
 beforeEach(() => { limpiarDb(); db = openDb(TEST_DB); mlFetch.mockReset(); });
 afterEach(() => { db.close(); limpiarDb(); });
@@ -130,7 +131,29 @@ describe('alerta diaria de missed_feeds', () => {
   });
 });
 
+describe('alerta diaria con todas las consultas fallidas', () => {
+  it('abre/mantiene la advertencia con el conteo y no cierra el incidente', () => {
+    const fin = new Date().toISOString();
+    for (let i = 0; i < 3; i++) db.prepare("INSERT INTO missed_feeds_corridas (inicio, fin, topic, error) VALUES (?, ?, 'orders_v2', 'HTTP_500')").run(fin, fin);
+    alertaMissedFeedsDiaria(db);
+    const inc = incidente('ml_missed_feeds_diario');
+    expect(inc.severidad).toBe('advertencia');
+    expect(inc.mensaje_humano).toContain('3 consultas');
+    alertaMissedFeedsDiaria(db);
+    expect(incidente('ml_missed_feeds_diario')).toBeTruthy();
+    // con una consulta sana y sin faltantes, se cierra
+    db.prepare("INSERT INTO missed_feeds_corridas (inicio, fin, topic) VALUES (?, ?, 'orders_v2')").run(fin, fin);
+    alertaMissedFeedsDiaria(db);
+    expect(incidente('ml_missed_feeds_diario')).toBeFalsy();
+  });
+});
+
 describe('monitor de webhooks de Woo', () => {
+  it('tienda sin webhooks (listado vacío válido): denuncia los 8 ausentes', () => {
+    db.prepare("INSERT INTO woo_webhooks_estado (id, topic, status, delivery_url, propio, visto_en, status_desde) VALUES (1,'order.updated','active','https://herramientas.fusionbikes.com.ar/api/woo/webhook/order',1,?,?)").run(fin0(), fin0());
+    db.prepare('DELETE FROM woo_webhooks_estado').run(); // lo que hace refrescarWebhooksWoo con 200 []
+    expect(evaluarWebhooksWoo(db).ausentes).toHaveLength(8);
+  });
   const HOST = 'https://herramientas.fusionbikes.com.ar/api/woo/webhook';
   const esperados = [['order.created', 'order'], ['order.updated', 'order'], ['order.deleted', 'order'], ['order.restored', 'order'],
     ['product.created', 'product'], ['product.updated', 'product'], ['product.deleted', 'product'], ['product.restored', 'product']];

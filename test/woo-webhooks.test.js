@@ -48,6 +48,15 @@ describe('vigilancia de los webhooks de Woo', () => {
     }
   });
 
+  it('un listado vacío VÁLIDO reemplaza el estado guardado', async () => {
+    responder([{ id: 1, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` }]);
+    await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(1);
+    responder([]);
+    expect(await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST })).toMatchObject({ ok: true, total: 0 });
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(0);
+  });
+
   it('distingue los webhooks propios de los de terceros', () => {
     // La tienda tiene webhooks de otros sistemas que no administramos.
     expect(esPropio('https://herramientas.example.com/api/woo/webhook', HOST)).toBe(true);
