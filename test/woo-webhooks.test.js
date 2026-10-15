@@ -21,6 +21,57 @@ describe('vigilancia de los webhooks de Woo', () => {
     for (const s of ['', '-wal', '-shm']) if (fs.existsSync(`${FILE}${s}`)) fs.unlinkSync(`${FILE}${s}`);
   });
 
+  it('pagina GET /webhooks hasta agotar: los de la página 2 no se borran del estado', async () => {
+    const mk = (i) => ({ id: i, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` });
+    const p1 = Array.from({ length: 100 }, (_, i) => mk(i + 1));
+    const p2 = [mk(101), mk(102)];
+    const spy = vi.spyOn(axios, 'request').mockImplementation(async ({ url }) => ({ status: 200, data: url.includes('page=2') ? p2 : p1 }));
+    const r = await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    expect(r).toMatchObject({ ok: true, total: 102 });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(102);
+    // un fallo en la página 2 no toca el estado (listado incompleto)
+    spy.mockImplementation(async ({ url }) => (url.includes('page=2') ? { status: 500, data: [] } : { status: 200, data: p1 }));
+    expect((await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST })).ok).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(102);
+  });
+
+  it('un 200 con cuerpo que no es lista devuelve ok:false y no toca el estado', async () => {
+    const mk = (i) => ({ id: i, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` });
+    responder([mk(1), mk(2)]);
+    await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    for (const cuerpo of [{ message: 'x' }, null, 'html']) {
+      responder(cuerpo);
+      const r = await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+      expect(r.ok).toBe(false);
+      expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(2);
+    }
+  });
+
+  it('un listado vacío VÁLIDO reemplaza el estado guardado', async () => {
+    responder([{ id: 1, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` }]);
+    await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(1);
+    responder([]);
+    expect(await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST })).toMatchObject({ ok: true, total: 0 });
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(0);
+  });
+
+  it('un rechazo de red o timeout devuelve ok:false y no toca el estado', async () => {
+    responder([{ id: 1, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` }]);
+    await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    vi.spyOn(axios, 'request').mockRejectedValue(new Error('timeout of 20000ms exceeded'));
+    const r = await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('timeout');
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(1);
+    // fallo en la página 2 tampoco toca nada
+    const mk = (i) => ({ id: i, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` });
+    vi.spyOn(axios, 'request').mockImplementation(async ({ url }) => { if (url.includes('page=2')) throw new Error('ECONNRESET'); return { status: 200, data: Array.from({ length: 100 }, (_, i) => mk(i + 10)) }; });
+    expect((await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST })).ok).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(1);
+  });
+
   it('distingue los webhooks propios de los de terceros', () => {
     // La tienda tiene webhooks de otros sistemas que no administramos.
     expect(esPropio('https://herramientas.example.com/api/woo/webhook', HOST)).toBe(true);

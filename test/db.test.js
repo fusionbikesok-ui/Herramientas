@@ -31,6 +31,8 @@ describe('db schema', () => {
     ).all().map(r => r.name);
     expect(tables).toEqual([
       '_schema_migrations',
+      'barrido_corridas',
+      'barrido_estado',
       'catalogo_cache',
       'cobertura_exclusiones',
       'cobertura_hay_que_publicar',
@@ -100,6 +102,7 @@ describe('db schema', () => {
       'mapeo_fusion',
       'matcher_candidatos_cache',
       'metricas_ciclo_sync',
+      'missed_feeds_corridas',
       // Captura de qué cambió en una publicación de ML, campo por campo (migración 087).
       'ml_cambios_observados',
       // Medición por minuto de llamadas a ML para el techo shadow de E1 T3 (106).

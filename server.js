@@ -843,7 +843,37 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             console.error('[woo-webhooks] NO están entregando: '
               + caidos.map((w) => `${w.topic} (${w.status} desde ${w.status_desde})`).join(', '));
           }
+          // E-3: pausado / deshabilitado / ausente => incidente crítico inmediato. NUNCA se reactiva solo (lo hace José a mano).
+          const { evaluarWebhooksWoo } = await import('./lib/controlMedido.js');
+          evaluarWebhooksWoo(app._db);
         } catch (e) { console.error('[woo-webhooks] error:', e.message); }
+      });
+
+      // E-3 (control medido). 1) Entregas fallidas de ML: una vez por hora (una página vacía por tópico en régimen), sin
+      // reintentos; cada faltante se reinyecta como recibo y entra al flujo durable. Minuto 23: no pisa a ningún otro cron ML.
+      cron.schedule('23 * * * *', async () => {          // ML
+        try {
+          const { reinyectarMissedFeeds } = await import('./lib/missedFeedsMl.js');
+          const r = await reinyectarMissedFeeds(app._db, mlCfg);
+          const nuevos = (r.topicos || []).reduce((a, t) => a + t.nuevos, 0);
+          if (nuevos) console.log(`[missed-feeds] ${nuevos} aviso(s) reinyectado(s)`);
+        } catch (e) { console.error('[missed-feeds] error:', e.message); }
+      });
+      // 2) Trabajos no terminados (generación sin cerrar > 15 min o dead-letter): solo lee la base local.
+      cron.schedule('4-59/5 * * * *', async () => {
+        try {
+          const { vigilarTrabajosNoTerminados } = await import('./lib/controlMedido.js');
+          vigilarTrabajosNoTerminados(app._db);
+        } catch (e) { console.error('[trabajos-no-terminados] error:', e.message); }
+      });
+      // Alertas diarias: entregas fallidas de ML y diferencias del barrido (+ regla del umbral 2 días; en E-3 solo se registra).
+      cron.schedule('30 9 * * *', async () => {
+        try {
+          const { alertaMissedFeedsDiaria } = await import('./lib/controlMedido.js');
+          const { evaluarBarridosDiario } = await import('./lib/barridoCorridas.js');
+          alertaMissedFeedsDiaria(app._db);
+          evaluarBarridosDiario(app._db);
+        } catch (e) { console.error('[control-medido] alerta diaria error:', e.message); }
       });
 
       cron.schedule('3-59/10 * * * *', () => {          // ML
@@ -882,6 +912,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         const desde = estadoRamp(app._db)?.ultimo_scan_en || null;
         try {
           const cobertura = medirCoberturaWebhook(app._db, desde);
+          // E-3: el escaneo es un barrido; "sin evento" = cambio que ningún aviso de `items` anunció desde el escaneo anterior.
+          const { registrarCorrida } = await import('./lib/barridoCorridas.js');
+          registrarCorrida(app._db, { proceso: 'refresco_ml', inicio: desde || new Date().toISOString(), revisados: cobertura.claves, diferencias: cobertura.cambios, sinEvento: cobertura.cambiosSinAviso });
           const paso = evaluarRamp(app._db, {
             cambiosSinAviso: cobertura.cambiosSinAviso,
             proyeccionRota: proyeccionItemsRota(app._db),
