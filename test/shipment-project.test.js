@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import { openDb } from '../db/index.js';
 import { procesarEnvioMl, procesarTrabajosRecurso } from '../routes/sync.js';
-import { ensureTables, syncPedidosCache } from '../routes/preparacion.js';
+import { ensureTables, syncPedidosCache, proyectadoDespues } from '../routes/preparacion.js';
 import { registrarWebhookMl } from '../lib/workerIntegrationJobs.js';
 import { encolarTrabajo } from '../lib/trabajosRecurso.js';
 
@@ -243,6 +243,50 @@ describe('E-4: carrera con syncPedidosCache', () => {
     });
     await syncPedidosCache(db, { ...CFG, andreaniStatus: 'lpaandreani', enviadoAndreaniStatus: 'enviadoandreani' });
     expect(db.prepare("SELECT estado_envio FROM pedidos_cache WHERE clave = 'ml:ORD-1'").get().estado_envio).toBe('no_elegible');
+  });
+});
+
+describe('E-4: ronda 3', () => {
+  it('la guarda de la carrera cuenta las marcas del MISMO instante como posteriores', () => {
+    const t0 = '2026-10-15T12:00:00.000Z';
+    db.prepare("INSERT INTO ml_envio_proyeccion (clave, estado, actualizado_en) VALUES ('ml:IGUAL', 'retirado', ?)").run(t0);
+    expect(proyectadoDespues(db, 'ml:IGUAL', t0)).toBe(true);
+    expect(proyectadoDespues(db, 'ml:IGUAL', '2026-10-15T12:00:00.001Z')).toBe(false);
+    expect(proyectadoDespues(db, 'ml:OTRA', t0)).toBe(false);
+  });
+
+  it('closed_by_user con 2 órdenes: se evalúan todas, un incidente por orden y la preparación intacta', async () => {
+    const p1 = seedPrep(db, { orden: 'ORD-1' }); const p2 = seedPrep(db, { orden: 'ORD-2' });
+    seedGestion(db, 'ORD-1'); seedGestion(db, 'ORD-2');
+    encolarTrabajo(db, { tipo: 'shipment.project', recurso: '555' });
+    db.prepare("UPDATE trabajos_recurso SET diferidos = 5 WHERE tipo = 'shipment.project' AND recurso = '555'").run();
+    instalarMl({ envio: { status: 'cancelled', substatus: 'closed_by_user' } });
+    mlFetch.mockImplementation(async (_d, _c, _m, path) => {
+      if (/^\/shipments\/\d+$/.test(path)) return { status: 200, data: ml.envio, headers: {} };
+      const id = path.split('/')[2];
+      return { status: 200, data: { id, status: 'paid', shipping: { id: 555 }, order_items: [] }, headers: {} };
+    });
+    const r = await procesarEnvioMl(db, CFG, '555');
+    expect(r.estado).toBe('hecho');
+    expect(incidente('envio_cerrado_sin_resolver_ORD-1')).toHaveLength(1);
+    expect(incidente('envio_cerrado_sin_resolver_ORD-2')).toHaveLength(1);
+    expect(estadoPrep(p1)).toBe('en_preparacion');
+    expect(estadoPrep(p2)).toBe('en_preparacion');
+  });
+
+  it('closed_by_user con 2 órdenes dentro de las esperas: evalúa la segunda (cancelled) y difiere el conjunto', async () => {
+    seedPrep(db, { orden: 'ORD-1' }); seedPrep(db, { orden: 'ORD-2' });
+    seedGestion(db, 'ORD-1'); seedGestion(db, 'ORD-2');
+    instalarMl({ envio: { status: 'cancelled', substatus: 'closed_by_user' } });
+    const vistas = [];
+    mlFetch.mockImplementation(async (_d, _c, _m, path) => {
+      if (/^\/shipments\/\d+$/.test(path)) return { status: 200, data: ml.envio, headers: {} };
+      vistas.push(path);
+      return { status: 200, data: { id: path.split('/')[2], status: 'paid', shipping: { id: 555 }, order_items: [] }, headers: {} };
+    });
+    const r = await procesarEnvioMl(db, CFG, '555');
+    expect(r).toMatchObject({ estado: 'reencolar', diferido: true });
+    expect(vistas).toHaveLength(2);
   });
 });
 

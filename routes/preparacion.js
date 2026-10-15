@@ -3717,8 +3717,9 @@ function marcarProyeccionEnvio(db, clave, estado) {
     ON CONFLICT(clave) DO UPDATE SET estado = excluded.estado, actualizado_en = excluded.actualizado_en`).run(clave, estado, now());
 }
 /** ¿El webhook proyectó/retiró esta clave después de `inicio`? Entonces el volcado de una corrida que arrancó antes no la toca. */
-function proyectadoDespues(db, clave, inicio) {
-  return Boolean(db.prepare('SELECT 1 FROM ml_envio_proyeccion WHERE clave = ? AND actualizado_en > ?').get(clave, inicio));
+export function proyectadoDespues(db, clave, inicio) {
+  // `>=`: con marcas en el mismo milisegundo se favorece al webhook (lo peor es saltear una fila una corrida; el barrido la repone en la siguiente).
+  return Boolean(db.prepare('SELECT 1 FROM ml_envio_proyeccion WHERE clave = ? AND actualizado_en >= ?').get(clave, inicio));
 }
 
 function upsertPedidoCache(db, row) {

@@ -2438,6 +2438,7 @@ export async function procesarEnvioMl(db, cfg, shipmentId) {
   if (db.prepare('SELECT firma FROM ml_envio_visto WHERE shipment_id = ?').get(sid)?.firma === firma) return { estado: 'hecho', motivo: 'sin_cambios' };
 
   // 3) Cada orden del envío.
+  let esperar = false;
   for (const oid of mapa.ids) {
     const ordResp = await mlFetch(db, cfg.ml, 'get', `/orders/${encodeURIComponent(oid)}`);
     if (ordResp.status === 429) return { estado: 'reencolar', diferido: true, motivo: 'ml_429' };
@@ -2454,14 +2455,14 @@ export async function procesarEnvioMl(db, cfg, shipmentId) {
     if (envio.status === 'cancelled' && envio.substatus === 'closed_by_user') {
       // Cambio de tipo de envío: ML cierra el viejo y asigna otro. Nunca se cancela por tiempo; solo la orden cancelada (otra ruta).
       if (orden.status === 'cancelled') continue;
-      if (dif < ESPERAS_CAMBIO_ENVIO) return { estado: 'reencolar', diferido: true, demoraMs: 3 * 60 * 1000, motivo: 'envio_cerrado_por_cambio_de_tipo' };
+      if (dif < ESPERAS_CAMBIO_ENVIO) { esperar = true; continue; } // se sigue con las demás órdenes del envío; el reintento es del conjunto
       abrirOActualizarIncidente(db, {
         integracion: 'mercadolibre', proceso: 'preparacion', tipoError: `envio_cerrado_sin_resolver_${orden.id}`.slice(0, 120), severidad: 'advertencia',
         mensajeTecnico: `shipment ${sid} cerrado por el usuario y la orden ${orden.id} sigue apuntando a él tras ${dif} esperas`,
         mensajeHumano: `El envío ML del pedido #${orden.id} quedó cerrado (cambio de tipo de envío) y ML todavía no asignó el nuevo. La preparación no se tocó: revisalo en ML.`,
         contexto: { ml_order_id: String(orden.id), shipment_id: sid, esperas: dif },
       });
-      return { estado: 'hecho', motivo: 'envio_cerrado_sin_resolver' };
+      continue;
     }
     if (envio.status === 'cancelled') {
       db.prepare(`INSERT INTO ml_shipment_estado (shipment_id, status, substatus, logistic_type, actualizado_en) VALUES (?, ?, ?, ?, ?)
@@ -2490,6 +2491,7 @@ export async function procesarEnvioMl(db, cfg, shipmentId) {
       });
     }
   }
+  if (esperar) return { estado: 'reencolar', diferido: true, demoraMs: 3 * 60 * 1000, motivo: 'envio_cerrado_por_cambio_de_tipo' };
   db.prepare(`INSERT INTO ml_envio_visto (shipment_id, firma, actualizado_en) VALUES (?, ?, ?)
     ON CONFLICT(shipment_id) DO UPDATE SET firma = excluded.firma, actualizado_en = excluded.actualizado_en`).run(sid, firma, new Date().toISOString());
   return { estado: 'hecho' };

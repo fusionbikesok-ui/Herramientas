@@ -32,10 +32,21 @@ const esperar = (url) => new Promise((resolve, reject) => {
   intento();
 });
 
+/** ¿El pid es REALMENTE el servidor de este entorno? (cmdline = node server.js, cwd = la raíz del repo y DB_PATH = la base de este entorno). */
+function esNuestroServidor(pid, dbPath) {
+  try {
+    const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+    if (!cmd.some((x) => path.basename(x) === 'server.js')) return false;
+    if (fs.readlinkSync(`/proc/${pid}/cwd`) !== root) return false;
+    return fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes(`DB_PATH=${dbPath}`);
+  } catch { return false; }
+}
+
 async function down() {
   try {
     const e = JSON.parse(fs.readFileSync(estadoPath, 'utf8'));
-    try { process.kill(e.pid, 'SIGTERM'); } catch { /* ya no corre */ }
+    if (esNuestroServidor(e.pid, e.db)) process.kill(e.pid, 'SIGTERM');
+    else console.log(`pid ${e.pid} no es el servidor de este entorno: no se mata`);
   } catch { /* sin estado */ }
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('entorno E2E apagado');
@@ -49,8 +60,11 @@ async function up() {
   const secreto = () => crypto.randomBytes(24).toString('hex');
   const server = spawn(process.execPath, ['server.js'], {
     cwd: root, detached: true, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'a'), fs.openSync(path.join(dir, 'server.log'), 'a')],
-    env: { ...process.env, DB_PATH: dbPath, PORT: String(port), DISABLE_CRONS: 'true', DOTENV_CONFIG_PATH: '/dev/null',
-      SESSION_SECRET: secreto(), MOBILE_JWT_SECRET: secreto(), ML_CLIENT_ID: '', ML_CLIENT_SECRET: '', WOO_URL: '', WOO_CK: '', WOO_CS: '' },
+    // Lista blanca: NADA se hereda salvo PATH/HOME/NODE_ENV. Sin ML/Woo/sombra/vigilante/gateway/push/ML_USER_ID: el servidor no puede
+    // hablar con el exterior ni con la base real aunque el shell que lo lanza tenga esas variables.
+    env: { PATH: process.env.PATH || '', HOME: process.env.HOME || '', NODE_ENV: process.env.NODE_ENV || 'test',
+      DB_PATH: dbPath, PORT: String(port), LISTEN_HOST: '127.0.0.1', DISABLE_CRONS: 'true', DOTENV_CONFIG_PATH: '/dev/null',
+      SESSION_SECRET: secreto(), MOBILE_JWT_SECRET: secreto() },
   });
   server.unref();
   await esperar(`http://127.0.0.1:${port}/login/`);
