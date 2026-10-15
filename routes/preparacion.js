@@ -6,12 +6,13 @@ import multer from 'multer';
 import { wooFetch } from './woo.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { mlFetch } from '../lib/mlClient.js';
+import { bajarEtiquetasMl, MAX_CLAVES_ETIQUETAS } from '../lib/etiquetasMl.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
 import { procesarColaFotos, reintentarFoto } from '../lib/fotosPreparacionCola.js';
 import {
   normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete, TIPO_FOTO_ETIQUETA,
-  requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
+  requisitosConCantidad, fotosFaltantes, fotosListasFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
   clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
 } from '../lib/preparacion.js';
@@ -577,7 +578,8 @@ function requisitosBaseParaItem(db, item) {
 // bloquea (no una versión paralela que se pueda desincronizar). La reusan también
 // preparacionEstaVerificada (para decidir 'completada' vs 'despachada_sin_verificar' al
 // cargar el tracking) y el cron reintentarColgadosTracking, con el mismo criterio.
-function calcularFaltantesPreparacion(db, prep) {
+function calcularFaltantesPreparacion(db, prep, { soloListas = false } = {}) {
+  const faltan_ = soloListas ? fotosListasFaltantes : fotosFaltantes;
   const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(prep.id);
   const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL').all(prep.id);
 
@@ -597,14 +599,14 @@ function calcularFaltantesPreparacion(db, prep) {
     }
 
     const req_ = requisitosParaItem(db, it);
-    const faltan = fotosFaltantes(req_, fotos.filter(f => f.item_id === it.id));
+    const faltan = faltan_(req_, fotos.filter(f => f.item_id === it.id));
     if (faltan.length) {
       faltantes.push({ item_id: it.id, sku: it.sku, nombre: it.nombre, motivo: 'fotos', faltan });
     }
   }
 
   const fotosGenerales = fotos.filter(f => !f.item_id);
-  const faltaPaquete = fotosFaltantes(requisitosPaquete(), fotosGenerales);
+  const faltaPaquete = faltan_(requisitosPaquete(), fotosGenerales);
 
   return { faltantes, delegadosPendientes, faltaPaquete };
 }
@@ -2655,6 +2657,30 @@ export function preparacionRouter(db, cfg) {
   const COLS_LISTA = `p.id, p.clave, p.canal, p.numero_pedido, p.comprador, p.estado, p.pack_id, p.completado_en, p.tracking, p.woo_paso2_pendiente,
     p.etiqueta_cargada_en, p.envio_confirmado_en, p.wc_order_id, p.ml_order_id,
     (SELECT f.estado_proceso FROM preparacion_fotos f WHERE f.preparacion_id=p.id AND f.tipo='paquete_etiquetado' AND f.borrado_en IS NULL AND f.estado_proceso IN ('pendiente','procesando','error') ORDER BY f.id DESC LIMIT 1) AS foto_etiqueta_pendiente`;
+
+  // Bajar etiquetas de ML (spec parte B): un PDF con las etiquetas de los envíos elegibles; el front lo abre para imprimir. «Bajado» ≠ «impreso».
+  const faltanFotosParaPdf = (prep) => {
+    const todo = calcularFaltantesPreparacion(db, prep);
+    if (todo.faltantes.length || todo.delegadosPendientes.length || todo.faltaPaquete.length) return 'faltan fotos';
+    const listas = calcularFaltantesPreparacion(db, prep, { soloListas: true });
+    return listas.faltantes.length || listas.faltaPaquete.length ? 'foto en proceso o fallida' : null;
+  };
+  router.post('/etiquetas-ml', async (req, res) => {
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const crudas = req.body?.claves;
+    if (!Array.isArray(crudas) || !crudas.length || crudas.length > MAX_CLAVES_ETIQUETAS
+      || !crudas.every((c) => typeof c === 'string' && /^ml:\d{1,20}$/.test(c))) {
+      return res.status(400).json({ ok: false, error: `claves: de 1 a ${MAX_CLAVES_ETIQUETAS} claves ml:<orden>`, code: 'CLAVES_INVALIDAS' });
+    }
+    if (!cfg?.ml) return res.status(503).json({ ok: false, error: 'ML no está configurado' });
+    try {
+      const out = await bajarEtiquetasMl(db, cfg.ml, [...new Set(crudas)], req.user.username, { faltanFotos: faltanFotosParaPdf });
+      return res.status(out.status).json(out.body);
+    } catch (e) {
+      console.error('etiquetas-ml falló:', e.message);
+      return res.status(500).json({ ok: false, error: 'no se pudieron bajar las etiquetas' });
+    }
+  });
 
   router.get('/falta-etiqueta', (req, res) => {
     const r = paginarLista(req, {
