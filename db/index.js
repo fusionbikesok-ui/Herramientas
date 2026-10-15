@@ -1013,6 +1013,13 @@ export function openDb(dbPath) {
       db.prepare("INSERT INTO _schema_migrations (key) VALUES ('control_medido_131')").run();
     })();
   }
+  const estadoFueraCache132 = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='ml_estado_item_fuera_cache_132'").get();
+  if (!estadoFueraCache132) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '132_ml_estado_item_fuera_cache.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('ml_estado_item_fuera_cache_132')").run();
+    })();
+  }
   // Columnas de trabajos_recurso agregadas después de la 127/128 (contador de fallos consecutivos, independiente de la generación).
   // Con guarda por PRAGMA: sirve para bases que ya registraron la 128 sin ellas y es idempotente.
   const colsTrabajos = new Set(db.prepare('PRAGMA table_info(trabajos_recurso)').all().map((c) => c.name));

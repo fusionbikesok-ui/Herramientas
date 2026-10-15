@@ -15,6 +15,7 @@ import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes
 import { descontarOrdenVieja, destinoActual, fechaOrdenMs, avisarCancelacionDescontada, avisarCanceladaLuegoPagada } from '../lib/descuentoOrdenVieja.js';
 import { encolarProductoWoo, encolarTrabajo, reclamarTrabajos, cerrarTrabajo, reencolarTrabajo, diferirTrabajo, guardarContextoTrabajo, ordenMlAfectaASkus } from '../lib/trabajosRecurso.js';
 import { registrarCorrida } from '../lib/barridoCorridas.js';
+import { estadoFueraDeCache, recordarEstadoFueraDeCache } from '../lib/mlEstadoItemFueraCache.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
 import { wooFetch, refrescarProductoPuntual } from './woo.js';
@@ -2799,8 +2800,14 @@ async function _syncWcToMl(db, cfg, opts = {}) {
     try {
       const bloqueoStock = bloquearStockPorContradiccion(db, { clave, sku, cantidad, cantAnterior: diff.cantidad_ml, cache: contradicciones });
       if (bloqueoStock.bloqueado) { bloqueadosContradiccion++; continue; }
+      // Ítem fuera de ml_publicaciones_cache (esa caché manda y ya precargó estadoItem): se usa el status recordado (TTL 24 h).
+      if (!estadoItem.has(itemId)) {
+        const recordado = estadoFueraDeCache(db, itemId);
+        if (recordado) estadoItem.set(itemId, recordado);
+      }
       if (!estadoItem.has(itemId)) {
         llamadasMl++;
+        const consultadoEn = new Date().toISOString(); // inicio del GET: si un aviso invalida durante la espera, no se guarda
         const est = await mlFetch(db, mlCfg, 'get', `/items/${itemId}?attributes=status`);
         if (est.status === 429) {
           // Cooldown global activo (real o sintético): TODAS las consultas de status que
@@ -2812,6 +2819,7 @@ async function _syncWcToMl(db, cfg, opts = {}) {
           break;
         }
         estadoItem.set(itemId, est.status === 200 ? est.data?.status ?? 'desconocido' : 'desconocido');
+        recordarEstadoFueraDeCache(db, itemId, estadoItem.get(itemId), consultadoEn);
         await sleep(espera(ML_CALL_DELAY_MS));
       }
       const status = estadoItem.get(itemId);
