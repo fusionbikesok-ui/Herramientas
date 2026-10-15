@@ -36,6 +36,18 @@ describe('vigilancia de los webhooks de Woo', () => {
     expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(102);
   });
 
+  it('un 200 con cuerpo que no es lista devuelve ok:false y no toca el estado', async () => {
+    const mk = (i) => ({ id: i, topic: 'order.updated', status: 'active', delivery_url: `https://${HOST}/api/woo/webhook/order` });
+    responder([mk(1), mk(2)]);
+    await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+    for (const cuerpo of [{ message: 'x' }, null, 'html']) {
+      responder(cuerpo);
+      const r = await refrescarWebhooksWoo(db, CFG, { hostPropio: HOST });
+      expect(r.ok).toBe(false);
+      expect(db.prepare('SELECT COUNT(*) n FROM woo_webhooks_estado').get().n).toBe(2);
+    }
+  });
+
   it('distingue los webhooks propios de los de terceros', () => {
     // La tienda tiene webhooks de otros sistemas que no administramos.
     expect(esPropio('https://herramientas.example.com/api/woo/webhook', HOST)).toBe(true);
