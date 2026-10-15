@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Fusion Herramientas — Puente de lectura
  * Description: Lectura autenticada de versiones y precios comerciales para preparar la integración con Herramientas. Incluye corte fiscal y archivo de comprobantes autorizados desde el VPS; no cambia precios ni stock.
- * Version: 0.5.1
+ * Version: 0.5.2
  * Requires at least: 6.4
  * Requires PHP: 7.4
  * Requires Plugins: woocommerce
@@ -17,7 +17,7 @@ require_once __DIR__ . '/messaging-read.php';
 require_once __DIR__ . '/fiscal-cutover.php';
 
 final class Bridge {
-    const VERSION = '0.5.1';
+    const VERSION = '0.5.2';
     const NAMESPACE = 'wc/v3';
     const PREFIX = '/fusion-herramientas';
     const MAX_IDS = 25;
@@ -115,6 +115,16 @@ final class Bridge {
         }
         if ($p->get_price('edit') === '') return ['id' => $id, 'state' => 'unpriced'];
         $base = $pricing->getBasePrice($p);
+        // Read the same product-specific rate and rounding as the public price box.
+        // This is a reference, never a payment execution or locked exchange rate.
+        $usd = null;
+        if (method_exists($data, 'getDollarV60')) {
+            $rate = (float)$data->getDollarV60($id);
+            if (is_finite($rate) && $rate > 0 && $base > 0) {
+                $usd = ['currency' => 'USD', 'amount' => self::decimal(ceil($base / $rate), 0),
+                    'source' => 'master_control_public_display', 'rounding' => 'ceil'];
+            }
+        }
         $quotes = [];
         foreach ($plans as $plan) {
             $coefficient = (float)$data->getCoefficient($id, $plan);
@@ -133,6 +143,7 @@ final class Bridge {
             'id' => $id, 'state' => 'ok', 'parent_id' => $parent_id, 'type' => $type,
             'sku' => (string)$p->get_sku(), 'name' => (string)$p->get_name(),
             'base_amount' => self::decimal($base, wc_get_price_decimals()),
+            'usd_reference' => $usd,
             'free_shipping' => !$p->is_virtual() && $base >= max(0, (float)get_option('fusion_free_shipping_threshold', 190000)),
             'plans' => $quotes, 'promo_three_installments' => (bool)$data->appliesNave($id),
             'source' => 'master_control_pricing_engine',
@@ -159,8 +170,8 @@ final class Bridge {
                 'schema' => 1, 'generated_at' => gmdate('c'),
                 'master_control_version' => defined('FUSION_BIKES_VERSION') ? FUSION_BIKES_VERSION : null,
                 'currency' => get_woocommerce_currency(), 'items' => $items,
-                'scope' => 'cash_and_single_unit_financing_only',
-                'excludes' => ['cart', 'coupons', 'shipping', 'tax_calculation', 'usd', 'checkout', 'stock_reservation'],
+                'scope' => 'cash_single_unit_financing_and_usd_reference',
+                'excludes' => ['cart', 'coupons', 'shipping', 'tax_calculation', 'checkout', 'stock_reservation'],
             ]);
         } catch (\Throwable $e) {
             // Do not expose stack traces, database details or configuration in an API error.

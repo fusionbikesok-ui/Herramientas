@@ -63,3 +63,10 @@ test('stock routes stay inside existing authenticated report gateway',async t=>{
  isAdmin=true;res=await fetch(base+'/herramientas/gestion-vps/ventas/api?mode=stock&days=90&cover=15');assert.equal(res.status,200);assert.equal((await res.json()).success,true);assert.equal(called,1);
  res=await fetch(base+'/herramientas/gestion-vps/ventas/api?mode=stock',{method:'POST'});assert.equal(res.status,423);
 });
+
+test('services never become zero-stock or synthetic-stock replenishment alerts; workshop merchandise remains countable',()=>{
+ const catalog=[product(19688,{stock:0,categorias_json:'["SERVICES","Taller"]'}),product(2,{stock:999924,categorias_json:'["Servicios"]'}),product(3,{stock:0,categorias_json:'["Taller","Repuestos"]'})];
+ const r=stockRows(catalog,[sale(19688,12),sale(2,15),sale(3,3)],opts);
+ for(const id of [19688,2]){const row=r.rows.find(x=>x.id===id);assert.equal(row.stock,null);assert.equal(row.alert,'service');assert.equal(row.coverage_days,null);assert.ok(row.units>0);}
+ assert.equal(r.rows.find(x=>x.id===3).alert,'missing');assert.equal(r.rows.find(x=>x.id===3).stock,0);assert.equal(r.quality.services,2);
+});

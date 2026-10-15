@@ -18,7 +18,7 @@ function compareResults(a,b,key='default',direction='asc',view='critical'){
  const comparison=typeof av==='number'&&typeof bv==='number'?av-bv:String(av).localeCompare(String(bv),'es',{sensitivity:'base',numeric:true});
  return comparison*(direction==='desc'?-1:1)||byName();
 }
-const priority={critical:0,negative:1,missing:2,review:3,no_sales:4,healthy:5};
+const priority={critical:0,negative:1,missing:2,review:3,no_sales:4,healthy:5,service:6};
 function viewRows(rows,view){return view==='critical'?rows.filter(r=>['missing','critical','negative'].includes(r.alert)):view==='ranking'?rows.filter(r=>r.units>0):rows;}
 function summarizeRows(rows){
  const countable=rows.filter(r=>finite(r.stock)&&!r.issue);
@@ -28,7 +28,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports={resultMatches,com
 if(typeof document==='undefined')return;
 const $=id=>document.getElementById(id),C=window.FusionSales,N=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
 const number=new Intl.NumberFormat('es-AR',{maximumFractionDigits:1}),fmt=n=>number.format(n),date=s=>s?s.slice(0,10).split('-').reverse().join('/'):'—',stamp=s=>s?new Date(s).toLocaleString('es-AR',{timeZone:'America/Argentina/Buenos_Aires',hour12:false}):'Sin dato';
-const labels={missing:'Sin stock informado',critical:'Cobertura baja',healthy:'Con cobertura',no_sales:'Sin ventas en el período',negative:'Stock negativo',review:'Stock para revisar'};
+const labels={missing:'Sin stock informado',critical:'Cobertura baja',healthy:'Con cobertura',no_sales:'Sin ventas en el período',negative:'Stock negativo',review:'Stock para revisar',service:'Servicio'};
 let data=null,view='critical',page=0,filtered=[],busy=false,pageSize=20;
 const bound=id=>$(id).value===''?null:Number($(id).value);
 function resultFilters(){return{stockState:$('fs-stock-state').value,stockMin:bound('fs-stock-min'),stockMax:bound('fs-stock-max'),unitsMin:bound('fs-units-min'),unitsMax:bound('fs-units-max'),coverMax:bound('fs-cover-max')};}
@@ -51,7 +51,7 @@ function render(){
  filtered=[...viewRows(rows,view)].sort((a,b)=>compareResults(a,b,key,direction,view));
  const summary=summarizeRows(filtered),viewLabel={critical:'Stock crítico',ranking:'Más vendidos',catalog:'Todo el catálogo'}[view];
  $('fs-summary-context').textContent='Resumen de '+viewLabel+' · todas las filas de esta vista, no sólo esta página';
- const stockNote='Variantes con cantidad positiva; unidades en la tabla'+(summary.excluded?` · ${fmt(summary.excluded)} con stock a revisar`:'');
+ const stockNote='Variantes con cantidad positiva; unidades en la tabla'+(summary.excluded?` · ${fmt(summary.excluded)} sin cantidad física computable`:'');
  $('fs-summary').replaceChildren();for(const[label,value,note,attention]of[['Productos / variantes',summary.count,'Coinciden con la tabla de '+viewLabel,false],['Variantes con stock',summary.inStock,stockNote,false],['Unidades vendidas',summary.units,`Últimos ${data.period.days} días · productos de esta vista`,false],['Para revisar reposición',summary.critical,'Cobertura baja, cantidad cero con ventas o stock negativo',true]]){const card=N('div',undefined,'fs-stat'+(attention?' attention':''));card.append(N('span',label),N('strong',fmt(value)),N('small',note));$('fs-summary').append(card);}
  page=Math.min(page,Math.max(0,Math.ceil(filtered.length/pageSize)-1));
  $('fs-title').textContent=view==='critical'?'Productos para revisar':view==='ranking'?'Ranking de productos vendidos':'Consulta rápida de stock';
@@ -71,10 +71,10 @@ function drawTable(){
   const row=N('tr'),cell=N('td'),product=N('div',undefined,'fs-product');
   if(r.image){const img=N('img');img.src=r.image;img.alt='';img.loading='lazy';img.width=54;img.height=54;img.onerror=()=>img.remove();product.append(img);}
   const description=N('div'),link=N('a',(view==='ranking'?`${page*pageSize+index+1}. `:'')+r.name);link.href=r.url;link.target='_blank';link.rel='noopener noreferrer';description.append(link,N('small',r.brand+(r.sku?' · '+r.sku:'')),N('span',labels[r.alert],'fs-badge '+r.alert));if(r.variant)description.append(N('small',r.variant));product.append(description);cell.append(product);row.append(cell);
-  const stock=N('td');stock.append(N('strong',r.stock===null?'—':fmt(r.stock),'fs-cell-value'));let note=r.issue==='shared'?'Revisar stock del padre':r.issue==='duplicate'?'SKU repetido':r.issue==='unknown'?'Cantidad no disponible':r.stock_stale?'Dato desactualizado':'Cantidad local';stock.append(N('small',note,'fs-cell-note'));stock.title='Dato del catálogo: '+stamp(r.stock_at);row.append(stock);
+  const stock=N('td');stock.append(N('strong',r.stock===null?'—':fmt(r.stock),'fs-cell-value'));let note=r.issue==='service'?'Servicio · stock no aplicable':r.issue==='shared'?'Revisar stock del padre':r.issue==='duplicate'?'SKU repetido':r.issue==='unknown'?'Cantidad no disponible':r.stock_stale?'Dato desactualizado':'Cantidad local';stock.append(N('small',note,'fs-cell-note'));stock.title='Dato del catálogo: '+stamp(r.stock_at);row.append(stock);
   const units=N('td');units.append(N('strong',fmt(r.units),'fs-cell-value'),N('small',`Web ${fmt(r.web_units)} · ML ${fmt(r.ml_units)}`,'fs-cell-note'));row.append(units);
   const daily=N('td');daily.textContent=r.units>0?new Intl.NumberFormat('es-AR',{maximumFractionDigits:3}).format(r.daily):'—';row.append(daily);
-  const coverage=N('td');coverage.append(N('strong',r.coverage_days===null?'—':(r.coverage_days>999?'> 999':fmt(r.coverage_days))+' días','fs-cell-value'));if(r.coverage_days===null)coverage.append(N('small',r.issue?'Requiere revisión':'Sin ventas para estimar','fs-cell-note'));row.append(coverage,N('td',date(r.last_sale)));body.append(row);
+  const coverage=N('td');coverage.append(N('strong',r.coverage_days===null?'—':(r.coverage_days>999?'> 999':fmt(r.coverage_days))+' días','fs-cell-value'));if(r.coverage_days===null)coverage.append(N('small',r.issue==='service'?'No requiere reposición':r.issue?'Requiere revisión':'Sin ventas para estimar','fs-cell-note'));row.append(coverage,N('td',date(r.last_sale)));body.append(row);
  });table.append(body);scroll.append(table);target.append(scroll);
  const nav=$('fs-pagination');nav.append(N('span',`${page*pageSize+1}–${Math.min((page+1)*pageSize,filtered.length)} de ${filtered.length}`));for(const[text,delta]of[['Anterior',-1],['Siguiente',1]]){const b=N('button',text,'fs-button');b.type='button';b.disabled=page+delta<0||(page+delta)*pageSize>=filtered.length;b.onclick=()=>{page+=delta;drawTable();};nav.append(b);}
 }
@@ -85,7 +85,7 @@ async function load(){if(busy)return;busy=true;$('fs-load').disabled=true;$('fs-
   const warnings=[];if(!data.snapshot.web_complete||!data.snapshot.ml_complete)warnings.push('El histórico tiene cobertura parcial en '+[!data.snapshot.web_complete?'Web/POS':'',!data.snapshot.ml_complete?'Mercado Libre':''].filter(Boolean).join(' y ')+'. La cobertura de stock se estima con las ventas disponibles y puede resultar mayor que la real.');if(data.snapshot.stale)warnings.push('La copia de ventas web está atrasada.');if(data.quality.unmatched_lines)warnings.push(`${data.quality.unmatched_lines} líneas de venta no pudieron vincularse a una variante vigente y quedan fuera del cálculo.`);if(data.quality.stale_stock)warnings.push(`${data.quality.stale_stock} productos tienen un dato de stock de más de 24 horas o sin fecha.`);
   $('fs-warning').textContent=warnings.join(' ');$('fs-warning').hidden=!warnings.length;
   $('fs-sources').textContent=`Ventas web actualizadas: ${stamp(data.snapshot.orders_at)}. Mercado Libre: ${stamp(data.snapshot.ml_at)}. Stock: fechas por producto entre ${stamp(data.snapshot.stock_oldest_at)} y ${stamp(data.snapshot.stock_latest_at)}.`;
-  $('fs-quality').textContent=`${data.quality.review_lines} líneas para conciliar excluidas; ${data.quality.unmatched_lines} líneas sin variante vinculada; ${data.quality.shared_stock} variantes con stock en el padre; ${data.quality.duplicate_skus} variantes con SKU repetido. Revisá estas últimas en «Todo el catálogo».`;
+  $('fs-quality').textContent=`${data.quality.review_lines} líneas para conciliar excluidas; ${data.quality.unmatched_lines} líneas sin variante vinculada; ${data.quality.shared_stock} variantes con stock en el padre; ${data.quality.duplicate_skus} variantes con SKU repetido; ${data.quality.services||0} servicios sin cálculo de reposición. Revisá estas últimas en «Todo el catálogo».`;
   $('fs-progress').textContent='Informe actualizado · '+stamp(data.snapshot.generated_at);render();
  }catch(error){$('fs-progress').textContent=error.message+(data?' Se conserva el último informe cargado.':'');}finally{busy=false;$('fs-load').disabled=false;$('fs-export').disabled=!filtered.length||!!resultFilterError(resultFilters());}}
 function csvValue(v){const text=typeof v==='number'?String(v):String(v??'').replace(/^([\s]*[=+@-])/,'\'$1');return '"'+text.replaceAll('"','""')+'"';}

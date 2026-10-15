@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {createAlertSettings,AlertSettingsError} from './stock-alert-settings.mjs';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { readFileSync } from 'node:fs';
@@ -45,6 +46,8 @@ export function allowedTarget(raw, method='GET') {
   if(u.pathname==='/andreani/api'&&!u.search)return {kind:'andreani-api',local};
   if(u.pathname==='/andreani/download'&&[...u.searchParams.keys()].join(',')==='id')return {kind:'andreani-download',local};
   if (['/assets/management.css', '/assets/catalog-ui.js', '/assets/directory.js', '/assets/directory.css','/assets/metrics.js','/assets/metrics.css','/assets/sales-core.js','/assets/stock-report.js','/assets/stock-report.css'].includes(u.pathname)) return { kind: 'asset', local };
+  if(u.pathname==='/ventas/stock/alertas'&&!u.search&&['GET','POST'].includes(method))return {kind:'stock-alert-settings',local};
+  if(['/assets/stock-alert-settings.js','/assets/stock-alert-settings.css'].includes(u.pathname))return {kind:'asset',local};
   if (u.pathname === '/ventas/stock/' && !u.search) return { kind: 'stock-page', local };
   if (u.pathname === '/ventas/' && !u.search) return { kind: 'metrics', local };
   if (u.pathname === '/ventas/api' && [...u.searchParams.keys()].every(k=>['kind','from','to','statuses[]','bike_categories[]','brand','model','page','generation','filter_kind','filter_brands[]','currency','category','country','state','city','search','mode','channel','modelKey','variant','quality','saleState','category[]','days','cover'].includes(k))) return { kind: 'metrics-api', local };
@@ -98,8 +101,9 @@ function session(cookie, authPort) {
 }
 const home = readFileSync(new URL('./home.html', import.meta.url), 'utf8');
 
-export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPort = 3001, catalogRead, directoryRead, metricsRead, andreaniHandle, pdfHandle, posHandle, deliveryHandle, posEnabled=process.env.FUSION_POS_VPS_ENABLED==='1', salesLocation=process.env.FUSION_SALES_LOCATION||'vps', origin='https://herramientas.fusionbikes.com.ar' }) {
+export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPort = 3001, catalogRead, directoryRead, metricsRead, alertSettingsHandle, andreaniHandle, pdfHandle, posHandle, deliveryHandle, posEnabled=process.env.FUSION_POS_VPS_ENABLED==='1', salesLocation=process.env.FUSION_SALES_LOCATION||'vps', origin='https://herramientas.fusionbikes.com.ar' }) {
   if (!secret || secret.length < 64) throw new Error('Missing signing key');
+  const alertSettings=alertSettingsHandle||createAlertSettings();
   const catalog = createLocalCatalog({ port: authPort, ...(catalogRead ? { read: catalogRead } : {}) });
   const directory = directoryRead || createDirectory();
   const metrics = metricsRead || createMetrics({authPort,catalogRead});
@@ -116,6 +120,8 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
     });request.on('timeout',()=>request.destroy(new Error('timeout')));request.on('error',()=>reject(new DeliveryError('No se pudo preparar el comprobante. No se envió ningún correo.',502)));
   })});
   const assets = new Map([
+    ['/assets/stock-alert-settings.js',['stock-alert-settings.js','text/javascript']],
+    ['/assets/stock-alert-settings.css',['stock-alert-settings.css','text/css']],
     ['/assets/pdf-render.mjs',['pdf-render.mjs','text/javascript']],
     ['/assets/pdfjs/pdf.min.mjs',['pdfjs/pdf.min.mjs','text/javascript']],
     ['/assets/pdfjs/pdf.worker.min.mjs',['pdfjs/pdf.worker.min.mjs','text/javascript']],
@@ -144,7 +150,7 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
     const arcaPost=req.method==='POST'&&target?.kind==='proxy'&&arcaWriteRoutes.some(r=>r.test(new URL(target.local,'http://private.invalid').searchParams.get('rest_route')||''));
     const posWrite=target?.kind==='pos'&&!['GET','HEAD'].includes(req.method)&&posEnabled;
     const deliveryPost=target?.kind==='delivery'&&req.method==='POST';
-    if (!['GET', 'HEAD'].includes(req.method)&&!posWrite&&!deliveryPost&&!(req.method==='POST'&&([prefix+'/andreani/api',prefix+'/corregir-etiquetas/api'].includes(req.url)||arcaPost))) return json(res, 423, { error: 'Operación no habilitada.', message: 'Esta operación todavía no está habilitada en el VPS.' });
+    if (!['GET', 'HEAD'].includes(req.method)&&!posWrite&&!deliveryPost&&!(target?.kind==='stock-alert-settings'&&req.method==='POST')&&!(req.method==='POST'&&([prefix+'/andreani/api',prefix+'/corregir-etiquetas/api'].includes(req.url)||arcaPost))) return json(res, 423, { error: 'Operación no habilitada.', message: 'Esta operación todavía no está habilitada en el VPS.' });
     if (!target) return json(res, 404, { error: 'Ruta no disponible.' });
     if(target.kind==='delivery-public'){
       try{const file=await delivery('public',{token:target.token});res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Robots-Tag','noindex, nofollow, noarchive');res.writeHead(200,{'Content-Type':'application/pdf','Content-Disposition':'inline; filename="'+file.filename+'"','Content-Length':file.pdf.length});return res.end(req.method==='HEAD'?'':file.pdf);}
@@ -154,6 +160,17 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
       const auth = await session(req.headers.cookie || '', authPort);
       if (auth.status !== 200 || auth.body.ok !== true) return json(res, 401, { error: 'Ingresá en Herramientas para acceder.' });
       if (auth.body.is_admin !== true || typeof auth.body.user !== 'string') return json(res, 403, { error: 'La validación requiere un administrador de Herramientas.' });
+      if(target.kind==='stock-alert-settings'){
+        let input;
+        if(req.method==='POST'){
+          if(req.headers.origin!==origin||!csrfValid(req.headers['x-fusion-csrf'],secret,auth.body.user,req.headers.cookie||''))return json(res,403,{message:'Recargá las alertas para renovar la sesión.'});
+          if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||''))return json(res,415,{message:'Formato no admitido.'});
+          const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>8192)return json(res,413,{message:'La solicitud es demasiado grande.'});chunks.push(chunk);}
+          try{input=JSON.parse(Buffer.concat(chunks));}catch{return json(res,400,{message:'Configuración inválida.'});}
+        }
+        try{return json(res,200,{...await alertSettings(req.method==='POST'?'save':'read',input,auth.body.user),csrf:csrfToken(secret,auth.body.user,req.headers.cookie||'')});}
+        catch(e){return json(res,e instanceof AlertSettingsError?e.status:503,{message:e instanceof AlertSettingsError?e.message:'No se pudo consultar la configuración de alertas.'});}
+      }
       const web=(salesLocation==='web'||target.kind==='web-sales')?salesWebTarget(target,req.method):null;
       if(web){
         if(web.status===302){res.writeHead(302,{Location:web.url});return res.end();}
