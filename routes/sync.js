@@ -2173,11 +2173,30 @@ function remotoDifiereDelDeseado(db, f, skuVinculado, deseados) {
   if (!skuVinculado || f.status !== 'active' || f.available_quantity == null) return false;
   // Si la última bolsa de este SKU terminó SIN escribir hace poco, una diferencia local no la vuelve a disparar (evita lecturas
   // a ML en cada aviso por un falso positivo persistente). Un cambio real de cantidad/estado/vínculo sí dispara (otra rama del diff).
-  const marca = leerEstado(db, `bolsa_sin_escritura:${skuVinculado}`);
-  if (marca?.valor === 'sin_escritura' && Date.now() - new Date(marca.actualizado_en).getTime() < VENTANA_SIN_ESCRITURA_MS) return false;
   const deseado = deseados.get(f.clave);
   if (deseado == null) return false;
-  return Number(f.available_quantity) !== deseado;
+  if (Number(f.available_quantity) === deseado) return false;
+  // La supresión vale SOLO si el deseado efectivo y la cantidad remota de esta clave son IGUALES a los que verificó esa bolsa:
+  // cualquier cambio (Woo o ML), aunque el scan ya haya actualizado el caché, dispara la bolsa.
+  const marca = leerEstado(db, `bolsa_sin_escritura:${skuVinculado}`);
+  if (!marca || Date.now() - new Date(marca.actualizado_en).getTime() >= VENTANA_SIN_ESCRITURA_MS) return true;
+  let verificado = null;
+  try { verificado = JSON.parse(marca.valor)?.claves?.[f.clave] ?? null; } catch { /* marca vieja o ilegible: no suprime */ }
+  return !(verificado && verificado.deseado === deseado && verificado.remoto === Number(f.available_quantity));
+}
+
+/** Recuerda, por clave, el deseado efectivo y la cantidad remota que verificó una bolsa que terminó sin escribir. */
+function marcarBolsaSinEscritura(db, sku) {
+  const claves = db.prepare(`SELECT clave FROM sku_matcher_decisiones WHERE accion IN ${ACCIONES_VINCULO} AND sku = ?`).all(sku).map((r) => r.clave);
+  const itemIds = [...new Set(claves.map((c) => c.split('|')[0]))];
+  const deseados = itemIds.length ? deseadosEfectivosDeItems(db, itemIds) : new Map();
+  const rem = db.prepare('SELECT cantidad_ml FROM ml_stock_estado WHERE clave = ?');
+  const porClave = {};
+  for (const c of claves) {
+    const r = rem.get(c);
+    if (deseados.has(c) && r?.cantidad_ml != null) porClave[c] = { deseado: deseados.get(c), remoto: Number(r.cantidad_ml) };
+  }
+  guardarEstado(db, `bolsa_sin_escritura:${sku}`, JSON.stringify({ claves: porClave }));
 }
 
 /**
@@ -2448,7 +2467,8 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
             if (cerrarTrabajo(db, t, { enCierre }).cerrado) cerrarIncidentesDeTrabajo(db, t);
             // E-2: recuerda si esta bolsa terminó sin escribir (ver remotoDifiereDelDeseado); una escritura real lo borra.
             if (tipo === 'stock.bolsa' && r.estado === 'hecho' && r.empujadas !== undefined) {
-              try { guardarEstado(db, `bolsa_sin_escritura:${t.recurso.replace(/^sku:/, '')}`, r.empujadas === 0 ? 'sin_escritura' : 'escribio'); } catch { /* optimización */ }
+              const skuB = t.recurso.replace(/^sku:/, '');
+              try { if (r.empujadas === 0) marcarBolsaSinEscritura(db, skuB); else guardarEstado(db, `bolsa_sin_escritura:${skuB}`, 'escribio'); } catch { /* optimización */ }
             }
           }
           procesados++;

@@ -309,15 +309,46 @@ describe('item.project: cada elemento del bulk se trata por su status_code', () 
     } finally { delete process.env.IDENTIDAD_PROTECCION; }
   });
 
-  it('tras una bolsa SIN escritura reciente, la diferencia local no re-dispara; un cambio real de cantidad sí', async () => {
-    db.prepare("UPDATE ml_publicaciones_cache SET available_quantity = 9 WHERE item_id = 'MLA500'").run();
-    ml.qty.MLA500 = 9; // difiere del deseado (5) pero el caché ya lo sabía
-    guardarEstado(db, 'bolsa_sin_escritura:S-500', 'sin_escritura');
-    await lote('MLA500');
-    expect(bolsas()).toEqual([]);
-    ml.qty.MLA500 = 7; // cambio REAL de available_quantity: dispara igual
-    await lote('MLA500');
-    expect(bolsas()).toEqual(['sku:S-500']);
+  describe('tras una bolsa SIN escritura reciente', () => {
+    const marcar = (deseado, remoto) => guardarEstado(db, 'bolsa_sin_escritura:S-500', JSON.stringify({ claves: { 'MLA500|': { deseado, remoto } } }));
+    beforeEach(() => {
+      db.prepare("UPDATE ml_publicaciones_cache SET available_quantity = 9 WHERE item_id = 'MLA500'").run();
+      ml.qty.MLA500 = 9; // difiere del deseado (5) pero el caché ya lo sabía (lo actualizó el scan)
+    });
+
+    it('nada cambió desde lo que verificó esa bolsa: la diferencia local no re-dispara', async () => {
+      marcar(5, 9);
+      await lote('MLA500');
+      expect(bolsas()).toEqual([]);
+    });
+
+    it('cambió el deseado (Woo): dispara aunque el caché de ML ya esté al día', async () => {
+      marcar(5, 9);
+      db.prepare("UPDATE catalogo_cache SET stock = 3 WHERE sku = 'S-500'").run();
+      await lote('MLA500');
+      expect(bolsas()).toEqual(['sku:S-500']);
+    });
+
+    it('cambió la cantidad remota: dispara', async () => {
+      marcar(5, 9);
+      ml.qty.MLA500 = 7;
+      await lote('MLA500');
+      expect(bolsas()).toEqual(['sku:S-500']);
+    });
+
+    it('el worker guarda por clave el deseado y el remoto que verificó una bolsa sin escritura', async () => {
+      ml.qty.MLA500 = 5; db.prepare("UPDATE ml_stock_estado SET cantidad_ml = 5").run(); // remoto == deseado: no hay escritura
+      encolarTrabajo(db, { tipo: 'stock.bolsa', recurso: 'sku:S-500' });
+      await correr();
+      const m = JSON.parse(db.prepare("SELECT valor FROM stock_barrera_estado WHERE clave = 'bolsa_sin_escritura:S-500'").get().valor);
+      expect(m.claves['MLA500|']).toEqual({ deseado: 5, remoto: 5 });
+    });
+
+    it('una marca vieja o sin datos de la clave no suprime', async () => {
+      guardarEstado(db, 'bolsa_sin_escritura:S-500', 'sin_escritura');
+      await lote('MLA500');
+      expect(bolsas()).toEqual(['sku:S-500']);
+    });
   });
 
   it('carrera con el scan: el caché ya estaba al día pero el remoto difiere del deseado → igual encola la bolsa', async () => {
