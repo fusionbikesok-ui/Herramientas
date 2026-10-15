@@ -225,7 +225,8 @@ describe('control de despacho U0.B', () => {
     expect(db.prepare("SELECT tipo FROM despacho_lote_eventos WHERE lote_id=?").all(loteId).map(r => r.tipo)).toContain('lote_cerrado');
     const salida = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/salida`).set('Idempotency-Key', 'salida-1');
     expect(salida.status).toBe(200); expect(salida.body.lote.salida_confirmada_por).toBeTruthy();
-    expect(db.prepare("SELECT job_type FROM integration_jobs WHERE event_id=?").get(`dispatch-lote-${loteId}`).job_type).toBe('dispatch.woo');
+    // La salida de un lote ya no encola nada hacia Woo (spec etiquetas v13.1).
+    expect(db.prepare("SELECT COUNT(*) n FROM integration_jobs WHERE job_type='dispatch.woo'").get().n).toBe(0);
     expect(db.prepare("SELECT tipo FROM despacho_lote_eventos WHERE lote_id=?").all(loteId).map(r => r.tipo)).toContain('salida_confirmada');
     const salidaRepeat = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/salida`).set('Idempotency-Key', 'salida-1');
     expect(salidaRepeat.body.repetido).toBe(true);

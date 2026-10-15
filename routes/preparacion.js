@@ -60,20 +60,22 @@ function imagenProductoPendiente(db, item) {
   return null;
 }
 
-function encolarSalidaWoo(db, lote, usuario) {
-  const at = new Date().toISOString();
-  const eventId = `dispatch-lote-${lote.id}`;
-  const orders = db.prepare(`SELECT DISTINCT p.wc_order_id, p.canal, p.tracking FROM despacho_lote_items li
-    JOIN despacho_controles d ON d.id=li.control_id
-    JOIN preparaciones p ON (p.pack_id=d.grupo_clave OR p.clave=d.grupo_clave)
-    WHERE li.lote_id=? AND p.wc_order_id IS NOT NULL`).all(lote.id);
-  const metadata = JSON.stringify({ lote_id: lote.id, canal: lote.canal, orders, actor: usuario });
-  db.prepare(`INSERT OR IGNORE INTO integration_events
-    (event_id,event_type,channel,source,resource_id,payload_version,occurred_at,received_at,correlation_id,dedupe_key,metadata_json,status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending')`).run(eventId, 'dispatch.confirmed', lote.canal, 'fusionbikes', String(lote.id), 'v1', at, at, eventId, eventId, metadata);
-  const event = db.prepare('SELECT event_id FROM integration_events WHERE event_id=?').get(eventId);
-  if (event) db.prepare('INSERT OR IGNORE INTO integration_jobs (event_id,job_type,available_at) VALUES (?,?,?)').run(event.event_id, 'dispatch.woo', at);
-  return eventId;
+// La confirmación de salida de un lote NO escribe en Woo, de ningún canal (spec v13.1): el único escritor del estado Woo de un pedido web es el flujo de
+// dos pasos de Seguimientos, y un pedido WC creado desde ML no se modifica. Lo único que hace la salida es FECHAR el envío de las preparaciones ML de los
+// miembros `confirmado` (todas las del grupo: un pack sale junto). Web toma su fecha del paso 2 (v21). Devuelve las advertencias «falta etiqueta» (v3.1):
+// no bloquean la salida.
+function registrarSalidaLote(db, lote, ts) {
+  const miembros = db.prepare(`SELECT d.grupo_clave FROM despacho_lote_items li JOIN despacho_controles d ON d.id=li.control_id
+    WHERE li.lote_id=? AND li.estado='confirmado'`).all(lote.id);
+  const advertencias = [];
+  if (lote.canal !== 'ml') return advertencias;
+  const fechar = db.prepare(`UPDATE preparaciones SET envio_confirmado_en = COALESCE(envio_confirmado_en, ?) WHERE canal='ml' AND (clave=? OR pack_id=?)`);
+  const sinEtiqueta = db.prepare(`SELECT clave FROM preparaciones WHERE canal='ml' AND (clave=? OR pack_id=?) AND etiqueta_cargada_en IS NULL AND envio_descartado_en IS NULL AND estado IN ('completada','despachada_sin_verificar')`);
+  for (const m of miembros) {
+    fechar.run(ts, m.grupo_clave, m.grupo_clave);
+    for (const f of sinEtiqueta.all(m.grupo_clave, m.grupo_clave)) advertencias.push({ clave: f.clave, motivo: 'falta_etiqueta' });
+  }
+  return advertencias;
 }
 
 // Estados en los que NO se puede seguir trabajando una preparación (escanear, confirmar
@@ -809,10 +811,19 @@ function registrarPerfilEvento(db, { alcance, clave, tipo, usuario, detalle }) {
 // Devuelve la cantidad purgada (para logging del cron).
 export function purgarFotosBorradas(db) {
   const limite = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  // Preparaciones cerradas (`completada`/`anulado_en_woo`, las que pueden estar en «Falta etiqueta»/«Falta seguimiento»): la foto se borra recién 30 días
+  // después de la ÚLTIMA resolución (envío confirmado/descartado, o etiqueta cargada si es posterior) y nunca mientras siga pendiente de etiqueta o de envío.
+  // Sin fecha de envío no se purga. El resto de los estados conserva la regla de siempre (30 días desde la creación de la preparación). Los holds mandan siempre.
   const vencidas = db.prepare(`SELECT f.id, f.url, f.url_liviana FROM preparacion_fotos f
     JOIN preparaciones p ON p.id=f.preparacion_id
-    WHERE (p.creado_en < ? OR (f.borrado_en IS NOT NULL AND f.borrado_en < ?))
-      AND NOT EXISTS (SELECT 1 FROM preparacion_fotos_holds h WHERE h.preparacion_id=f.preparacion_id)`).all(limite, limite);
+    WHERE (
+        (p.estado NOT IN ('completada','anulado_en_woo') AND p.creado_en < ?)
+        OR (p.estado IN ('completada','anulado_en_woo') AND f.creado_en < ?
+            AND COALESCE(p.envio_confirmado_en, p.envio_descartado_en) IS NOT NULL
+            AND MAX(COALESCE(p.envio_confirmado_en, p.envio_descartado_en), COALESCE(p.etiqueta_cargada_en, '')) < ?
+            AND NOT (p.etiqueta_cargada_en IS NULL AND p.envio_descartado_en IS NULL))
+        OR (f.borrado_en IS NOT NULL AND f.borrado_en < ?))
+      AND NOT EXISTS (SELECT 1 FROM preparacion_fotos_holds h WHERE h.preparacion_id=f.preparacion_id)`).all(limite, limite, limite, limite);
   let purgadas = 0;
   for (const f of vencidas) {
     // Contención (defensa en profundidad): si la ruta resuelta cae fuera de uploads/,
@@ -1219,7 +1230,8 @@ export function guardiaPreparacionAnulada(db) {
         prep = db.prepare('SELECT estado FROM preparaciones WHERE clave=?').get(`web:${req.body.id}`);
       }
     } catch { /* si no se puede leer, cada handler igual valida el estado */ }
-    if (prep?.estado === ESTADO_ANULADO_EN_WOO) {
+    // Única excepción (spec v9.2): descartar con motivo un envío pendiente de un pedido anulado. Solo escribe envio_descartado_*, motivo y actor.
+    if (prep?.estado === ESTADO_ANULADO_EN_WOO && !(req.method === 'POST' && /^\/\d+\/descartar-envio$/.test(req.path))) {
       return res.status(409).json({ ok: false, code: 'PREPARACION_ANULADA_EN_WOO', error: bloqueoPorEstado(prep) });
     }
     return next();
@@ -1641,12 +1653,15 @@ export function preparacionRouter(db, cfg) {
     if (lote.estado !== 'cerrado') return res.status(409).json({ ok: false, error: 'el lote debe estar cerrado antes de confirmar salida', code: 'LOTE_NO_CERRADO' });
     if (lote.salida_idempotencia) return res.status(409).json({ ok: false, error: 'la salida ya fue confirmada con otra idempotencia', code: 'SALIDA_YA_CONFIRMADA' });
     const ts = now();
-    const info = db.prepare(`UPDATE despacho_lotes SET salida_confirmada_por=?, salida_confirmada_en=?, salida_idempotencia=?
-      WHERE id=? AND estado='cerrado' AND salida_idempotencia IS NULL`).run(req.user.username, ts, idem, id);
-    if (!info.changes) return res.status(409).json({ ok: false, error: 'otra operación confirmó la salida', code: 'SALIDA_CONFLICTO' });
-    eventoLote(id, 'salida_confirmada', req.user.username, { idempotencia: idem });
-    const jobEventId = encolarSalidaWoo(db, db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id), req.user.username);
-    res.json({ ok: true, repetido: false, lote: db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id) });
+    const resultado = db.transaction(() => {
+      const info = db.prepare(`UPDATE despacho_lotes SET salida_confirmada_por=?, salida_confirmada_en=?, salida_idempotencia=?
+        WHERE id=? AND estado='cerrado' AND salida_idempotencia IS NULL`).run(req.user.username, ts, idem, id);
+      if (!info.changes) return null;
+      eventoLote(id, 'salida_confirmada', req.user.username, { idempotencia: idem });
+      return registrarSalidaLote(db, lote, ts);
+    })();
+    if (!resultado) return res.status(409).json({ ok: false, error: 'otra operación confirmó la salida', code: 'SALIDA_CONFLICTO' });
+    res.json({ ok: true, repetido: false, lote: db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id), advertencias: resultado });
   });
 
   router.post('/despacho/:id/escanear', (req, res) => {
@@ -2623,6 +2638,126 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Estado del sync de pedidos_cache (para el aviso de frescura en el frontend) ──
+  // ── Listas de cierre pendiente (spec v3.4, v6–v11): «Falta etiqueta», «Falta seguimiento» (web) y «No salieron con el lote» ──
+  // Paginadas por cursor (orden, id); nada se oculta por fecha: una fila sale solo al resolverse.
+  const paginarLista = (req, { select, from, where, params, orden }) => {
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit || '50', 10) || 50));
+    const [cOrden, cId] = String(req.query.cursor || '').split('|');
+    const total = db.prepare(`SELECT COUNT(*) n FROM ${from} WHERE ${where}`).get(...params).n;
+    const filtroCursor = cOrden ? `AND (${orden} > ? OR (${orden} = ? AND p.id > ?))` : '';
+    const args = cOrden ? [...params, cOrden, cOrden, Number(cId) || 0] : params;
+    const filas = db.prepare(`SELECT ${select}, ${orden} AS orden FROM ${from} WHERE ${where} ${filtroCursor} ORDER BY ${orden}, p.id LIMIT ?`).all(...args, limit + 1);
+    const hayMas = filas.length > limit;
+    const items = hayMas ? filas.slice(0, limit) : filas;
+    const ultimo = items[items.length - 1];
+    return { items, total, next_cursor: hayMas && ultimo ? `${ultimo.orden}|${ultimo.id}` : null };
+  };
+  const COLS_LISTA = `p.id, p.clave, p.canal, p.numero_pedido, p.comprador, p.estado, p.pack_id, p.completado_en, p.tracking, p.woo_paso2_pendiente,
+    p.etiqueta_cargada_en, p.envio_confirmado_en, p.wc_order_id, p.ml_order_id,
+    (SELECT f.estado_proceso FROM preparacion_fotos f WHERE f.preparacion_id=p.id AND f.tipo='paquete_etiquetado' AND f.borrado_en IS NULL AND f.estado_proceso IN ('pendiente','procesando','error') ORDER BY f.id DESC LIMIT 1) AS foto_etiqueta_pendiente`;
+
+  router.get('/falta-etiqueta', (req, res) => {
+    const r = paginarLista(req, {
+      select: COLS_LISTA, from: 'preparaciones p',
+      where: "p.estado IN ('completada','anulado_en_woo') AND p.etiqueta_cargada_en IS NULL AND p.envio_descartado_en IS NULL",
+      params: [], orden: 'COALESCE(p.completado_en, p.creado_en)',
+    });
+    const items = r.items.map((f) => ({
+      ...f,
+      anulado: f.estado === ESTADO_ANULADO_EN_WOO,
+      salio: !!f.envio_confirmado_en,
+      acciones: f.estado === ESTADO_ANULADO_EN_WOO ? ['descartar']
+        : [f.canal === 'web' ? 'completar_envio' : 'subir_foto', ...(f.envio_confirmado_en ? ['salio_sin_foto'] : [])],
+    }));
+    res.json({ ok: true, ...r, items });
+  });
+
+  router.get('/falta-seguimiento', (req, res) => {
+    const r = paginarLista(req, {
+      select: COLS_LISTA, from: 'preparaciones p',
+      where: `p.canal='web' AND p.envio_confirmado_en IS NULL AND p.envio_descartado_en IS NULL AND (
+        p.estado='completada'
+        OR (p.estado='anulado_en_woo' AND (p.woo_paso2_pendiente=1
+          OR EXISTS (SELECT 1 FROM preparacion_eventos e WHERE e.preparacion_id=p.id AND e.tipo='tracking_abandonado'))))`,
+      params: [], orden: 'COALESCE(p.completado_en, p.creado_en)',
+    });
+    const abandonado = db.prepare("SELECT 1 FROM preparacion_eventos WHERE preparacion_id=? AND tipo='tracking_abandonado' LIMIT 1");
+    const items = r.items.map((f) => {
+      const tieneTracking = !!String(f.tracking || '').trim();
+      let estadoEnvio; let acciones;
+      if (f.estado === ESTADO_ANULADO_EN_WOO) { estadoEnvio = 'anulado_con_envio_pendiente'; acciones = ['descartar']; }
+      else if (abandonado.get(f.id)) { estadoEnvio = 'abandonado'; acciones = ['reintentar', 'descartar']; }
+      else if (Number(f.woo_paso2_pendiente) === 1) { estadoEnvio = 'envio_incierto'; acciones = ['reintentar']; }
+      else if (tieneTracking) { estadoEnvio = 'asociado_sin_confirmar'; acciones = ['confirmar_envio']; }
+      else { estadoEnvio = 'sin_seguimiento'; acciones = ['completar_envio']; }
+      return { ...f, estado_envio: estadoEnvio, acciones };
+    });
+    res.json({ ok: true, ...r, items });
+  });
+
+  // Miembros que no salieron con un lote cuya salida ya se confirmó. Sale de la lista cuando alguna preparación de su grupo queda fechada/descartada.
+  router.get('/no-salieron', (req, res) => {
+    const filas = db.prepare(`SELECT li.id AS miembro_id, li.estado AS miembro_estado, l.id AS lote_id, l.canal, l.salida_confirmada_en, d.id AS control_id, d.grupo_clave
+      FROM despacho_lote_items li
+      JOIN despacho_lotes l ON l.id=li.lote_id
+      JOIN despacho_controles d ON d.id=li.control_id
+      WHERE l.salida_confirmada_en IS NOT NULL AND li.estado<>'confirmado'
+        AND NOT EXISTS (SELECT 1 FROM preparaciones p WHERE (p.clave=d.grupo_clave OR p.pack_id=d.grupo_clave)
+          AND (p.envio_confirmado_en IS NOT NULL OR p.envio_descartado_en IS NOT NULL))
+        AND EXISTS (SELECT 1 FROM preparaciones p WHERE p.clave=d.grupo_clave OR p.pack_id=d.grupo_clave)
+      ORDER BY l.salida_confirmada_en, li.id`).all();
+    const preps = db.prepare('SELECT id, clave, canal, numero_pedido, comprador FROM preparaciones WHERE clave=? OR pack_id=?');
+    res.json({ ok: true, total: filas.length, items: filas.map((f) => ({ ...f, preparaciones: preps.all(f.grupo_clave, f.grupo_clave), acciones: ['descartar'] })) });
+  });
+
+  // Resolución con motivo, atómica y fail-closed (v17.2): el cambio y su evento van en la misma transacción; si el evento falla no hay cambio.
+  const resolverConMotivo = (req, res, fn) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!motivo) return res.status(400).json({ ok: false, error: 'motivo requerido', code: 'MOTIVO_REQUERIDO' });
+    if (motivo.length > 300) return res.status(400).json({ ok: false, error: 'motivo demasiado largo', code: 'MOTIVO_INVALIDO' });
+    try {
+      const out = db.transaction(() => fn(prep, motivo))();
+      if (out?.error) return res.status(out.status || 409).json({ ok: false, error: out.error, code: out.code });
+      return res.json({ ok: true, ...(out || {}) });
+    } catch (e) {
+      console.error('resolución con motivo falló, sin cambios:', e.message);
+      return res.status(500).json({ ok: false, error: 'no se pudo registrar la resolución; no se hizo ningún cambio' });
+    }
+  };
+
+  // «Salió sin foto de etiqueta» (v15.1): solo si el envío ya está fechado y la etiqueta sigue sin cargar. La marca queda con origen `sin_foto`.
+  router.post('/:id/salio-sin-foto', (req, res) => resolverConMotivo(req, res, (prep, motivo) => {
+    const actual = db.prepare('SELECT estado, envio_confirmado_en, etiqueta_cargada_en FROM preparaciones WHERE id=?').get(prep.id);
+    if (actual.estado !== 'completada') return { error: 'solo una preparación completada puede resolverse así', code: 'ESTADO_INVALIDO' };
+    if (!actual.envio_confirmado_en) return { error: 'el envío todavía no está confirmado', code: 'ENVIO_NO_CONFIRMADO' };
+    if (actual.etiqueta_cargada_en) return { error: 'la etiqueta ya está resuelta', code: 'ETIQUETA_YA_CARGADA' };
+    db.prepare("UPDATE preparaciones SET etiqueta_cargada_en=?, etiqueta_origen='sin_foto' WHERE id=?").run(now(), prep.id);
+    registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'etiqueta_sin_foto', usuario: req.user.username, detalle: { motivo }, failClosed: true });
+    return {};
+  }));
+
+  // «Descartar con motivo» (v8.2/v9.2/v10.1/v19.2): resuelve el envío de TODO el grupo (pack) sin afirmar que se confirmó. Limpia el paso 2 pendiente
+  // para que nada lo reintente. `lote_id` opcional: deja constancia también en el historial del lote.
+  router.post('/:id/descartar-envio', (req, res) => resolverConMotivo(req, res, (prep, motivo) => {
+    if (!['completada', ESTADO_ANULADO_EN_WOO].includes(prep.estado)) return { error: 'solo se descarta el envío de una preparación cerrada', code: 'ESTADO_INVALIDO' };
+    const grupo = prep.pack_id || prep.clave;
+    const miembros = db.prepare('SELECT id, estado FROM preparaciones WHERE (clave=? OR pack_id=?) AND envio_confirmado_en IS NULL AND envio_descartado_en IS NULL').all(grupo, grupo);
+    if (!miembros.length) return { error: 'el envío ya está resuelto', code: 'ENVIO_YA_RESUELTO' };
+    const ts = now();
+    for (const m of miembros) {
+      db.prepare('UPDATE preparaciones SET envio_descartado_en=?, envio_descartado_motivo=?, envio_descartado_por=?, woo_paso2_pendiente=0 WHERE id=?').run(ts, motivo, req.user.username, m.id);
+      registrarEvento(db, { preparacionId: m.id, itemId: null, tipo: 'envio_descartado', usuario: req.user.username, detalle: { motivo, estado: m.estado }, failClosed: true });
+    }
+    const loteId = Number(req.body?.lote_id);
+    if (Number.isInteger(loteId) && loteId > 0 && db.prepare('SELECT 1 FROM despacho_lotes WHERE id=?').get(loteId)) {
+      eventoLote(loteId, 'miembro_descartado', req.user.username, { grupo_clave: grupo, motivo });
+    }
+    return { descartadas: miembros.length };
+  }));
+
   router.get('/pedidos-cache/estado', (req, res) => {
     const ultimoLog = db.prepare(
       "SELECT creado_en, estado, error FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1"
