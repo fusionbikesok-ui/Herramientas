@@ -663,6 +663,16 @@
   // El "volver al inicio" del markup es relativo y apuntaría mal desde la URL del
   // detalle; se reescribe con la raíz ya calculada.
   $('ir-home').setAttribute('href', RAIZ.slice(0, RAIZ.length - 'gestion-pedidos/'.length) + 'home/');
+  // «Enviar a preparación» llama al POST de Preparación (exige preparacion:write): se oculta sin ese permiso (admin siempre puede).
+  function puedeCrearLote(me) {
+    if (!me || !me.ok) return false;
+    if (me.is_admin || (me.scopes && me.scopes.indexOf('all') !== -1)) return true;
+    return (me.permisos || []).some(function (p) { return p.herramienta === 'preparacion' && p.nivel === 'write'; });
+  }
+  fetch('/api/auth/me', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (me) { if (!puedeCrearLote(me)) $('btn-lote').style.display = 'none'; })
+    .catch(function () { $('btn-lote').style.display = 'none'; });
   cargarResumen();
   var inicial = idDeLaUrl();
   if (inicial) { mostrarDetalle(inicial, false); cargarLista(false); }
