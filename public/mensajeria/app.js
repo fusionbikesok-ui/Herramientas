@@ -1,3 +1,4 @@
+import {originLabel,prospectPreview,renderProspects} from './prospects.js';
 import {savedReply,messageLabel,forwardBlock} from './message-actions.js?v=351ec445ab57';
 const API = '../api/mensajeria';
 const POLL_MIN = 10000;
@@ -11,6 +12,13 @@ const DELIVERY = { queued: '◷ En cola', queue: '◷ En cola', pending: '◷ En
 const DELIVERY_PROGRESS = { queue: 0, queued: 0, pending: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
 const SEND_BLOCKED = { thread_closed: 'La conversación está cerrada. Reabrila para responder.', number_not_connected: 'El número de negocio todavía no está conectado. Completá la conexión para responder.', web_not_connected: 'La atención del chat web todavía no está disponible. Actualizá el estado antes de responder.', window_closed: 'Fuera de la ventana de atención de 24 horas. Se necesita una plantilla aprobada.', owner_required: 'Necesitás ser responsable de esta conversación para responder.' };
 const ERRORS = { ...SEND_BLOCKED, message_reference_unavailable:'El mensaje original ya no está disponible para esta acción.',message_reference_changed:'El mensaje original cambió. Volvé a seleccionarlo antes de continuar.',invalid_message_reference:'Volvé a elegir el mensaje original.', already_owned: 'Otra persona ya tomó esta conversación. Se actualizará el responsable.', revision_conflict: 'La conversación cambió mientras trabajabas. Revisá su estado actualizado antes de continuar.', idempotency_conflict: 'Esta operación ya tiene un registro diferente. Revisá el historial antes de volver a enviar.', inbox_not_configured: 'La conexión del servicio de mensajería todavía no está configurada.', write_required: 'Tu acceso permite consultar, pero no cambiar la atención.', invalid_target: 'La persona elegida ya no está disponible para atender. Actualizá el equipo.', thread_not_found: 'No se encontró esta conversación.', invalid_media_caption: 'Los archivos admiten hasta 1024 caracteres. El audio debe enviarse sin texto adjunto.', invalid_message: 'Escribí un mensaje o elegí un archivo válido antes de enviar.', media_not_available: 'El archivo no está disponible. Volvé a adjuntarlo antes de enviar.', media_not_found: 'No se encontró el archivo.', media_unavailable: 'El archivo todavía no está disponible.', unsupported_media_type: 'Este tipo de archivo no está permitido.', media_too_large: 'El archivo supera el tamaño permitido.', media_signature_mismatch: 'El contenido no coincide con el tipo de archivo. Elegí un archivo válido.', unsafe_pdf: 'Este PDF contiene elementos no admitidos. Elegí una versión sin contenido activo.', upload_quota_exceeded: 'Se alcanzó el límite de archivos de esta conversación.', nonce_store_unavailable: 'No se pudo confirmar la conexión segura. El servicio volverá a intentar conectarse.' };
+
+export function shouldClaimOnOpen(actor, thread, pending = false) {
+  return Boolean(['agent', 'supervisor'].includes(actor?.role) && thread?.status === 'open' && !thread.owner_id && !pending);
+}
+export function filterHelp(filter) {
+  return ({unread:'Sin responsable: quedan acá hasta que un operador las tome, aunque responda la IA.',mine:'Conversaciones a tu cargo. El número celeste indica mensajes nuevos.',all:'Conversaciones abiertas, atendidas o pendientes.',unassigned:'Todas las conversaciones abiertas sin responsable, incluido el historial.',closed:'Conversaciones cerradas. Abrir el historial no las reactiva.'})[filter] || '';
+}
 
 export function readBoundary(messages, { role, visible, selected, atBottom, unread } = {}) {
   if (!['agent', 'supervisor'].includes(role) || !visible || !selected || !atBottom || !(unread > 0)) return '';
@@ -37,6 +45,7 @@ export function errorMessage(result) {
 }
 
 export function sendWindow(thread, now = Date.now()) {
+  if (threadChannel(thread)==='lead') return {allowed:false,label:'Este contacto no tiene un teléfono válido para WhatsApp. Podés copiar sus datos y guardar notas privadas.'};
   if (!thread) return { allowed: false, label: 'Sin conversación' };
   if (threadChannel(thread) === 'web') {
     if (thread.can_send === true) return { allowed: true, label: 'Chat web disponible' };
@@ -51,7 +60,7 @@ export function sendWindow(thread, now = Date.now()) {
   return { allowed: true, label: 'Ventana de atención abierta' };
 }
 
-export function threadChannel(thread) { return thread?.channel === 'web' ? 'web' : 'whatsapp'; }
+export function threadChannel(thread) { return thread?.channel === 'lead' ? 'lead' : thread?.channel === 'web' ? 'web' : 'whatsapp'; }
 export function customerWindowOpen(thread, now = Date.now()) {
   const inbound = Date.parse(thread?.last_inbound_at || '');
   return threadChannel(thread) === 'whatsapp' && Number.isFinite(inbound) && inbound <= now && now - inbound < SEND_WINDOW_MS;
@@ -95,7 +104,7 @@ export function productStock(value) {
   if (Number.isFinite(Number(value))) return Number(value) > 0 ? `Stock: ${Number(value)}` : 'Sin stock';
   return ({ instock: 'Disponible', outofstock: 'Sin stock', onbackorder: 'Por encargo' })[String(value)] || 'Stock a confirmar';
 }
-export function channelLabel(thread) { return threadChannel(thread) === 'web' ? 'Chat web' : 'WhatsApp'; }
+export function channelLabel(thread) { return threadChannel(thread) === 'lead' ? 'Contacto web' : threadChannel(thread) === 'web' ? 'Chat web' : 'WhatsApp'; }
 export function mediaAllowed(thread) { return Boolean(thread && (typeof thread.capabilities?.media === 'boolean' ? thread.capabilities.media : threadChannel(thread) === 'whatsapp')); }
 export function aiStateLabel(thread, status) {
   if (thread?.bot_paused) return 'IA pausada';
@@ -369,7 +378,7 @@ function start() {
   function nameOf(thread) { return thread?.name || thread?.phone || (threadChannel(thread) === 'web' ? 'Visitante del chat web' : 'Contacto de WhatsApp'); }
   function numberLabel(thread) { return threadChannel(thread) === 'web' ? thread?.page_title || '' : thread?.number_label || state.numbers.find(number => String(number.number_id) === String(thread?.number_id))?.number_label || thread?.number_id || 'Número de negocio'; }
   function sourceLabel(thread) { return [...new Set([channelLabel(thread), numberLabel(thread)].filter(Boolean))].join(' · '); }
-  function shortSource(thread) { const number = state.numbers.find(item => String(item.number_id) === String(thread.number_id)); const digits = String(number?.number || number?.number_label || thread.number_label || '').replace(/\D/g, ''); return threadChannel(thread) === 'web' ? 'Web' : `WA${digits ? ` · ${digits.slice(-4)}` : ''}`; }
+  function shortSource(thread) { if (threadChannel(thread)==='lead') return 'Contacto web'; const number = state.numbers.find(item => String(item.number_id) === String(thread.number_id)); const digits = String(number?.number || number?.number_label || thread.number_label || '').replace(/\D/g, ''); return threadChannel(thread) === 'web' ? 'Web' : `WA${digits ? ` · ${digits.slice(-4)}` : ''}`; }
   function renderList() {
     const list = $('thread-list'); const top = list.scrollTop; const anchor = [...list.children].find(node => node.offsetTop + node.offsetHeight > list.offsetTop + top); const anchorOffset = anchor ? anchor.offsetTop - top : 0;
     const existing = new Map([...$('thread-list').children].map(node => [node.dataset.key, node]));
@@ -384,7 +393,7 @@ function start() {
         const source = element('span', 'thread-channel', shortSource(thread)); source.title = sourceLabel(thread); bottom.append(source);
         if (Number(thread.unread) > 0) { const unread = element('span', 'unread-count', Number(thread.unread) > 99 ? '99+' : thread.unread); unread.setAttribute('aria-label', `${thread.unread} sin leer`); bottom.append(unread); }
         const avatar = element('span', 'thread-avatar', contactInitials(nameOf(thread))); avatar.setAttribute('aria-hidden', 'true');
-        const content = element('div', 'thread-card-content'); content.append(top, element('p', 'thread-preview', thread.preview || 'Sin mensajes de texto'), bottom); card.replaceChildren(avatar, content); card.classList.toggle('is-unread', Number(thread.unread) > 0);
+        const content = element('div', 'thread-card-content'); content.append(top, element('p', 'thread-preview', thread.preview || prospectPreview(thread) || 'Sin mensajes de texto'), bottom); card.replaceChildren(avatar, content); card.classList.toggle('is-unread', Number(thread.unread) > 0);
         card.dataset.signature = signature;
       }
       card.setAttribute('aria-current', key === state.selected ? 'true' : 'false');
@@ -394,13 +403,13 @@ function start() {
     if (top > 0 && anchor?.isConnected) list.scrollTop = anchor.offsetTop - anchorOffset; else list.scrollTop = top;
     $('load-list').hidden = !state.listMore;
     $('list-state').classList.toggle('error', Boolean(state.lastListError));
-    $('list-state').textContent = state.lastListError || (!state.threads.length ? (state.search || state.number || state.channel !== 'all' ? 'No hay conversaciones que coincidan con estos filtros.' : state.filter === 'unread' ? 'Estás al día. No hay chats pendientes de leer.' : state.filter === 'mine' ? 'Todavía no tenés conversaciones asignadas.' : state.filter === 'closed' ? 'No hay conversaciones cerradas.' : state.filter === 'unassigned' ? 'No hay conversaciones esperando responsable.' : 'Todavía no hay conversaciones. Las consultas reales del chat web y de WhatsApp aparecerán acá.') : '');
+    $('list-state').textContent = state.lastListError || (!state.threads.length ? (state.search || state.number || state.channel !== 'all' || $('prospect-source').value!=='all' ? 'No hay conversaciones que coincidan con estos filtros.' : state.filter === 'unread' ? 'Estás al día. No hay conversaciones pendientes de asignar.' : state.filter === 'mine' ? 'Todavía no tenés conversaciones asignadas.' : state.filter === 'closed' ? 'No hay conversaciones cerradas.' : state.filter === 'unassigned' ? 'No hay conversaciones esperando responsable.' : 'Todavía no hay conversaciones. Las consultas reales del chat web y de WhatsApp aparecerán acá.') : '');
     $('list-state').hidden = !$('list-state').textContent;
   }
   async function loadList({ more = false } = {}) {
     const seq = ++state.listSeq;
     const offset = more ? state.threads.length : 0;
-    const queries = Array.from({ length: more ? 1 : state.listPages }, (_, index) => new URLSearchParams({ filter: state.filter, channel: state.channel, search: state.search, number: state.channel === 'web' ? '' : state.number, offset: text(more ? offset : index * 50), limit: '50' }));
+    const queries = Array.from({ length: more ? 1 : state.listPages }, (_, index) => new URLSearchParams({ filter: state.filter, channel: state.channel, source:$('prospect-source').value, search: state.search, number: state.channel === 'web' ? '' : state.number, offset: text(more ? offset : index * 50), limit: '50' }));
     if (more) $('load-list').disabled = true;
     try {
       const pages = await Promise.all(queries.map(query => api(`/list?${query}`))); if (seq !== state.listSeq) return;
@@ -409,6 +418,8 @@ function start() {
       const all = more ? [...state.threads, ...incoming] : incoming;
       state.threads = [...new Map(all.map(thread => [text(thread.key), thread])).values()];
       if (more) state.listPages = Math.max(1, Math.ceil(state.threads.length / 50));
+      const sync=result.prospects_sync;
+      $('prospect-sync').textContent=$('prospect-source').value==='all'?'':sync?.lead?.ok===false||sync?.cart?.ok===false?'Hay contactos que requieren revisión; la sincronización volverá a intentarlo.':sync?.lead?.through&&sync?.cart?.through?`Datos del sitio: ${[sync.lead.through,sync.cart.through].sort()[0]} · cada 15 min`:'La sincronización de contactos todavía no está confirmada.';
       state.listMore = Boolean(result.more); state.lastListError = ''; renderList();
       for (const counter of document.querySelectorAll('[data-count]')) { const value = result.counts?.[counter.dataset.count]; counter.textContent = Number.isFinite(Number(value)) && value != null ? text(value) : ''; }
     } catch (error) { if (seq === state.listSeq) { state.lastListError = `No se pudo actualizar la bandeja. ${error.message}`; renderList(); } throw error; }
@@ -464,13 +475,20 @@ function start() {
     catch (error) { state.statusReady = false; $('connection-summary').textContent = 'No se pudo confirmar el estado de los canales'; renderThreadBadges(); throw error; }
   }
   async function selectThread(key) {
-    if (state.selected === key && state.thread) { $('workspace').classList.add('has-selection'); scheduleRead(); return; }
+    if (state.selected === key && state.thread) { $('workspace').classList.add('has-selection'); await claimOpenedThread(key); scheduleRead(); return; }
     saveText(); stopAudioResources(); state.selectionEpoch++; state.threadSeq++; state.selected = key; state.thread = null; state.relatedWeb = []; state.messages = []; state.messageNodes.clear(); state.more = false; state.historyLoading = false; state.mode = 'reply';
     $('workspace').classList.add('has-selection'); $('welcome').hidden = true; $('thread-view').hidden = false; $('messages').replaceChildren(); $('history-state').textContent = 'Cargando historial…'; $('contact-name').textContent = nameOf(state.threads.find(thread => text(thread.key) === key)); $('contact-meta').textContent = '';
-    $('thread-badges').replaceChildren(); $('ownership').textContent = ''; $('web-context').hidden = true; $('copy-phone').disabled = true;
+    $('thread-badges').replaceChildren(); $('ownership').textContent = ''; $('web-context').hidden = true; $('prospect-context').hidden=true; $('copy-phone').disabled = true;
     setNotice('thread-notice', ''); restoreComposer(); renderPermissions(); renderList(); renderPending();
-    try { await loadThread({ initial: true }); if (state.selected === key) $('contact-name').focus({ preventScroll: true }); }
+    const openingEpoch = state.selectionEpoch; state.openingEpoch = openingEpoch;
+    try { await loadThread({ initial: true }); if (state.selected === key && state.selectionEpoch === openingEpoch) { await claimOpenedThread(key); if (state.selected === key && state.selectionEpoch === openingEpoch) $('contact-name').focus({ preventScroll: true }); } }
     catch (error) { if (state.selected === key) { $('history-state').textContent = 'No se pudo cargar el historial.'; setNotice('thread-notice', error.message, 'critico'); } }
+    finally { if (state.openingEpoch === openingEpoch) state.openingEpoch = null; }
+  }
+  async function claimOpenedThread(key) {
+    if (state.selected !== key || state.thread?.key !== key || !shouldClaimOnOpen(state.actor, state.thread, state.operations.has(key))) return;
+    await runOperation(key, {phase:'command', state:'pending', payload:{key, request_id:uuid(), revision:state.thread.revision, action:'open'}});
+    if (state.selected === key) scheduleRead();
   }
   let readTimer, readBusy = false, preferredWidth = null;
   function scheduleRead() {
@@ -479,6 +497,7 @@ function start() {
   }
   async function acknowledgeRead() {
     const history = $('history');
+    if (state.thread?.owner_id !== state.actor?.id || state.operations.has(state.selected)) return;
     const boundary = readBoundary(state.messages, { role: state.actor?.role, visible: !document.hidden && !document.querySelector('dialog[open]'),
       selected: $('workspace').classList.contains('has-selection') && !state.historyLoading,
       atBottom: history.scrollHeight - history.clientHeight - history.scrollTop < 90, unread: state.thread?.unread });
@@ -496,7 +515,7 @@ function start() {
       }
       await loadList();
     } catch {
-      if (state.selected === key && state.selectionEpoch === epoch) announce('No se pudo confirmar la lectura. El chat conserva su estado pendiente hasta volver a intentarlo.');
+      if (state.selected === key && state.selectionEpoch === epoch) announce('No se pudo confirmar la lectura. El aviso de mensajes nuevos se conserva hasta volver a intentarlo.');
     } finally { readBusy = false; }
   }
   const divider = $('inbox-divider');
@@ -542,7 +561,7 @@ function start() {
   $('history').addEventListener('scroll', scheduleRead, { passive: true });
 
   async function loadThread({ initial = false, older = false } = {}) {
-    const key = state.selected; if (!key || state.historyLoading) return;
+    const key = state.selected; if (!key || state.historyLoading || (!initial && state.openingEpoch === state.selectionEpoch)) return;
     const epoch = state.selectionEpoch; const seq = ++state.threadSeq;
     const query = new URLSearchParams({ key });
     if (older) { const before = oldestMessageId(state.messages); if (!before || state.historyLoading) return; state.historyLoading = true; query.set('before', before); $('load-older').disabled = true; }
@@ -560,6 +579,7 @@ function start() {
         history = reconcileHistoryPage(state.messages, incoming, { ...pagination, earlierExists: Array.isArray(probe.messages) && probe.messages.length > 0 });
       }
       if (!state.thread || Number(result.thread.revision) >= Number(state.thread.revision)) state.thread = result.thread;
+      if (!older) renderProspects(document.getElementById('prospect-context'),result.prospects||[]);
       if (!older && Array.isArray(result.related_web)) state.relatedWeb = result.related_web;
       state.messages = history.messages; state.more = history.more;
       reconcileOperation(key);
@@ -590,8 +610,9 @@ function start() {
   }
   function renderThreadBadges() {
     const thread = state.thread; if (!thread) return;
-    const ia = aiStateLabel(thread, state.statusReady ? { numbers: state.numbers, web: state.web } : null);
+    const ia = threadChannel(thread)==='lead'?'Ficha de contacto':aiStateLabel(thread, state.statusReady ? { numbers: state.numbers, web: state.web } : null);
     const badges = [chip(channelLabel(thread)), chip(thread.status === 'closed' ? 'Cerrada' : 'Abierta'), chip(ia)];
+    for(const item of thread.prospect_origins||[]) badges.push(chip(originLabel(item.origin)));
     for (const label of Array.isArray(thread.labels) ? thread.labels : []) badges.push(chip(typeof label === 'string' ? label : label.name || label.label || ''));
     $('thread-badges').replaceChildren(...badges);
   }
@@ -611,7 +632,7 @@ function start() {
     const web = threadChannel(state.thread) === 'web'; const canAttach = mediaAllowed(state.thread);
     for (const action of ['take', 'transfer', 'release', 'close', 'reopen', 'pause', 'resume']) {
       const visible = action === 'take' ? access.take : action === 'transfer' ? access.manage && !closed : action === 'release' ? access.manage && Boolean(state.thread?.owner_id) : action === 'close' ? access.manage && !closed : action === 'reopen' ? access.control && closed : action === 'pause' ? access.control && !state.thread?.bot_paused : access.control && !closed && Boolean(state.thread?.bot_paused);
-      $(action).hidden = !visible; $(action).disabled = pending || state.recordingPhase !== 'idle';
+      $(action).hidden = !visible || threadChannel(state.thread)==='lead' && ['pause','resume'].includes(action); $(action).disabled = pending || state.recordingPhase !== 'idle';
     }
     const note = state.mode === 'note'; const canCompose = note ? access.note : access.send;
     $('reply-mode').setAttribute('aria-pressed', text(!note)); $('note-mode').setAttribute('aria-pressed', text(note)); $('note-mode').disabled = !access.write;
@@ -938,7 +959,7 @@ function start() {
     if (action === 'send') return operation.template_preview ? `Plantilla: ${operation.template_preview}` : `${operation.payload.text || ''}${operation.payload.media_id ? '\nArchivo adjunto' : ''}`.trim();
     if (action === 'forward') return `Reenviar: ${operation.forward_preview || 'Mensaje o archivo seleccionado'}`;
     if (action === 'note') return `Nota privada: ${operation.payload.text}`;
-    return { take: 'Tomar conversación', transfer: 'Transferir conversación', release: 'Liberar conversación', close: 'Cerrar conversación', reopen: 'Reabrir conversación', pause: 'Pausar IA', resume: 'Reanudar IA' }[action] || 'Cambio en la conversación';
+    return { open: 'Asignarte la conversación al abrirla', take: 'Tomar conversación', transfer: 'Transferir conversación', release: 'Liberar conversación', close: 'Cerrar conversación', reopen: 'Reabrir conversación', pause: 'Pausar IA', resume: 'Reanudar IA' }[action] || 'Cambio en la conversación';
   }
   function renderPending() {
     const operation = state.operations.get(state.selected); const box = $('pending-operation'); box.hidden = !operation;
@@ -977,7 +998,7 @@ function start() {
       if (result.message) { const wasEmpty = state.messages.length === 0; state.messages = mergeMessages(state.messages, [result.message]); if (wasEmpty) $('history-state').textContent = ''; }
       if (operation.snapshot === $('message-input').value && (operation.payload.action === 'send' && state.mode === 'reply' || operation.payload.action === 'note' && state.mode === 'note')) $('message-input').value = draft[state.mode];
       renderThread(); renderMessages(); renderPending();
-      setNotice('thread-notice', ['send','forward'].includes(operation.payload.action) ? 'Mensaje registrado. Su estado de entrega aparece en el historial.' : operation.payload.action === 'note' ? 'Nota privada guardada.' : 'Conversación actualizada.', 'ok');
+      setNotice('thread-notice', operation.payload.action === 'open' ? (result.thread?.owner_id === state.actor?.id ? 'Conversación a tu cargo. La encontrás en Mías y Todas.' : result.thread?.status === 'closed' ? 'La conversación está cerrada; podés consultar el historial.' : `La está atendiendo ${result.thread?.owner_name || 'otro operador'}. Se conserva su asignación.`) : ['send','forward'].includes(operation.payload.action) ? 'Mensaje registrado. Su estado de entrega aparece en el historial.' : operation.payload.action === 'note' ? 'Nota privada guardada.' : 'Conversación actualizada.', 'ok');
     }
     persist(); announce(['send','forward'].includes(operation.payload.action) ? 'Mensaje registrado.' : 'Operación confirmada.');
   }
@@ -1244,9 +1265,11 @@ function start() {
   let searchTimer;
   $('search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.search = $('search').value.trim(); resetList(); }, 350); });
   $('channel').addEventListener('change', () => { state.channel = $('channel').value; state.number = ''; $('number').value = ''; $('number-field').hidden = state.channel === 'web'; $('number').disabled = state.channel === 'web' || !state.numbers.some(number => number.number_id); resetList(); });
+  $('prospect-source').addEventListener('change',()=>{state.channel='all';state.number='';$('channel').value='all';$('number').value='';$('number-field').hidden=false;resetList();});
   $('number').addEventListener('change', () => { state.number = $('number').value; if (state.number) { state.channel = 'whatsapp'; $('channel').value = 'whatsapp'; } resetList(); });
   function resetList() { $('source-summary').textContent = state.channel === 'web' ? 'Chat web' : state.number ? `WhatsApp · ${$('number').selectedOptions[0]?.textContent || 'Número seleccionado'}` : state.channel === 'whatsapp' ? 'WhatsApp · Todos los números' : 'Todos los canales y números'; state.listSeq++; state.listPages = 1; state.threads = []; state.listMore = false; state.lastListError = ''; $('thread-list').replaceChildren(); $('list-state').hidden = false; $('list-state').textContent = 'Buscando conversaciones…'; loadList().catch(() => {}); }
-  $('filters').addEventListener('click', event => { const button = event.target.closest('[data-filter]'); if (!button || button.dataset.filter === state.filter) return; state.filter = button.dataset.filter; for (const tab of $('filters').querySelectorAll('button')) tab.setAttribute('aria-pressed', text(tab === button)); resetList(); });
+  $('filter-help').textContent = filterHelp(state.filter);
+  $('filters').addEventListener('click', event => { const button = event.target.closest('[data-filter]'); if (!button || button.dataset.filter === state.filter) return; state.filter = button.dataset.filter; $('filter-help').textContent = filterHelp(state.filter); for (const tab of $('filters').querySelectorAll('button')) tab.setAttribute('aria-pressed', text(tab === button)); resetList(); });
   $('load-list').addEventListener('click', () => loadList({ more: true }).catch(() => {}));
   $('load-older').addEventListener('click', () => loadThread({ older: true }).catch(error => setNotice('thread-notice', error.message, 'critico')));
   $('back').addEventListener('click', () => { saveText(); stopAudioResources(); $('workspace').classList.remove('has-selection'); $('inbox').focus({ preventScroll: true }); });
