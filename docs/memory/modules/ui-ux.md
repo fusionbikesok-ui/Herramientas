@@ -1,10 +1,10 @@
+# UI, UX y pruebas de navegador
+
 ## Usuarios y permisos del VPS — publicado 2026-10-15
 
 Usuarios agrupa las aplicaciones del VPS, accesos externos y herramientas existentes; permite buscar sin perder casillas seleccionadas. Cada permiso binario explica las acciones incluidas. Ventas, stock y reposición, alertas, clientes/pedidos, Andreani, corrector PDF y consulta del taller tienen controles independientes. La configuración de alertas no aparece con sólo permiso de consulta de stock.
 
 POS y Facturador son accesos a WordPress: sus casillas sólo habilitan los enlaces y no otorgan permisos dentro de la tienda. Inicio y Gestión VPS reflejan los permisos efectivos, con comprobación adicional en el servidor. El permiso de supervisión de Mensajería también permite encontrar su tarjeta de inicio.
-
-# UI, UX y pruebas de navegador
 
 ## Operación vigente POS y ARCA — regreso a la web, 2026-10-06
 
