@@ -1,3 +1,9 @@
+## Permisos de aplicaciones del VPS — publicado 2026-10-15
+
+`integrations/management-migration/permissions.mjs` define el catálogo compartido por Usuarios y el gateway independiente. Los permisos se almacenan en `user_permisos`; no requieren migración ni asignación automática. El gateway lee `/api/auth/me` en cada petición, clasifica el destino ya validado y deniega a usuarios comunes cualquier ruta sin clasificación. Conserva firmas, CSRF, Origin y bloqueos de operaciones trasladadas a WordPress. Rechaza parámetros de despacho repetidos, combinaciones ambiguas y claves/separadores que PHP interpretaría de forma distinta a Node.
+
+`routes/usuarios.js` sincroniza transaccionalmente los permisos de Mensajería con `mensajeria_roles` y audita cambios en `mensajeria_roles_audit`; protege al último supervisor. Un rol explícito anterior ya no contradice lo que se guarda desde Usuarios.
+
 # Arquitectura y contratos internos
 
 ## Hechos durables

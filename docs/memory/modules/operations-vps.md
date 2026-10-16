@@ -1,3 +1,11 @@
+## Permisos de aplicaciones del VPS — publicado 2026-10-15
+
+Desarrollo y pruebas aislados en `/opt/fusion-permissions-20261015/repo`; publicación autorizada y aplicada el 2026-10-15. Respaldo por archivo: `/opt/fusion-permissions-20261015/backup/20261016T011025Z`. Se verificaron 17 archivos, se recargaron Herramientas y su gateway, y la comprobación pública confirmó salud 200, sesión anónima 401 y rechazo 403 en nueve accesos para la cuenta limitada de pruebas. Sin migración ni cambios de permisos en cuentas productivas. Se incorporan `gestion-ventas`, `gestion-stock`, `gestion-alertas`, `gestion-clientes`, `gestion-andreani`, `pdf-etiquetas` y `gestion-taller`, más los enlaces `acceso-pos-web` y `acceso-facturador-web`. Ninguna cuenta recibe permisos nuevos automáticamente; los administradores conservan el acceso general.
+
+La comprobación del 2026-10-16 preservó una actualización posterior de `taller`, `garantias` y sus tarjetas; el proceso activo cargó el catálogo de 27 controles y mantiene los nueve accesos de este cambio.
+
+El runtime `/opt/fusion-management-migration` necesita `permissions.mjs`, `gateway.mjs` y `home.html` sincronizados con `integrations/management-migration`. Herramientas importa ese catálogo desde `lib/permisos.js`. La aplicación efectiva se valida por petición; revocar o desactivar no requiere nuevo login. No cambia Nginx ni se habilita el POS/ARCA del VPS. Copia por archivo y verificación de hashes antes de publicar para preservar tareas concurrentes. Rollback sólo de código; no restaurar una base vieja después de cambios de permisos.
+
 # Operación del VPS y despliegue
 
 ## Recuperación de Sombra — 2026-10-15
@@ -328,7 +336,7 @@ docker exec fusion-pg-pg-1 psql -U postgres -d plataforma -c \
 
 - 2026-10-05: Por cambio solicitado, Andreani Observaciones ahora usa Pedido #<número visible Woo> en lugar del título. Aplicado permanentemente en la aplicación VPS al abrir borradores nuevos/existentes, guardar y generar nuevos Excel. Retira el antiguo título automático sólo como segmento completo, preserva aclaraciones de entrega y no duplica el número; menciones de productos dentro de frases manuales se conservan. 42 aserciones PHP y verificación XML de Observaciones; clasificación automática de bultos y medidas manuales conservadas. Archivos ya generados permanecen históricos; plantilla de sucursal sigue sin columna de observaciones. Fuentes en integrations/management-migration/andreani/worker.php.
 
-- 2026-10-05: Corrector de etiquetas PDF publicado en Home/Gestión: `/herramientas/gestion-vps/corregir-etiquetas/`, requiere sesión administrador y Origin/CSRF. Entrada y salida editables (peso Gr, ancho/alto/largo Cm), enteros positivos hasta 6 dígitos en peso y 4 en medidas; valores habituales 9000/20/30/40 → 15000/25/70/150 y botón restaurar. Coincidencia conjunta exacta por página; no modifica pedidos ni registros de Andreani. Conserva fuentes/imágenes; ajusta ancho de líneas largas. Vista paginada, impresión al100% y descarga. Regla JSON X-Fusion-Pdf-Rule validada por gateway/Python; sin cabecera aplica habituales para clientes anteriores. Campos bloqueados durante corrección/impresión; cambiar invalida resultado. PDF en memoria sin historial,10MiB/300páginas. Worker loopback8213 autenticado, unidad `fusion-pdf-corrector.service`, fuente `/opt/fusion-pdf-corrector`; gateway `/opt/fusion-management-migration`, guía y pruebas en `integrations/management-migration/README-PDF.md`, pypdf6.10.0/PDF.js5.6.205 locales. Impresora física no probada. Actualización manual con backup /opt/fusion-management-migration/backups/pdf-manual-20261005T193419Z. Home, nginx y aplicación principal sin cambios.
+- 2026-10-05: Corrector de etiquetas PDF publicado en Home/Gestión: `/herramientas/gestion-vps/corregir-etiquetas/`, requiere sesión administrador y Origin/CSRF. Entrada y salida editables (peso Gr, ancho/alto/largo Cm), enteros positivos hasta 6 dígitos en peso y 4 en medidas; valores habituales 9000/20/30/40 → 15000/25/70/150 y botón restaurar. Coincidencia conjunta exacta por página; no modifica pedidos ni registros de Andreani. Conserva fuentes/imágenes; ajusta ancho de líneas largas. Vista paginada, impresión al100% y descarga. Regla JSON X-Fusion-Pdf-Rule validada por gateway/Python; sin cabecera aplica habituales para clientes anteriores. Campos bloqueados durante corrección/impresión; cambiar invalida resultado. Entrada en memoria; desde 2026-10-15 la salida tiene historial persistente (ver sección Historial de PDF). Límites 10MiB/300páginas. Worker loopback8213 autenticado, unidad `fusion-pdf-corrector.service`, fuente `/opt/fusion-pdf-corrector`; gateway `/opt/fusion-management-migration`, guía y pruebas en `integrations/management-migration/README-PDF.md`, pypdf6.10.0/PDF.js5.6.205 locales. Impresora física no probada. Actualización manual con backup /opt/fusion-management-migration/backups/pdf-manual-20261005T193419Z. Home, nginx y aplicación principal sin cambios.
 
 - 2026-10-05: Ranking del Panel de ventas publicado en /herramientas/gestion-vps/ventas/. Carga inicial de últimos 12 meses, períodos rápidos, rankings paginados de productos y marcas por unidades o importe, participación y selección de una marca a sus modelos; comparación de varias marcas y filtros conservados al cambiar de período, incluso sin movimientos. Sólo cambiaron metrics.html, assets/metrics.js y assets/metrics.css; backend, cálculo, caché, sesión y CSV existentes conservados. 13 pruebas Node aprobadas; revisión real de carga automática, septiembre 2026, marca a productos, comparación múltiple, SKU, orden, período vacío y recuperación de filtros; 390/768/1440 px sin desborde del documento y sin errores de consola. Exportador real con la consulta generada en navegador: FB-63080, Venzo, 3 líneas, ARS 2.400.510, igual al panel. Los 30 archivos de runtime fuera del alcance conservaron su hash, incluidos Andreani y el corrector PDF. Sin reiniciar servicios. Respaldo: /opt/fusion-management-migration/backups/ranking-20261005T193115Z-535c3e. Para revertir, restaurar únicamente los tres archivos originales de ese respaldo; fuentes en integrations/management-migration y prueba ranking.test.cjs.
 
@@ -880,6 +888,20 @@ respetando ediciones posteriores; nunca restaurar conversaciones/colas anteriore
 Rama de archivo: codex/inbox-autoopen-20261015. Pruebas con datos ficticios y cero
 mensajes de prueba enviados a clientes.
 
+## Historial de PDF corregidos — 2026-10-15
+
+El corrector guarda cada salida exitosa antes de informar éxito: PDF y metadatos en una transacción SQLite FULL. Original entrante sólo en memoria; reglas y operador de sesión quedan en el registro. Nombres repetidos crean UUID distintos. Sin borrado automático ni recuperación retroactiva. StateDirectory=fusion-pdf-corrector, DB privada /var/lib/fusion-pdf-corrector/history.sqlite3 (DynamicUser, directorio0700, DB0600, físico /var/lib/private). Incluir la DB mediante SQLite backup en copias operativas; no guardar en Git.
+
+GET/HEAD history y files/<uuid> bajo /herramientas/gestion-vps/corregir-etiquetas/ requieren administrador vigente. Búsqueda literal por nombre, fecha argentina inclusiva, 20 registros por página. Corrección y descarga comparten un cupo de memoria; HEAD sólo metadatos. Reserva de disco512MiB más3x archivo; fallo de guardado no devuelve éxito. Timeout proceso32s, espera SQLite3s, proxy43s, nginx45s, cliente55s. Ante resultado incierto revisar historial.
+
+Publicación limitada a gateway/worker/activos PDF y StateDirectory. No cambia nginx, Home ni app principal. Respaldo /opt/fusion-management-migration/backups/pdf-history-20261015-b507a6; paquete y rollback.py /opt/fusion-management-migration/pdf-stage-20261015-history-b507a6. Rollback restaura código/unidad y reinicia sólo gateway/worker; preserva siempre DB y nuevos registros. Fuentes y pruebas en integrations/management-migration/README-PDF.md. La prueba vieja pos-bridge.test.mjs falla también en baseline (pos frente a pos-prepare); no declarar suite global verde ni modificar POS por este cambio.
+
+Vista por días ajustada: HOY abierto al comienzo del panel, anteriores plegables, sin buscador en pantalla; carga progresiva con días completos y UUID deduplicados. Sólo pdf-view.mjs y assets/pdf-corrector.js/.css; backend, DB y worker conservados. Backup /opt/fusion-management-migration/backups/pdf-history-days-20261015-bf31; revertir sólo archivos respaldados y reiniciar gateway.
+
+Botón «Imprimir todos los de HOY»: consulta fresca del día argentino, descarga secuencial autenticada y todas las páginas en un único diálogo, respetando tamaños. Conserva los archivos históricos y la impresión individual. Deshabilitado sin archivos; progreso y cancelación en el propio grupo. Sólo imprime si todos los PDFs se preparan correctamente; afterprint, pagehide y cancelación liberan recursos. QA con tres archivos y 48 páginas, exclusión de ayer y archivo dañado sin impresión parcial; sin impresión física.
+Sólo assets/pdf-corrector.js/.css y pdf-render.mjs; sin reiniciar servicios, sin cambios de API/DB/worker. Límites de grupo: 60 MiB, 300 páginas y 64 megapíxeles; escala hasta 200 dpi antes del máximo de 3000 px por lado, tamaño físico conservado. Backup /opt/fusion-management-migration/backups/pdf-print-today-20261015-c24b; rollback sólo de estos activos y documentación, nunca del historial.
+
+
 ## Limpieza de desarrollo y QA — 2026-10-15
 
 Por autorización del usuario se retiraron 4 instalaciones anteriores de VS Code remoto, una caché de descargas y 8 copias antiguas de Herramientas usadas en QA.
@@ -924,3 +946,48 @@ Correcciones de revisión previas a fusionar: el barrido liviano selecciona sól
 Estas correcciones pertenecen al candidato Git y todavía no están en el worker r4. Su eventual despliegue requiere artefacto acotado, pruebas y verificación operativa propios. Se conservan los criterios de 24–48 horas y siete días verdes para aceptar E1.
 
 Validación de la integración: tipos, suites raíz y plataforma y regresiones de revisión correctas. Evidencia reproducible: `docs/superpowers/evidence/e1/2026-10-16-integracion-prs.md`. La fusión de Git no cambia el worker r4 ni acepta E1.
+
+## Mensajería — disponibilidad y lectura de pendientes (2026-10-15)
+
+Esta regla reemplaza el criterio «pendiente hasta la toma humana» descrito arriba.
+Pendientes (filter=unread por compatibilidad) contiene chats abiertos con mensajes
+de cliente sin leer, incluso asignados, y contactos comerciales activos sin asignar
+cuyo imported_at sea posterior al acuse inbox_read_at. Sin asignar conserva su
+criterio independiente por owner_id. Historial importado y mensajes revocados no
+generan pendientes. Abrir explícitamente conserva la asignación automática vigente;
+leer o responder retira el pendiente, sin eliminar su historial ni origen comercial.
+La respuesta de IA no acusa lectura humana. Un echo válido de WhatsApp Business
+acusa sólo entradas anteriores a su timestamp; las posteriores quedan sin leer.
+
+POST /read-all requiere administrador general y rol supervisor derivados de sesión,
+CSRF y firma HMAC. Acusa todos los pendientes de todos los canales y números. Usa
+UUID idempotente, límite de mensaje capturado por conversación, bloqueo compartido
+y auditoría. Conserva nuevas entradas, responsables, estado, revisión y política IA;
+no envía recibos ni mensajes al cliente. La migración añade inbox_read_at nullable;
+no limpia pendientes históricos automáticamente. Matías dispone del botón para ello.
+
+Al cargar Mensajería, agentes/supervisores registran available antes de mostrar
+Disponible. La selección manual Ocupado/No disponible se respeta durante refrescos.
+Heartbeat en segundo plano mientras el navegador permite ejecutar la pestaña;
+la presencia expira según el TTL existente si la pestaña deja de comunicar.
+
+Release fusion-chatbot-attention:20261015 en API/worker/outbox y archivos específicos
+de Mensajería en Herramientas. Respaldo verificado y rollback en
+/opt/fusionbikes/backups/mensajeria-attention-20261015; paquete en
+/opt/fusion-inbox-attention-20261015. Rollback de archivos/imagen, conservando columna
+aditiva y datos nuevos. No restaurar un dump sobre conversaciones/colas activas.
+Configuración y permisos IA conservados. Pruebas con datos ficticios, sin mensajes
+de prueba a clientes ni lectura masiva de producción durante QA.
+Para readiness de Herramientas se usa GET /api/mensajeria/bootstrap sin sesión
+(401 esperado); /healthz ejecuta PRAGMA integrity_check síncrono y puede bloquear
+el proceso durante el escaneo, por lo que no debe usarse en sondeos repetidos.
+
+## Integración Git de Sombra completada — 2026-10-16
+
+PR38, PR45 y PR42 quedaron fusionados en ese orden. Commits de merge: `233b2e37`, `446e7254` y `d357ce74`. El árbol final de master coincide exactamente con el candidato validado en `/opt/fusionbikes/worktrees/codex-sombra-integracion-20261016`.
+
+La revisión agregó protección de variantes Woo con baja propia o estado deleted heredado; validación de IDs/checkpoints de mensajes; y selección sólo de señales activas. Los 404 individuales del barrido no bloquean el control diario ni alteran señales: los reintentos y su agotamiento siguen a cargo del consumidor. Las señales terminales requieren replay explícito.
+
+Validación: 1.083 pruebas de plataforma, 4.642 de raíz y 104 de migración aprobadas; tipos, 73 regresiones focalizadas y 27 fichas documentales correctos. Las omisiones declaradas por las suites se conservaron. Evidencia pública: `docs/superpowers/evidence/e1/2026-10-16-integracion-prs.md` en master.
+
+Esta integración no despliega. Comprobado al terminar: mismos contenedores, imágenes, fechas de inicio y reinicios de worker/API/scheduler/PostgreSQL, mismo hash del override y mismo HEAD productivo `1cf751f4`; Herramientas conserva PID 180268 y salud operativa correcta. El worker r4 continúa en ejecución; las correcciones nuevas de revisión aún necesitan publicación controlada. No hacer un pull indiscriminado en producción: hay trabajo ajeno y componentes todavía fuera del alcance de Sombra. Se preservan captura futura y cupos E2/E3 en cero; E1 sigue pendiente de estabilidad sostenida y siete días verdes.
