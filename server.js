@@ -53,6 +53,7 @@ import { backfillVentas } from './lib/criticidad.js';
 import { incidentesRouter } from './routes/incidentes.js';
 import { abrirOActualizarIncidente, confirmarCicloSano, procesarAlertasEmailIncidentes } from './lib/incidentes.js';
 import { revisarBackupNube, revisarBackupPostgres } from './lib/vigiaBackup.js';
+import { revisarDrift } from './lib/vigiaDrift.js';
 import { anunciarVigilanteApagado, revisarInformeDelDia } from './lib/vigilanteInformes.js';
 import { devicesRouter } from './routes/devices.js';
 import { notificationsRouter } from './routes/notifications.js';
@@ -1037,6 +1038,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       cron.schedule('17 * * * *', () => { revisarBackupNube(app._db); });
       // Vigía de PostgreSQL (E0 nivel 1): archivado de WAL y backup verificado; inactivo hasta desplegarlo.
       cron.schedule('2-59/5 * * * *', () => { revisarBackupPostgres(app._db); });
+      // Vigía de deriva VPS ↔ git: lee estado-drift.json que deja el cron diario drift-vps-cron.sh.
+      cron.schedule('32 * * * *', () => { revisarDrift(app._db); });
 
       cron.schedule('0 5 * * *', () => {
         backfillVentas(app._db, syncCfg)
