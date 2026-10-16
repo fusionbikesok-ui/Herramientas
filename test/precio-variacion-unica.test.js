@@ -44,7 +44,7 @@ function montar(ruta, extra = {}) {
   const scripts = scriptsDe(ruta);
   const principal = scripts.reduce((a, b) => (b.length > a.length ? b : a));
   vm.runInContext(principal.replace('Api.installAuth();', ''), sandbox);
-  return { sandbox, posts };
+  return { sandbox, posts, els };
 }
 
 describe('precios: aplicar objetivos en lote', () => {
@@ -73,6 +73,21 @@ describe('precios: aplicar objetivos en lote', () => {
   });
 });
 
+describe('precios: grupo mixto (simple + variación del mismo ítem)', () => {
+  for (const orden of [['MLA1', 'MLA1|11'], ['MLA1|11', 'MLA1']]) {
+    it(`un solo pedido al ítem con el máximo (orden ${orden.join(' , ')})`, async () => {
+      const t = montar('./public/precios/index.html');
+      const precios = { MLA1: 90000, 'MLA1|11': 70000 };
+      t.sandbox.__obj = Object.fromEntries(orden.map((k) => [k, { clave: k, precio: precios[k], delta: 1 }]));
+      t.sandbox.__claves = orden;
+      vm.runInContext("OBJ=__obj; SEL={}; __claves.forEach(function(k){SEL[k]=true}); cargar=async function(){}; estado=function(){}; refrescarBarra=function(){};", t.sandbox);
+      await vm.runInContext('aplicarObjetivos()', t.sandbox);
+      await esperar();
+      expect(t.posts).toEqual([{ url: '/api/precios/actualizar-precio-item', body: { itemId: 'MLA1', precio: 90000 } }]);
+    });
+  }
+});
+
 describe('sync-ml: aplicarPlan', () => {
   async function aplicar(plan, respuestas) {
     const t = montar('./public/sync-ml/index.html', { respuestas });
@@ -80,8 +95,10 @@ describe('sync-ml: aplicarPlan', () => {
     vm.runInContext('planPrecios=__plan; cargar=async function(){};', t.sandbox);
     await vm.runInContext('aplicarPlan()', t.sandbox);
     await esperar();
+    posts = t.posts; ultimaBanda = t.els['#bandmsg'].innerHTML;
     return t.posts;
   }
+  let posts, ultimaBanda;
   const fila = (clave, precio) => ({ clave, item_id: clave.split('|')[0], precio });
 
   it('una sola variación va por /actualizar-precio-item y la reactivación recibe el item_id', async () => {
@@ -105,5 +122,23 @@ describe('sync-ml: aplicarPlan', () => {
       { '/api/precios/actualizar-precio-item': () => json(400, { ok: false, error: 'Found different prices' }) },
     );
     expect(posts.some((p) => p.url === '/api/sync/reactivar')).toBe(false);
+    expect(ultimaBanda).toContain('No se pudieron corregir 2');
+  });
+
+  for (const orden of [[fila('MLA1', 90000), fila('MLA1|11', 70000)], [fila('MLA1|11', 70000), fila('MLA1', 90000)]]) {
+    it(`grupo mixto (${orden.map((f) => f.clave).join(' , ')}): una sola escritura al ítem con el máximo`, async () => {
+      const p = await aplicar(orden);
+      expect(p.filter((x) => x.url.includes('actualizar-precio'))).toEqual([
+        { url: '/api/precios/actualizar-precio-item', body: { itemId: 'MLA1', precio: 90000 } },
+      ]);
+      expect(p.find((x) => x.url === '/api/sync/reactivar').body.itemIds).toEqual(['MLA1']);
+    });
+  }
+
+  it('grupo mixto con error: las dos filas quedan fallados y no se reactiva', async () => {
+    const p = await aplicar([fila('MLA1', 90000), fila('MLA1|11', 70000)],
+      { '/api/precios/actualizar-precio-item': () => json(400, { ok: false, error: 'rechazo' }) });
+    expect(p.some((x) => x.url === '/api/sync/reactivar')).toBe(false);
+    expect(ultimaBanda).toContain('No se pudieron corregir 2');
   });
 });

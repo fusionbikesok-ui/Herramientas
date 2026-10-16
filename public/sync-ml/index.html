@@ -441,19 +441,20 @@ async function verPlan(){
 async function aplicarPlan(){
   if(!planPrecios||!planPrecios.length||corriendo)return;
   corriendo=true;
-  // ML exige el mismo precio para todas las variaciones de una publicación: las claves 'ITEM|VARIACION' van en un solo
-  // pedido por ítem con el precio más alto del grupo (aunque haya una sola); las simples, una por una.
+  // ML exige el mismo precio para todas las variaciones de una publicación. Se agrupa TODO por ítem: si alguna clave del
+  // grupo es 'ITEM|VARIACION' se hace un solo pedido al ítem con el precio más alto (nunca dos escrituras al mismo ítem);
+  // si no, una clave simple va sola. Un error marca fallado a todo el grupo y no se reactiva.
   var lista=planPrecios, aplicados=[], fallados=[], grupos={}, tareas=[];
   lista.forEach(function(x){
-    var esVar=String(x.clave).indexOf('|')>=0, id=esVar?'v:'+x.item_id:'s:'+x.clave;
-    if(!grupos[id]){grupos[id]={esVar:esVar,itemId:x.item_id,filas:[]};tareas.push(grupos[id]);}
+    var id=x.item_id||String(x.clave).split('|')[0];
+    if(!grupos[id]){grupos[id]={itemId:id,filas:[]};tareas.push(grupos[id]);}
     grupos[id].filas.push(x);
   });
   for(var i=0;i<tareas.length;i++){
     band('warn','Aplicando precios: '+(i+1)+' de '+tareas.length+'…');
-    var t=tareas[i];
+    var t=tareas[i], esVar=t.filas.some(function(f){return String(f.clave).indexOf('|')>=0});
     try{
-      if(t.esVar){
+      if(esVar){
         var max=Math.max.apply(null,t.filas.map(function(f){return f.precio}));
         await leerJson(await fetch('/api/precios/actualizar-precio-item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemId:t.itemId,precio:max})}));
       }else{

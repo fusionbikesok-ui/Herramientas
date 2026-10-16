@@ -532,7 +532,7 @@ function agruparPorPublicacion(claves){
   });
   return orden.map(function(id){
     var g=grupos[id], max=Math.max.apply(null,g.precios), min=Math.min.apply(null,g.precios);
-    return {itemId:g.itemId,claves:g.claves,precio:max,distintos:max!==min,esVariacion:String(g.claves[0]).indexOf('|')>=0};
+    return {itemId:g.itemId,claves:g.claves,precio:max,distintos:max!==min,esVariacion:g.claves.some(function(k){return String(k).indexOf('|')>=0;})};
   });
 }
 
