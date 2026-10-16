@@ -1,0 +1,54 @@
+# Lo que corre en /opt/fusion-management-migration y NO es código: secretos, estado y artefactos.
+.env
+.env.*
+*.env
+.task-owner
+node_modules/
+vendor/
+__pycache__/
+*.pyc
+
+# Secretos y claves
+*secret*
+*keyring*
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Bases, logs, paquetes y respaldos
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+*.zip
+*.gz
+*.bak
+*.bak.*
+backups/
+data/
+downloads/
+directory-cache/
+test-tmp/
+
+# Estado de runtime
+run.lock
+*.lock
+status.json
+*-stage-*/
+*-stage/
+
+# Registros de operaciones y evidencia de pruebas del VPS (ver PR: decisión pendiente)
+*-release.json
+verification.json
+pos-v3-proof-intent.json
+andreani-package-correction.json
+alerts/alert_config.json
+alerts/deployment-manifest.json
+home-navigation/
+releases/
+delivery-qa/
+
+# Excepciones: archivos ya versionados que el patrón de arriba alcanzaría
+!worker/pypdf-vendor.zip
