@@ -4,7 +4,7 @@ import fs from 'node:fs';
 vi.mock('../lib/mlClient.js', () => ({ mlFetch: vi.fn(), bootstrapToken: vi.fn(), getAccessToken: vi.fn() }));
 import { mlFetch } from '../lib/mlClient.js';
 import { openDb } from '../db/index.js';
-import { procesarCambios, UMBRAL_PAUSA_MASIVA } from '../lib/vigiaPausado.js';
+import { procesarCambios, UMBRAL_PAUSA_MASIVA, MOTIVO_REINCIDENTE } from '../lib/vigiaPausado.js';
 
 const TEST_DB = './test/vigia-pausado.sqlite';
 const CFG = { clientId: 'x', clientSecret: 'y', redirectUri: 'z' };
@@ -503,6 +503,78 @@ describe('vigiaPausado', () => {
       expect(incidente().estado).toBe('resuelto');
       await procesarCambios(db, CFG, [cambio(3)]);
       expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato' AND estado='activo'").get().n).toBe(1);
+    });
+  });
+
+  describe('reincidente revisada: 2+ pausas del vigía revisadas por una persona en 30 días → solo aviso', () => {
+    const hace = (dias) => new Date(Date.now() - dias * 86400e3).toISOString();
+    // Una pausa del vigía ya revisada. Las filas de una misma corrida comparten detectado_en: dos fechas = dos pausas.
+    function pausaRevisada(item, { dias = 5, por = 'jose', n = 1 } = {}) {
+      for (let k = 0; k < n; k++) {
+        db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, sku, campo, valor_anterior, valor_nuevo, pausada, detectado_en, revisado_en, revisado_por)
+          VALUES (?,?,?,?,?,?,1,?,?,?)`).run(`${item}|`, item, 'FB-R', 'UNITS_PER_PACK', '1', '6', hace(dias + k), hace(dias + k - 0.5), por);
+      }
+    }
+    const ultima = (item) => db.prepare('SELECT * FROM ml_publicacion_cambios WHERE item_id=? ORDER BY id DESC LIMIT 1').get(item);
+
+    it('con 1 pausa revisada pausa igual', async () => {
+      pausaRevisada('MLA1', { n: 1 });
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r).toMatchObject({ pausadas: 1, avisos_reincidentes: 0 });
+      expect(mlFetch).toHaveBeenCalled();
+    });
+
+    it('con 2 pausas revisadas queda como aviso: no pausa, solo_aviso=1 y el motivo reincidente', async () => {
+      pausaRevisada('MLA1', { n: 2 });
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r).toMatchObject({ pausadas: 0, avisos_reincidentes: 1, omitidos_por_umbral: 0, errores: 0 });
+      expect(mlFetch).not.toHaveBeenCalled();
+      expect(ultima('MLA1')).toMatchObject({ pausada: 0, solo_aviso: 1, pausa_error: MOTIVO_REINCIDENTE, revisado_en: null });
+      expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato'").get().n).toBe(0);
+    });
+
+    it('si las revisadas son de hace más de 30 días, pausa', async () => {
+      pausaRevisada('MLA1', { dias: 40, n: 2 });
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r).toMatchObject({ pausadas: 1, avisos_reincidentes: 0 });
+    });
+
+    it('las revisadas por vigia-auto no cuentan', async () => {
+      pausaRevisada('MLA1', { por: 'vigia-auto', n: 3 });
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r).toMatchObject({ pausadas: 1, avisos_reincidentes: 0 });
+    });
+
+    it('es por publicación: otra publicación no hereda el historial', async () => {
+      pausaRevisada('MLA1', { n: 2 });
+      const r = await procesarCambios(db, CFG, [cambio(1), cambio(2)]);
+      expect(r).toMatchObject({ pausadas: 1, avisos_reincidentes: 1 });
+    });
+
+    it('sin stock sigue como hoy: se registra como sin stock aunque sea reincidente', async () => {
+      pausaRevisada('MLA1', { n: 2 });
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA1|','MLA1','','x','paused','out_of_stock',0,datetime('now'))`).run();
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r).toMatchObject({ sin_stock: 1, avisos_reincidentes: 0 });
+      expect(ultima('MLA1').bloquea_reactivador).toBe(1);
+    });
+
+    it('el aviso reincidente no cuenta para el tope y no traba el cierre del incidente', async () => {
+      pausaRevisada('MLA1', { n: 2 });
+      pausaRevisada('MLA2', { n: 2 });
+      // UMBRAL publicaciones normales + 2 reincidentes: sin las reincidentes está justo en el tope, no lo excede.
+      const lote = [...Array.from({ length: UMBRAL_PAUSA_MASIVA }, (_, i) => cambio(200 + i)), cambio(1), cambio(2)];
+      const r = await procesarCambios(db, CFG, lote);
+      expect(r).toMatchObject({ pausadas: UMBRAL_PAUSA_MASIVA, omitidos_por_umbral: 0, avisos_reincidentes: 2 });
+      const inc = () => db.prepare("SELECT estado FROM incidentes_operativos WHERE proceso='vigia_formato'").get().estado;
+      expect(inc()).toBe('activo');
+      // Revisadas las pausas reales, las dos filas reincidentes (sin revisar, solo_aviso) no traban el cierre.
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose' WHERE pausada = 1 AND revisado_en IS NULL").run();
+      expect(db.prepare('SELECT COUNT(*) n FROM ml_publicacion_cambios WHERE revisado_en IS NULL').get().n).toBe(2);
+      await procesarCambios(db, CFG, []);
+      expect(inc()).toBe('resuelto');
     });
   });
 });
