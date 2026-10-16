@@ -242,7 +242,7 @@ def _grounded_catalog_reply(
     introduction = (
         "Sí, te paso algunas opciones:"
         if available else
-        "Encontré estas opciones, pero no tengo stock confirmado:"
+        "Estas son las opciones del catálogo; todavía falta confirmar su disponibilidad:"
     )
     blocks = [greeting + introduction]
 

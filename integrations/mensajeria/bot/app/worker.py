@@ -69,11 +69,28 @@ def _decision_for(
     text: str,
     conversation: dict[str, Any],
     department: str,
+    external_id: str = '',
+    revision: int | None = None,
 ) -> BotDecision:
     from .handoff_contact import finalize_handoff
     history = recent_messages(key, 40)
     def finish(decision):
         return finalize_handoff(decision, text, history, conversation)
+    from .routing import explicit_handoff
+    if explicit_handoff(text):
+        return finish(BotDecision('Te derivo con un asesor para continuar con tu consulta.',True,department,'Atención humana solicitada','normal'))
+    from .invoice_flow import invoice_decision
+    invoice = invoice_decision(text, history, conversation, key)
+    if invoice is not None:
+        return finish(invoice)
+    from .tracking_flow import tracking_decision
+    tracking = tracking_decision(text, history, conversation, key)
+    if tracking is not None:
+        return finish(tracking)
+    from .sales_engine import run as sales_reply
+    seller=sales_reply(text,history,conversation,key,external_id,revision)
+    if seller is not None:
+        return finish(seller) if seller.reply else seller
     catalog_lookup_ok = False
     if text.startswith("[") and "recibid" in text.lower():
         return finish(_fallback(department, "El cliente envió un archivo que requiere revisión humana"))
@@ -114,6 +131,7 @@ def _decision_for(
                 len(products),
                 round((time.monotonic() - catalog_started) * 1000),
             )
+    history=[dict(row,body='[Respuesta anterior con importes: consultar cotización actual]') if row.get('sender')=='bot' and any(cue in str(row.get('body','')).lower() for cue in ('$', 'cuotas', 'cbu', 'alias')) else row for row in history]
     try:
         active_prompt = get_active_prompt_version()
         direct = fast_catalog_decision(text, products, department, speed_profile, history=history, catalog_lookup_ok=catalog_lookup_ok)
@@ -136,6 +154,8 @@ def _decision_for(
             speed_profile,
             round((time.monotonic() - ai_started) * 1000),
         )
+        from .payment_answers import guard_model_reply
+        decision=guard_model_reply(decision)
         return finish(decision)
     except Exception as exc:
         logger.exception("AI generation failed for conversation %s", key)
@@ -218,7 +238,7 @@ def _reply_web(payload: dict[str, Any], key: str, conversation: dict[str, Any], 
         message={
             "external_id": external_id,
             "sender": "bot",
-            "agent_name": "Fabri IA",
+            "agent_name": "Matías IA",
             "text": decision.reply,
             "status": "sent",
         },
@@ -237,7 +257,7 @@ def _reply_web(payload: dict[str, Any], key: str, conversation: dict[str, Any], 
         key=key,
         external_id=external_id,
         sender="bot",
-        agent_name="Fabri IA",
+        agent_name="Matías IA",
         body=decision.reply,
         metadata={"handoff": decision.handoff, "reason": decision.reason},
     )
@@ -264,7 +284,7 @@ def process_web_message(payload: dict[str, Any]) -> str:
         conversation.update(customer_phone=current.get('customer_phone') or '', customer_name=current.get('customer_name') or '')
         message = payload.get('message') or {}
         text = str(message.get('text') or '').strip()
-        decision = _decision_for(key=key,text=text,conversation=conversation,department=department_for(conversation,text))
+        decision = _decision_for(key=key,text=text,conversation=conversation,department=department_for(conversation,text),external_id=external_id,revision=revision)
         enqueue_ai(key,web_source_id(message),revision,decision)
         return 'done'
     if payload.get("_deferred_reply"):
@@ -289,7 +309,44 @@ def _reply_whatsapp(payload: dict[str, Any], key: str, conversation: dict[str, A
         return
     text = str(message.get("text") or "").strip()
     department = department_for(conversation, text)
-    decision = _decision_for(key=key, text=text, conversation=conversation, department=department)
+    kind = str(message.get('type') or 'text')
+    from .media_context import related_attachment
+    linked=related_attachment(key,str(message.get('external_id') or '')) if kind=='text' else None
+    target_id=str(message.get('external_id') or '')
+    if linked:kind=linked['kind'];target_id=linked['external_id'];text=linked['caption']
+    from .routing import explicit_handoff
+    if explicit_handoff(text):
+        from .handoff_contact import finalize_handoff
+        decision=finalize_handoff(BotDecision('Te derivo con un asesor para continuar con tu consulta.',True,department,'Atención humana solicitada','normal'),text,recent_messages(key,40),conversation)
+        enqueue_ai(key,'bot:'+str(payload.get('event_id') or ''),revision,decision)
+        return
+    decision = None
+    media_revision = None
+    if kind in ('image','audio'):
+        from .multimedia import read_attachment,image_decision
+        from .multimedia_config import MultimediaError
+        try:
+            result=read_attachment(key,target_id,revision,kind,**({'anchor_external_id':str(message.get('external_id') or '')} if linked else {}))
+            media_revision=result['config_revision']
+            if ai_revision(key,str(message.get('external_id') or ''))!=revision:return
+            if kind=='audio':
+                text=result['text']+('\n'+text if linked else '')
+                department=department_for(conversation,text)
+            else:decision=image_decision(result,department,text if linked or not text.startswith('[') else '')
+        except Exception as exc:
+            if isinstance(exc,MultimediaError) and str(exc)=='multimedia_in_progress':
+                if linked and int(payload.get('_media_wait',0))<12:
+                    _defer_reply(dict(payload,_media_wait=int(payload.get('_media_wait',0))+1),5)
+                return
+            if isinstance(exc,MultimediaError) and str(exc)=='multimedia_cancelled':return
+            if ai_revision(key,str(message.get('external_id') or ''))!=revision:return
+            from .handoff_contact import finalize_handoff
+            decision=finalize_handoff(_fallback(department,'No se pudo interpretar el archivo; requiere revisión humana'),text,recent_messages(key,40),conversation)
+    if decision is None:
+        decision = _decision_for(key=key, text=text, conversation=conversation, department=department,external_id=str(message.get('external_id') or ''),revision=revision)
+    if media_revision is not None:
+        from .multimedia_config import read_config
+        if read_config()['revision']!=media_revision:return
     enqueue_ai(key, "bot:" + str(payload.get("event_id") or ""), revision, decision)
 
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Respaldo diario de Mensajería a las 10:00 de Argentina
+
+[Timer]
+OnCalendar=*-*-* 10:00:00 America/Argentina/Buenos_Aires
+Persistent=true
+RandomizedDelaySec=60
+Unit=fusion-mensajeria-drive.service
+
+[Install]
+WantedBy=timers.target

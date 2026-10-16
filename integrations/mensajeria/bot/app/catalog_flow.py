@@ -12,7 +12,7 @@ MORE={'mas','ver mas','mostrame mas','mostrar mas','mostrame otras','otras opcio
 OTHER_BRANDS=re.compile(r'\b(?:otra|otras)\s+marcas?\b')
 NO_MORE={'no','no gracias','no por ahora','por ahora no','no gracias por ahora','no gracias ya esta','no hace falta','por el momento no'}
 YES={'si','si quiero','si mostrame','dale','bueno'}
-NOISE=NOISE | set('estan esta tendras ofrecerme alguna alguno algunos algunas interesa gusta prefiero mejor tengo necesito cuento presupuesto maximo pesos ars mas otras otros tambien'.split())
+NOISE=NOISE | set('estan esta tendras ofrecerme alguna alguno algunos algunas interesa gusta prefiero mejor tengo necesito cuento presupuesto maximo pesos ars mas otras otros tambien mira queria quisiera saber consultar preguntar si disponible disponibles'.split())
 HORN_QUESTION='¿Buscás los puños con cuernitos integrados o los cuernitos que se agregan al manubrio?'
 SIZE=r'(xxxs|xxs|xs|s|m|l|xl|xxl|xxxl|\d{2})'
 
@@ -82,12 +82,18 @@ def _parse(raw,brands,existing=None,types=TYPES):
         except (ValueError,InvalidOperation):pass
     size_match=re.search(r'\b(?:talle|talla)\s+'+SIZE+r'\b',value)
     bare_size=re.fullmatch(r'(?:(?:en|busco|quiero|necesito)\s+)?'+SIZE,value)
-    size=(size_match or bare_size)
+    # A short stock follow-up refines the current product, never a new identity.
+    size_follow=None
+    if existing:
+        size_follow=re.fullmatch(r'(?:(?:tenes|tienen|hay|hay stock|queda|quedan)\s+(?:en\s+)?)?'+SIZE+r'(?:\s+(?:tenes|tienen|hay|hay stock|queda|quedan))?',value)
+        if not size_match and re.fullmatch(r'(?:talle|talla)\s+mediano',value):
+            value='talle m';size_match=re.search(r'\b(?:talle|talla)\s+'+SIZE+r'\b',value)
+    size=(size_match or bare_size or size_follow)
     size=size.group(1).upper() if size else None
     color=[w for w in tokens if w in COLORS]
     work=_without_budget(value) if bounds else value
     if size_match:work=re.sub(r'\b(?:talle|talla)\s+'+SIZE+r'\b',' ',work)
-    elif bare_size:work=''
+    elif bare_size or size_follow:work=''
     feature=''
     feature_match=re.search(r'\b(?:con|tipo)\s+(.+)',work)
     if feature_match:
@@ -228,7 +234,13 @@ def _fields(p,v=None):
     return fields
 
 
-def _match(products,s):
+def _match(products,s,_verified=False):
+    # Filter identity/stock/size locally first; a budget must use actual web cash.
+    if s['bounds'] and not _verified and any(p.get('price_source')=='catalog_base_unverified' for p in products):
+        from .commercial_prices import hydrate
+        exact,partial=_match(products,dict(s,bounds=None),_verified=True)
+        verified=hydrate(exact+partial,strict=True)
+        return _match(verified,s,_verified=True)
     from .catalog_stock import available_product, confirmed_stock
     exact=[];partial=[]
     for p in products:
@@ -282,13 +294,15 @@ def _match(products,s):
 
 
 def _render(products,s,greeting,more=False,partial=False):
+    from .commercial_prices import hydrate
+    products=hydrate(products)
     scope=[]
     if s['bounds']:scope.append('dentro de tu presupuesto')
     if s['size']:scope.append('en talle '+s['size'])
-    intro='Te paso otras opciones' if more else 'Te paso lo que encontré con stock'
+    intro='Te paso otras opciones' if more else 'Te puedo ofrecer estas opciones'
     if not more and s.get('kind')=='bicicleta' and s.get('subtype') in {'ruta','mtb','gravel','ciudad'}:
         label={'ruta':'de ruta','mtb':'MTB','gravel':'de gravel','ciudad':'urbanas'}[s['subtype']]
-        intro='Te paso las bicicletas '+label+' que encontré con stock'
+        intro='Te puedo ofrecer estas bicicletas '+label
     blocks=[greeting+intro+(' '+', '.join(scope) if scope else '')+':']
     if partial:
         blocks.append('No tengo confirmado que estas versiones cumplan la característica que pediste ('+s['feature']+'). Necesitamos que un asesor revise ese detalle.')
@@ -299,7 +313,7 @@ def _render(products,s,greeting,more=False,partial=False):
             prices=[_money(v.get('display_price')) for v in variants]
             common=prices[0] if prices and all(x is not None and x==prices[0] for x in prices) else None
             ars=str(p.get('currency','')).upper()=='ARS'
-            if common is not None and ars:block.append('Precio publicado: '+_format(common))
+            if common is not None and ars:block.append('Contado / transferencia: '+_format(common))
             block.append('Con stock:')
             groups={}
             for v in variants:
@@ -337,7 +351,7 @@ def _child_reply(state,history,greeting):
             selected,_=_match(candidates,state)
             if selected:
                 blocks.append('Estas son las opciones con stock de la categoría. La medida adecuada todavía debe confirmarse:')
-                blocks.append(_render(selected,state,'').removeprefix('Te paso lo que encontré con stock:').lstrip())
+                blocks.append(_render(selected,state,'').removeprefix('Te puedo ofrecer estas opciones:').lstrip())
         except Exception:
             blocks.append('No pude confirmar el stock del catálogo en este momento.')
         blocks.append('Un asesor debe continuar para confirmar la medida con la guía del modelo y ayudarte a elegir.')
@@ -420,6 +434,17 @@ def _catalog_decision(text,history):
     use_partial=not exact and bool(partial) and bool(state['brands'] and state['identity'])
     matching=partial if use_partial else exact
     if not matching:
+        from .sales_availability import requested_model,availability,intro
+        request=requested_model(text,products)
+        if request:
+            report=availability(products,request['query'],state['size'] or '', ' '.join(state['color']))
+            if report['status']=='out_of_stock':
+                alternatives,_=_match(products,dict(state,identity=[request['family_query'].split()[-1]],selection=None))
+                alternatives=[p for p in alternatives if p['id'] not in report['product_ids']][:2]
+                if alternatives:
+                    cards=_render(alternatives,state,'').partition('\n\n')[2]
+                    return _answer(intro(report,True)+'\n\n'+cards,alternatives,reason='Modelo agotado; alternativa explícita')
+                return _answer(intro(report)+'\n\n¿Querés que veamos otro modelo?',reason='Modelo agotado confirmado')
         from .catalog_spelling import suggestions, QUESTION
         possible=suggestions(text,products)
         if len(possible)==1:
@@ -450,6 +475,9 @@ def catalog_decision(text,history,learning_config=None,conversation=None):
         return _answer('¿Me pasás el nombre completo o el enlace del producto que buscás?',reason='Aclarar producto después de sugerencia')
     from .learning import active_config, clean, interpret, transform_history
     config=clean(active_config() if learning_config is None else learning_config)
+    from .payment_answers import payment_decision
+    payment=payment_decision(text,history,conversation,config.get('business'),load_products)
+    if payment is not None:return payment,[]
     from .commercial_policy import commercial_decision
     commercial=commercial_decision(text,history,config.get('business'))
     if commercial is not None:return commercial
@@ -463,14 +491,20 @@ def catalog_decision(text,history,learning_config=None,conversation=None):
     business_result=business_decision(text,history,config.get('business'))
     if business_result is not None:return business_result
     from .inquiry_flow import inquiry_decision
-    inquiry_result=inquiry_decision(text,history,conversation,config.get('business'),load_products)
+    from .commercial_prices import QuoteScopeTooWide,QuoteUnavailable
+    try:inquiry_result=inquiry_decision(text,history,conversation,config.get('business'),load_products)
+    except QuoteScopeTooWide:return _answer('Para verificar precios dentro de tu presupuesto necesito acotar la búsqueda. ¿Qué marca, modelo o talle te interesa?',reason='Acotar cotización comercial')
+    except QuoteUnavailable:return _answer('No pude verificar los precios de contado de la web en este momento. Un asesor puede confirmarlos antes de avanzar.',reason='Cotización no disponible')
     if inquiry_result is not None:return inquiry_result
     interpreted,rule=interpret(text,config)
     if rule and rule['kind'] in {'ask','handoff'}:
         if rule['kind']=='ask':
             return _answer(rule['target'],reason='Pregunta aprobada en WooCommerce')
         return _answer('Necesitamos que un asesor revise tu consulta.',handoff=True,reason='Derivación aprobada en WooCommerce')
-    result=_catalog_decision(interpreted,transform_history(history,config))
+    from .commercial_prices import QuoteScopeTooWide,QuoteUnavailable
+    try:result=_catalog_decision(interpreted,transform_history(history,config))
+    except QuoteScopeTooWide:return _answer('Para comparar precios de contado dentro de tu presupuesto necesito acotar la búsqueda. ¿Qué marca, modelo o talle te interesa?',reason='Acotar cotización comercial')
+    except QuoteUnavailable:return _answer('No pude verificar los precios de contado de la web. No quiero descartar opciones de tu presupuesto usando un precio incorrecto. Un asesor puede confirmarlas.',reason='Cotización no disponible')
     if result is None and rule and rule['kind']=='search':
         return _answer('No pude resolver esa búsqueda con los datos disponibles. Necesitamos que un asesor la revise.',handoff=True)
     if result is None:

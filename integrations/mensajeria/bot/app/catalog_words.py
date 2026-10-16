@@ -4,6 +4,7 @@ from .routing import normalize
 
 ALIASES = {
  'rudy project':'rudyproject','rudy-project':'rudyproject','rudy':'rudyproject',
+ 'super caliber':'supercaliber',
  'rock shox':'rockshox','mountain bike':'mtb','mountainbike':'mtb','mountain':'mtb',
  'montana':'mtb','bicis':'bicicleta','bici':'bicicleta','bicicletas':'bicicleta',
  'carretera':'ruta','road bike':'ruta','roadbike':'ruta',

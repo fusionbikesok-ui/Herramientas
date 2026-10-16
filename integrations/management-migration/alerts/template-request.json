@@ -1,0 +1,30 @@
+{
+  "name": "fusion_resumen_reposicion_v1",
+  "language": "es_AR",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "HEADER",
+      "format": "TEXT",
+      "text": "Reposición · Fusion Bikes"
+    },
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}. Este es tu resumen de reposición del {{2}}, solicitado para Fusion Bikes.\nHay {{3}} productos nuevos o con menos stock dentro del listado crítico.\nDetalle: {{4}}\nConsultá el listado completo y coordiná la compra con el otro responsable:\nhttps://herramientas.fusionbikes.com.ar/herramientas/gestion-vps/ventas/stock/\nBase: ventas registradas de 90 días y cobertura menor a 15 días. Confirmá cantidades antes de comprar.",
+      "example": {
+        "body_text": [
+          [
+            "Matías",
+            "15/10/2026",
+            "3",
+            "Producto de ejemplo, talle M: stock 1, cobertura 10 días."
+          ]
+        ]
+      }
+    },
+    {
+      "type": "FOOTER",
+      "text": "Aviso interno de stock y reposición"
+    }
+  ]
+}

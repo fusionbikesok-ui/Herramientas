@@ -4,6 +4,9 @@ import base64
 import binascii
 import os
 import re
+import io
+import zipfile
+from xml.etree import ElementTree
 from urllib.parse import urlparse
 
 import httpx
@@ -16,6 +19,7 @@ TYPES = {
     'audio/mpeg': ('audio', '.mp3'), 'audio/ogg': ('audio', '.ogg'),
     'audio/mp4': ('audio', '.m4a'), 'audio/aac': ('audio', '.aac'),
     'video/mp4': ('video', '.mp4'),
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ('document', '.xlsx'),
 }
 
 
@@ -34,6 +38,42 @@ def decode_upload(encoded):
         return base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise MediaError('invalid_base64') from exc
+
+
+def validate_xlsx(content: bytes):
+    """Inspect the bounded OOXML package without extracting or executing its contents."""
+    if not content.startswith(b'PK\x03\x04'):
+        raise MediaError('media_signature_mismatch')
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            entries = archive.infolist()
+            if len(entries) > 2000 or sum(item.file_size for item in entries) > 100 * 1024 * 1024:
+                raise MediaError('document_too_complex')
+            names = [item.filename for item in entries]
+            if len(names) != len(set(names)):
+                raise MediaError('media_signature_mismatch')
+            for item in entries:
+                name = item.filename.replace('\\', '/').lower()
+                if item.flag_bits & 1 or name.startswith('/') or '..' in name.split('/'):
+                    raise MediaError('unsafe_document')
+                if name.endswith('vbaproject.bin') or any(part in name.split('/') for part in ('activex', 'embeddings', 'macrosheets')):
+                    raise MediaError('unsafe_document')
+            if '[Content_Types].xml' not in names or 'xl/workbook.xml' not in names:
+                raise MediaError('media_signature_mismatch')
+            entry = archive.getinfo('[Content_Types].xml')
+            if entry.file_size > 1024 * 1024:
+                raise MediaError('document_too_complex')
+            types = archive.read(entry)
+            if b'<!DOCTYPE' in types.upper() or b'<!ENTITY' in types.upper():
+                raise MediaError('unsafe_document')
+            root = ElementTree.fromstring(types)
+            workbook_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'
+            matches = [node for node in root if node.tag == '{http://schemas.openxmlformats.org/package/2006/content-types}Override'
+                       and node.attrib.get('PartName') == '/xl/workbook.xml' and node.attrib.get('ContentType') == workbook_type]
+            if not matches:
+                raise MediaError('media_signature_mismatch')
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, ElementTree.ParseError, RuntimeError, NotImplementedError, OSError, EOFError) as exc:
+        raise MediaError('media_signature_mismatch') from exc
 
 
 def validate_media(content: bytes, mime: str, name: str):
@@ -55,7 +95,9 @@ def validate_media(content: bytes, mime: str, name: str):
         'audio/mp4': len(data) >= 24 and data[4:8] == b'ftyp' and data[8:12] in {b'M4A ', b'M4B '},
         'video/mp4': len(data) >= 24 and data[4:8] == b'ftyp' and data[8:12] in {b'isom', b'iso2', b'mp41', b'mp42', b'avc1', b'M4V '},
     }
-    if not magic[mime]:
+    if mime == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+        validate_xlsx(data)
+    elif not magic[mime]:
         raise MediaError('media_signature_mismatch')
     # PDFs with active actions, embedded files or encryption are not accepted.
     if mime == 'application/pdf' and re.search(rb'/(JavaScript|JS|Launch|OpenAction|AA|EmbeddedFile|Encrypt|RichMedia)\b', data, re.I):
@@ -78,6 +120,8 @@ class CloudTransport:
             raise SendRejected('invalid_recipient')
         payload = {'messaging_product': 'whatsapp', 'recipient_type': 'individual', 'to': recipient,
                    'biz_opaque_callback_data': str(outbox_id)}
+        quoted=(message.get('metadata') or {}).get('reply_to_external_id')
+        if quoted:payload['context']={'message_id':str(quoted)}
         template_payload = None
         if message.get('kind') == 'template':
             from .inbox_templates import verified_template, TemplateError

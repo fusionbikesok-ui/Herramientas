@@ -103,13 +103,19 @@ def ingest(payload):
         conn.execute('''INSERT INTO messages(conversation_key,external_id,sender,agent_name,body,metadata,kind,media_id,delivery_status,created_at)
             VALUES(%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,COALESCE(%s,NOW()))''',
             (key, external_id, 'operator' if echo else 'customer', 'WhatsApp Business' if echo else None,
-             text or '[Mensaje sin texto]', json.dumps({'historical': historical, 'source_event_id': payload.get('event_id')}),
+             text or '[Mensaje sin texto]', json.dumps({'historical': historical, 'source_event_id': payload.get('event_id'), 'reply_external_id':str((raw.get('context') if isinstance(raw.get('context'),dict) else {}).get('id') or '')[:400], 'forwarded':(raw.get('context') if isinstance(raw.get('context'),dict) else {}).get('forwarded') is True or (raw.get('context') if isinstance(raw.get('context'),dict) else {}).get('frequently_forwarded') is True}),
              kind, media_id, str(message.get('status') or ('sent' if echo else 'received')), stamp))
         if historical:
             # Import must not open the 24-hour window or mutate existing owner/state.
             return key, False
         if echo:
-            conn.execute("UPDATE conversations SET bot_status='paused',revision=revision+1,updated_at=NOW() WHERE conversation_key=%s", (key,))
+            # Replies from the Business app acknowledge only preceding inbound
+            # messages; a delayed echo must not consume a newer customer message.
+            conn.execute("""UPDATE conversations SET bot_status='paused',revision=revision+1,updated_at=NOW(),
+                inbox_read_at=GREATEST(inbox_read_at,%s),unread=LEAST(unread,
+                (SELECT count(*) FROM messages WHERE conversation_key=%s AND sender='customer'
+                 AND created_at>COALESCE(%s,'-infinity'::timestamptz) AND COALESCE(metadata->>'historical','false')!='true'))
+                WHERE conversation_key=%s""", (stamp, key, stamp, key))
             audit(conn, key, app_actor, 'business_app_echo', {'external_id': external_id})
             return key, False
         conn.execute("""UPDATE conversations SET inbox_status='open',revision=revision+1,unread=unread+1,updated_at=NOW(),
@@ -147,8 +153,14 @@ def enqueue_ai(key, source_id, revision, decision):
             row = conn.execute("""UPDATE conversations SET customer_phone=COALESCE(NULLIF(%s,''),customer_phone),
                 context=context || %s::jsonb WHERE conversation_key=%s RETURNING *""",
                 (contact_phone,json.dumps({'handoff_reason':reason if decision.handoff else ''}),key)).fetchone()
-        queue_message(conn, row, {'id': 'system:fabri', 'name': 'Fabri IA'}, text,
-            is_ai=True, source_id=source_id, metadata={'handoff': decision.handoff, 'reason': decision.reason})
+        from .invoice_flow import queue_invoice
+        media_id = queue_invoice(conn, row, decision)
+        metadata = {'handoff': decision.handoff, 'reason': decision.reason}
+        order_id = getattr(decision, 'invoice_order', None)
+        if order_id is not None:
+            metadata['invoice_order'] = order_id
+        queue_message(conn, row, {'id': 'system:fabri', 'name': 'Matías IA'}, text,
+            media_id=media_id, is_ai=True, source_id=source_id, metadata=metadata)
         conn.execute('UPDATE conversations SET updated_at=NOW() WHERE conversation_key=%s', (key,))
         return True
 

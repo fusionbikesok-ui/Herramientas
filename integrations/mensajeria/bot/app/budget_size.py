@@ -114,7 +114,7 @@ def size_budget_decision(text, history):
             True, "ventas", "Sin variantes verificadas", "normal"
         ), []
 
-    blocks = [f"Sí, en talle {size} encontré estas opciones dentro de tu presupuesto:"]
+    blocks = [f"Sí, en talle {size} te puedo ofrecer estas opciones dentro de tu presupuesto:"]
     selected = []
     for _, p, variants in matches[:3]:
         details = []

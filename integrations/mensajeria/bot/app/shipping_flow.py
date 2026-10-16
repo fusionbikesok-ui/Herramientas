@@ -12,7 +12,12 @@ def shipping_decision(text, history, business):
     rows=list(history or [])
     if rows and role(rows[-1]) in {'customer','user'} and body(rows[-1]).strip()==text.strip():rows.pop()
     last=next((normalize(body(row)) for row in reversed(rows) if role(row) in {'bot','assistant'}),'')
+    timing=bool(re.search(r'\b(?:tarda\w*|demora\w*|plazos?|dias?|cuando|llega\w*|tiempo|fecha)\b',value))
+    postal=bool(re.search(r'\b(?:cp|codigo postal)\s*[:#-]?\s*[a-z]?\d{4}',value))
+    hypothetical=bool(re.search(r'\b(?:(?:si|de|antes de)\s+compr\w*|compro hoy|comprar hoy)\b',value))
+    contextual=bool(re.search(r'\b(?:envio|despacho|andreani|entrega)\b',last))
     shipping=bool(re.search(r'\b(?:envios?|enviar|envian|mandan|entregas?|despach\w*|andreani)\b',value))
+    shipping=shipping or (timing and (postal or hypothetical or contextual))
     assembly=bool(re.search(r'\b(?:semi\s*armad[ao]s?|armad[ao]s?|desarmad[ao]s?|armado|ensamblad[ao]s?)\b',value))
     # Wheelsets are assembled products, not bicycle shipping instructions.
     if re.search(r'\b(?:ruedas?|llantas?)\s+armad[ao]s?\b',value):assembly=False
@@ -30,26 +35,30 @@ def shipping_decision(text, history, business):
     b=business if isinstance(business,dict) and business.get('enabled') is True else {}
     sections=[];handoff=False
     if shipping:
-        exception=bool(re.search(r'\b(?:tierra del fuego|ushuaia|tolhuin)\b',normalize(relevant)))
-        if exception:
-            sections.append('Tierra del Fuego es una excepción: un asesor debe confirmar las condiciones de envío para ese destino.')
-            handoff=True
-        else:
-            from .business_info import business_decision
-            # Keep explicit amount questions intact; never treat a postcode as price.
-            cost_query=text if re.search(r'\b(?:cuanto|costo|cuesta|sale|valor|precio|cobran|gratis)\b',value) else 'costo de envio'
-            policy=business_decision(cost_query,rows,b) if b else None
-            if policy is None and b:policy=business_decision('costo de envio',[],b)
-            if policy:sections.append(policy[0].reply)
-            else:
-                sections.append('No tengo disponibles las condiciones de envío publicadas. Un asesor debe confirmarlas.')
-                handoff=True
-        if b.get('carrier'):sections.append('Enviamos por '+b['carrier']+'.')
-        cp=re.search(r'\b(?:cp|codigo postal)\s*[:#-]?\s*([A-Z]?\d{4}(?:[A-Z]{3})?)(?!\w)',relevant,re.I)
-        if cp:sections.append('Ya tengo el CP '+cp[1].upper()+'.')
-        if re.search(r'\b(?:tarda\w*|demora\w*|plazo|dias|cuando|llega\w*|tiempo)\b',normalize(relevant)):
+        timing=bool(re.search(r'\b(?:tarda\w*|demora\w*|plazos?|dias?|cuando|llega\w*|tiempo|fecha)\b',normalize(relevant)))
+        # Answer the delivery-time question first. Buying today is not dispatching today.
+        if timing:
             if b.get('delivery_info'):sections.append(b['delivery_info'])
-            else:sections.append('No tengo confirmado el plazo de entrega para esa compra; un asesor puede revisarlo.')
+            else:
+                sections.append('No tengo confirmado el plazo de entrega para esa compra; un asesor puede revisarlo.')
+                handoff=True
+        cost=bool(re.search(r'\b(?:costo|cuesta|sale|valor|precio|cobran|gratis)\b',value))
+        if not timing or cost:
+            exception=bool(re.search(r'\b(?:tierra del fuego|ushuaia|tolhuin)\b',normalize(relevant)))
+            if exception:
+                sections.append('Tierra del Fuego es una excepción: un asesor debe confirmar las condiciones de envío para ese destino.')
+                handoff=True
+            else:
+                from .business_info import business_decision
+                # Keep explicit amount questions intact; never treat a postcode as price.
+                cost_query=text if cost else 'costo de envio'
+                policy=business_decision(cost_query,rows,b) if b else None
+                if policy is None and b:policy=business_decision('costo de envio',[],b)
+                if policy:sections.append(policy[0].reply)
+                else:
+                    sections.append('No tengo disponibles las condiciones de envío publicadas. Un asesor debe confirmarlas.')
+                    handoff=True
+        if b.get('carrier'):sections.append('Enviamos por '+b['carrier']+'.')
     if assembly:
         if b.get('assembly_info'):sections.append(b['assembly_info'])
         else:

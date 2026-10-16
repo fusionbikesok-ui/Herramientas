@@ -49,10 +49,15 @@ def recover_interrupted():
 
 def run_once(transport=None):
     with connection() as conn:
-        candidates = conn.execute("SELECT id,conversation_key FROM inbox_outbox WHERE state='queued' ORDER BY created_at,id LIMIT 25").fetchall()
+        candidates = conn.execute("SELECT o.id,o.conversation_key,m.metadata->>'forward_source_key' AS source_key FROM inbox_outbox o JOIN messages m ON m.id=o.message_id WHERE o.state='queued' ORDER BY o.created_at,o.id LIMIT 25").fetchall()
         for candidate in candidates:
-            acquired = conn.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,171717)) AS held', (candidate['conversation_key'],)).fetchone()['held']
-            if not acquired:
+            keys=sorted({candidate['conversation_key'],candidate.get('source_key') or candidate['conversation_key']})
+            held=[]
+            for key in keys:
+                if not conn.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,171717)) AS held',(key,)).fetchone()['held']:break
+                held.append(key)
+            if len(held)!=len(keys):
+                for key in reversed(held):conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,171717))',(key,))
                 continue
             try:
                 with conn.transaction():
@@ -63,7 +68,8 @@ def run_once(transport=None):
                     message = conn.execute('SELECT * FROM messages WHERE id=%s', (out['message_id'],)).fetchone()
                     meta = message.get('metadata') or {}
                     is_template = message.get('kind') == 'template' and isinstance(meta.get('template'),dict) and meta.get('opt_in') is True and not out['is_ai'] and row['channel'] == 'whatsapp'
-                    reason = send_blocked(row, conn=conn, template=is_template)
+                    from .message_actions import reply_send_error
+                    reason = send_blocked(row, conn=conn, template=is_template) or reply_send_error(conn,row,message)
                     if message.get('kind') == 'template' and not is_template:
                         reason = 'invalid_template_message'
                     if out['is_ai'] and (not ai_allowed(conn, row) or row['revision'] != out['expected_revision']):
@@ -92,7 +98,7 @@ def run_once(transport=None):
                     finish(conn, out, 'sent', remote_id=remote_id)
                 return True
             finally:
-                conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,171717))', (candidate['conversation_key'],))
+                for key in reversed(held):conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,171717))',(key,))
     return False
 
 

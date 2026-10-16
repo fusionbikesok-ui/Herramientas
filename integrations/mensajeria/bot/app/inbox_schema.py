@@ -1,5 +1,20 @@
 """Additive inbox migration. Existing web-chat tables and rows remain intact."""
+from .inbox_prospects import TABLE_SQL, INDEX_SQL
+
 STATEMENTS = (
+    TABLE_SQL, INDEX_SQL,
+    """CREATE TABLE IF NOT EXISTS sales_ai_calls (
+        id BIGSERIAL PRIMARY KEY, message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        conversation_key TEXT NOT NULL REFERENCES conversations(conversation_key),
+        step INTEGER NOT NULL, state TEXT NOT NULL, reserved_microusd BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(message_id,step))""",
+    "CREATE INDEX IF NOT EXISTS sales_ai_calls_created_idx ON sales_ai_calls(created_at)",
+    """CREATE TABLE IF NOT EXISTS multimedia_jobs (
+        message_id BIGINT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+        conversation_key TEXT NOT NULL REFERENCES conversations(conversation_key),
+        kind TEXT NOT NULL, state TEXT NOT NULL, reserved_microusd BIGINT NOT NULL,
+        result JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""",
+    "CREATE INDEX IF NOT EXISTS multimedia_jobs_created_idx ON multimedia_jobs(created_at)",
     # PostgreSQL 16 supplies gen_random_uuid natively; defaults cover future
     # legacy inserts too. Existing rows are backfilled by this additive ALTER.
     "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS inbox_public_id UUID NOT NULL DEFAULT gen_random_uuid()",
@@ -18,6 +33,7 @@ STATEMENTS = (
     "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0",
     "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_inbound_at TIMESTAMPTZ",
     "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS unread INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS inbox_read_at TIMESTAMPTZ",
     "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS labels JSONB NOT NULL DEFAULT '[]'::jsonb",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'text'",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_id TEXT",

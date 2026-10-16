@@ -5,7 +5,7 @@ from typing import Any
 
 
 DEFAULT_PROMPT_CONFIG: dict[str, str] = {
-    "assistant_name": "Fabri IA",
+    "assistant_name": "Matías IA",
     "tone": (
         "Español de Argentina, claro, directo y cordial. Usar podés, tenés y querés. "
         "Emojis moderados y respuestas breves, orientadas a resolver o avanzar la compra."

@@ -10,7 +10,7 @@ from .query_spelling import distance
 
 
 QUESTION = '¿Te referís al producto «{}»?'
-_QUESTION = re.compile(r'^¿Te referís al producto «([^»\n]{1,200})»\?$')
+_QUESTION = re.compile(r'^(?:Para (?:confirmar disponibilidad|orientarte con el talle|revisar el equipamiento o dato técnico)\. )?¿Te referís (?:al producto |a )«([^»\n]{1,200})»\?$')
 _YES = {'si', 'si por favor', 'si gracias', 'exacto', 'correcto', 'esa', 'ese', 'dale'}
 _NO = {'no', 'no gracias', 'otra', 'otro'}
 _TOKEN = re.compile(r'https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+|\b[\w.-]+\b', re.I)

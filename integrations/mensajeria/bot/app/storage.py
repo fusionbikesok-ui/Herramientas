@@ -383,7 +383,11 @@ def recent_messages(key: str, limit: int = 16) -> list[dict[str, Any]]:
     with connection() as conn:
         rows = conn.execute(
             """
-            SELECT m.sender, m.agent_name, m.body, m.created_at
+            SELECT m.sender, m.agent_name,
+                CASE WHEN m.sender='customer' AND m.kind='audio'
+                    AND COALESCE(m.metadata->>'revoked','false')!='true' AND COALESCE(m.metadata->>'edited','false')!='true'
+                    THEN COALESCE(m.metadata->'media_reading'->>'text',m.body) ELSE m.body END AS body,
+                m.created_at
             FROM messages m JOIN conversations c ON c.conversation_key=m.conversation_key
             WHERE m.conversation_key=%s
               AND m.sender != 'note'

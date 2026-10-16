@@ -215,7 +215,7 @@ class WebTransport:
         result = _callback({'event_id':external_id,'event_type':'inbox_message',
             'conversation':conversation_payload(row),'inbox':state,
             'message':{'external_id':external_id,'sender':message['sender'],'agent_name':message.get('agent_name') or '',
-                'text':message['body'],'status':'sent'},
+                'text':__import__('app.message_actions',fromlist=['web_reply_text']).web_reply_text(message),'status':'sent'},
             'handoff':{'requested':meta.get('handoff') is True,'reason':str(meta.get('reason') or '')}})
         mid = result.get('message_id') if isinstance(result,dict) else None
         if not isinstance(result,dict) or result.get('ok') is not True or isinstance(mid,bool) or not str(mid or '').isdigit() or int(mid)<=0:
