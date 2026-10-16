@@ -66,7 +66,7 @@ export function crearRelectoresMl(dep: { transporte: TransporteCanal }): Record<
     {
       topic: 'ml.messages', versionKind: 'hash', id: /^[A-Za-z0-9_-]{1,128}$/,
       async releer(id) {
-        const r = await t.get(`/messages/${encodeURIComponent(id)}?tag=post_sale`);
+        const r = await t.get(`/messages/${encodeURIComponent(id)}?tag=post_sale`, { headers: { 'x-format-new': 'true' } });
         // ML documenta que un 404 puede ser temporal para este recurso y recomienda reintentar en segundos.
         if (r.status === 404) throw new ErrorBarridoReintentable(`HTTP_404 /messages/${id}`);
         return { tipo: 'recursos', recursos: [mensajeMl(r.body)] };

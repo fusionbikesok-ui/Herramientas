@@ -23,7 +23,7 @@
   `event_id`. Proyecta atómicamente `integration_events`, `inbox_items`, notificaciones por
   usuario con dispositivo activo y deliveries push; los handoffs se priorizan en el worker.
 - El programa canónico usa E0–E26 y está en `/opt/fusionbikes/herramientas/docs/superpowers/plan-maestro.md`; sus dependencias forman un DAG explícito y las fichas separadas prueban progreso.
-- E1 tramo 1 añade el paquete aislado `plataforma/`: Node 24 con TypeScript nativo, PostgreSQL, Fastify y `pg` con SQL explícito. API, worker y scheduler son procesos distintos de una misma imagen; todavía no reemplazan ni se conectan al runtime legacy en producción. Sus contratos públicos iniciales son `/api/v2/health` e `/api/v2/incidents` en `openapi/platform-v2.yaml`.
+- E1 añade `plataforma/`: Node 24 con TypeScript nativo, PostgreSQL, Fastify y `pg` con SQL explícito. API, worker y scheduler son procesos separados y la sombra está conectada al legado por recibos, señales y gateway GET. El legado conserva la autoridad operativa. Sus contratos públicos iniciales son `/api/v2/health` e `/api/v2/incidents` en `openapi/platform-v2.yaml`.
 - La API móvil de Preparación e Inventario vive bajo `/api/v1`, comparte servicios de negocio con
   el panel y nunca reutiliza rutas web autenticadas por cookies. Toda mutación reintentable exige
   idempotencia y toda edición concurrente, versión esperada con conflicto `409` sin sobrescritura.
@@ -31,6 +31,10 @@
 
 ## Decisiones vigentes
 
+- Decisión del 2026-10-15: conservar la captura de pedidos, envíos y demás corrientes sin consumidor para las entregas posteriores; no borrar sus pendientes ni marcarlos artificialmente como procesados. La frescura de captura y los errores de consumidores activos se evalúan por separado.
+- Recuperación de Sombra desplegada el 2026-10-15: una llamada individual por página y checkpoints separados de scan/bulk de ML permiten avanzar con cupo parcial; requiere el motor y la gestión de corridas reanudables, ausentes en la imagen heredada. El relector individual de mensajes envía `x-format-new: true`. Plan y validación en `docs/superpowers/plans/2026-10-15-recuperacion-sombra.md`. No implica aceptación de E1: faltan medición de capacidad y siete días verdes.
+- Compatibilidad de rollback: una imagen previa al checkpoint `fase: contenido` de items no puede reanudarlo. Con worker detenido, cerrar esas corridas incompletas sin bajas y reiniciar la vuelta completa desde cero antes de volver a la imagen anterior; conservar el cursor final previo y las observaciones.
+- El paginado de envíos conserva la pausa de 300 ms entre lecturas aunque cada envío tenga su propio checkpoint; dividir páginas no habilita ráfagas nuevas.
 - El alcance de cambios del programa vive en `docs/superpowers/deliveries/`; un plan auxiliar no altera el maestro ni una ficha.
 - Las especificaciones de diseño viven en `docs/superpowers/specs/`.
 - Vigencia, archivos, decisiones y progreso se enrutan desde `/opt/fusionbikes/herramientas/docs/superpowers/INDEX.md`.

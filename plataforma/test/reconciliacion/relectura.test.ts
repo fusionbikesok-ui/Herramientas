@@ -143,7 +143,7 @@ describe('E1-RER-01 relectura puntual por señal', () => {
     };
     const { w, llamadasMl } = worker({ [`/messages/${mensajeId}?tag=post_sale`]: { status: 200, body: mensaje } });
     await w.unaVuelta();
-    expect(llamadasMl).toEqual([`/messages/${mensajeId}?tag=post_sale`]);
+    expect(llamadasMl).toEqual([`/messages/${mensajeId}?tag=post_sale [x-format-new]`]);
     expect(await estado(id)).toMatchObject({ status: 'succeeded', error_detail: 'enqueued' });
     expect(await contar("select count(*) n from integrations.resource_observations where topic='ml.messages' and resource_id=$1", [mensajeId])).toBe(1);
     expect(await contar("select count(*) n from integrations.inbox_messages where topic='ml.messages' and source='signal_reread'", [])).toBe(1);
