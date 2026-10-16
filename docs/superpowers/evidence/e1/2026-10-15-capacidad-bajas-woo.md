@@ -1,5 +1,7 @@
 # Sombra: capacidad de barridos y bajas Woo — 2026-10-15
 
+Seguimiento posterior: [medición del 16/10 y worker r4](2026-10-16-seguimiento-capacidad.md). Los datos de despliegue siguientes describen r3 y conservan su contexto histórico.
+
 Continúa la [recuperación del 15/10](2026-10-15-recuperacion-sombra.md). Autorización: ajustar capacidad y corregir siete bajas Woo sin cambiar la operación comercial. E1 continúa **sin aceptación**: faltan medición sostenida de 24–48 horas y la campaña de siete días verdes.
 
 ## Cambio y validación
