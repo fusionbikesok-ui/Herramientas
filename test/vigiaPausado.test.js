@@ -551,14 +551,41 @@ describe('vigiaPausado', () => {
       expect(r).toMatchObject({ pausadas: 1, avisos_reincidentes: 1 });
     });
 
-    it('sin stock sigue como hoy: se registra como sin stock aunque sea reincidente', async () => {
+    const sinStockEnCache = (item) => db.prepare(`INSERT INTO ml_publicaciones_cache
+      (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+      VALUES (?,?,'','x','paused','out_of_stock',0,datetime('now'))`).run(`${item}|`, item);
+
+    it('reincidente sin stock: gana la reincidencia, queda como aviso y NO bloquea al reactivador', async () => {
       pausaRevisada('MLA1', { n: 2 });
-      db.prepare(`INSERT INTO ml_publicaciones_cache
-        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
-        VALUES ('MLA1|','MLA1','','x','paused','out_of_stock',0,datetime('now'))`).run();
+      sinStockEnCache('MLA1');
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r).toMatchObject({ avisos_reincidentes: 1, pausadas: 0 });
+      expect(ultima('MLA1')).toMatchObject({ solo_aviso: 1, pausa_error: MOTIVO_REINCIDENTE, bloquea_reactivador: 0, revisado_en: null });
+    });
+
+    it('NO reincidente sin stock: igual que hoy (sin stock, bloquea al reactivador)', async () => {
+      pausaRevisada('MLA1', { n: 1 });
+      sinStockEnCache('MLA1');
       const r = await procesarCambios(db, CFG, [cambio(1)]);
       expect(r).toMatchObject({ sin_stock: 1, avisos_reincidentes: 0 });
       expect(ultima('MLA1').bloquea_reactivador).toBe(1);
+    });
+
+    it('la ventana de 30 días mira solo detectado_en: detectadas hace 40 días y revisadas hace 5 NO cuentan', async () => {
+      for (const d of [40, 41]) {
+        db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, sku, campo, valor_anterior, valor_nuevo, pausada, detectado_en, revisado_en, revisado_por)
+          VALUES ('MLA1|','MLA1','FB-R','UNITS_PER_PACK','1','6',1,?,?,'jose')`).run(hace(d), hace(5));
+      }
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r).toMatchObject({ pausadas: 1, avisos_reincidentes: 0 });
+    });
+
+    it('reincidente + cambio de catálogo que sería migración: queda como reincidente, sin leer /products', async () => {
+      pausaRevisada('MLA1', { n: 2 });
+      const r = await procesarCambios(db, CFG, [cambioCat(1, { valor_anterior: 'MLA111', valor_nuevo: 'MLA222' })]);
+      expect(r).toMatchObject({ avisos_reincidentes: 1, migraciones_sin_pausa: 0, pausadas: 0 });
+      expect(mlFetch).not.toHaveBeenCalled();
+      expect(ultima('MLA1').pausa_error).toBe(MOTIVO_REINCIDENTE);
     });
 
     it('el aviso reincidente no cuenta para el tope y no traba el cierre del incidente', async () => {
