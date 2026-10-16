@@ -126,6 +126,8 @@ describe('contrato GET /pendientes', () => {
       'fecha', 'fecha_despacho', 'fecha_despacho_limite', 'estado_despacho', 'despacho_motivo',
       'shipment_limite_original', 'items', 'notas', 'numero_pedido',
       'preparacion_id', 'wc_order_id',
+      // Etiquetas en Preparación (2026-10-15).
+      'etiqueta_foto', 'falta_etiqueta',
     ].sort());
     expect(web.wc_order_id).toBe(900);
     expect(web.espejo_ml).toBe(false);
@@ -145,7 +147,9 @@ describe('contrato GET /pendientes', () => {
       'ml_order_id', 'pack_id', 'numero_pedido', 'preparacion_id',
       'substatus', 'wc_order_id', 'fecha_despacho_limite', 'estado_despacho', 'despacho_motivo',
       'shipment_limite_original',
+      'etiqueta_foto', 'falta_etiqueta', 'etiqueta_ml',
     ].sort());
+    expect(Object.keys(ml.etiqueta_ml)).toEqual(expect.arrayContaining(['elegible', 'motivo']));
     expect(ml.ml_order_id).toBe('ORD-ML-1');
     expect(ml.comprador).toBe('comprador_ml');
     expect(ml.logistic_type).toBe('self_service');

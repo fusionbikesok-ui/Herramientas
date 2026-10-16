@@ -19,6 +19,7 @@
 
 ## Línea base verificada
 
+- Seguimiento del 16/10: [capacidad, cambios concurrentes y reportes](../evidence/e1/2026-10-16-seguimiento-capacidad.md). Mensajes y envíos dentro de sus intervalos; siete bajas Woo resueltas y sin DLQ activas. Dos corridas fallaron durante la recreación de PostgreSQL y las siguientes terminaron. Worker r4 vigente, pendiente su observación sostenida; reporte del 15/10 rojo. No constituye aceptación ni habilita reducción de crons.
 - El legado Node/Express/SQLite sigue atendiendo producción; existe plan P1 auditado archivado.
 - Fotografía común: `docs/superpowers/audit-baseline-2026-09-13.md`. Al iniciar se debe refrescar con los mismos comandos y registrar fecha, commit y origen.
 - Toda diferencia entre Git, despliegue y base se registra como hallazgo bloqueante; no se rellena por inferencia.
@@ -436,7 +437,7 @@ Origen: `specs/2026-10-03-consolidacion-herramientas.md` (Fase E) y PM-189. Se a
 - **Webhooks primero, crons reducidos (no eliminados).** Un evento `items` de ML relee ese ítem, actualiza la caché, corre el Vigía y sincroniza el stock de esa clave; un evento `product` de Woo sincroniza ese SKU; ambos idempotentes. La relectura cumple `specs/ml-api-guia.md` y PM-179 (el webhook sólo crea la señal).
 - **Cada proceso conserva un barrido de control más espaciado** (p. ej. stock 10 min → 1 h; refresco de ML 15 min → 2 h más conciliación nocturna completa). El barrido **verifica y mide**: cuenta las diferencias que el webhook no cubrió, las corrige y avisa («se perdieron N avisos de ML hoy»); si son muchas, sube solo su frecuencia. Nunca se apaga un barrido de control.
 - **Cada cambio de frecuencia, de a uno:** evento en paralelo, una semana comparando evento contra barrido, recién entonces se baja la frecuencia. Verificación: por cada frecuencia que se baja, una semana con «diferencias encontradas» en 0 o explicada, y la alarma de avisos perdidos probada.
-- **Decisión de José pendiente en E1:** para las corrientes en sombra que la plataforma no consume (pedidos, envíos, preguntas; unos 4.800 `pending` desde el 17–18/09), consumirlas o dejar de guardarlas.
+- **Decisión de José del 15/10:** conservar la captura de corrientes sin consumidor para entregas futuras, con sus estados reales. Se distingue del atraso de los consumidores activos; no se borra ni se marca procesada para cerrar E1.
 - Contexto verificado el 2026-10-03: 31 crons (6 por minuto, «missed execution», 55 reinicios de pm2); en 7 días 8.273 webhooks de ml.items y 652 de woo.products en `integrations.inbox_messages`; el legado los usa sólo para pedidos.
 - **Alternativa descartada:** implementar el flujo de eventos como función nueva del legado: queda como requisito de E1 y de las entregas de stock, por PM-160.
 

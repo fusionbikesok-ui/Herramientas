@@ -1,0 +1,8 @@
+# Historial de PDF corregidos — 2026-10-15
+
+1. Cada corrección exitosa guarda el PDF de salida junto con nombre de origen, fecha/hora, usuario y regla aplicada antes de responder éxito. Se conserva entre recargas y reinicios; sin borrado automático. Los PDF de entrada siguen siendo temporales.
+2. SQLite privada en `/var/lib/fusion-pdf-corrector/history.sqlite3`, con PDF y metadatos en una misma transacción. Directorio systemd StateDirectory, permisos privados, límites actuales por archivo y reserva mínima de disco. Sin URL pública ni acceso de nginx al almacenamiento.
+3. Mismos permisos de administrador. Gateway valida sesión para listar y recuperar archivos; worker loopback exige HMAC también en sus rutas de historial. ID UUID, consultas parametrizadas, nombres normalizados y descarga Content-Disposition segura.
+4. Historial visible en el corrector, agrupado por día de Argentina (más reciente primero), búsqueda por nombre sin distinguir mayúsculas/acentos y filtros Desde/Hasta inclusivos. Paginación de 20 archivos. Cada fila muestra nombre, hora, páginas/cambios y botones Ver, Imprimir, Descargar. Reutiliza el visor y la impresión existentes.
+5. Probar persistencia tras reinicio, separación de días cerca de medianoche UTC, búsqueda/filtros, nombres peligrosos, privacidad, archivos idénticos con nombre repetido, errores de almacenamiento y descarga exacta; pruebas HTTP y responsive.
+6. Publicar con hashes de concurrencia y backup de código/unidad. Reiniciar sólo worker/gateway. Rollback restaura código y preserva todos los PDF guardados. Actualizar fuentes y memoria relacionada. El historial empieza con esta actualización; la versión anterior no guardaba archivos recuperables.

@@ -4,7 +4,7 @@
 
 La firma Woo quedó reparada conservando el secreto efectivo del proceso: `.env` usa comillas para que shell y dotenv lo interpreten igual. Webhooks 17–20 alineados y activos; pings autenticados 200. El monitor fue refrescado desde Woo y comprobó los ocho webhooks propios sin caídos ni ausentes. El ping prueba autenticación; la recuperación de entregas de negocio se verifica con tráfico natural, sin generar pedidos de prueba.
 
-Respaldo de la configuración de firma: `/opt/fusionbikes/backups/sombra-firma-2026-10-15T18-11-47-971Z`. Respaldo de PostgreSQL/configuraciones: `/opt/fusionbikes/backups/sombra-recuperacion-20261015`. Worker vigente desde las 23:19 UTC: `fusion-plataforma:sombra-capacidad-20261015-r3`, imagen `sha256:aa2f621cf5374d9b29a518952127b03878ce3628f52fd2caf2299c7d43f43bdf`. Deriva de r2 y cambia sólo el tratamiento de bajas Woo. Compose debe incluir `/opt/fusionbikes/plataforma-prod/sombra-worker.override.yml`; API/scheduler conservaron sus contenedores. Herramientas se reinició de forma controlada para cargar el reparto de cupos, con paridad verificada de las demás variables y salud posterior correcta. Evidencia: `docs/superpowers/evidence/e1/2026-10-15-capacidad-bajas-woo.md`; no implica aceptación de E1.
+Respaldo de la configuración de firma: `/opt/fusionbikes/backups/sombra-firma-2026-10-15T18-11-47-971Z`. Respaldo de PostgreSQL/configuraciones: `/opt/fusionbikes/backups/sombra-recuperacion-20261015`. Worker vigente verificado el 16/10 a las 14:22 UTC: `fusion-plataforma:sombra-mensajes-20261016-r4`, imagen `sha256:549542828674ab2966951bd6bbb1de3e17cb2fc024fe8ef17426b15bccd2acb1`, iniciado a las 14:05 UTC por otra sesión. Incorpora el adaptador liviano de PR42 y la corrección de restauración de hijas Woo de PR45, sobre la recuperación de PR38. Compose debe incluir `/opt/fusionbikes/plataforma-prod/sombra-worker.override.yml`. PostgreSQL/API/scheduler también fueron recreados el 16/10 alrededor de las 12:17 UTC; no afirmar que conservan los contenedores del 15/10. Cuotas efectivas verificadas sin cambios. El reporte firmado del 15/10 sigue rojo por faltantes históricos; las compensaciones terminaron y se conserva la evidencia. E1 continúa sin aceptación: se requiere observación sostenida de r4 y siete días verdes. Evidencia detallada en la rama de PR38: `docs/superpowers/evidence/e1/2026-10-16-seguimiento-capacidad.md`.
 
 Decisión de José: conservar la captura para consumidores futuros. La medición `scripts/ops/medir-recuperacion-sombra.sql` distingue esos pendientes sin intentos de los errores de consumidores activos. El reparto vigente mantiene 60 RPM globales: mensajes 30, envíos 20, publicaciones 4, pedidos 3, preguntas 2, reclamos 1; E2/E3 sigue en cero. Antes de siete días verdes falta confirmar capacidad sostenida durante 24–48 horas. No reducir crons para ocultar el atraso.
 
@@ -675,6 +675,210 @@ se pueden volver a descargar si fueran necesarios. Registro de la operación:
 
 Runtime `/opt/fusion-management-migration`, fuente `integrations/management-migration`, entrada en el Panel comercial existente. La nueva vista comparte el lector/caché comercial y lee catálogo por loopback autenticado; no agrega tareas de sincronización. Gateway `fusion-management-validation.service` conserva CPUQuota=25% y recibe drop-in `stock-report-memory.conf` con MemoryHigh=192M y MemoryMax=256M para el historial consolidado. Solamente ese servicio requiere reinicio; no cambia la app principal ni las bases. Respaldo previo por archivo y manifiesto en `/opt/fusion-management-migration/backups/stock-report-*`; para revertir, restaurar originales y retirar sólo los archivos nuevos enumerados en ese manifiesto (incluido drop-in), daemon-reload y reiniciar el gateway. No restaurar bases de datos.
 
+
+## Sincronización comercial de Mensajería (2026-10-14)
+
+Plugin independiente Fusion Mensajería Contactos expone POST /wp-json/fusion-chat/v1/prospects-export, sólo lectura y firmado con el puente Live Chat existente. Exporta campos permitidos de leads y carritos identificados, con paginación por ID y cursor temporal de la zona del sitio. VPS ejecuta python -m app.inbox_prospects en el contenedor api mediante fusion-mensajeria-prospects.timer cada 15 minutos. Lecturas de operadores consultan PostgreSQL local. Lock global y por fuente, identidad teléfono completo normalizado, clave única fuente/ID, solapamiento incremental de dos horas; un error no avanza el cursor de su fuente.
+
+Tabla aditiva inbox_prospect_sources conserva contexto comercial y estado. WhatsApp se vincula exclusivamente al número 2035; no se crean chats por registros inactivos sin conversación previa. Importación no crea mensajes recibidos, ventana de 24 horas, jobs de IA ni outbox. Contactos sólo email/teléfono inválido usan canal interno lead. El primer WhatsApp sigue requiriendo plantilla aprobada cuando no hay ventana y confirmación de autorización del contacto.
+
+Runtime /opt/fusion-chatbot; imagen fusion-chatbot-leads:20261014. Herramientas usa el proxy autenticado y controles de propiedad existentes. Respaldo y manifiesto /opt/fusionbikes/backups/mensajeria-leads-20261014. Para revertir: detener el timer y restaurar sólo los archivos/imágenes del manifiesto; conservar tablas e historial, nunca restaurar automáticamente el dump sobre actividad nueva. Una pestaña abierta necesita recarga para el nuevo selector.
+
+
+## Alertas internas de reposición por WhatsApp — 2026-10-14
+
+Programación VPS nativa `fusion-stock-whatsapp.timer`, diaria 09:00 Argentina, sin
+recuperar ejecuciones perdidas. Emisor 2035; destinatarios internos Matías y Fabri
+configurados en `/opt/fusion-management-migration/alerts/alert_config.json` privado
+root/0600 (no copiar teléfonos ni credenciales a la memoria/repositorio).
+Fuentes locales y algoritmo compartido del informe: 90 días de ventas, cobertura
+menor a 15 días; servicios excluidos. Resume altas en crítico o nuevas bajas de
+stock, sin repetir estado igual o mejorado. Detalle con hasta tres ejemplos y
+enlace al informe. Historial parcial de ML señalado; no decide compras ni cantidades.
+
+Plantilla Meta `fusion_resumen_reposicion_v1` es_AR enviada a revisión. Al publicar
+esta tarea seguía PENDING: el emisor está conectado, pero no se envía hasta aprobación;
+se comprueba cada ejecución y envío. Timer activo; primera evaluación 15/10 a las 09:00.
+Validación en PostgreSQL desechable sin red externa: 19 pruebas aprobadas. Vista
+previa bajo las restricciones systemd de producción confirmó el bloqueo de plantilla;
+ningún mensaje real de esta automatización se envió durante la instalación.
+
+Runtime `alerts/` bajo `/opt/fusion-management-migration`; fuente/documentación en
+`integrations/management-migration/alerts/README.md`. Reutiliza transporte, outbox
+y webhooks existentes del bot, sin reiniciar contenedores ni cambiar roles o IA.
+Tablas aditivas `stock_alert_runs` y `stock_alert_state`; registro `system` para
+evitar aprendizaje como respuesta humana. Un intento diario por destinatario;
+resultado incierto bloquea reintentos hasta conciliación. Fallas definitivas de
+Meta no consolidan el stock como notificado.
+
+Diagnóstico: `journalctl -u fusion-stock-whatsapp.service`, `alerts/status.json` y
+`python3 alerts/run_alerts.py --dry-run`. Pausa/rollback: `systemctl disable --now
+fusion-stock-whatsapp.timer`; conservar tablas/historial, nunca restaurar bases.
+Manifiesto por archivo en `alerts/deployment-manifest.json`.
+
+
+### Configuración editable de alertas de stock — 2026-10-14
+
+El panel Stock y reposición permite al administrador editar nombre/WhatsApp de los dos
+destinatarios, hora diaria de Argentina, pausa general e individual. Emisor 2035 fijo.
+GET/POST /herramientas/gestion-vps/ventas/stock/alertas exige sesión admin; POST agrega
+Origin exacto, CSRF, límite de cuerpo y revisión optimista. Cambiar una etiqueta no
+modifica usuarios ni permisos. Guardar no dispara mensajes y aplica al siguiente envío.
+
+Configuración vigente en /var/lib/fusion-management-validation/stock-alert-settings.json
+(privada, 0600, dueño del gateway DynamicUser). Alert_config.json privado conserva datos
+técnicos de Meta. El ejecutor root valida los campos permitidos antes de usarlos.
+Timer comprueba cada minuto; fuera de horario/pausado termina sin consultar catálogo,
+Docker o Meta. Máximo un intento por fecha y número, independiente de ediciones del
+horario. Estado sin secretos en stock-alert-status.json.
+
+Plantilla aprobada por Meta y previsualización real verificada sin enviar. Pausa desde
+la UI comprobada en el ejecutor (disabled), luego reactivada con los dos destinatarios
+originales a las 09:00. Pruebas de persistencia, permisos, horario, pausas y duplicados
+aprobadas. Dos pruebas antiguas de PDF/POS fallan igual con el gateway previo y nuevo;
+no se modificaron esos contratos. Respaldo por archivo/unidad: /opt/fusion-management-migration/backups/stock-alert-settings-20261014T231001Z.
+
+
+## Fabri — tono argentino y presupuestos compartidos (2026-10-14)
+
+Publicado en fusion-chatbot-tone-budget:20261014, API/worker/outbox. OpenAI usa ahora
+el prompt general publicado (prompt_versions), no sólo las instrucciones fijas del vendedor.
+El tono incorporado usa voseo natural, conserva contexto, evita saludos repetidos y preguntas
+innecesarias. El formato separa la pregunta final opcional de las fichas oficiales.
+Los precios, variantes, cuotas, enlaces y datos de posventa siguen pasando por las fuentes
+y controles previos. Hasta cinco consultas de herramientas y una reparación de formato
+dentro de seis llamadas máximas, con las mismas barreras de pausa/toma humana y presupuesto.
+
+Distribución mensual autorizada vigente: US$20 sólo imágenes; US$80 compartidos entre
+conversación y transcripción de audios. Reemplaza la distribución previa de 50/50.
+Los consumos anteriores del mes UTC se conservan y reclasifican por kind, sin borrarlos.
+sales_ai_calls y multimedia_jobs(audio) comparten un bloqueo transaccional para reservar;
+multimedia_jobs(image) consume el cupo separado. Se conservan reservas de intentos inciertos.
+La pantalla Inteligencia de Fabri muestra estos alcances y consumos. Esto no activa voz
+de salida: la voz personalizada permanece pendiente de habilitación del proveedor.
+
+Respaldo: /opt/fusionbikes/backups/fabri-tono-presupuesto-20261014. Paquete y manifiesto:
+ /opt/fusion-tone-budget-20261014. Reversión de archivos e imagen desde el respaldo,
+reactivando la versión de prompt y configuración previas de prepared.json; no restaurar
+conversaciones, bases ni colas. La clave permanece privada y no se recreó.
+
+
+## Mensajería — formato de importes (2026-10-14)
+
+Los contadores de consumo de imágenes y de conversación/audios se muestran con
+formato es-AR, coma decimal y tres decimales. La presentación no cambia los
+importes registrados ni los límites vigentes de US$20 y US$80, respectivamente.
+
+
+## Fabri — pago en dólares y cuenta USD (2026-10-15)
+
+Bot publicado como fusion-chatbot-usd:20261015 (API, worker, outbox). La herramienta
+condiciones resuelve pagos/cotizaciones en USD y el seguimiento de CBU/alias sin
+derivar por moneda solamente. Fuente bancaria: system_settings.usd_payment_policy,
+confirmada por el administrador; separada del BACS en pesos. Solo cuentas nacionales
+de Argentina. Los pagos combinados, incidentes y solicitudes humanas mantienen sus
+controles. No cambia estados de toma/pausa ni presupuestos ni envía mensajes de prueba.
+
+Puente WordPress de lectura 0.5.2 agrega usd_reference opcional al contrato existente:
+getDollarV60(id), precio base y ceil, con fuente master_control_public_display. No
+modifica Master Control, precios, stock ni checkout. Bot valida identidad/SKU/moneda/
+fuente y conserva caché de cotizaciones de 60 s. Si falta el dato USD no toma el precio
+base de Mercado Libre ni calcula un tipo de cambio alternativo. Una variante con otro
+importe requiere aclaración. Toda cotización USD advierte que puede variar al comprar
+y pide confirmar el total del pedido antes de transferir.
+
+Respaldo del bot/configuración: /opt/fusionbikes/backups/fabri-usd-20261015. Candidato y
+manifiesto: /opt/fusion-usd-20261015. Reversión con imagen/override/archivos y ajuste
+usd_payment_policy previos; no restaurar conversaciones ni colas. Puente anterior
+en work/fabri-usd-20261014/baseline/bridge.php del workspace local y copia remota del
+paquete. Comprobada la respuesta de condiciones completa con el modelo activo,
+sin despacho real; 224 pruebas Python y validación PHP aprobadas.
+
+
+## Matías IA — identidad y alternativas ante falta de stock (2026-10-15)
+
+El asistente pasa a llamarse Matías IA (identidad conversacional Matías, asistente
+virtual). Cambian el prompt publicado y las etiquetas de respuestas nuevas de web
+y WhatsApp; se conserva system:fabri como identificador interno estable. No se
+renombran agentes humanos ni mensajes históricos. La pantalla multimedia usa
+Inteligencia de Matías; voz, presupuestos y controles por número no cambian.
+
+sales_availability separa ausencia de coincidencias, variante no confirmada,
+disponibilidad y cero de stock explícito. Conserva la versión numérica del modelo y
+normaliza Super caliber/Supercaliber. Antes de una alternativa se antepone el aviso
+del modelo o variante agotados, sin «encontré». El buscador separa products exactos
+de alternatives; las alternativas automáticas conservan familia, tipo, talle y
+color. Los precios siguen hidratándose desde Woo/Master Control, nunca desde ML.
+Una continuación breve de talle conserva el modelo del cliente; una nueva versión
+explícita lo actualiza y un cambio de producto no hereda el agotado anterior.
+
+system_settings.catalog_restock_notices guarda previsiones de reposición por ID de
+producto y con vencimiento. Sólo se muestran para agotados confirmados; no hay
+promesa global de reingreso. La previsión operativa de la Supercaliber 9.6 vence el
+26/10/2026 00:00 Argentina. No se autoaprenden plazos sin dato operativo vigente.
+
+Imagen fusion-chatbot-matias-stock:20261015 en API/worker/outbox. Respaldo:
+/opt/fusionbikes/backups/matias-stock-20261015; paquete y manifiesto:
+/opt/fusion-matias-stock-20261015. Rollback con archivos, override, HTML y versión de
+prompt 46, restaurando sólo catalog_restock_notices desde previous-settings.json;
+no restaurar conversaciones ni colas. Sin migraciones. Verificado con 243 pruebas
+Python y una evaluación con el proveedor de la consulta original, sin despacho a
+clientes. Se mantienen los presupuestos de imágenes y conversación/audio.
+
+
+## Matías IA — estimación de envío desde el despacho (2026-10-15)
+
+Política autorizada publicada en conversation_learning_v1.active.business.delivery_info:
+2 a 7 días hábiles desde la fecha de despacho, según localidad. Es una estimación,
+no una fecha de llegada garantizada ni un plazo contado desde la compra. Se informa
+para consultas generales de cualquier destino sin derivar ni pedir el modelo de bici.
+Los costos sólo se agregan si los preguntan o la consulta es general de condiciones;
+la excepción de costos de Tierra del Fuego conserva su confirmación humana.
+
+shipping_flow reconoce consultas hipotéticas de compra y código postal, y prioriza
+la respuesta de plazo. conditions consulta shipping_flow antes de business_decision
+para no perder la demora en preguntas de costo y tiempo combinadas. Los pedidos ya
+realizados mantienen el flujo de seguimiento autenticado; la estimación no confirma
+que un pedido haya sido despachado. Prompt general actualizado con esa distinción.
+
+Imagen fusion-chatbot-matias-envios:20261015 (API, worker, outbox), sin migraciones ni
+cambios en voz, presupuestos, precios o estados de conversaciones. Respaldo:
+/opt/fusionbikes/backups/matias-envios-20261015; paquete:
+/opt/fusion-matias-envios-20261015. Reversión: archivos e imagen/override anteriores,
+prompt 47 y conversation_learning_v1 de previous-settings.json, respetando ediciones
+posteriores; nunca restaurar conversaciones/colas. 253 pruebas Python y evaluación
+del caso de código postal aprobadas sin mensajes enviados al cliente. Fuente de la
+versión aislada en la rama codex/matias-envios-20261015; se preserva el checkout de
+producción con sus diferencias ajenas.
+
+
+## Mensajería — asignación al abrir y pendientes por responsable (2026-10-15)
+
+La apertura explícita de una conversación abierta sin responsable por un agente o
+supervisor ejecuta command/open con la identidad de sesión. La asignación se decide
+bajo el bloqueo de conversación, conserva al primer operador y pausa la IA de ese
+chat; cancela sólo sus respuestas IA todavía en cola. Consultar una conversación
+ajena conserva su responsable y sus avisos de no leído. Abrir una cerrada no la
+reabre. Lectores, consultas GET y refrescos automáticos nunca toman conversaciones.
+Se reutilizan CSRF, HMAC, UUID idempotente y auditoría. Si hay resultado incierto,
+la verificación conserva el UUID original; no se toma de nuevo después de liberar.
+
+Pendientes (filter=unread por compatibilidad) es abierto, sin responsable y con un
+mensaje entrante de cliente no histórico/no revocado o un origen comercial activo.
+Leer y responder con IA no lo consumen: espera a la toma humana. Los chats asignados
+quedan en Mías/Todas y los mensajes nuevos conservan un contador separado. Liberar o
+reanudar IA devuelve a Pendientes si cumple el criterio. Historial importado y chats
+sólo salientes no generan pendientes. Listado y contadores comparten el predicado.
+Esta regla reemplaza el criterio anterior basado en unread para chats normales.
+
+Publicación manual: fusion-chatbot-autoopen:20261015 (API, worker y outbox), junto a
+routes/mensajeria.js y public/mensajeria/app.js/index.html. Sin migración de esquema
+ni reasignación masiva de registros. Roles, IA global/por número y presupuestos se
+conservan. Respaldo: /opt/fusionbikes/backups/mensajeria-autoopen-20261015; paquete:
+/opt/fusion-inbox-autoopen-20261015. Rollback sólo de archivos e imagen/override,
+respetando ediciones posteriores; nunca restaurar conversaciones/colas anteriores.
+Rama de archivo: codex/inbox-autoopen-20261015. Pruebas con datos ficticios y cero
+mensajes de prueba enviados a clientes.
 
 ## Limpieza de desarrollo y QA — 2026-10-15
 

@@ -43,7 +43,31 @@ export function usuariosRouter(db) {
     return out;
   }
 
-  const setPermisos = db.transaction((userId, permisos) => {
+  const rolDePermisos = (permisos) => permisos.some(p => p.herramienta === 'mensajeria-supervision' && p.nivel === 'write') ? 'supervisor'
+    : permisos.some(p => p.herramienta === 'mensajeria' && p.nivel === 'write') ? 'agent'
+    : permisos.some(p => ['mensajeria', 'mensajeria-supervision'].includes(p.herramienta)) ? 'reader' : 'none';
+  const tieneRolesMensajeria = () => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mensajeria_roles'").get();
+  function rolActual(u) {
+    return db.prepare('SELECT role FROM mensajeria_roles WHERE user_id=?').get(u.id)?.role
+      || (u.is_admin ? 'supervisor' : rolDePermisos(permisosDe(u.id)));
+  }
+
+  const setPermisos = db.transaction((userId, permisos, actorId) => {
+    // Mensajería conserva un rol explícito además de user_permisos. Actualizar ambos
+    // evita que un rol anterior ignore la revocación o la nueva asignación de Usuarios.
+    if (tieneRolesMensajeria()) {
+      const u = db.prepare('SELECT id,is_admin,activo FROM users WHERE id=?').get(userId);
+      const oldRole = rolActual(u), newRole = rolDePermisos(permisos);
+      if (u.activo && oldRole === 'supervisor' && newRole !== 'supervisor') {
+        const supervisors = db.prepare('SELECT id,is_admin FROM users WHERE activo=1').all().filter(x => rolActual(x) === 'supervisor').length;
+        if (supervisors <= 1) throw Object.assign(new Error('Debe quedar al menos un supervisor de Mensajería.'), { status: 409 });
+      }
+      if (oldRole !== newRole) {
+        const ts = ahora();
+        db.prepare('INSERT INTO mensajeria_roles(user_id,role,updated_by,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,updated_by=excluded.updated_by,updated_at=excluded.updated_at').run(userId,newRole,actorId,ts);
+        db.prepare('INSERT INTO mensajeria_roles_audit(actor_id,user_id,old_role,new_role,created_at) VALUES(?,?,?,?,?)').run(actorId,userId,oldRole,newRole,ts);
+      }
+    }
     db.prepare('DELETE FROM user_permisos WHERE user_id = ?').run(userId);
     const ins = db.prepare(
       'INSERT INTO user_permisos (user_id, herramienta, nivel) VALUES (?, ?, ?)'
@@ -84,7 +108,7 @@ export function usuariosRouter(db) {
       .prepare(`INSERT INTO users (username, pass_hash, is_admin, activo, email, creado_en, actualizado_en)
                 VALUES (?, ?, ?, 1, ?, ?, ?)`)
       .run(uname, hashPassword(password), admin, emailVal, t, t);
-    if (!admin) setPermisos(info.lastInsertRowid, sanearPermisos(permisos));
+    if (!admin) setPermisos(info.lastInsertRowid, sanearPermisos(permisos), req.user.id);
     const u = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
     res.status(201).json({ ok: true, usuario: serializar(u) });
   });
@@ -132,7 +156,11 @@ export function usuariosRouter(db) {
     if (u.is_admin) {
       return res.status(400).json({ ok: false, error: 'Un admin ya tiene acceso a todo' });
     }
-    setPermisos(id, sanearPermisos(req.body?.permisos));
+    try { setPermisos(id, sanearPermisos(req.body?.permisos), req.user.id); }
+    catch (error) {
+      if (error.status === 409) return res.status(409).json({ ok: false, error: error.message });
+      throw error;
+    }
     db.prepare('UPDATE users SET actualizado_en = ? WHERE id = ?').run(ahora(), id);
     res.json({ ok: true, usuario: serializar(u) });
   });
