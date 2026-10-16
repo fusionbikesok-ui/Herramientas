@@ -26,11 +26,11 @@ __pycache__/
 *.gz
 *.bak
 *.bak.*
-backups/
-data/
-downloads/
-directory-cache/
-test-tmp/
+/backups/
+/data/
+/downloads/
+/directory-cache/
+/test-tmp/
 
 # Estado de runtime
 run.lock
