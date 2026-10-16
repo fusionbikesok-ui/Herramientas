@@ -52,3 +52,6 @@ delivery-qa/
 
 # Excepciones: archivos ya versionados que el patrón de arriba alcanzaría
 !worker/pypdf-vendor.zip
+
+# Descarga puntual (task-get-andreani-assets.py), idéntica a andreani/data/; ningún código la lee
+andreani-assets/
