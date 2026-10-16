@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -598,7 +598,14 @@ fetch('/api/auth/me').then(function(r) {
   (d.permisos || []).forEach(function(p) { permitidas[p.herramienta] = true; });
   (d.scopes || []).forEach(function(s) { if (s !== 'all') permitidas[s] = true; });
 
-  function tienePermiso(tool) { return isAdmin || !!permitidas[tool]; }
+  function tienePermiso(tool) {
+    if(isAdmin || permitidas[tool]) return true;
+    if(tool==='mensajeria') return !!permitidas['mensajeria-supervision'];
+    if(tool==='gestion-pedidos') return !!permitidas.pedidos;
+    if(tool==='gestion-stock') return !!permitidas['gestion-alertas'];
+    if(tool==='gestion-vps') return ['gestion-ventas','gestion-stock','gestion-alertas','gestion-clientes','gestion-andreani','pdf-etiquetas','gestion-taller','acceso-pos-web','acceso-facturador-web'].some(function(id){return !!permitidas[id];});
+    return false;
+  }
 
   /* ── LAS HERRAMIENTAS, COMO DATOS ──────────────────────────────────────────
      Agrupadas por TAREA, no por parte del sistema. NN/g, sobre 77 intranets: las estructuras
@@ -617,13 +624,15 @@ fetch('/api/auth/me').then(function(r) {
     { titulo: 'Atención al cliente', color: 'control', tools: [
       { tool: 'mensajeria', href: 'mensajeria', t: 'Mensajería', d: 'Atendé WhatsApp con el equipo, asigná conversaciones y consultá el historial junto con Fabri IA.', tag: 'WhatsApp · Equipo · Atención' },
     ]},
-    { titulo: 'Ventas, informes y etiquetas', color: 'control', adminOnly: true, tools: [
-      { tool: 'gestion-vps', href: 'gestion-vps/pos-web', t: 'Punto de venta · web', d: 'Abrí el POS original para vender, consultar cuotas y cobrar con los pedidos de la tienda.', tag: 'Ventas · Cuotas · Cobros' },
-      { tool: 'gestion-vps', href: 'gestion-vps/facturador-web', t: 'Facturador ARCA · web', d: 'Facturá pedidos y ventas de Mercado Libre desde la web. Historial, correo y WhatsApp.', tag: 'ARCA · Web · Mercado Libre' },
-      { tool: 'gestion-vps', href: 'gestion-vps/ventas', t: 'Panel de ventas · VPS', d: 'Consultá informes, rankings y evolución de ventas con el historial sincronizado en Herramientas.', tag: 'Métricas · Rankings · Exportar' },
-      { tool: 'gestion-vps', href: 'gestion-vps/andreani', t: 'Envíos Andreani · VPS', d: 'Revisá pedidos, destinatarios y medidas. Generá el archivo para las etiquetas de Andreani.', tag: 'Envíos · Bultos · Excel' },
+    { titulo: 'Ventas, informes y etiquetas', color: 'control', tools: [
+      { tool: 'acceso-pos-web', href: 'gestion-vps/pos-web', t: 'Punto de venta · web', d: 'Abrí el POS original para vender, consultar cuotas y cobrar con los pedidos de la tienda.', tag: 'Ventas · Cuotas · Cobros' },
+      { tool: 'acceso-facturador-web', href: 'gestion-vps/facturador-web', t: 'Facturador ARCA · web', d: 'Facturá pedidos y ventas de Mercado Libre desde la web. Historial, correo y WhatsApp.', tag: 'ARCA · Web · Mercado Libre' },
+      { tool: 'gestion-ventas', href: 'gestion-vps/ventas', t: 'Panel de ventas · VPS', d: 'Consultá informes, rankings y evolución de ventas con el historial sincronizado en Herramientas.', tag: 'Métricas · Rankings · Exportar' },
+      { tool: 'gestion-andreani', href: 'gestion-vps/andreani', t: 'Envíos Andreani · VPS', d: 'Revisá pedidos, destinatarios y medidas. Generá el archivo para las etiquetas de Andreani.', tag: 'Envíos · Bultos · Excel' },
       { tool: 'pdf-etiquetas', href: 'gestion-vps/corregir-etiquetas', t: 'Corregir etiquetas PDF', d: 'Actualizá peso y medidas de las etiquetas de Andreani. Podés ver, imprimir y descargar el PDF corregido.', tag: 'PDF · Peso y medidas' },
-      { tool: 'gestion-vps', href: 'gestion-vps', t: 'Más herramientas de gestión', d: 'Directorio de clientes y pedidos, copia de consulta del taller y accesos a venta, facturación y logística.', tag: 'Clientes · Pedidos · Taller' },
+      { tool: 'gestion-stock', href: 'gestion-vps/ventas/stock', t: 'Stock y reposición · VPS', d: 'Consultá existencias, ventas y cobertura para planificar la reposición.', tag: 'Stock · Ventas · Reposición' },
+      { tool: 'gestion-clientes', href: 'gestion-vps/directory', t: 'Clientes y pedidos · VPS', d: 'Buscá clientes y consultá el historial de pedidos de la tienda.', tag: 'Clientes · Historial' },
+      { tool: 'gestion-vps', href: 'gestion-vps', t: 'Más herramientas de gestión', d: 'Abrí las aplicaciones de gestión habilitadas para tu usuario.', tag: 'Tus aplicaciones' },
     ]},
     { titulo: 'Vender y despachar', color: 'ingreso', tools: [
       { tool: 'preparacion', href: 'preparacion', t: 'Preparación de pedidos', d: 'Buscá los productos, escaneá cada unidad, embalá y dejá el pedido listo para despachar.', tag: 'Picking · Embalaje · Evidencia' },

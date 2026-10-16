@@ -10,7 +10,7 @@ describe('permiso consulta-precios', () => {
 
   it('GET /consulta-precios/buscar requiere read', () => {
     const req = resolvePermiso('GET', '/consulta-precios/buscar');
-    expect(req).toEqual({ anyOf: ['consulta-precios'], nivel: 'read' });
+    expect(req).toEqual({ anyOf: ['consulta-precios', 'gestion-taller'], nivel: 'read' });
     expect(permiteAcceso([{ herramienta: 'consulta-precios', nivel: 'read' }], req)).toBe(true);
   });
 
