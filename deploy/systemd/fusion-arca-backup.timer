@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily private ARCA fiscal backup
+[Timer]
+OnCalendar=*-*-* 05:40:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Private ARCA fiscal recovery backup
+After=docker.service
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/fusion-management-migration/scripts/arca-backup.py
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+TimeoutStartSec=240

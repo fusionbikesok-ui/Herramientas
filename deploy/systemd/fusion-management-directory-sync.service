@@ -1,0 +1,17 @@
+[Unit]
+Description=Fusion shared customer and order read index
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/fusion-management-migration/sync-directory.py
+User=root
+Group=fusion-management-read
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/fusion-management-migration/directory-cache
+TimeoutStartSec=7200
+MemoryMax=256M
+CPUQuota=30%

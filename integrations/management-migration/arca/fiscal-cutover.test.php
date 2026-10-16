@@ -69,13 +69,13 @@ namespace {
     else require __DIR__.'/fiscal-cutover.php';
     use FusionBikes\HerramientasBridge\FiscalCutover as Cutover;
     function reset_fixture(){
-        $GLOBALS['wpdb']=new Database();$GLOBALS['options']=['fusion_arca_settings'=>['company'=>'Fixture','cuit'=>'30716597489','point'=>15,'environment'=>'production','production_enabled'=>true,'auto_enabled'=>false,'auto_statuses'=>[]],'fusion_arca_ml'=>['point'=>16]];
+        $GLOBALS['wpdb']=new Database();$GLOBALS['options']=['fusion_arca_settings'=>['company'=>'Fixture','cuit'=>'30000000007','point'=>15,'environment'=>'production','production_enabled'=>true,'auto_enabled'=>false,'auto_statuses'=>[]],'fusion_arca_ml'=>['point'=>16]];
         $GLOBALS['option_writes']=[];$GLOBALS['orders']=[];$GLOBALS['items']=[];$GLOBALS['fail_option']='';$GLOBALS['bridge_permission']=true;$GLOBALS['admin_permission']=true;$GLOBALS['matches_request']=true;Cutover::$receiving=false;
     }
     function stopped(){$GLOBALS['options'][Cutover::OPTION]=['state'=>'stopped'];}
     function record_fixture(int $id=200,int $oid=0): array {
-        return ['id'=>$id,'revision'=>3,'environment'=>'production','scope'=>hash('sha256','production|30716597489|15|6'),'order_id'=>$oid,'order_key'=>$oid?'production|fixture|'.$oid:null,'status'=>'authorized','number'=>15,
-            'payload'=>['issuer'=>['cuit'=>'30716597489'],'type'=>6,'point'=>15,'order_id'=>$oid,'cae'=>'12345678901234','cae_expires'=>'20261015','lines'=>[]],
+        return ['id'=>$id,'revision'=>3,'environment'=>'production','scope'=>hash('sha256','production|30000000007|15|6'),'order_id'=>$oid,'order_key'=>$oid?'production|fixture|'.$oid:null,'status'=>'authorized','number'=>15,
+            'payload'=>['issuer'=>['cuit'=>'30000000007'],'type'=>6,'point'=>15,'order_id'=>$oid,'cae'=>'12345678901234','cae_expires'=>'20261015','lines'=>[]],
             'request'=>['fixture'=>true],'response'=>['Resultado'=>'A','CodAutorizacion'=>'12345678901234','CbteDesde'=>15,'CbteHasta'=>15],'error'=>'','created_at'=>'2026-10-05 20:00:00','updated_at'=>'2026-10-05 20:00:01'];
     }
     function sql_record(array $row){foreach(['payload','request','response'] as $key)$row[$key]=wp_json_encode($row[$key]);return $row;}
@@ -89,7 +89,7 @@ namespace {
     test('REST write routes have the same admin permission callback',function(){Cutover::register();foreach(['/fusion-herramientas/fiscal-receipt','/fusion-herramientas/fiscal-cutover'] as $route){$defs=$GLOBALS['routes'][$route];if(isset($defs['methods']))$defs=[$defs];foreach($defs as $def)check($def['permission_callback']===[Cutover::class,'permission'],'Missing route permission');}});
     test('stop requires explicit confirmation',function(){error_is(Cutover::stop(new Request()),'fiscal_confirm');check(!Cutover::active()&&!$GLOBALS['option_writes'],'No mutations');});
     test('failed new credit-note scope lock does not pause',function(){
-        $GLOBALS['wpdb']->failLock='fbarca_emit_'.substr(hash('sha256','production|30716597489|15|3'),0,48);error_is(Cutover::stop(new Request(['confirm'=>'ORIGIN_OFF_VPS'])),'fiscal_cutover');check(!Cutover::active()&&!$GLOBALS['option_writes'],'No paused option');check(!$GLOBALS['wpdb']->held,'Locks released');check(get_option('fusion_arca_settings')['production_enabled']===true,'Existing issuer can finish');
+        $GLOBALS['wpdb']->failLock='fbarca_emit_'.substr(hash('sha256','production|30000000007|15|3'),0,48);error_is(Cutover::stop(new Request(['confirm'=>'ORIGIN_OFF_VPS'])),'fiscal_cutover');check(!Cutover::active()&&!$GLOBALS['option_writes'],'No paused option');check(!$GLOBALS['wpdb']->held,'Locks released');check(get_option('fusion_arca_settings')['production_enabled']===true,'Existing issuer can finish');
     });
     test('pending invoice prevents cut and leaves recovery possible',function(){
         $row=record_fixture();$row['status']='pending';$GLOBALS['wpdb']->rows[$row['id']]=sql_record($row);error_is(Cutover::stop(new Request(['confirm'=>'ORIGIN_OFF_VPS'])),'fiscal_cutover');check(!Cutover::active()&&!$GLOBALS['option_writes'],'No paused option');check(!$GLOBALS['wpdb']->held,'Locks released');check(apply_filters('rest_pre_dispatch',null,null,new Request([],'/fusion-arca/v1/invoices/200/recover'))===null,'Recovery not blocked');
@@ -111,7 +111,7 @@ namespace {
         stopped();$row=record_fixture();$old=$row;$old['status']=$status;$old['revision']=1;$old['number']=null;unset($old['payload']['cae']);$GLOBALS['wpdb']->rows[$old['id']]=sql_record($old);$r=Cutover::receipt(new Request(['record'=>$row]));check($r['synced']===true&&$GLOBALS['wpdb']->rows[$row['id']]['status']==='authorized','Transition');check($GLOBALS['wpdb']->writes===['update'],'Only update');
     });
     test('existing authorized ID with another CAE is immutable',function(){stopped();$row=record_fixture();$old=$row;$old['payload']['cae']='99999999999999';$GLOBALS['wpdb']->rows[$row['id']]=sql_record($old);error_is(Cutover::receipt(new Request(['record'=>$row])),'fiscal_receipt');check(!$GLOBALS['wpdb']->writes&&!Cutover::$receiving,'No replacement');});
-    test('new authorized credit note archives without order marking',function(){stopped();$row=record_fixture();$row['payload']['type']=8;$row['payload']['credit_of']=['id'=>199];$row['scope']=hash('sha256','production|30716597489|15|8');check(Cutover::receipt(new Request(['record'=>$row]))['synced']===true,'Credit archived');check(!$GLOBALS['orders'],'No order changes');});
+    test('new authorized credit note archives without order marking',function(){stopped();$row=record_fixture();$row['payload']['type']=8;$row['payload']['credit_of']=['id'=>199];$row['scope']=hash('sha256','production|30000000007|15|8');check(Cutover::receipt(new Request(['record'=>$row]))['synced']===true,'Credit archived');check(!$GLOBALS['orders'],'No order changes');});
     test('authorized web invoice marks matching order and item',function(){
         stopped();$row=record_fixture(200,77);$row['payload']['lines']=[['item_id'=>3,'serials'=>['FRAME123']]];$GLOBALS['orders'][77]=new Order();$GLOBALS['items'][3]=new Item(77);check(Cutover::receipt(new Request(['record'=>$row]))['synced']===true,'Synced');check($GLOBALS['orders'][77]->meta['_fusion_arca_cae']===$row['payload']['cae'],'Order CAE');check($GLOBALS['items'][3]->serials===['FRAME123'],'Serials');
     });

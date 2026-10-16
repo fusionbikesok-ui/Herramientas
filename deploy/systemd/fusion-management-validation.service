@@ -1,0 +1,24 @@
+[Unit]
+Description=Fusion management migration validation gateway
+After=docker.service network-online.target
+Requires=docker.service
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/fusion-management-migration
+EnvironmentFile=/opt/fusion-management-migration/runtime.env
+EnvironmentFile=/opt/fusion-management-migration/gateway.env
+ExecStart=/usr/bin/node /opt/fusion-management-migration/gateway.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=128M
+CPUQuota=25%
+[Install]
+WantedBy=multi-user.target
