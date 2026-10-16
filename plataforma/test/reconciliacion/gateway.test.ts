@@ -179,6 +179,8 @@ describe('E1-GW-01 contrato plataforma ↔ gateway del legado', () => {
     const corrida = {
       channelAccountId: 'cuenta-ml', topic: 'ml.messages', cursorBefore: {
         v: 1, generation: WINDOW_TO.toISOString(), last_unread_at: new Date(WINDOW_TO.getTime() - 60 * 60_000).toISOString(),
+        // Control completo reciente: la vuelta es liviana y, sin motivos que leer, termina sin llamadas.
+        last_full_at: new Date(WINDOW_TO.getTime() - 60 * 60_000).toISOString(),
       },
     } as unknown as CorridaReclamada;
     const pagina = await adaptador.listar({ corrida, windowFrom: null, windowTo: WINDOW_TO }, null);

@@ -914,3 +914,13 @@ Plan de ejecución y reversión: `docs/superpowers/plans/2026-10-15-capacidad-ba
 Las siete entradas históricas de Woo se reprocesaron con el handler desplegado y `completarEnTx` en una única transacción; las siete quedaron `succeeded` y las siete DLQ se resolvieron con nota, conservando su historial. Catálogo sin mensajes pendientes/reintentables/DLQ en la comprobación posterior. No hubo escrituras a Woo/ML ni cambios de esquema. Se preservó la captura de las seis corrientes futuras sin intentos.
 
 Rollback de esta entrega: imagen r2 `sha256:20ee28ac78969751eae524728b51e6b96468160c3b85d6eb97d416cd8c1fae28` y `worker-before-r3.override.yml` guardados. Para cupos, restaurar sólo los seis valores anteriores desde `legacy-before-cupos.env` y recargar Herramientas comprobando salud; no sobrescribir cambios de configuración posteriores. `woo-before-r3.json` conserva la fotografía privada de siete inbox, siete DLQ y 28 representaciones. No restaurar una base anterior sobre producción.
+
+## Integración Git de Sombra — revisión 2026-10-16
+
+La integración de PR38, PR42 y PR45 se validó en el worktree aislado `codex-sombra-integracion-20261016`, con master `1cf751f4` como base. No se despliega ni se modifica configuración o servicios con esta integración.
+
+Correcciones de revisión previas a fusionar: el barrido liviano selecciona sólo señales `pending`, `claimed` y `retryable`, valida IDs con el mismo contrato del relector y conserva el avance sobre inválidos sin saltar candidatos fuera del tope. Los checkpoints anteriores también se validan. Un 404 individual no modifica la señal ni genera una baja: el consumidor conserva sus reintentos acotados y la DLQ durable mientras el barrido continúa. Las señales terminales no se recuperan automáticamente por este barrido; requieren replay explícito. La restauración de un padre Woo sólo reabre hijas con observación propia `open`; estados `closed`, `unknown`, `deleted` o ausentes no bastan. Si una imagen anterior dejó `estado_remoto=deleted`, la hija espera su propia proyección válida antes de reabrirse.
+
+Estas correcciones pertenecen al candidato Git y todavía no están en el worker r4. Su eventual despliegue requiere artefacto acotado, pruebas y verificación operativa propios. Se conservan los criterios de 24–48 horas y siete días verdes para aceptar E1.
+
+Validación de la integración: tipos, suites raíz y plataforma y regresiones de revisión correctas. Evidencia reproducible: `docs/superpowers/evidence/e1/2026-10-16-integracion-prs.md`. La fusión de Git no cambia el worker r4 ni acepta E1.

@@ -1,4 +1,4 @@
-import { envioMl, itemMl, mensajeMl, ordenMl, preguntaMl, reclamoMl, recursoNoEncontrado } from './adaptadores/ml.ts';
+import { envioMl, ID_MENSAJE_ML, itemMl, mensajeMl, ordenMl, preguntaMl, reclamoMl, recursoNoEncontrado } from './adaptadores/ml.ts';
 import { pedidoWoo, productoWoo } from './adaptadores/woo.ts';
 import { esRegistro, exigirLista, exigirRegistro, idTexto } from './adaptadores/comun.ts';
 import { ErrorBarridoReintentable } from '../worker/barridos.ts';
@@ -64,7 +64,7 @@ export function crearRelectoresMl(dep: { transporte: TransporteCanal }): Record<
     },
     // La notificación `messages` entrega el ID resoluble por GET /messages/{id}?tag=post_sale.
     {
-      topic: 'ml.messages', versionKind: 'hash', id: /^[A-Za-z0-9_-]{1,128}$/,
+      topic: 'ml.messages', versionKind: 'hash', id: ID_MENSAJE_ML,
       async releer(id) {
         const r = await t.get(`/messages/${encodeURIComponent(id)}?tag=post_sale`, { headers: { 'x-format-new': 'true' } });
         // ML documenta que un 404 puede ser temporal para este recurso y recomienda reintentar en segundos.

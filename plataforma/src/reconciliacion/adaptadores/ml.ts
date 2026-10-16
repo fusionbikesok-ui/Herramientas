@@ -18,7 +18,11 @@ export interface DependenciasMl {
 const LOTE_INDIVIDUAL = 1;
 /** Relecturas de un segmento de órdenes antes de declararlo inestable y dejar el cursor quieto. */
 const MAX_RELECTURAS_SEGMENTO = 3;
-const LOTE_PACKS = 1;
+// El código de ml.messages lee y avanza de a UN pack (pendientes[0] + slice(1), despuesDe = último leído): con un lote
+// mayor se saltearían packs en silencio. Por eso se verifica al crear el adaptador.
+const LOTE_PACKS: number = 1;
+/** Contrato compartido con el relector y el gateway; nunca construir una ruta con un aviso inválido. */
+export const ID_MENSAJE_ML = /^[A-Za-z0-9_-]{1,128}$/;
 const LIMITE_BUSQUEDA = 50;
 
 function versionHash(proyeccion: unknown): string {
@@ -273,6 +277,27 @@ const RECURSO_PACK = /^\/packs\/[^/?#]+\/sellers\/[^/?#]+$/;
 // La guía de ML recomienda `/messages/unread` sólo como validación redundante del flujo de notificaciones.
 // Las notificaciones y missed_feeds cubren el flujo frecuente; este respaldo se consulta cada seis horas.
 const INTERVALO_UNREAD_MS = 6 * 60 * 60 * 1000;
+// Dos ritmos (a 10 RPM los ~470 packs de 30 días tardan ~47 min y no entran en la vuelta de 20 min):
+// la vuelta liviana lee sólo packs con motivo; el recorrido completo queda como control, una vez por día.
+const INTERVALO_COMPLETA_MS = DIA_MS;
+const MAX_AVISOS_WEBHOOK = 100;
+const MAX_PACKS_CAMBIADOS = 500;
+const PREFIJO_MENSAJE = 'msg:';
+/** Punto de reanudación (t, id) de cada consulta liviana: se consulta con `(t, id) > (luz.t, luz.id)`, así que más filas
+ *  empatadas en `t` que el tope no frenan la ventana. */
+/** Texto ISO con los µs completos: `pg` entrega los timestamptz como Date (ms) y truncaría el cursor, con lo que filas del
+ *  mismo ms (distinto µs) volverían a entrar en cada consulta. El tiempo del cursor viaja siempre como este texto. */
+const TEXTO_US = `'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'`;
+const ID_MAXIMO = '￿';   // mayor que cualquier id (son ASCII) bajo COLLATE "C"
+interface PuntoLuz { t: string; id: string }
+interface Luz { avisos: PuntoLuz; pedidos: PuntoLuz }
+const esPunto = (v: unknown): v is PuntoLuz => esRegistro(v) && typeof v.t === 'string' && Number.isFinite(Date.parse(v.t)) && typeof v.id === 'string';
+function luzDe(v: unknown, respaldo: string): Luz {
+  const base: PuntoLuz = { t: respaldo, id: '' };
+  return esRegistro(v) ? { avisos: esPunto(v.avisos) ? v.avisos : base, pedidos: esPunto(v.pedidos) ? v.pedidos : base } : { avisos: base, pedidos: base };
+}
+const rutaPack = (pack: string, vendedor: string): string => `/packs/${encodeURIComponent(pack)}/sellers/${encodeURIComponent(vendedor)}`;
+const packDeRecurso = (recurso: string): string => decodeURIComponent(recurso.split('/')[2]!);
 
 /** Forma común entre GET /messages/{id} (notificación) y GET /messages/packs/{pack}/sellers/{seller}. */
 export function mensajeMl(crudo: unknown, packId?: string): RecursoRemoto {
@@ -297,33 +322,108 @@ export function mensajeMl(crudo: unknown, packId?: string): RecursoRemoto {
 }
 
 export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
+  if (LOTE_PACKS !== 1) throw new Error('ml.messages asume un pack por página (LOTE_PACKS=1)');
   return {
     topic: 'ml.messages', cursorKind: 'state_sweep', fullScan: false, versionKind: 'hash',
     async listar(ctx, posicionInicial): Promise<PaginaRemota> {
-      const ultimoUnread = typeof ctx.corrida.cursorBefore?.last_unread_at === 'string'
-        ? Date.parse(ctx.corrida.cursorBefore.last_unread_at) : Number.NaN;
+      const instante = (v: unknown): number => (typeof v === 'string' ? Date.parse(v) : Number.NaN);
+      const antes = ctx.corrida.cursorBefore;
+      const ultimoUnread = instante(antes?.last_unread_at);
+      const ultimaCompleta = instante(antes?.last_full_at);
       const comprobarUnread = !Number.isFinite(ultimoUnread) || ctx.windowTo.getTime() - ultimoUnread >= INTERVALO_UNREAD_MS;
-      const cursorAfter = {
+      const completa = posicionInicial === null
+        ? !Number.isFinite(ultimaCompleta) || ctx.windowTo.getTime() - ultimaCompleta >= INTERVALO_COMPLETA_MS
+        : posicionInicial.completa === true;
+      const perdidosPrevios = numeroPosicion(posicionInicial, 'perdidos', 0);
+      const iso = (n: number) => new Date(n).toISOString();
+      // `last_light_at` es hasta dónde la vuelta liviana cubrió TODO: si un tope recortó la lista, no llega a windowTo.
+      // El motor persiste este cursor sólo al cerrar la corrida (por página guarda únicamente la posición).
+      const armarCursor = (luz: Luz, recortados: boolean, perdidos: number) => ({
         ...cursorGeneracion(ctx.windowTo),
-        last_unread_at: comprobarUnread ? ctx.windowTo.toISOString() : new Date(ultimoUnread).toISOString(),
-      };
-      let posicion = posicionInicial;
-      if (posicion === null && comprobarUnread) {
-        const body = exigirRegistro(exigirOk(await dep.transporte.get('/messages/unread?role=seller&tag=post_sale'), '/messages/unread'), '/messages/unread');
-        // `resource` se usa tal como lo devuelve ML: rearmarlo con otro vendedor produce 404.
-        const pendientes = exigirLista(body.results, '/messages/unread results')
-          .map((r) => (esRegistro(r) && typeof r.resource === 'string' ? r.resource.trim() : ''))
-          .filter((r) => RECURSO_PACK.test(r));
-        return { resources: [], nextPosition: { pendientes, despuesDe: '' }, cursorAfter };
+        last_unread_at: comprobarUnread ? ctx.windowTo.toISOString() : iso(ultimoUnread),
+        // `light` es el punto exacto por consulta; `last_light_at` es el más atrasado de los dos (informativo).
+        last_light_at: Date.parse(luz.avisos.t) <= Date.parse(luz.pedidos.t) ? luz.avisos.t : luz.pedidos.t,
+        light: luz,
+        ...(completa ? { last_full_at: ctx.windowTo.toISOString() } : Number.isFinite(ultimaCompleta) ? { last_full_at: iso(ultimaCompleta) } : {}),
+        // Mensajes que sólo el recorrido de control encontró y la sombra no tenía: lo que la vuelta liviana no avisó.
+        avisos_perdidos: perdidos,
+        avisos_recortados: recortados,
+      });
+
+      if (posicionInicial === null) {
+        // Vuelta liviana: sólo los packs con motivo. El recorrido de 30 días queda para la vuelta de control.
+        // Cursor sin `light` (versión anterior): se arranca de `last_light_at`, o de un día atrás si no hay nada.
+        const inicial = typeof antes?.last_light_at === 'string' && Number.isFinite(Date.parse(antes.last_light_at))
+          ? antes.last_light_at : iso(ctx.windowTo.getTime() - DIA_MS);
+        const punto = luzDe(antes?.light, inicial);
+        const candidatos: string[] = [];
+        if (comprobarUnread) {
+          const body = exigirRegistro(exigirOk(await dep.transporte.get('/messages/unread?role=seller&tag=post_sale'), '/messages/unread'), '/messages/unread');
+          // `resource` se usa tal como lo devuelve ML: rearmarlo con otro vendedor produce 404.
+          for (const r of exigirLista(body.results, '/messages/unread results')) {
+            const recurso = esRegistro(r) && typeof r.resource === 'string' ? r.resource.trim() : '';
+            if (RECURSO_PACK.test(recurso)) candidatos.push(recurso);
+          }
+        }
+        // Sólo señales activas: las terminales requieren replay explícito y conservan su auditoría. Del más viejo al
+        // más nuevo, acotados a la ventana congelada de la corrida (`<= windowTo`), por clave (t, id) y con tope+1.
+        const avisos = await dep.db.query<{ resource_id: string; t: string }>(
+          `SELECT resource_id COLLATE "C" AS resource_id, to_char(MIN(received_at) AT TIME ZONE 'UTC', ${TEXTO_US}) AS t FROM integrations.reconciliation_signals
+            WHERE channel_account_id=$1 AND topic='ml.messages' AND status IN ('pending','claimed','retryable')
+              AND received_at <= $4 AND (received_at, resource_id COLLATE "C") > ($2::timestamptz, $3::text)
+            GROUP BY 1 ORDER BY MIN(received_at), 1 LIMIT $5`,
+          [ctx.corrida.channelAccountId, punto.avisos.t, punto.avisos.id, ctx.windowTo, MAX_AVISOS_WEBHOOK + 1],
+        );
+        // Reagrupado (intencional, en ambas consultas): el filtro de clave es por FILA y se agrupa después. Un resource_id /
+        // target_id ya leído que reciba una fila nueva posterior al cursor vuelve a aparecer: nueva actividad = releer.
+        // Pedidos que cambiaron en la ventana de la corrida, con la misma clave.
+        const cambiados = await dep.db.query<{ target_id: string; t: string }>(
+          `SELECT target_id COLLATE "C" AS target_id, to_char(MIN(last_seen_at) AT TIME ZONE 'UTC', ${TEXTO_US}) AS t FROM integrations.resource_relations
+            WHERE channel_account_id=$1 AND relation_type='order_pack' AND target_topic='ml.messages'
+              AND last_seen_at <= $4 AND (last_seen_at, target_id COLLATE "C") > ($2::timestamptz, $3::text)
+            GROUP BY 1 ORDER BY MIN(last_seen_at), 1 LIMIT $5`,
+          [ctx.corrida.channelAccountId, punto.pedidos.t, punto.pedidos.id, ctx.windowTo, MAX_PACKS_CAMBIADOS + 1],
+        );
+        // Cierre sin recorte: todo lo que tenga t <= windowTo ya se leyó, incluso una fila con t == windowTo exacto, así que el
+        // punto queda en (windowTo, id máximo): ningún id lo supera y esa fila no se relee en la corrida siguiente.
+        const fin: PuntoLuz = { t: iso(ctx.windowTo.getTime()), id: ID_MAXIMO };
+        const luz: Luz = { avisos: fin, pedidos: fin }; let recortados = false;
+        const recortar = <T extends { t: string }>(filas: T[], tope: number, clave: keyof Luz, idDe: (f: T) => string): T[] => {
+          if (filas.length <= tope) return filas;
+          recortados = true;
+          const ultimo = filas[tope - 1]!;
+          luz[clave] = { t: ultimo.t, id: idDe(ultimo) };
+          return filas.slice(0, tope);
+        };
+        // Recortar ANTES de omitir inválidos: el cursor avanza también sobre esos avisos, sin saltar
+        // candidatos válidos que quedaron fuera del tope. El relector conserva su exclusión/auditoría.
+        for (const f of recortar(avisos.rows, MAX_AVISOS_WEBHOOK, 'avisos', (x) => x.resource_id)) {
+          if (ID_MENSAJE_ML.test(f.resource_id)) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);
+        }
+        for (const f of recortar(cambiados.rows, MAX_PACKS_CAMBIADOS, 'pedidos', (x) => x.target_id)) candidatos.push(rutaPack(f.target_id, dep.sellerId));
+        const pendientes = [...new Set(candidatos)];
+        const vistos = [...new Set(pendientes.filter((p) => p.startsWith('/packs/')).map(packDeRecurso))];
+        return {
+          resources: [],
+          // Liviana sin nada que leer: la vuelta termina acá, sin una página vacía de más.
+          nextPosition: !completa && !pendientes.length ? null
+            : { pendientes, despuesDe: '', completa, vistos, perdidos: perdidosPrevios, luz, recortados },
+          cursorAfter: armarCursor(luz, recortados, perdidosPrevios),
+        };
       }
-      if (posicion === null) posicion = { pendientes: [], despuesDe: '' };
-      const pendientesPrevios = Array.isArray(posicion.pendientes) ? posicion.pendientes.filter((p): p is string => typeof p === 'string') : [];
-      let lote: string[]; let resto: string[]; let despuesDe = textoPosicion(posicion, 'despuesDe') ?? '';
-      let fin = false;
+
+      const luz = luzDe(posicionInicial.luz, ctx.windowTo.toISOString());
+      const recortados = posicionInicial.recortados === true;
+      // Un checkpoint creado antes de esta validación también puede contener avisos inválidos.
+      const pendientesPrevios = Array.isArray(posicionInicial.pendientes) ? posicionInicial.pendientes.filter((p): p is string =>
+        typeof p === 'string' && (!p.startsWith(PREFIJO_MENSAJE) || ID_MENSAJE_ML.test(p.slice(PREFIJO_MENSAJE.length)))) : [];
+      const vistos = new Set(Array.isArray(posicionInicial.vistos) ? posicionInicial.vistos.filter((p): p is string => typeof p === 'string') : []);
+      let despuesDe = textoPosicion(posicionInicial, 'despuesDe') ?? '';
+      let resto: string[] = []; let lote: string | null = null; let fin = false;
+      let leidoEnControl = false;
       if (pendientesPrevios.length) {
-        lote = pendientesPrevios.slice(0, LOTE_PACKS); resto = pendientesPrevios.slice(LOTE_PACKS);
-      } else {
-        resto = [];
+        lote = pendientesPrevios[0]!; resto = pendientesPrevios.slice(LOTE_PACKS);
+      } else if (completa) {
         const packs = (await dep.db.query<{ target_id: string }>(
           `SELECT DISTINCT target_id COLLATE "C" AS target_id FROM integrations.resource_relations
             WHERE channel_account_id=$1 AND relation_type='order_pack' AND target_topic='ml.messages'
@@ -331,20 +431,54 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
             ORDER BY 1 LIMIT $4`,
           [ctx.corrida.channelAccountId, new Date(ctx.windowTo.getTime() - 30 * DIA_MS), despuesDe, LOTE_PACKS],
         )).rows.map((f) => f.target_id);
-        lote = packs.map((p) => `/packs/${encodeURIComponent(p)}/sellers/${encodeURIComponent(dep.sellerId)}`);
-        if (packs.length) despuesDe = packs.at(-1)!;
+        if (packs.length) {
+          despuesDe = packs.at(-1)!;
+          // Un pack que la vuelta liviana ya leyó no se pide dos veces.
+          if (!vistos.has(packs[0]!)) { lote = rutaPack(packs[0]!, dep.sellerId); leidoEnControl = true; }
+        }
         fin = packs.length < LOTE_PACKS;
-      }
-      const leidos = await Promise.all(lote.map((recurso) =>
-        dep.transporte.get(`/messages${recurso}?tag=post_sale&mark_as_read=false`)));
+      } else fin = true;
+
       const resources: RecursoRemoto[] = [];
-      leidos.forEach((r, i) => {
-        if (r.status === 404) return;
-        const body = exigirRegistro(r.body, 'pack ML');
-        const packId = decodeURIComponent(lote[i]!.split('/')[2]!);
-        resources.push(...exigirLista(body.messages, 'pack ML messages').map((m) => mensajeMl(m, packId)));
-      });
-      return { resources, nextPosition: fin ? null : { pendientes: resto, despuesDe }, cursorAfter };
+      let perdidos = perdidosPrevios;
+      if (lote !== null) {
+        if (lote.startsWith(PREFIJO_MENSAJE)) {
+          // Aviso por webhook: el mensaje dice a qué pack pertenece; ese pack se lee después si no estaba ya.
+          const r = await dep.transporte.get(`/messages/${encodeURIComponent(lote.slice(PREFIJO_MENSAJE.length))}?tag=post_sale`, { headers: { 'x-format-new': 'true' } });
+          // Esta lectura es redundante. Un 404 no modifica la señal ni genera una baja:
+          // su relector conserva los reintentos acotados y la DLQ, sin bloquear el barrido completo.
+          if (r.status !== 404) {
+            const recurso = mensajeMl(r.body);
+            resources.push(recurso);
+            const pack = esRegistro(recurso.projection) && typeof recurso.projection.pack_id === 'string' ? recurso.projection.pack_id : null;
+            if (pack && !vistos.has(pack)) { vistos.add(pack); resto = [rutaPack(pack, dep.sellerId), ...resto]; }
+          }
+        } else {
+          const packId = packDeRecurso(lote);
+          vistos.add(packId);
+          const r = await dep.transporte.get(`/messages${lote}?tag=post_sale&mark_as_read=false`);
+          if (r.status !== 404) {
+            const body = exigirRegistro(r.body, 'pack ML');
+            const mensajes = exigirLista(body.messages, 'pack ML messages').map((m) => mensajeMl(m, packId));
+            resources.push(...mensajes);
+            if (leidoEnControl && mensajes.length) {
+              // «Perdido» = mensaje que la sombra todavía no tenía proyectado; una conversación vieja ya leída no suma.
+              const conocidos = await dep.db.query<{ resource_id: string }>(
+                `SELECT resource_id FROM integrations.resource_observations
+                  WHERE channel_account_id=$1 AND topic='ml.messages' AND resource_id = ANY($2::text[])`,
+                [ctx.corrida.channelAccountId, mensajes.map((m) => m.id)],
+              );
+              const ya = new Set(conocidos.rows.map((f) => f.resource_id));
+              perdidos += mensajes.filter((m) => !ya.has(m.id)).length;
+            }
+          }
+        }
+      }
+      return {
+        resources,
+        nextPosition: fin ? null : { pendientes: resto, despuesDe, completa, vistos: [...vistos], perdidos, luz, recortados },
+        cursorAfter: armarCursor(luz, recortados, perdidos),
+      };
     },
   };
 }
