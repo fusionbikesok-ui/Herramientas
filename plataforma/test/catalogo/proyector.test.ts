@@ -57,9 +57,208 @@ describe('E2-PRY-10 proyector del catálogo', () => {
     await admin.query(`TRUNCATE catalog.identity_cases, catalog.matcher_decisions, catalog.external_representations,
       catalog.sellable_variants, catalog.product_models CASCADE;
       DELETE FROM integrations.dead_letters; DELETE FROM integrations.inbox_messages; DELETE FROM integrations.reconciliation_signals;
+      DELETE FROM integrations.resource_observations;
       DROP TRIGGER IF EXISTS falla_inyectada ON catalog.identity_cases;`);
+    await admin.query('DROP TRIGGER IF EXISTS falla_cierre_baja ON integrations.inbox_messages');
   });
   afterAll(async () => { await app.end(); await admin.end(); await base.borrar(); });
+
+  describe('bajas sintéticas de Woo', () => {
+    const observar = (recurso: string, version: string, lifecycle = 'deleted', cuenta?: string) => admin.query(
+      `INSERT INTO integrations.resource_observations
+       (channel_account_id,topic,resource_id,remote_version,remote_hash,projection_hash,lifecycle)
+       VALUES ($1,'woo.products',$2,$3,$4,$4,$5)
+       ON CONFLICT (channel_account_id,topic,resource_id) DO UPDATE
+       SET remote_version=EXCLUDED.remote_version,lifecycle=EXCLUDED.lifecycle`,
+      [cuenta ?? woo, recurso, version, Buffer.alloc(32), lifecycle]);
+    const alta = async (id: number, extra = {}) => {
+      await encolar(woo, 'woo.products', String(id), { id, type: 'simple', sku: `FB-${id}`, ...extra }, { version: '2026-10-01T00:00:00Z' });
+      await proyector().unaVuelta();
+    };
+    const baja = (id: string, version = 'deleted:123', payload: unknown = { id, lifecycle: 'deleted' }) =>
+      encolar(woo, 'woo.products', id, payload, { version });
+
+    it('consume el sobre del motor, archiva sólo Woo y conserva identidad y modelo compartido con ML', async () => {
+      await alta(901);
+      await decision('MLA901', '', 'confirmar', 'FB-901');
+      await encolar(ml, 'ml.items', 'MLA901', { id: 'MLA901', status: 'active' });
+      await proyector().unaVuelta();
+      const antes = await q('SELECT id,sku,model_id FROM catalog.sellable_variants');
+      await observar('901', 'deleted:123');
+      const id = await baja('901');
+      expect(await proyector().unaVuelta()).toMatchObject({ aplicados: 1, rechazados: 0, errores: 0 });
+      expect(await estadoMensaje(id)).toBe('succeeded');
+      expect(await q(`SELECT canal,archivado_en IS NOT NULL AS archivada FROM catalog.external_representations ORDER BY canal`))
+        .toEqual([{ canal: 'mercadolibre', archivada: false }, { canal: 'woocommerce', archivada: true }]);
+      expect(await q('SELECT id,sku,model_id FROM catalog.sellable_variants')).toEqual(antes);
+      expect(await q('SELECT archivado_en FROM catalog.product_models')).toEqual([{ archivado_en: null }]);
+      expect(await q(`SELECT version_remota FROM catalog.external_representations WHERE canal='woocommerce'`))
+        .toEqual([{ version_remota: '2026-10-01T00:00:00Z' }]);
+    });
+
+    it('una baja del padre archiva sus representaciones y no permite que un hijo atrasado las reactive', async () => {
+      await alta(910, { type: 'variable' });
+      await alta(911, { type: 'variation', parent_id: 910 });
+      await observar('910', 'deleted:123');
+      await baja('910');
+      await proyector().unaVuelta();
+      await encolar(woo, 'woo.products', '911', { id: 911, parent_id: 910, type: 'variation', sku: 'FB-911' }, { version: '2026-10-02T00:00:00Z' });
+      expect(await proyector().unaVuelta()).toMatchObject({ errores: 1, rechazados: 0 });
+      expect(await q(`SELECT count(*)::int n FROM catalog.external_representations WHERE archivado_en IS NOT NULL`)).toEqual([{ n: 2 }]);
+    });
+
+    it('si la hija reaparece antes del padre conserva el mensaje y reactiva ambos al reconciliarlo', async () => {
+      await alta(913, { type: 'variable' });
+      await alta(914, { type: 'variation', parent_id: 913 });
+      await observar('913', 'deleted:123');
+      await baja('913');
+      await proyector().unaVuelta();
+      await observar('914', '2026-10-03T00:00:00Z', 'open');
+      const hija=await encolar(woo, 'woo.products', '914', { id: 914, parent_id: 913, type: 'variation', sku: 'FB-914' }, { version: '2026-10-03T00:00:00Z' });
+      expect(await proyector().unaVuelta()).toMatchObject({ errores: 1, aplicados: 0 });
+      expect(await estadoMensaje(hija)).toBe('retryable');
+      await observar('913', '2026-10-03T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '913', { id: 913, type: 'variable' }, { version: '2026-10-03T00:00:00Z' });
+      await admin.query('UPDATE integrations.inbox_messages SET available_at=now() WHERE id=$1', [hija]);
+      expect(await proyector().unaVuelta()).toMatchObject({ aplicados: 2, errores: 0 });
+      expect(await estadoMensaje(hija)).toBe('succeeded');
+      expect(await q(`SELECT count(*)::int n FROM catalog.external_representations WHERE archivado_en IS NULL`)).toEqual([{ n: 2 }]);
+    });
+
+    it('una hija nueva con parent_id textual respeta la baja vigente del padre', async () => {
+      await alta(916, { type: 'variable' });
+      await observar('916', 'deleted:123');
+      await baja('916');
+      await proyector().unaVuelta();
+      const hija=await encolar(woo, 'woo.products', '917', { id: 917, parent_id: '916', type: 'variation' });
+      expect(await proyector().unaVuelta()).toMatchObject({ errores: 1, aplicados: 0 });
+      expect(await estadoMensaje(hija)).toBe('retryable');
+      expect(await q(`SELECT count(*)::int n FROM catalog.external_representations WHERE variacion_normalizada='917'`)).toEqual([{ n: 0 }]);
+    });
+
+    it('doce hijas esperando no detienen al proyector y la misma instancia procesa la restauración', async () => {
+      await alta(1200, { type: 'variable' });
+      await observar('1200', 'deleted:123');
+      await baja('1200');
+      await proyector().unaVuelta();
+      const ids=[];
+      for(let id=1201;id<=1212;id++) ids.push(await encolar(woo,'woo.products',String(id),
+        {id,parent_id:1200,type:'variation',sku:`FB-${id}`},{version:'2026-10-03T00:00:00Z'}));
+      const p=proyector();
+      expect(await p.unaVuelta()).toMatchObject({ reclamados:12, errores:12, detenido:null });
+      await observar('1200','2026-10-03T00:00:00Z','open');
+      await encolar(woo,'woo.products','1200',{id:1200,type:'variable'},{version:'2026-10-03T00:00:00Z'});
+      await admin.query('UPDATE integrations.inbox_messages SET available_at=now() WHERE id=ANY($1::bigint[])',[ids]);
+      expect(await p.unaVuelta()).toMatchObject({ aplicados:13, errores:0, detenido:null });
+      expect(await q('SELECT count(*)::int n FROM catalog.external_representations WHERE archivado_en IS NULL')).toEqual([{ n:13 }]);
+    });
+
+    it('las esperas por padre que agotan intentos sí cuentan para el freno de errores', async () => {
+      await observar('1300','deleted:123');
+      const ids=[];
+      for(let id=1301;id<=1310;id++) ids.push(await encolar(woo,'woo.products',String(id),{id,parent_id:1300,type:'variation'}));
+      await admin.query('UPDATE integrations.inbox_messages SET max_attempts=1 WHERE id=ANY($1::bigint[])',[ids]);
+      const r=await proyector().unaVuelta();
+      expect(r.errores).toBe(10);
+      expect(r.detenido).not.toBeNull();
+      expect(await q(`SELECT count(*)::int n FROM integrations.inbox_messages WHERE status='dead_lettered'`)).toEqual([{ n:10 }]);
+    });
+
+    it('la baja de una variación no archiva al padre ni a sus hermanas', async () => {
+      await alta(920, { type: 'variable' });
+      await alta(921, { type: 'variation', parent_id: 920 });
+      await alta(922, { type: 'variation', parent_id: 920 });
+      await observar('921', 'deleted:123');
+      await baja('921');
+      expect(await proyector().unaVuelta()).toMatchObject({ aplicados: 1, rechazados: 0 });
+      expect(await q(`SELECT variacion_normalizada FROM catalog.external_representations WHERE archivado_en IS NOT NULL`))
+        .toEqual([{ variacion_normalizada: '921' }]);
+    });
+
+    it('tolera una baja sin representación y no crea productos artificiales', async () => {
+      await observar('930', 'deleted:123');
+      const id = await baja('930');
+      expect(await proyector().unaVuelta()).toMatchObject({ aplicados: 1, rechazados: 0 });
+      expect(await estadoMensaje(id)).toBe('succeeded');
+      expect(await q('SELECT count(*)::int n FROM catalog.product_models')).toEqual([{ n: 0 }]);
+    });
+
+    it('restaura con una observación nueva y omite una baja anterior que llega después', async () => {
+      await alta(940);
+      await observar('940', 'deleted:123');
+      await baja('940');
+      await proyector().unaVuelta();
+      await observar('940', '2026-10-03T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '940', { id: 940, type: 'simple', sku: 'FB-940' }, { version: '2026-10-03T00:00:00Z' });
+      await proyector().unaVuelta();
+      await baja('940', 'deleted:122');
+      expect(await proyector().unaVuelta()).toMatchObject({ aplicados: 1, rechazados: 0 });
+      expect(await q('SELECT archivado_en,version_remota FROM catalog.external_representations'))
+        .toEqual([{ archivado_en: null, version_remota: '2026-10-03T00:00:00Z' }]);
+    });
+
+    it('omite una proyección vieja mientras la observación sigue eliminada', async () => {
+      await alta(950);
+      await observar('950', 'deleted:123');
+      await baja('950');
+      await proyector().unaVuelta();
+      await encolar(woo, 'woo.products', '950', { id: 950, type: 'simple', sku: 'FB-950' }, { version: '2026-10-02T00:00:00Z' });
+      await proyector().unaVuelta();
+      expect(await q('SELECT archivado_en IS NOT NULL AS archivada FROM catalog.external_representations')).toEqual([{ archivada: true }]);
+    });
+
+    it('rechaza un aviso cuya identidad no coincide y no archiva otro recurso', async () => {
+      await alta(960);
+      await observar('960', 'deleted:123');
+      const id = await baja('960', 'deleted:123', { id: '961', lifecycle: 'deleted' });
+      expect(await proyector().unaVuelta()).toMatchObject({ rechazados: 1, errores: 0 });
+      expect(await estadoMensaje(id)).toBe('dead_lettered');
+      expect(await q('SELECT archivado_en FROM catalog.external_representations')).toEqual([{ archivado_en: null }]);
+    });
+
+    it('no usa una observación de otra cuenta para autorizar una baja', async () => {
+      await alta(970);
+      await observar('970', 'deleted:123', 'deleted', ml);
+      const id = await baja('970');
+      expect(await proyector().unaVuelta()).toMatchObject({ rechazados: 1, errores: 0 });
+      expect(await estadoMensaje(id)).toBe('dead_lettered');
+      expect(await q('SELECT archivado_en FROM catalog.external_representations')).toEqual([{ archivado_en: null }]);
+    });
+
+    it('reprocesar el mismo aviso conserva el archivo y no toca la misma identidad de otra cuenta', async () => {
+      await alta(980);
+      const otra = (await q<{ id: string }>(`INSERT INTO core.channel_accounts(company_id,channel,external_account)
+        VALUES ($1,'woocommerce',$2) RETURNING id`, [empresa, randomUUID()]))[0]!.id;
+      await encolar(otra, 'woo.products', '980', { id: 980, type: 'simple' });
+      await proyector().unaVuelta();
+      await observar('980', 'deleted:123');
+      const id = await baja('980');
+      await proyector().unaVuelta();
+      const antes = await q(`SELECT id,archivado_en,motivo_archivo FROM catalog.external_representations ORDER BY id`);
+      await admin.query(`UPDATE integrations.inbox_messages SET status='pending' WHERE id=$1`, [id]);
+      expect(await proyector().unaVuelta()).toMatchObject({ aplicados: 1, rechazados: 0 });
+      expect(await q(`SELECT id,archivado_en,motivo_archivo FROM catalog.external_representations ORDER BY id`)).toEqual(antes);
+      expect(await q(`SELECT archivado_en FROM catalog.external_representations WHERE channel_account_id=$1`, [otra]))
+        .toEqual([{ archivado_en: null }]);
+    });
+
+    it('si falla el cierre del inbox, revierte el archivo; el reintento aplica ambos juntos', async () => {
+      await alta(990);
+      await observar('990', 'deleted:123');
+      const id = await baja('990');
+      await admin.query(`CREATE OR REPLACE FUNCTION integrations.falla_cierre_baja() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.status='succeeded' THEN RAISE EXCEPTION 'cierre de baja inyectado'; END IF; RETURN NEW; END $$;
+        CREATE TRIGGER falla_cierre_baja BEFORE UPDATE ON integrations.inbox_messages FOR EACH ROW EXECUTE FUNCTION integrations.falla_cierre_baja()`);
+      expect(await proyector().unaVuelta()).toMatchObject({ errores: 1, aplicados: 0 });
+      expect(await estadoMensaje(id)).toBe('retryable');
+      expect(await q('SELECT archivado_en FROM catalog.external_representations')).toEqual([{ archivado_en: null }]);
+      await admin.query('DROP TRIGGER falla_cierre_baja ON integrations.inbox_messages');
+      await admin.query('UPDATE integrations.inbox_messages SET available_at=now() WHERE id=$1', [id]);
+      expect(await proyector().unaVuelta()).toMatchObject({ aplicados: 1, errores: 0 });
+      expect(await estadoMensaje(id)).toBe('succeeded');
+      expect(await q('SELECT archivado_en IS NOT NULL AS archivada FROM catalog.external_representations')).toEqual([{ archivada: true }]);
+    });
+  });
 
   describe('Woo', () => {
     it('un simple con SKU canónico crea modelo, variante con su SKU y representación', async () => {

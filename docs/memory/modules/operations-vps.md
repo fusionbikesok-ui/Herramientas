@@ -1,5 +1,15 @@
 # Operación del VPS y despliegue
 
+## Recuperación de Sombra — 2026-10-15
+
+La firma Woo quedó reparada conservando el secreto efectivo del proceso: `.env` usa comillas para que shell y dotenv lo interpreten igual. Webhooks 17–20 alineados y activos; pings autenticados 200. El monitor fue refrescado desde Woo y comprobó los ocho webhooks propios sin caídos ni ausentes. El ping prueba autenticación; la recuperación de entregas de negocio se verifica con tráfico natural, sin generar pedidos de prueba.
+
+Respaldo de la configuración de firma: `/opt/fusionbikes/backups/sombra-firma-2026-10-15T18-11-47-971Z`. Respaldo de PostgreSQL/configuraciones: `/opt/fusionbikes/backups/sombra-recuperacion-20261015`. Worker vigente verificado el 16/10 a las 14:22 UTC: `fusion-plataforma:sombra-mensajes-20261016-r4`, imagen `sha256:549542828674ab2966951bd6bbb1de3e17cb2fc024fe8ef17426b15bccd2acb1`, iniciado a las 14:05 UTC por otra sesión. Incorpora el adaptador liviano de PR42 y la corrección de restauración de hijas Woo de PR45, sobre la recuperación de PR38. Compose debe incluir `/opt/fusionbikes/plataforma-prod/sombra-worker.override.yml`. PostgreSQL/API/scheduler también fueron recreados el 16/10 alrededor de las 12:17 UTC; no afirmar que conservan los contenedores del 15/10. Cuotas efectivas verificadas sin cambios. El reporte firmado del 15/10 sigue rojo por faltantes históricos; las compensaciones terminaron y se conserva la evidencia. E1 continúa sin aceptación: se requiere observación sostenida de r4 y siete días verdes. Evidencia detallada en la rama de PR38: `docs/superpowers/evidence/e1/2026-10-16-seguimiento-capacidad.md`.
+
+Decisión de José: conservar la captura para consumidores futuros. La medición `scripts/ops/medir-recuperacion-sombra.sql` distingue esos pendientes sin intentos de los errores de consumidores activos. El reparto vigente mantiene 60 RPM globales: mensajes 30, envíos 20, publicaciones 4, pedidos 3, preguntas 2, reclamos 1; E2/E3 sigue en cero. Antes de siete días verdes falta confirmar capacidad sostenida durante 24–48 horas. No reducir crons para ocultar el atraso.
+
+La verificación de avance detectó que la imagen heredada no incluía el motor reanudable presente en Git. La reparación requiere publicar juntos `adaptadores/ml.ts`, `relectura.ts`, `motor.ts` y `corridas.ts`; comprobar sólo los adaptadores no basta. El artefacto debe probarse con su propio código extraído y el avance debe verificarse en `integrations.sweep_runs.cursor_after`.
+
 ## Operación vigente POS y ARCA — regreso a la web, 2026-10-06
 
 POS y Facturador ARCA vuelven a operar exclusivamente en fusionbikes.com.ar, por decisión del usuario. Herramientas ofrece accesos directos; los informes, directorio y etiquetas Andreani/corrector PDF permanecen en el VPS. Los enlaces antiguos ?fm_module=pos/facturador redirigen a la web. El gateway con FUSION_SALES_LOCATION=web bloquea las API antiguas de POS, facturación y envíos manuales del VPS; los enlaces PDF ya compartidos conservan su vigencia original.
@@ -631,22 +641,23 @@ archivos de esta interfaz, sin reiniciar ni restaurar bases, colas o configuraci
 - Publicación verificada el 2026-10-07: Home abre la bandeja con sesión real; rol de Matías consulta; API/worker/outbox operativos; ambos números permanecen pendientes y sin emisión. Respaldo de software/configuración y bases en `/opt/fusionbikes/backups/mensajeria-20261007`.
 
 
-## Copia manual de Herramientas retenida — 2026-10-14
+## Copia manual de Herramientas retenida — 2026-10-15
 
-Por instrucción del usuario se conservará como referencia de esta depuración únicamente la
-copia manual más reciente de la base de Herramientas:
-`/opt/fusionbikes/backups/fusion-20261014T143817Z-pre-marcar-ordenes-viejas.sqlite`.
-La copia conservada pasó `PRAGMA quick_check`; su SHA-256 figura en
-`/opt/fusionbikes/backups/manual-cleanup-20261014.json`.
+Por instrucción del usuario, conservar una sola copia manual de la base de Herramientas:
+la más reciente. En esta limpieza quedó
+`/opt/fusionbikes/backups/fusion-20261015T133253Z-predeploy-fixes.sqlite`.
+La copia conservada pasó `PRAGMA quick_check`; su SHA-256 y el registro de las siete
+copias anteriores eliminadas figuran en
+`/opt/fusionbikes/backups/manual-cleanup-20261015-sombra.json`.
+La copia manual del 14/10 mencionada en la revisión anterior fue reemplazada por esta.
 
-Se eliminaron las instantáneas manuales anteriores de esa misma base dentro de
-`/opt/fusionbikes/backups/`, incluidas las alojadas en paquetes de migración.
-Los archivos de código, configuración y dumps de otras bases se conservaron; los
-paquetes históricos que referencian las SQLite retiradas ya no pueden restaurarlas.
+Se retiraron únicamente las siete SQLite manuales anteriores de esa misma base, con
+6.583.726.080 bytes en total. Los archivos de código, configuración y dumps de otras
+bases se conservaron. Los procedimientos históricos que nombran las SQLite retiradas
+ya no pueden restaurarlas desde esas rutas.
 Los respaldos automáticos de `db/*.sqlite.gz`, `uploads/*.tar.gz`, PostgreSQL y la nube
-permanecen fuera de esta limpieza. Fue una depuración puntual; no se modificó la
-programación ni la retención automática.
-
+quedan fuera de esta decisión. Para nuevas copias manuales, comprobar la integridad de
+la nueva antes de retirar la anterior; no se agregó una tarea automática de limpieza.
 
 ## Modelos de Ollama depurados — 2026-10-14
 
@@ -868,3 +879,38 @@ conservan. Respaldo: /opt/fusionbikes/backups/mensajeria-autoopen-20261015; paqu
 respetando ediciones posteriores; nunca restaurar conversaciones/colas anteriores.
 Rama de archivo: codex/inbox-autoopen-20261015. Pruebas con datos ficticios y cero
 mensajes de prueba enviados a clientes.
+
+## Limpieza de desarrollo y QA — 2026-10-15
+
+Por autorización del usuario se retiraron 4 instalaciones anteriores de VS Code remoto, una caché de descargas y 8 copias antiguas de Herramientas usadas en QA.
+Se conserva VS Code 1.142.0 en `/root/.vscode-server/cli/servers/Stable-6d62b1d5dace93a33b3a6d3eca1317bd5e15bcb1`, además del lanzador, las extensiones instaladas y los datos de usuario.
+
+Se retiró la caché `/root/.vscode-server/data/CachedExtensionVSIXs`, que puede regenerarse con nuevas descargas. La caché `/root/.npm/_cacache` se conservó porque cambió durante las comprobaciones.
+Copias QA retiradas:
+
+- `/opt/fusion-sales-ai-qa-20261008/herramientas`
+- `/opt/fusion-message-actions-qa-20261008/herramientas`
+- `/opt/fusion-inbox-share-qa-20261007/herramientas`
+- `/opt/fusion-inbox-tools-qa-20261007/herramientas`
+- `/opt/fusion-messaging-qa-20261007/herramientas`
+- `/opt/fusion-multimedia-qa-20261008/herramientas`
+- `/opt/fusion-messaging-compact-qa-20261008/herramientas`
+- `/opt/fusion-unified-qa-20261007/herramientas`
+
+Los directorios padres de estas QA y sus archivos auxiliares se conservaron, incluidos los referenciados por contenedores detenidos. Los marcadores Git copiados dentro de las QA apuntaban al worktree original de `pausadas-volver`; el original y su registro se conservaron.
+
+Antes de cada borrado se verificaron procesos, archivos abiertos, montajes, contenedores, servicios, tareas programadas y registros de worktrees. La limpieza no incluye worktrees registrados, QA activa, `/root/.npm/_npx`, contenedores, imágenes, volúmenes ni bases y respaldos de producción. Manifiesto privado: `/opt/fusionbikes/backups/dev-cleanup-20261015.json`. No se agregó una tarea automática de limpieza.
+
+## Capacidad y bajas Woo — desplegado, 2026-10-15
+
+Las siete DLQ de `woo.products` provienen del sobre sintético del motor (`id`, `lifecycle=deleted`, versión `deleted:<corrida>`), no de productos sin tipo enviados por Woo. El contrato de la corrección es archivar sólo representaciones Woo cuya observación actual confirme la baja, conservando identidades, modelos compartidos y representaciones ML. Las versiones `deleted:` no se comparan como fechas ni se escriben en el campo temporal del catálogo. Una observación posterior permite reaparición; una baja vieja o una proyección anterior a una baja vigente no modifica el catálogo.
+
+Una variación cuya observación propia no está eliminada y cuyo padre aún figura eliminado se conserva para reintentar: no se completa como obsoleta, porque puede ser una restauración que llegó antes que su padre. Se acepta `parent_id` numérico o textual con el mismo contrato del proyector Woo.
+
+La espera transitoria por el padre tiene código propio y no alimenta ni diluye el umbral global mientras siga reintentable; al agotar intentos sí cuenta como fallo. Esto evita que varias hijas impidan que el mismo proyector procese la reaparición del padre.
+
+Plan de ejecución y reversión: `docs/superpowers/plans/2026-10-15-capacidad-barridos-bajas-woo.md`. El techo global del gateway permanece en 60 RPM y E2/E3 en cero; el ajuste de reparto no cambia intervalos ni habilita consumidores futuros. El despliegue debe partir de la imagen worker r2 efectiva: el código de catálogo en Git incluye opciones E3 todavía ausentes de esa imagen, por lo que copiar toda la carpeta activaría cambios fuera del alcance.
+
+Las siete entradas históricas de Woo se reprocesaron con el handler desplegado y `completarEnTx` en una única transacción; las siete quedaron `succeeded` y las siete DLQ se resolvieron con nota, conservando su historial. Catálogo sin mensajes pendientes/reintentables/DLQ en la comprobación posterior. No hubo escrituras a Woo/ML ni cambios de esquema. Se preservó la captura de las seis corrientes futuras sin intentos.
+
+Rollback de esta entrega: imagen r2 `sha256:20ee28ac78969751eae524728b51e6b96468160c3b85d6eb97d416cd8c1fae28` y `worker-before-r3.override.yml` guardados. Para cupos, restaurar sólo los seis valores anteriores desde `legacy-before-cupos.env` y recargar Herramientas comprobando salud; no sobrescribir cambios de configuración posteriores. `woo-before-r3.json` conserva la fotografía privada de siete inbox, siete DLQ y 28 representaciones. No restaurar una base anterior sobre producción.

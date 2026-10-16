@@ -1,6 +1,6 @@
 # Índice canónico de planificación y operación
 
-**Actualizado:** 2026-09-13
+**Actualizado:** 2026-10-15 (estado de E1)
 
 **Programa vigente:** E0–E26
 
@@ -20,8 +20,9 @@
 
 ## E1 activa
 
-- [Tramo 1 — diseño](specs/2026-09-15-e1-tramo1-fundacion-design.md) y [plan](plans/2026-09-15-e1-tramo1-fundacion.md): implementado y revisado en aislamiento; no desplegado.
-- [Tramo 2 — diseño](specs/2026-09-15-e1-tramo2-barridos-design.md) y [plan](plans/2026-09-15-e1-tramo2-barridos.md): aprobados para implementación exclusivamente efímera; los cinco cortes implementados y verificados con `E1_TRAMO=2 npm run test:e1` el 2026-09-16 (worker real contra el simulador dockerizado, gate de los 26 escenarios del tramo); no desplegado y pendiente de revisión independiente.
+- T1–T5 están desplegados en sombra. La autoridad operativa sigue en el legado; **E1 no está aceptada**. Estado y antecedentes: [ficha E1](deliveries/E1-fundacion-sombra.md).
+- [Recuperación de Sombra del 15/10](evidence/e1/2026-10-15-recuperacion-sombra.md): correcciones de progreso y firmas desplegadas; pendientes capacidad 24–48 h y siete días verdes. Se conserva la captura para consumidores futuros. [Plan y pendientes](plans/2026-10-15-recuperacion-sombra.md).
+- [Tramo 1 — diseño](specs/2026-09-15-e1-tramo1-fundacion-design.md) y [plan](plans/2026-09-15-e1-tramo1-fundacion.md); [Tramo 2 — diseño](specs/2026-09-15-e1-tramo2-barridos-design.md) y [plan](plans/2026-09-15-e1-tramo2-barridos.md): contratos y evidencia de implementación; consultar la ficha E1 para estado operativo.
 
 ## Revisiones abiertas
 

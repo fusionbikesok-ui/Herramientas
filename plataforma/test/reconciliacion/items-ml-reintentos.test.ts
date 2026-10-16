@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { adaptadorItemsMl } from '../../src/reconciliacion/adaptadores/ml.ts';
 import type { RespuestaCanal, TransporteCanal } from '../../src/reconciliacion/cliente-http.ts';
-import type { ContextoListado } from '../../src/reconciliacion/tipos.ts';
+import type { AdaptadorBarrido, ContextoListado, PaginaRemota } from '../../src/reconciliacion/tipos.ts';
 import { ErrorBarridoReintentable } from '../../src/worker/barridos.ts';
 
 // Vuelta completa de ml.items contra la guía de ML (Rate limit / Error 429): un 429 o un 5xx aislado se
@@ -28,12 +28,22 @@ function transporte(fallos: Record<string, number>, retryAfter?: number) {
   return { t, llamadas, maxEnVuelo: () => maxEnVuelo };
 }
 
+async function paginaScan(a: AdaptadorBarrido, posicion: Record<string, unknown> | null): Promise<PaginaRemota> {
+  let pagina = await a.listar(ctx, posicion);
+  const resources = [...pagina.resources];
+  while (pagina.nextPosition?.fase === 'contenido') {
+    pagina = await a.listar(ctx, pagina.nextPosition);
+    resources.push(...pagina.resources);
+  }
+  return { ...pagina, resources };
+}
+
 describe('ml.items full_scan: reintento por pedido y ritmo', () => {
   it('un 429 en el scan y otro en un bulk se reintentan sin fallar la página', async () => {
     const esperas: number[] = [];
     const tr = transporte({ scan: 1, bulk: 1 });
     const a = adaptadorItemsMl({ transporte: tr.t, db: {} as never, sellerId: '777', esperar: async (ms) => { esperas.push(ms); }, azar: () => 0.5 });
-    const p = await a.listar(ctx, null);
+    const p = await paginaScan(a, null);
     expect(p.resources).toHaveLength(60);
     expect(esperas.filter((ms) => ms >= 1000)).toHaveLength(2);
   });
@@ -41,7 +51,7 @@ describe('ml.items full_scan: reintento por pedido y ritmo', () => {
   it('los /items/bulk de una página van de a uno, no en paralelo', async () => {
     const tr = transporte({});
     const a = adaptadorItemsMl({ transporte: tr.t, db: {} as never, sellerId: '777', esperar: async () => {}, azar: () => 0.5 });
-    await a.listar(ctx, null);
+    await paginaScan(a, null);
     expect(tr.llamadas.filter((r) => r.startsWith('/items/bulk'))).toHaveLength(3);
     expect(tr.maxEnVuelo()).toBe(1);
   });
@@ -49,7 +59,7 @@ describe('ml.items full_scan: reintento por pedido y ritmo', () => {
   it('respeta Retry-After y agota el presupuesto antes de que venza el scroll', async () => {
     const esperas: number[] = [];
     const a = adaptadorItemsMl({ transporte: transporte({ scan: 99 }, 5).t, db: {} as never, sellerId: '777', esperar: async (ms) => { esperas.push(ms); }, azar: () => 0.5 });
-    await expect(a.listar(ctx, null)).rejects.toBeInstanceOf(ErrorBarridoReintentable);
+    await expect(paginaScan(a, null)).rejects.toBeInstanceOf(ErrorBarridoReintentable);
     expect(esperas[0]).toBe(5000);
     expect(esperas.reduce((s, x) => s + x, 0)).toBeLessThanOrEqual(90_000);
   });
@@ -57,7 +67,7 @@ describe('ml.items full_scan: reintento por pedido y ritmo', () => {
   it('pausa entre páginas cuando sigue un scroll', async () => {
     const esperas: number[] = [];
     const a = adaptadorItemsMl({ transporte: transporte({}).t, db: {} as never, sellerId: '777', esperar: async (ms) => { esperas.push(ms); }, azar: () => 0.5 });
-    await a.listar(ctx, { scroll_id: 'S1' });
+    await paginaScan(a, { scroll_id: 'S1' });
     expect(esperas[0]).toBeGreaterThan(0);
   });
 
@@ -72,7 +82,7 @@ describe('ml.items full_scan: reintento por pedido y ritmo', () => {
     const esperas: number[] = [];
     const tr = transporte({ scan: 5 }, 20);
     const a = adaptadorItemsMl({ transporte: tr.t, db: {} as never, sellerId: '777', esperar: async (ms) => { esperas.push(ms); }, azar: () => 0.5 });
-    await expect(a.listar(ctx, null)).rejects.toBeInstanceOf(ErrorBarridoReintentable);
+    await expect(paginaScan(a, null)).rejects.toBeInstanceOf(ErrorBarridoReintentable);
     expect(esperas).toEqual([20_000, 20_000, 20_000, 20_000]);
     expect(tr.llamadas.some((r) => r.startsWith('/items/bulk'))).toBe(false);
   });
@@ -99,16 +109,16 @@ describe('ml.items full_scan: reintento por pedido y ritmo', () => {
       },
     };
     const a = adaptadorItemsMl({ transporte: dedicado, db: {} as never, sellerId: '777', esperar: async (ms) => { esperas.push(ms); }, azar: () => 0.5 });
-    await expect(a.listar(ctx, null)).rejects.toBeInstanceOf(ErrorBarridoReintentable);
+    await expect(paginaScan(a, null)).rejects.toBeInstanceOf(ErrorBarridoReintentable);
     expect(esperas).toEqual([60_000]);
     expect(llamadas.filter((r) => r.startsWith('/items/bulk'))).toHaveLength(1);
   });
 
-  it('el presupuesto NO cruza páginas: cada listar() arranca con el suyo propio, gastado o no en la anterior', async () => {
+  it('el presupuesto NO cruza páginas de scan: cada scan arranca con el suyo propio', async () => {
     // Página 1 (sin scroll_id): el scan gasta 80s (Retry-After 80, un solo reintento) del presupuesto de ESA
-    // llamada a listar(). Página 2 (con scroll_id 'S1'): si el presupuesto sobreviviera entre llamadas, ya
+    // página de scan. Página 2 (con scroll_id 'S1'): si el presupuesto sobreviviera entre scans, ya
     // arrancaría con 80s gastados y su propio Retry-After de 40s revientaría (80000+40000=120000 > 90000).
-    // Como es una llamada nueva a listar(), arranca en 0 y esos 40s entran sin problema.
+    // Como es un scan nuevo, arranca en 0 y esos 40s entran sin problema.
     const esperas: number[] = [];
     let fallosScan1 = 1; let fallosScan2 = 1;
     const dedicado = {
@@ -126,9 +136,9 @@ describe('ml.items full_scan: reintento por pedido y ritmo', () => {
       },
     };
     const a = adaptadorItemsMl({ transporte: dedicado, db: {} as never, sellerId: '777', esperar: async (ms) => { esperas.push(ms); }, azar: () => 0.5 });
-    const p1 = await a.listar(ctx, null);
-    expect(p1.nextPosition).toEqual({ scroll_id: 'S1' });
-    const p2 = await a.listar(ctx, p1.nextPosition);
+    const p1 = await paginaScan(a, null);
+    expect(p1.nextPosition).toMatchObject({ scroll_id: 'S1' });
+    const p2 = await paginaScan(a, p1.nextPosition);
     expect(p2.resources).toHaveLength(5);
     // El 300 del medio es PAUSA_ENTRE_PAGINAS_MS (no exportada): la espera fija antes de reusar el scroll_id.
     expect(esperas).toEqual([80_000, 300, 40_000]);

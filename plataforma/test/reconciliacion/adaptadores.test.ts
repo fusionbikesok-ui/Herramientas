@@ -8,11 +8,11 @@ import { crearAdaptadoresWoo } from '../../src/reconciliacion/adaptadores/woo.ts
 import {
   crearClienteCanal, ErrorCanalTerminal, ErrorDestinoProhibido, ErrorMetodoProhibido, parsearRetryAfter,
 } from '../../src/reconciliacion/cliente-http.ts';
-import { completarCorrida, fallarCorrida, materializarCorridas, reclamarCorridas } from '../../src/reconciliacion/corridas.ts';
+import { completarCorrida, diferirCorridaPorCupo, fallarCorrida, materializarCorridas, reclamarCorridas } from '../../src/reconciliacion/corridas.ts';
 import { crearProcesadorMotor } from '../../src/reconciliacion/motor.ts';
 import { claveCorriente, type AdaptadorBarrido } from '../../src/reconciliacion/tipos.ts';
 import { descifrarSobre, type KeyringSobre } from '../../src/seguridad/sobre.ts';
-import { ErrorBarridoReintentable } from '../../src/worker/barridos.ts';
+import { ErrorBarridoReintentable, ErrorCupoSombraAgotado } from '../../src/worker/barridos.ts';
 import { crearSimulador, type DatosSimulador, type FixtureCanales, type LlamadaSimulador, type RegistroSim } from '../../../scripts/qa/simulador-canales.mjs';
 import { crearBaseDePrueba, type BaseDePrueba } from '../soporte/base.ts';
 
@@ -101,7 +101,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
   const inbox = (topic: string) => contar('select count(*) n from integrations.inbox_messages where topic=$1', [topic]);
 
   /** Programa y ejecuta una corrida de la corriente pedida, tal como lo haría scheduler + worker. */
-  async function barrer(topic: string, cursorKind = 'state_sweep', opciones: { reloj?: () => Date } = {}) {
+  async function barrer(topic: string, cursorKind = 'state_sweep', opciones: { reloj?: () => Date; adaptador?: AdaptadorBarrido } = {}) {
     const estrategia = topic === 'ml.shipments' ? 'convergence' : 'enumerable';
     await db.query(`insert into integrations.reconciliation_cursors
         (channel_account_id,topic,cursor_kind,strategy,overlap_seconds,interval_seconds,next_run_at)
@@ -110,7 +110,7 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
     [cuenta, topic, cursorKind, estrategia]);
     await materializarCorridas(db);
     const corrida = (await reclamarCorridas(db, 'w-adaptadores', [{ channelAccountId: cuenta, topic, cursorKind }], 1))[0]!;
-    const adaptador = adaptadores()[claveCorriente(topic, cursorKind)]!;
+    const adaptador = opciones.adaptador ?? adaptadores()[claveCorriente(topic, cursorKind)]!;
     const procesar = crearProcesadorMotor({ db, adaptador, keyring, reloj: opciones.reloj ?? reloj });
     try {
       const r = await procesar(corrida);
@@ -120,6 +120,60 @@ describe('adaptadores y cliente de barridos E1 T2', () => {
       throw error;
     }
   }
+
+  it('un scroll vencido después del checkpoint del scan falla sin declarar bajas ni adelantar el cursor', async () => {
+    await barrer('ml.items', 'full_scan');
+    const previo = (await db.query("select cursor_value from integrations.reconciliation_cursors where topic='ml.items'")).rows[0].cursor_value;
+    let lecturasReloj = 0;
+    const a = crearAdaptadoresMl({ transporte: cliente(), db, sellerId: SELLER,
+      esperar: async () => {}, ahora: () => ++lecturasReloj <= 2 ? 0 : 300_000,
+    })[claveCorriente('ml.items', 'full_scan')]!;
+    await expect(barrer('ml.items', 'full_scan', { adaptador: a })).rejects.toThrow('SCROLL_VENCIDO');
+    expect(await contar("select count(*) n from integrations.resource_observations where topic='ml.items' and lifecycle='deleted'")).toBe(0);
+    expect(await contar("select count(*) n from integrations.resource_observations where topic='ml.items'")).toBe(130);
+    expect((await db.query("select cursor_value from integrations.reconciliation_cursors where topic='ml.items'")).rows[0].cursor_value).toEqual(previo);
+    expect(await contar("select count(*) n from integrations.sweep_runs where topic='ml.items' and status='failed'")).toBe(1);
+  });
+
+  it('reanuda desde PostgreSQL tras un bulk y sólo declara bajas al completar el último bulk sin scroll', async () => {
+    await barrer('ml.items', 'full_scan');
+    const items = fixture.ml!.items!.slice(0, 40);
+    let permisos = 2;
+    const llamadas: string[] = [];
+    const crearAdaptador = () => crearAdaptadoresMl({ db, sellerId: SELLER, ahora: () => 0, transporte: {
+      async get(ruta) {
+        if (permisos-- <= 0) throw new ErrorCupoSombraAgotado('cupo', 1);
+        llamadas.push(ruta);
+        const body = ruta.includes('items/search')
+          ? { results: items.map(x => x.id), scroll_id: null }
+          : new URL(ruta, 'http://x').searchParams.get('ids')!.split(',').map(id => ({
+            id, status_code: 200, body: items.find(x => x.id === id),
+          }));
+        return { status: 200, body, headers: new Headers() };
+      },
+    } })[claveCorriente('ml.items', 'full_scan')]!;
+    const corrientes = [{ channelAccountId: cuenta, topic: 'ml.items', cursorKind: 'full_scan' }];
+    await db.query("update integrations.reconciliation_cursors set next_run_at=now()-interval '1 second' where topic='ml.items'");
+    await materializarCorridas(db);
+    const corrida = (await reclamarCorridas(db, 'antes-reinicio', corrientes, 1))[0]!;
+    await expect(crearProcesadorMotor({ db, keyring, reloj, adaptador: crearAdaptador() })(corrida)).rejects.toBeInstanceOf(ErrorCupoSombraAgotado);
+    const checkpoint = (await db.query('select cursor_after from integrations.sweep_runs where id=$1', [corrida.id])).rows[0].cursor_after;
+    expect(checkpoint.posicion.pendientes).toEqual(items.slice(20).map(x => x.id));
+    expect(await contar("select count(*) n from integrations.resource_observations where lifecycle='deleted'")).toBe(0);
+    await diferirCorridaPorCupo(db, corrida, 1);
+    await db.query('update integrations.sweep_runs set available_at=now() where id=$1', [corrida.id]);
+    permisos = 1;
+    const retomada = (await reclamarCorridas(db, 'despues-reinicio', corrientes, 1))[0]!;
+    expect(retomada.id).toBe(corrida.id);
+    const resultado = await crearProcesadorMotor({ db, keyring, reloj, adaptador: crearAdaptador() })(retomada);
+    expect(await contar("select count(*) n from integrations.resource_observations where lifecycle='deleted'")).toBe(0);
+    expect(await completarCorrida(db, retomada, resultado.cursorAfter, resultado.antesDeCerrar)).toBe('succeeded');
+    expect(llamadas.filter(x => x.includes('items/search'))).toHaveLength(1);
+    expect(llamadas.filter(x => x.includes('/items/bulk'))).toHaveLength(2);
+    expect(await contar("select count(*) n from integrations.resource_observations where lifecycle='deleted'")).toBe(90);
+    expect(await contar("select count(*) n from integrations.resource_observations where lifecycle<>'deleted'")).toBe(40);
+    expect(await inbox('ml.items')).toBe(220);
+  });
 
   describe('cliente HTTP de lectura', () => {
     it('rechaza métodos no GET, destinos externos y rutas que cambian el origen antes de la red', async () => {
