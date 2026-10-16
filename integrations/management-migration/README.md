@@ -1,5 +1,3 @@
-Estado vigente de entrega de comprobantes: email con PDF adjunto y WhatsApp manual disponibles en el VPS desde 2026-10-06. Ver [README-DELIVERY.md](README-DELIVERY.md). Los apartados de preparación histórica que indican correo/WhatsApp pendientes no describen esta entrega. POS operativo: [README-POS.md](README-POS.md); emisión fiscal: [arca/README-ARCA.md](arca/README-ARCA.md).
-
 # Integración de POS, Facturador y Taller — estado verificable
 
 Solicitud del usuario: llevar la gestión al VPS, mantener tienda/checkout en su hosting y Master Control íntegro. Este directorio conserva la implementación de la **copia de consulta**; no representa el corte operativo completo.
