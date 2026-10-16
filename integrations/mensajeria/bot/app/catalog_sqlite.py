@@ -159,6 +159,7 @@ def _build_products(rows: list[sqlite3.Row], base_url: str) -> list[dict[str, An
             "name": name,
             "sku": sku,
             "cash_price": price,
+            "price_source": "catalog_base_unverified",
             "regular_price": _price(row.get("regular_price")),
             "currency": "ARS",
             "free_shipping": False,

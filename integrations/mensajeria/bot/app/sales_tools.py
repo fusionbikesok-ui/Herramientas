@@ -20,6 +20,7 @@ class Tools:
     def __init__(self,text,history,conversation,key):
         self.text=text;self.history=history;self.conversation=conversation;self.key=key
         self.products={};self.responses={};self.final=None;self.sequence=0
+        self.requested_availability=None;self.request_checked=False;self.requested_family=None
     def remember(self,result,decision=None):
         self.sequence+=1;reference='fuente_'+str(self.sequence)
         self.responses[reference]=decision
@@ -33,34 +34,36 @@ class Tools:
         raise ValueError('unknown_tool')
     def search(self,args):
         query=str(args.get('query',''))[:180];size=str(args.get('size','')).upper().strip()[:12];color=str(args.get('color',''))[:50]
-        if size and not re.fullmatch(r'XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|\d{2}',size):raise ValueError('invalid_size')
+        if size and not re.fullmatch(r'XXXS|XXS|XS|S|M|ML|L|XL|XXL|XXXL|\d{2}',size):raise ValueError('invalid_size')
         from .catalog_words import NOISE
         terms=[w for w in words(query) if w not in NOISE]
         if not terms:return {'error':'Falta indicar tipo de producto, marca o modelo.'}
-        matches=[]
-        for source in load_products():
-            name=words(source.get('name',''))
-            if not all(w in name or (len(w)>4 and w.rstrip('s') in name) for w in terms):continue
-            p=available_product(source)
-            if p is None:continue
-            if size or color:
-                if p.get('variations'):
-                    variations=[]
-                    for v in p['variations']:
-                        a=v.get('attributes') or {};s=str(a.get('attribute_pa_talle') or a.get('attribute_talle') or a.get('size') or '').upper()
-                        c=' '.join(str(a.get(k) or '') for k in ['attribute_pa_color','attribute_color','color'])
-                        if (not size or s==size) and (not color or all(w in words(c) for w in words(color))):variations.append(v)
-                    if not variations:continue
-                    p=dict(p,variations=variations)
-                else:
-                    a=p.get('attributes') or {}
-                    if size and str(a.get('attribute_pa_talle') or a.get('size') or '').upper()!=size:continue
-                    if color and not all(w in words(a.get('attribute_pa_color','')) for w in words(color)):continue
-            matches.append(p)
-        matches.sort(key=lambda p:(len(words(p['name'])),p['id']))
+        from .sales_availability import requested_model,availability,matches as matches_query
+        catalog=load_products()
+        if not self.request_checked:
+            from .sales_availability import request_from_turn
+            request=request_from_turn(self.text,self.history,catalog)
+            if request:
+                self.requested_availability=availability(catalog,request['query'],size,color)
+                self.requested_family=request['family_query']
+            self.request_checked=True
+        from .sales_availability import stocked_matches
+        matches=stocked_matches(catalog,query,size,color)
         selected=hydrate(matches[:6],limit=75)
-        for p in selected:self.products[p['id']]=p
-        return self.remember({'products':[self.compact(p) for p in selected],'more':len(matches)>6,'query':query,'size':size,'color':color,'notice':'Sólo coincidencias verificadas con stock. Si no hay resultados, reformulá marca/modelo o preguntá; no concluyas que la tienda no lo vende.'})
+        alternatives=[]
+        report=self.requested_availability
+        if not selected and report and report['status']=='out_of_stock' and self.requested_family:
+            from .catalog_words import product_kind
+            kinds={product_kind(p) for p in catalog if p['id'] in report['product_ids']}
+            candidates=stocked_matches(catalog,self.requested_family,size,color)
+            candidates=[p for p in candidates if p['id'] not in report['product_ids'] and len(kinds)==1 and None not in kinds and product_kind(p) in kinds]
+            alternatives=hydrate(candidates[:2],limit=75)
+        for p in selected+alternatives:self.products[p['id']]=p
+        public_report={k:v for k,v in report.items() if k!='product_ids'} if report else None
+        return self.remember({'products':[self.compact(p) for p in selected],
+            'alternatives':[self.compact(p) for p in alternatives],
+            'more':len(matches)>6,'query':query,'size':size,'color':color,'requested_availability':public_report,
+            'notice':'products son coincidencias con stock; alternatives son otros modelos similares con stock, NO el solicitado. Sólo sus IDs pueden usarse en ficha_producto o product_ids. Cuando requested_availability.status=out_of_stock, el servidor antepone el aviso de falta de stock y la reposición confirmada. Mostrá hasta dos alternatives en product_ids si existen; si no, buscá una alternativa pertinente. No intentes cotizar ni pedir ficha del modelo agotado. No reescribas el aviso ni la reposición en message. Si not_found/unconfirmed, no afirmes agotado. 9.6 y 9.7 son modelos distintos.'})
     def compact(self,p):
         return {'id':p['id'],'name':p['name'],'url':p['url'],'cash_price':p.get('cash_price') or None,'payment_options':p.get('payment_options') or [],'free_shipping':p.get('free_shipping') is True,
             'variants':[{'id':v['id'],'attributes':v.get('attributes') or {},'cash_price':v.get('display_price') or None} for v in (p.get('variations') or [])[:20]]}
@@ -81,7 +84,7 @@ class Tools:
         business=clean(active_config()).get('business') or {}
         decision=payment_decision(question,self.history,self.conversation,business,load_products)
         if decision is None:
-            for fn in [business_decision,shipping_decision,commercial_decision]:
+            for fn in [shipping_decision,business_decision,commercial_decision]:
                 found=fn(question,self.history,business)
                 if found is not None:decision=found[0];break
         if decision is None:return {'error':'Esa condición necesita confirmación de un asesor.'}
@@ -110,13 +113,20 @@ class Tools:
         # Financial data and links only enter through verified server blocks.
         from .routing import normalize
         claim=message+' '+followup
-        forbidden=bool(re.search(r'https?://|www\.|\$|\b(?:ars|pesos|usd|dolares?|cbu|cvu|alias)\b',claim,re.I) or re.search(r'\b(?:usd|dolares?|precio|contado|cuotas?|transferencia|tarjetas?|envios?|entrega|descuentos?|promociones?|garantia|stock|disponibles?)\b',normalize(claim)))
+        forbidden=bool(re.search(r'https?://|www\.|\$|\b(?:ars|pesos|usd|dolares?|cbu|cvu|alias)\b',claim,re.I) or re.search(r'\b(?:usd|dolares?|precio|contado|cuotas?|transferencia|tarjetas?|envios?|entrega|descuentos?|promociones?|garantia|stock|disponibles?|reposicion|reingres\w*|encontr[eé])\b',normalize(claim)))
         if len(claim)>1200 or forbidden:raise ValueError('ungrounded_commercial_text')
-        blocks=[message] if message else []
+        report=self.requested_availability
+        out=report is not None and report['status']=='out_of_stock'
+        if out:
+            from .sales_availability import intro
+            # The explanation always precedes the substitute, independent of model copy.
+            blocks=[intro(report,bool(ids))]
+            if message and not ids:blocks.append(message)
+        else:blocks=[message] if message else []
         if ids:
             from .catalog_flow import _render
             cards=_render([self.products[i] for i in dict.fromkeys(ids)],{'bounds':None,'size':None,'kind':None},'')
-            if message:cards=cards.partition('\n\n')[2] or cards
+            if message or out:cards=cards.partition('\n\n')[2] or cards
             blocks.append(cards)
         decisions=[self.responses[r] for r in dict.fromkeys(refs)]
         blocks.extend(d.reply for d in decisions)

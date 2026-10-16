@@ -264,7 +264,7 @@ def wordpress_callback(payload: dict[str, Any]) -> dict[str, Any]:
     return post_wordpress(get_settings().wordpress_inbound_url, payload)
 
 
-def search_catalog(query: str, limit: int = 6) -> list[dict[str, Any]]:
+def _search_catalog(query: str, limit: int = 6) -> list[dict[str, Any]]:
     if len(query.strip()) < 2:
         return []
     settings = get_settings()
@@ -304,6 +304,11 @@ def search_catalog(query: str, limit: int = 6) -> list[dict[str, Any]]:
     products = result.get("products", [])
     logger.info("catalog_source=wordpress products=%s", len(products) if isinstance(products, list) else 0)
     return products if isinstance(products, list) else []
+
+
+def search_catalog(query: str, limit: int = 6):
+    from .commercial_prices import hydrate,untrusted
+    return hydrate(untrusted(_search_catalog(query,limit)))
 
 
 def local_catalog_status() -> dict[str, Any]:
@@ -386,7 +391,7 @@ def _store_api_service_catalog(limit: int = 8) -> list[dict[str, Any]]:
     return products
 
 
-def search_service_catalog(limit: int = 8) -> list[dict[str, Any]]:
+def _search_service_catalog(limit: int = 8) -> list[dict[str, Any]]:
     settings = get_settings()
     mode = str(_runtime_setting("catalog_mode", "auto") or "auto").strip().lower()
     if mode != "wordpress":
@@ -409,6 +414,11 @@ def search_service_catalog(limit: int = 8) -> list[dict[str, Any]]:
         # que tengan desactivada la Store API pública.
         pass
     return search_catalog("service", limit)
+
+
+def search_service_catalog(limit: int = 8):
+    from .commercial_prices import hydrate,untrusted
+    return hydrate(untrusted(_search_service_catalog(limit)))
 
 
 def send_whatsapp_text(phone_number_id: str, recipient: str, text: str) -> str:

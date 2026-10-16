@@ -171,7 +171,7 @@ def technical_kind(text):
 def version_question(candidates, intent):
     intro='Para orientarte con el talle' if intent=='fit' else 'Para revisar el equipamiento o dato técnico'
     options=['• '+str(p.get('name',''))+'\n'+str(p.get('url','')) for p in candidates[:5]]
-    reply=intro+', encontré varias versiones:\n\n'+'\n\n'.join(options)
+    reply=intro+', estas son las versiones del catálogo:\n\n'+'\n\n'.join(options)
     if len(candidates)>5:reply+='\n\nHay más versiones con ese nombre.'
     return answer(reply+'\n\n¿Cuál de estas versiones estás mirando?',candidates[:5],reason='Aclarar versión para '+intent)
 
@@ -323,7 +323,7 @@ def inquiry_decision(text, history, conversation, business, loader):
 
     reverse_fit=re.search(r'\b(?:para que altura|que altura|cuanto (?:debe|tiene que) medir|para cuanto)\b.*?\b(?:talle\s+)?(xxs|xs|s|m|l|xl|xxl)\b',v)
     fit=bool(re.search(r'consultar (?:por |sobre )?(?:(?:el|los|la|las) )?(?:talles?|tallas?)\b|que (?:talle|talla).*(?:soy|corresponde|recomend|necesito)|talle.*(?:correcto|queda|sirve)|\b(?:mido|entrepierna)\b',v))
-    fit=fit or bool(reverse_fit)
+    fit=fit or bool(reverse_fit) or bool(re.search(r'\bque (?:talle|talla)(?: seria| soy| me corresponde)?[ ?.!]*$',v))
     fit_follow=any(cue in prev for cue in ('cuanto medis','medida de entrepierna','para orientarte con el talle','segun nuestra tabla base'))
     technical=technical_kind(text)
     if not technical and ('queres confirmar algun componente en particular' in prev or last.strip().endswith(HUMAN_OFFER)):
