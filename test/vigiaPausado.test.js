@@ -376,4 +376,43 @@ describe('vigiaPausado', () => {
       expect(r.pausadas).toBe(1);
     });
   });
+
+  describe('cierre del incidente vigia_formato', () => {
+    const incidente = () => db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='mercadolibre' AND proceso='vigia_formato' AND tipo_error='datos'").get();
+
+    it('(a) incidente activo + todas las pausas revisadas + corrida sin cambios → se resuelve', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      expect(incidente().estado).toBe('activo');
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('(a2) lo mismo con una corrida que trae cambios que no abren incidente (ya pausada)', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA2|','MLA2','','x','paused','out_of_stock',0,datetime('now'))`).run();
+      await procesarCambios(db, CFG, [cambio(2)]);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('(b) con una pausa sin revisar el incidente sigue activo', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+      await procesarCambios(db, CFG, [cambio(1, { valor_nuevo: '6' })]);
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('(c) una corrida que pausa abre o actualiza el incidente como siempre', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('resuelto');
+      await procesarCambios(db, CFG, [cambio(3)]);
+      expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato' AND estado='activo'").get().n).toBe(1);
+    });
+  });
 });
