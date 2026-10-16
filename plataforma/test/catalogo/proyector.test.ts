@@ -175,6 +175,36 @@ describe('E2-PRY-10 proyector del catálogo', () => {
         .toEqual([{ variacion_normalizada: '921' }]);
     });
 
+    it('al restaurar el padre se reabren las variaciones que archivó su baja', async () => {
+      await alta(1010, { type: 'variable' });
+      await alta(1011, { type: 'variation', parent_id: 1010 });
+      await observar('1010', 'deleted:123');
+      await baja('1010');
+      await proyector().unaVuelta();
+      expect(await q(`SELECT count(*)::int n FROM catalog.external_representations WHERE archivado_en IS NOT NULL`)).toEqual([{ n: 2 }]);
+      await observar('1010', '2026-10-03T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '1010', { id: 1010, type: 'variable' }, { version: '2026-10-03T00:00:00Z' });
+      await proyector().unaVuelta();
+      expect(await q(`SELECT variacion_normalizada,archivado_en,motivo_archivo FROM catalog.external_representations ORDER BY variacion_normalizada`))
+        .toEqual([{ variacion_normalizada: '', archivado_en: null, motivo_archivo: null },
+          { variacion_normalizada: '1011', archivado_en: null, motivo_archivo: null }]);
+    });
+
+    it('al restaurar el padre no reabre una variación cuya propia observación sigue eliminada', async () => {
+      await alta(1020, { type: 'variable' });
+      await alta(1021, { type: 'variation', parent_id: 1020 });
+      await observar('1021', 'deleted:123');
+      await baja('1021');
+      await observar('1020', 'deleted:123');
+      await baja('1020');
+      await proyector().unaVuelta();
+      await observar('1020', '2026-10-03T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '1020', { id: 1020, type: 'variable' }, { version: '2026-10-03T00:00:00Z' });
+      await proyector().unaVuelta();
+      expect(await q(`SELECT variacion_normalizada FROM catalog.external_representations WHERE archivado_en IS NOT NULL`))
+        .toEqual([{ variacion_normalizada: '1021' }]);
+    });
+
     it('tolera una baja sin representación y no crea productos artificiales', async () => {
       await observar('930', 'deleted:123');
       const id = await baja('930');

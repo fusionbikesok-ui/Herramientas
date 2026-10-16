@@ -145,6 +145,7 @@ export async function aplicarProyeccion(ctx: ContextoAplicacion, p: Proyeccion):
     if (obs.tipo === 'contenedor') {
       const contenedorId = await upsertRepresentacion(tx, empresa, ctx, obs, { modelo: await obtenerModelo(), variante: null, omitida: false }, p.archivar);
       resumen.representaciones++;
+      if (ctx.canal === 'woocommerce' && p.archivar === null) await reabrirHijasDeBajaWoo(tx, ctx.cuenta, obs.recurso);
       await persistirExtras(tx, ctx, contenedorId, obs, resumen, empresa);
       continue;
     }
@@ -357,6 +358,24 @@ async function upsertModelo(
        version = product_models.version + 1
      RETURNING id`,
     [empresa, cuenta, origen, clave, titulo, actualizarTitulo, archivar])).rows[0]!.id;
+}
+
+/**
+ * La baja del padre Woo archiva también sus variaciones (atenderBajaWoo). Al restaurar el padre, esas
+ * variaciones no reciben mensaje propio: se reabren acá, pero sólo las que archivó esa baja y cuya
+ * observación E1 no esté eliminada (una variación borrada por su cuenta sigue archivada).
+ */
+async function reabrirHijasDeBajaWoo(tx: Consultable, cuenta: string, padre: string): Promise<void> {
+  await tx.query(
+    `UPDATE catalog.external_representations r
+        SET archivado_en = NULL, motivo_archivo = NULL, estado_remoto = NULL, observado_en = now()
+      WHERE r.channel_account_id = $1 AND r.canal = 'woocommerce' AND r.recurso = $2
+        AND r.variacion_normalizada <> '' AND r.archivado_en IS NOT NULL
+        AND r.motivo_archivo = 'baja confirmada por barrido Woo'
+        AND NOT EXISTS (SELECT 1 FROM integrations.resource_observations o
+                         WHERE o.channel_account_id = r.channel_account_id AND o.topic = 'woo.products'
+                           AND o.resource_id = r.variacion_normalizada AND o.lifecycle = 'deleted')`,
+    [cuenta, padre]);
 }
 
 async function upsertRepresentacion(
