@@ -1,0 +1,9 @@
+qa.env
+*.env
+!qa.env.example
+__pycache__/
+*.pyc
+images.json
+environment-verification.json
+test-result.txt
+.codex-migration-qa

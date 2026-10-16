@@ -1,0 +1,189 @@
+{
+  "name": "fusion-chat-migration-qa",
+  "services": {
+    "api": {
+      "image": "sha256:0524e75d9eb1e424945fffb9d27bb187a372dceb5337f51892ccf7c7bd0fce9b",
+      "pull_policy": "never",
+      "env_file": [
+        "qa.env"
+      ],
+      "volumes": [
+        "./app:/srv/fusion-chatbot/app:ro",
+        "./tests:/srv/fusion-chatbot/tests:ro"
+      ],
+      "read_only": true,
+      "tmpfs": [
+        "/tmp:size=16m,noexec,nosuid,nodev"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "restart": "unless-stopped",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "5m",
+          "max-file": "2"
+        }
+      },
+      "depends_on": {
+        "postgres": {
+          "condition": "service_healthy"
+        },
+        "redis": {
+          "condition": "service_healthy"
+        }
+      },
+      "command": [
+        "uvicorn",
+        "app.native_main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--no-access-log",
+        "--no-proxy-headers"
+      ],
+      "mem_limit": "256m",
+      "cpus": 0.5,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=4)"
+        ],
+        "interval": "10s",
+        "timeout": "5s",
+        "retries": 6
+      }
+    },
+    "worker": {
+      "image": "sha256:0524e75d9eb1e424945fffb9d27bb187a372dceb5337f51892ccf7c7bd0fce9b",
+      "pull_policy": "never",
+      "env_file": [
+        "qa.env"
+      ],
+      "volumes": [
+        "./app:/srv/fusion-chatbot/app:ro",
+        "./tests:/srv/fusion-chatbot/tests:ro"
+      ],
+      "read_only": true,
+      "tmpfs": [
+        "/tmp:size=16m,noexec,nosuid,nodev"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "restart": "unless-stopped",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "5m",
+          "max-file": "2"
+        }
+      },
+      "depends_on": {
+        "postgres": {
+          "condition": "service_healthy"
+        },
+        "redis": {
+          "condition": "service_healthy"
+        }
+      },
+      "command": [
+        "python",
+        "-m",
+        "app.native_worker"
+      ],
+      "mem_limit": "160m",
+      "cpus": 0.25
+    },
+    "postgres": {
+      "image": "sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685",
+      "pull_policy": "never",
+      "environment": {
+        "POSTGRES_DB": "native_chat_qa",
+        "POSTGRES_USER": "native_chat_qa",
+        "POSTGRES_PASSWORD": "${QA_POSTGRES_PASSWORD}"
+      },
+      "volumes": [
+        "pgdata:/var/lib/postgresql/data"
+      ],
+      "mem_limit": "256m",
+      "cpus": 0.3,
+      "restart": "unless-stopped",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "5m",
+          "max-file": "2"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "pg_isready",
+          "-U",
+          "native_chat_qa",
+          "-d",
+          "native_chat_qa"
+        ],
+        "interval": "5s",
+        "timeout": "3s",
+        "retries": 12
+      }
+    },
+    "redis": {
+      "image": "sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2",
+      "pull_policy": "never",
+      "command": [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "48mb",
+        "--maxmemory-policy",
+        "noeviction"
+      ],
+      "volumes": [
+        "redisdata:/data"
+      ],
+      "mem_limit": "96m",
+      "cpus": 0.15,
+      "restart": "unless-stopped",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "5m",
+          "max-file": "2"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "redis-cli",
+          "ping"
+        ],
+        "interval": "5s",
+        "timeout": "3s",
+        "retries": 12
+      }
+    }
+  },
+  "volumes": {
+    "pgdata": {},
+    "redisdata": {}
+  },
+  "networks": {
+    "default": {
+      "internal": true
+    }
+  }
+}
