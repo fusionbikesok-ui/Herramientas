@@ -60,10 +60,13 @@ export async function atenderBajaWoo(tx: Consultable, r: Reclamo, payload: unkno
     const resultado = await tx.query(
       `UPDATE catalog.external_representations
        SET archivado_en=COALESCE(archivado_en,now()),
-           motivo_archivo=COALESCE(motivo_archivo,'baja confirmada por barrido Woo'), estado_remoto='deleted'
+           motivo_archivo=COALESCE(motivo_archivo,'baja confirmada por barrido Woo'),
+           -- Las hijas archivadas por la baja del PADRE conservan su estado: se reabren si el padre vuelve.
+           estado_remoto=CASE WHEN variacion_normalizada IN ('',$2) THEN 'deleted' ELSE estado_remoto END
        WHERE channel_account_id=$1 AND canal='woocommerce'
          AND (recurso=$2 OR variacion_normalizada=$2)
-         AND (archivado_en IS NULL OR estado_remoto IS DISTINCT FROM 'deleted')`,
+         AND (archivado_en IS NULL
+              OR (variacion_normalizada IN ('',$2) AND estado_remoto IS DISTINCT FROM 'deleted'))`,
       [r.channelAccountId, r.resourceId]);
     archivadas = resultado.rowCount ?? 0;
     // No poner deleted:<corrida> en version_remota: no es una fecha comparable y bloquearía
