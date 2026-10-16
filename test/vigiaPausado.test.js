@@ -406,6 +406,63 @@ describe('vigiaPausado', () => {
       expect(incidente().estado).toBe('activo');
     });
 
+    const revisarTodo = () => db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
+
+    it('el tope (excede) seguido de una corrida vacía sigue activo: esas filas quedan pausada=0 sin revisar', async () => {
+      const muchos = Array.from({ length: UMBRAL_PAUSA_MASIVA + 1 }, (_, i) => cambio(i + 1));
+      await procesarCambios(db, CFG, muchos);
+      expect(incidente().estado).toBe('activo');
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('un PUT de ML con 500 seguido de una corrida vacía sigue activo', async () => {
+      mlFetch.mockResolvedValue({ status: 500, data: {} });
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r.errores).toBe(1);
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('una fila en vuelo (insertada, sin resultado de pausa) mantiene el incidente activo', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      revisarTodo();
+      db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, sku, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+        VALUES ('MLA9|','MLA9','FB-9','UNITS_PER_PACK','1','6',0,datetime('now'))`).run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('corridas solapadas: mientras la corrida A espera a ML, una corrida B vacía no cierra el incidente', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      revisarTodo();
+      let estadoDuranteB = null;
+      mlFetch.mockImplementation(async () => {
+        await procesarCambios(db, CFG, []); // corrida B mientras la fila de A está en vuelo
+        estadoDuranteB = incidente().estado;
+        return { status: 200, data: {} };
+      });
+      await procesarCambios(db, CFG, [cambio(2)]);
+      expect(estadoDuranteB).toBe('activo');
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('una corrida de solo ruido con todo revisado resuelve', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      revisarTodo();
+      const r = await procesarCambios(db, CFG, [cambioCat(7, { valor_anterior: 'X', valor_nuevo: null })]);
+      expect(r).toMatchObject({ pausadas: 0, ignorados_por_ruido: 1 });
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('migraciones, avisos de catálogo y ya pausadas sin revisar NO traban el cierre (caso de las 94 filas de prod)', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      revisarTodo();
+      await procesarCambios(db, CFG, [cambioCat(5)]); // vacío → producto: aviso de catálogo, queda sin revisar
+      expect(db.prepare('SELECT COUNT(*) n FROM ml_publicacion_cambios WHERE revisado_en IS NULL').get().n).toBe(1);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
     it('(c) una corrida que pausa abre o actualiza el incidente como siempre', async () => {
       await procesarCambios(db, CFG, [cambio(1)]);
       db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
