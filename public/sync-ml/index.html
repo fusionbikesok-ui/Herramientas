@@ -441,19 +441,32 @@ async function verPlan(){
 async function aplicarPlan(){
   if(!planPrecios||!planPrecios.length||corriendo)return;
   corriendo=true;
-  var lista=planPrecios, aplicados=[], fallados=[];
-  for(var i=0;i<lista.length;i++){
-    band('warn','Aplicando precios: '+(i+1)+' de '+lista.length+'…');
-    var x=lista[i];
+  // ML exige el mismo precio para todas las variaciones de una publicación. Se agrupa TODO por ítem: si alguna clave del
+  // grupo es 'ITEM|VARIACION' se hace un solo pedido al ítem con el precio más alto (nunca dos escrituras al mismo ítem);
+  // si no, una clave simple va sola. Un error marca fallado a todo el grupo y no se reactiva.
+  var lista=planPrecios, aplicados=[], fallados=[], grupos={}, tareas=[];
+  lista.forEach(function(x){
+    var id=x.item_id||String(x.clave).split('|')[0];
+    if(!grupos[id]){grupos[id]={itemId:id,filas:[]};tareas.push(grupos[id]);}
+    grupos[id].filas.push(x);
+  });
+  for(var i=0;i<tareas.length;i++){
+    band('warn','Aplicando precios: '+(i+1)+' de '+tareas.length+'…');
+    var t=tareas[i], esVar=t.filas.some(function(f){return String(f.clave).indexOf('|')>=0});
     try{
-      await leerJson(await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:x.clave,precio:x.precio})}));
-      aplicados.push(x);
-    }catch(e){fallados.push({x:x,error:e.message})}
+      if(esVar){
+        var max=Math.max.apply(null,t.filas.map(function(f){return f.precio}));
+        await leerJson(await fetch('/api/precios/actualizar-precio-item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemId:t.itemId,precio:max})}));
+      }else{
+        await leerJson(await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:t.filas[0].clave,precio:t.filas[0].precio})}));
+      }
+      t.filas.forEach(function(x){aplicados.push(x)});
+    }catch(e){t.filas.forEach(function(x){fallados.push({x:x,error:e.message})})}
   }
   var reactivadas=0, errReact=null;
   if(aplicados.length){
     try{
-      var dd=await leerJson(await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:aplicados.map(function(x){return x.item_id})})}));
+      var dd=await leerJson(await fetch('/api/sync/reactivar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemIds:aplicados.map(function(x){return x.item_id}).filter(function(id,i,a){return a.indexOf(id)===i})})}));
       reactivadas=dd.reactivados!=null?dd.reactivados:aplicados.length;
     }catch(e){errReact=e.message}
   }

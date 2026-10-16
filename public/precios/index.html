@@ -503,7 +503,8 @@ async function aplicarObjetivos(){
     var t=tareas[i];
     btn.textContent='Aplicando… ('+(i+1)+'/'+tareas.length+')';
     try{
-      var r=t.claves.length>1
+      // Toda variación (clave con '|') va por el ítem completo, aunque se haya elegido una sola: ML rechaza precios distintos.
+      var r=t.esVariacion
         ? await fetch('/api/precios/actualizar-precio-item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({itemId:t.itemId,precio:t.precio})})
         : await fetch('/api/precios/actualizar-precio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clave:t.claves[0],precio:t.precio})});
       var d=await leerJson(r);
@@ -531,7 +532,7 @@ function agruparPorPublicacion(claves){
   });
   return orden.map(function(id){
     var g=grupos[id], max=Math.max.apply(null,g.precios), min=Math.min.apply(null,g.precios);
-    return {itemId:g.itemId,claves:g.claves,precio:max,distintos:max!==min};
+    return {itemId:g.itemId,claves:g.claves,precio:max,distintos:max!==min,esVariacion:g.claves.some(function(k){return String(k).indexOf('|')>=0;})};
   });
 }
 
