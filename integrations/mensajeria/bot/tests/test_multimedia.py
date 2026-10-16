@@ -21,7 +21,7 @@ class MultimediaTests(unittest.TestCase):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
   self.path=Path(self.temp.name)/'config.json'
   self.env=patch.dict(os.environ,{'MULTIMEDIA_CONFIG_PATH':str(self.path)});self.env.start();self.addCleanup(self.env.stop)
-  set_system_setting('sales_openai',{'enabled':False,'monthly_usd':10,'revision':0});set_system_setting('bot_enabled',True);set_system_setting('whatsapp_bot_number:5493515214819',True)
+  set_system_setting('bot_enabled',True);set_system_setting('whatsapp_bot_number:5493515214819',True)
  def setup_config(self,budget=10,**extra):
   return cfg.save_config(dict(revision=cfg.read_config()['revision'],api_key=FAKE,images=True,audio=True,monthly_usd=budget,**extra))
  def media(self,kind='image'):
