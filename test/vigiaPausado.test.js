@@ -470,6 +470,8 @@ describe('vigiaPausado', () => {
       const lote = [...Array.from({ length: UMBRAL_PAUSA_MASIVA + 1 }, (_, i) => cambio(i + 1)), cambio(99)];
       const r = await procesarCambios(db, CFG, lote);
       expect(r.pausadas).toBe(0);
+      // El tope omitió las 6 que había que pausar; la ya pausada no se cuenta como omitida sino como ya_pausadas.
+      expect(r).toMatchObject({ omitidos_por_umbral: UMBRAL_PAUSA_MASIVA + 1, ya_pausadas: 1 });
       expect(incidente().estado).toBe('activo');
       const ya = db.prepare("SELECT revisado_en, nota FROM ml_publicacion_cambios WHERE item_id='MLA99'").get();
       expect(ya.nota).toContain('ya estaba pausada');
