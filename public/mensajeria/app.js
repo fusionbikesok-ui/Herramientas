@@ -1,3 +1,4 @@
+import {createAttention} from './attention.js?v=attention1';
 import {originLabel,prospectPreview,renderProspects} from './prospects.js';
 import {savedReply,messageLabel,forwardBlock} from './message-actions.js?v=351ec445ab57';
 const API = '../api/mensajeria';
@@ -17,7 +18,7 @@ export function shouldClaimOnOpen(actor, thread, pending = false) {
   return Boolean(['agent', 'supervisor'].includes(actor?.role) && thread?.status === 'open' && !thread.owner_id && !pending);
 }
 export function filterHelp(filter) {
-  return ({unread:'Sin responsable: quedan acá hasta que un operador las tome, aunque responda la IA.',mine:'Conversaciones a tu cargo. El número celeste indica mensajes nuevos.',all:'Conversaciones abiertas, atendidas o pendientes.',unassigned:'Todas las conversaciones abiertas sin responsable, incluido el historial.',closed:'Conversaciones cerradas. Abrir el historial no las reactiva.'})[filter] || '';
+  return ({unread:'Mensajes sin leer y contactos nuevos por revisar. Sin asignar muestra los chats que todavía no tienen responsable.',mine:'Conversaciones a tu cargo. El número celeste indica mensajes nuevos.',all:'Conversaciones abiertas, atendidas o pendientes.',unassigned:'Todas las conversaciones abiertas sin responsable, incluido el historial.',closed:'Conversaciones cerradas. Abrir el historial no las reactiva.'})[filter] || '';
 }
 
 export function readBoundary(messages, { role, visible, selected, atBottom, unread } = {}) {
@@ -369,6 +370,9 @@ function start() {
     } finally { clearTimeout(timer); externalSignal?.removeEventListener('abort', cancel); }
   }
   const post = (path, payload) => api(path, { method: 'POST', body: JSON.stringify(payload) });
+  const attention=createAttention({post,refresh:()=>refresh(),identity:()=>state.actor,
+    allowedSound:()=>state.statusReady&&state.recordingPhase==='idle'&&$('presence').dataset.confirmed==='available'});
+
   function formatTime(value, short = false) {
     const date = new Date(value); if (!Number.isFinite(date.getTime())) return '';
     if (short && date.toDateString() === new Date().toDateString()) return new Intl.DateTimeFormat('es-AR', { hour: '2-digit', minute: '2-digit' }).format(date);
@@ -403,7 +407,7 @@ function start() {
     if (top > 0 && anchor?.isConnected) list.scrollTop = anchor.offsetTop - anchorOffset; else list.scrollTop = top;
     $('load-list').hidden = !state.listMore;
     $('list-state').classList.toggle('error', Boolean(state.lastListError));
-    $('list-state').textContent = state.lastListError || (!state.threads.length ? (state.search || state.number || state.channel !== 'all' || $('prospect-source').value!=='all' ? 'No hay conversaciones que coincidan con estos filtros.' : state.filter === 'unread' ? 'Estás al día. No hay conversaciones pendientes de asignar.' : state.filter === 'mine' ? 'Todavía no tenés conversaciones asignadas.' : state.filter === 'closed' ? 'No hay conversaciones cerradas.' : state.filter === 'unassigned' ? 'No hay conversaciones esperando responsable.' : 'Todavía no hay conversaciones. Las consultas reales del chat web y de WhatsApp aparecerán acá.') : '');
+    $('list-state').textContent = state.lastListError || (!state.threads.length ? (state.search || state.number || state.channel !== 'all' || $('prospect-source').value!=='all' ? 'No hay conversaciones que coincidan con estos filtros.' : state.filter === 'unread' ? 'Estás al día. No hay mensajes ni contactos pendientes de leer.' : state.filter === 'mine' ? 'Todavía no tenés conversaciones asignadas.' : state.filter === 'closed' ? 'No hay conversaciones cerradas.' : state.filter === 'unassigned' ? 'No hay conversaciones esperando responsable.' : 'Todavía no hay conversaciones. Las consultas reales del chat web y de WhatsApp aparecerán acá.') : '');
     $('list-state').hidden = !$('list-state').textContent;
   }
   async function loadList({ more = false } = {}) {
@@ -426,6 +430,7 @@ function start() {
     finally { if (seq === state.listSeq) $('load-list').disabled = false; }
   }
   function renderStatus(result, allowPresence = true) {
+    attention.update(result.counts?.unread || 0);
     state.statusReady = true; state.numbers = Array.isArray(result.numbers) ? result.numbers : []; state.web = result.web && typeof result.web === 'object' ? result.web : null;
     const connected = state.numbers.filter(number => number.connected === true).length;
     const pending = state.numbers.filter(number => number.coexistence_pending).length;
@@ -1195,6 +1200,7 @@ function start() {
       $('actor-name').textContent = state.actor.name; $('actor-role').textContent = ROLES[state.actor.role]; $('presence-field').hidden = !permissions(state.actor, null).write; $('team').hidden = state.actor.role !== 'supervisor'; $('admin-recovery').hidden = !state.actor.can_restore_supervision || state.actor.role === 'supervisor';
       if (state.actor.role !== 'supervisor') $('team-dialog').close();
       if (changedActor) restoreComposer();
+      attention.identityChanged();
       renderPermissions(); renderPending();
     } catch (error) {
       stopAudioResources(true); state.actor = null; state.csrf = ''; clearTimeout(state.pollTimer); $('team-dialog').close(); $('new-chat-dialog').close(); $('template-dialog').close(); $('forward-dialog').close(); forwardContext=null; forwardSequence++; $('team').hidden = true; $('admin-recovery').hidden=true; $('presence-field').hidden = true; $('actor-role').textContent = 'Acceso pendiente de confirmar'; renderPermissions(); renderPending(); setNotice('global-notice', error.message, 'critico');
@@ -1220,7 +1226,7 @@ function start() {
     try { const result = await api('/team'); renderTeam(Array.isArray(result.users) ? result.users : []); $('team-feedback').textContent = ''; }
     catch (error) { $('team-feedback').textContent = error.message; }
   }
-  function schedulePoll() { clearTimeout(state.pollTimer); if (!document.hidden && state.actor) state.pollTimer = setTimeout(refresh, state.pollDelay); }
+  function schedulePoll() { clearTimeout(state.pollTimer); if (state.actor) state.pollTimer = setTimeout(refresh, document.hidden ? Math.max(30000,state.pollDelay) : state.pollDelay); }
   async function sendPresence(status) {
     const preceding = state.presencePromise || Promise.resolve();
     const request = preceding.catch(() => {}).then(() => post('/presence', { status }));
@@ -1229,17 +1235,17 @@ function start() {
   }
   async function maintainPresence() {
     const status = $('presence').dataset.confirmed;
-    if (document.hidden || !permissions(state.actor, null).write || state.presencePosting || $('presence').disabled || !['available', 'busy'].includes(status) || Date.now() - state.presencePostAt < 30000) return;
+    if (!permissions(state.actor, null).write || state.presencePosting || $('presence').disabled || !['available', 'busy'].includes(status) || Date.now() - state.presencePostAt < 30000) return;
     state.presencePosting = true; state.presencePostAt = Date.now();
     try { await sendPresence(status); }
     catch { /* The connection indicator reports refresh failures; stale presence expires on the server. */ }
     finally { state.presencePosting = false; }
   }
   async function refresh() {
-    if (document.hidden || state.refreshing || !state.actor) return;
+    if (state.refreshing || !state.actor) return;
     state.refreshing = true; $('refresh').disabled = true;
     try {
-      const results = await Promise.allSettled([loadList(), loadStatus(), state.selected ? loadThread() : Promise.resolve()]);
+      const results = await Promise.allSettled(document.hidden ? [loadStatus()] : [loadList(), loadStatus(), state.selected ? loadThread() : Promise.resolve()]);
       const failed = results.some(result => result.status === 'rejected'); state.pollDelay = failed ? Math.min(POLL_MAX, state.pollDelay * 2) : POLL_MIN;
       $('sync-state').textContent = failed ? `Conexión intermitente · Reintento en ${state.pollDelay / 1000} s` : `Actualizado ${formatTime(new Date().toISOString(), true)}`;
       if (!failed) await maintainPresence();
@@ -1255,8 +1261,15 @@ function start() {
       if (state.storageKey && state.storageKey !== storageKey) { stopAudioResources(true); persist(); state.drafts = new Map(); state.operations = new Map(); state.newChatOperation = null; state.templateContext = null; $('new-chat-dialog').close(); $('template-dialog').close(); $('forward-dialog').close(); forwardContext=null; forwardSequence++; }
       state.storageKey = storageKey; restore(); restoreWidth();
       $('actor-name').textContent = state.actor.name; $('actor-role').textContent = ROLES[state.actor.role]; $('presence-field').hidden = !permissions(state.actor, null).write; $('team').hidden = state.actor.role !== 'supervisor'; $('admin-recovery').hidden = !state.actor.can_restore_supervision || state.actor.role === 'supervisor';
-      $('presence').value = result.presence?.status || 'offline'; $('presence').dataset.confirmed = $('presence').value;
-      setNotice('global-notice', state.actor.role === 'reader' ? 'Acceso de consulta: podés revisar conversaciones y estados.' : '', 'info');
+      $('presence').value = 'offline'; $('presence').dataset.confirmed = 'offline';
+      if (permissions(state.actor,null).write) {
+        $('presence').disabled=true;
+        try { await sendPresence('available'); $('presence').value='available'; $('presence').dataset.confirmed='available'; state.presencePostAt=Date.now(); }
+        catch(error) { setNotice('global-notice','No se pudo activar tu disponibilidad. Elegí Disponible para reintentar.','critico'); }
+        finally { $('presence').disabled=false; }
+      }
+      attention.identityChanged();
+      if(state.actor.role==='reader')setNotice('global-notice','Acceso de consulta: podés revisar conversaciones y estados.','info');
       if (state.selected) restoreComposer(); renderPermissions(); renderPending(); await refresh();
     } catch (error) { $('actor-name').textContent = 'Sesión no disponible'; $('actor-role').textContent = ''; $('list-state').textContent = 'No se pudo abrir la bandeja.'; setNotice('global-notice', error.message, 'critico'); }
     finally { $('refresh').disabled = false; }
@@ -1336,7 +1349,7 @@ function start() {
   $('copy-phone').addEventListener('click', async () => { if (!state.thread?.phone) return; try { await navigator.clipboard.writeText(text(state.thread.phone)); announce('Teléfono copiado.'); setNotice('thread-notice', 'Teléfono de contacto copiado.', 'ok'); } catch { setNotice('thread-notice', `Copiá el teléfono desde la ficha: ${state.thread.phone}`, 'info'); } });
   $('restore-supervision').addEventListener('click',async()=>{const b=$('restore-supervision');b.disabled=true;try{await post('/restore-supervision',{});await reloadIdentity();await loadStatus();setNotice('global-notice','Recuperaste la supervisión de Mensajería.','ok');}catch(e){setNotice('global-notice',e.message,'critico');}finally{b.disabled=false;}});
   $('team').addEventListener('click', openTeam); $('team-close').addEventListener('click', () => $('team-dialog').close());
-  document.addEventListener('visibilitychange', () => { if (document.hidden) { clearTimeout(state.pollTimer); saveText(); } else if (state.actor) refresh(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { saveText(); schedulePoll(); } else if (state.actor) refresh(); });
   window.addEventListener('online', () => { if (state.actor) refresh(); });
   window.addEventListener('pagehide', () => { saveText(); stopAudioResources(true); clearTimeout(state.pollTimer); });
   bootstrap();

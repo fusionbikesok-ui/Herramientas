@@ -1,5 +1,11 @@
 # UI, UX y pruebas de navegador
 
+## Usuarios y permisos del VPS — publicado 2026-10-15
+
+Usuarios agrupa las aplicaciones del VPS, accesos externos y herramientas existentes; permite buscar sin perder casillas seleccionadas. Cada permiso binario explica las acciones incluidas. Ventas, stock y reposición, alertas, clientes/pedidos, Andreani, corrector PDF y consulta del taller tienen controles independientes. La configuración de alertas no aparece con sólo permiso de consulta de stock.
+
+POS y Facturador son accesos a WordPress: sus casillas sólo habilitan los enlaces y no otorgan permisos dentro de la tienda. Inicio y Gestión VPS reflejan los permisos efectivos, con comprobación adicional en el servidor. El permiso de supervisión de Mensajería también permite encontrar su tarjeta de inicio.
+
 ## Operación vigente POS y ARCA — regreso a la web, 2026-10-06
 
 POS y Facturador ARCA vuelven a operar exclusivamente en fusionbikes.com.ar, por decisión del usuario. Herramientas ofrece accesos directos; los informes, directorio y etiquetas Andreani/corrector PDF permanecen en el VPS. Los enlaces antiguos ?fm_module=pos/facturador redirigen a la web. El gateway con FUSION_SALES_LOCATION=web bloquea las API antiguas de POS, facturación y envíos manuales del VPS; los enlaces PDF ya compartidos conservan su vigencia original.
@@ -113,7 +119,7 @@ Detectada en el E2E de Fase B; no es de esa rama. Controles por debajo de 44 px 
 
 - 2026-10-05: Por cambio solicitado, Andreani Observaciones ahora usa Pedido #<número visible Woo> en lugar del título. Aplicado permanentemente en la aplicación VPS al abrir borradores nuevos/existentes, guardar y generar nuevos Excel. Retira el antiguo título automático sólo como segmento completo, preserva aclaraciones de entrega y no duplica el número; menciones de productos dentro de frases manuales se conservan. 42 aserciones PHP y verificación XML de Observaciones; clasificación automática de bultos y medidas manuales conservadas. Archivos ya generados permanecen históricos; plantilla de sucursal sigue sin columna de observaciones. Fuentes en integrations/management-migration/andreani/worker.php.
 
-- 2026-10-05: Corrector de etiquetas PDF publicado en Home/Gestión: `/herramientas/gestion-vps/corregir-etiquetas/`, requiere sesión administrador y Origin/CSRF. Entrada y salida editables (peso Gr, ancho/alto/largo Cm), enteros positivos hasta 6 dígitos en peso y 4 en medidas; valores habituales 9000/20/30/40 → 15000/25/70/150 y botón restaurar. Coincidencia conjunta exacta por página; no modifica pedidos ni registros de Andreani. Conserva fuentes/imágenes; ajusta ancho de líneas largas. Vista paginada, impresión al100% y descarga. Regla JSON X-Fusion-Pdf-Rule validada por gateway/Python; sin cabecera aplica habituales para clientes anteriores. Campos bloqueados durante corrección/impresión; cambiar invalida resultado. PDF en memoria sin historial,10MiB/300páginas. Worker loopback8213 autenticado, unidad `fusion-pdf-corrector.service`, fuente `/opt/fusion-pdf-corrector`; gateway `/opt/fusion-management-migration`, guía y pruebas en `integrations/management-migration/README-PDF.md`, pypdf6.10.0/PDF.js5.6.205 locales. Impresora física no probada. Actualización manual con backup /opt/fusion-management-migration/backups/pdf-manual-20261005T193419Z. Home, nginx y aplicación principal sin cambios.
+- 2026-10-05: Corrector de etiquetas PDF publicado en Home/Gestión: `/herramientas/gestion-vps/corregir-etiquetas/`, requiere sesión administrador y Origin/CSRF. Entrada y salida editables (peso Gr, ancho/alto/largo Cm), enteros positivos hasta 6 dígitos en peso y 4 en medidas; valores habituales 9000/20/30/40 → 15000/25/70/150 y botón restaurar. Coincidencia conjunta exacta por página; no modifica pedidos ni registros de Andreani. Conserva fuentes/imágenes; ajusta ancho de líneas largas. Vista paginada, impresión al100% y descarga. Regla JSON X-Fusion-Pdf-Rule validada por gateway/Python; sin cabecera aplica habituales para clientes anteriores. Campos bloqueados durante corrección/impresión; cambiar invalida resultado. Entrada en memoria; desde 2026-10-15 la salida tiene historial persistente (ver sección Historial de PDF). Límites 10MiB/300páginas. Worker loopback8213 autenticado, unidad `fusion-pdf-corrector.service`, fuente `/opt/fusion-pdf-corrector`; gateway `/opt/fusion-management-migration`, guía y pruebas en `integrations/management-migration/README-PDF.md`, pypdf6.10.0/PDF.js5.6.205 locales. Impresora física no probada. Actualización manual con backup /opt/fusion-management-migration/backups/pdf-manual-20261005T193419Z. Home, nginx y aplicación principal sin cambios.
 
 - 2026-10-05: Ranking del Panel de ventas publicado en /herramientas/gestion-vps/ventas/. Carga inicial de últimos 12 meses, períodos rápidos, rankings paginados de productos y marcas por unidades o importe, participación y selección de una marca a sus modelos; comparación de varias marcas y filtros conservados al cambiar de período, incluso sin movimientos. Sólo cambiaron metrics.html, assets/metrics.js y assets/metrics.css; backend, cálculo, caché, sesión y CSV existentes conservados. 13 pruebas Node aprobadas; revisión real de carga automática, septiembre 2026, marca a productos, comparación múltiple, SKU, orden, período vacío y recuperación de filtros; 390/768/1440 px sin desborde del documento y sin errores de consola. Exportador real con la consulta generada en navegador: FB-63080, Venzo, 3 líneas, ARS 2.400.510, igual al panel. Los 30 archivos de runtime fuera del alcance conservaron su hash, incluidos Andreani y el corrector PDF. Sin reiniciar servicios. Respaldo: /opt/fusion-management-migration/backups/ranking-20261005T193115Z-535c3e. Para revertir, restaurar únicamente los tres archivos originales de ese respaldo; fuentes en integrations/management-migration y prueba ranking.test.cjs.
 
@@ -257,3 +263,31 @@ el polling sólo actualiza. Se conservan diseño, divisor móvil y componentes e
 Recorrido de toma, salida de Pendientes y respeto de otro responsable comprobado
 en navegador con datos ficticios; presentación revisada en escritorio y móvil sin
 desborde horizontal.
+
+## Historial de PDF corregidos — 2026-10-15
+
+El corrector comienza con «Archivos listos»: HOY abierto con sus archivos, incluso si está vacío, y fechas anteriores plegadas que se abren al tocarlas. Fechas y horas de Argentina. Sin buscador en pantalla; «Ver días anteriores» carga más fechas, completa los archivos del día de borde y evita UUID duplicados. Se conservan los días abiertos al cargar más. Cada archivo mantiene Ver, Imprimir y Descargar. «Corregir un nuevo PDF» queda debajo del historial. Tres archivos diarios es volumen estimado, no un límite impuesto. Sesión administrador, guardado automático y visor/impresión existentes conservados. Probado con 30 archivos ficticios, apertura por día y carga progresiva; sin impresión física.
+
+Botón «Imprimir todos los de HOY»: consulta fresca del día argentino, descarga secuencial autenticada y todas las páginas en un único diálogo, respetando tamaños. Conserva los archivos históricos y la impresión individual. Deshabilitado sin archivos; progreso y cancelación en el propio grupo. Sólo imprime si todos los PDFs se preparan correctamente; afterprint, pagehide y cancelación liberan recursos. QA con tres archivos y 48 páginas, exclusión de ayer y archivo dañado sin impresión parcial; sin impresión física.
+
+
+## Mensajería — aviso de pendientes y disponibilidad automática (2026-10-15)
+
+Al entrar a Mensajería, agentes y supervisores pasan a Disponible; si falla se
+informa y se permite reintentar. Pueden elegir Ocupado o No disponible y el refresco
+lo respeta. Pendientes ahora significa sin leer/contactos nuevos por revisar;
+Sin asignar indica responsable pendiente, independientemente de la lectura.
+
+La barra compacta muestra un punto rojo con pulso lento y el total global de
+pendientes; el título de la pestaña también indica ese total. Respeta movimiento
+reducido. El sonido suave se habilita tras la primera interacción del navegador,
+con botón Activar sonido/Sonido activado/Sonido silenciado y preferencia local por
+operador. Máximo una vez por minuto, sólo disponible y sin reproducir/grabar audio;
+coordina la última señal entre pestañas mediante localStorage. No contiene datos
+del cliente ni necesita permisos de notificaciones del sistema.
+
+Marcar todas como leídas se muestra sólo al administrador general con supervisión
+(Matías). Abarca todos los canales y números, conserva responsable/estado y deja
+los chats accesibles en Todas/Mías/Sin asignar. Muestra resultado y permite
+reintentar la misma operación ante fallo. Controles revisados en escritorio y móvil
+390 px, sin desborde horizontal y con altura táctil 44 px en móvil.

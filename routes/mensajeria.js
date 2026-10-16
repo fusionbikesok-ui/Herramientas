@@ -180,6 +180,11 @@ export function mensajeriaRouter(db,{env=process.env,fetchImpl=fetch,now=()=>Dat
     offset:Math.max(0,Math.min(Number(req.query.offset)||0,100000)),limit:Math.max(1,Math.min(Number(req.query.limit)||30,100))
   }))));
   router.get('/thread',safe(async(req,res)=>res.json(await proxy(req,'thread',{key:String(req.query.key||'').slice(0,300),...(req.query.before?{before:String(req.query.before).slice(0,60)}:{})}))));
+  router.post('/read-all',safe(async(req,res)=>{
+    if(!req.user.is_admin||req.inboxActor.role!=='supervisor')return error(res,403,'admin_required','Sólo el administrador general puede marcar todas como leídas.');
+    if(!UUID.test(req.body?.request_id||''))return error(res,400,'request_id_required','Falta la identificación de la operación.');
+    res.json(await proxy(req,'read-all',{request_id:req.body.request_id,platform_admin:true}));
+  }));
   router.post('/read',safe(async(req,res)=>{
     const b=req.body||{};
     if(typeof b.key!=='string'||!b.key||b.key.length>300||typeof b.through_id!=='string'||!/^[1-9][0-9]{0,18}$/.test(b.through_id)||BigInt(b.through_id)>9223372036854775807n)

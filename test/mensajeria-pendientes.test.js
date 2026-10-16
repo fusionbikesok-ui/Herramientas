@@ -25,8 +25,8 @@ describe('Asignación al abrir y significado de la bandeja',()=>{
   expect(shouldClaimOnOpen(actor,{...thread,status:'closed'})).toBe(false);
   expect(shouldClaimOnOpen(actor,thread,true)).toBe(false);
  });
- it('explica que una respuesta de la IA no consume pendientes',()=>{
-  expect(filterHelp('unread')).toContain('aunque responda la IA');
+ it('distingue lectura y asignación',()=>{
+  expect(filterHelp('unread')).toContain('Mensajes sin leer');
   expect(filterHelp('mine')).toContain('mensajes nuevos');
  });
 });

@@ -23,3 +23,7 @@ Solicitud: gestionar desde `/herramientas/usuarios/` el acceso del equipo a toda
 ## Publicación y reversión previstas
 
 Aplicar sólo los archivos de este cambio, verificando nuevamente sus hashes. Sin migración de esquema ni modificación masiva de usuarios. El gateway usa `fusion-management-validation.service`; Herramientas usa el proceso PM2 existente. Verificar salud, catálogo nuevo y denegación anónima. Ante error, restaurar sólo los archivos respaldados y recargar esos servicios; nunca restaurar bases viejas ni sobrescribir trabajo concurrente.
+
+## Publicación realizada — 2026-10-15
+
+Publicación autorizada por el usuario y aplicada con respaldo `/opt/fusion-permissions-20261015/backup/20261016T011025Z`. Suite general: 4.637 pruebas aprobadas, ninguna fallida y 52 omitidas por la configuración existente. La versión final volvió a aprobar 27 pruebas de Usuarios/permisos y 104 del gateway (una omitida). Comprobación pública: salud 200, acceso anónimo 401 y nueve aplicaciones rechazadas con 403 para la cuenta limitada de pruebas. No se modificaron permisos productivos durante las verificaciones.

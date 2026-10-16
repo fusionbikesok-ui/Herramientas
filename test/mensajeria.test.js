@@ -54,6 +54,14 @@ describe('Mensajería: identidad, permisos y proxy firmado',()=>{
   expect((await send(boss.agent,'/ai-number',{number:'5493518752035',enabled:false,actor:{id:'fake'}},boss.csrf)).status).toBe(200);
   expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({op:'ai-number',number:'5493518752035',enabled:false,actor:{id:'herramientas:1',name:'Matias',role:'supervisor'}});
  });
+ it('lectura masiva exige admin supervisor, CSRF y firma la identidad real',async()=>{
+  const body={request_id:crypto.randomUUID(),platform_admin:true,actor:{id:'fake',role:'supervisor'}};
+  for(const id of [3,5,8]){const a=await login(id);expect((await send(a.agent,'/read-all',body,a.csrf)).status).toBe(403);}
+  const boss=await login(1);expect((await boss.agent.post('/api/mensajeria/read-all').send(body)).status).toBe(403);
+  expect((await send(boss.agent,'/read-all',{request_id:'bad'},boss.csrf)).status).toBe(400);
+  expect((await send(boss.agent,'/read-all',body,boss.csrf)).status).toBe(200);
+  expect(JSON.parse(fetcher.mock.calls.at(-1)[1].body)).toEqual({op:'read-all',request_id:body.request_id,platform_admin:true,actor:{id:'herramientas:1',name:'Matias',role:'supervisor'}});
+ });
  it('confirmación de lectura valida identidad y límite bigint sin permitir actor del navegador',async()=>{
   const a=await login(3);const body={key:'whatsapp:111:5493511234567',through_id:'9223372036854775807',actor:{id:'fake',role:'supervisor'}};
   expect((await send(a.agent,'/read',body,a.csrf)).status).toBe(200);
