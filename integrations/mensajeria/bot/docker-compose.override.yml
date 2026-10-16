@@ -1,0 +1,106 @@
+{
+  "services": {
+    "ollama": {
+      "image": "ollama/ollama:latest",
+      "restart": "unless-stopped",
+      "environment": {
+        "OLLAMA_CONTEXT_LENGTH": "8192",
+        "OLLAMA_KEEP_ALIVE": "30m",
+        "OLLAMA_NUM_PARALLEL": "1",
+        "OLLAMA_MAX_LOADED_MODELS": "1",
+        "OLLAMA_MAX_QUEUE": "16"
+      },
+      "volumes": [
+        "ollama_data:/root/.ollama"
+      ],
+      "mem_limit": "6g"
+    },
+    "api": {
+      "environment": {
+        "CATALOG_SQLITE_PATH": "/catalog/catalog.sqlite",
+        "CATALOG_SQLITE_MAX_AGE_SECONDS": "900"
+      },
+      "volumes": [
+        "chatbot_catalog_data:/catalog:ro",
+        "/opt/fusion-chatbot/private-ai:/private-ai"
+      ],
+      "image": "fusion-chatbot-attention:20261015",
+      "env_file": [
+        ".env",
+        ".commercial.env"
+      ]
+    },
+    "worker": {
+      "environment": {
+        "CATALOG_SQLITE_PATH": "/catalog/catalog.sqlite",
+        "CATALOG_SQLITE_MAX_AGE_SECONDS": "900"
+      },
+      "volumes": [
+        "chatbot_catalog_data:/catalog:ro",
+        "/opt/fusion-chatbot/private-ai:/private-ai:ro"
+      ],
+      "image": "fusion-chatbot-attention:20261015",
+      "env_file": [
+        ".env",
+        ".commercial.env"
+      ]
+    },
+    "catalog-exporter": {
+      "build": ".",
+      "restart": "unless-stopped",
+      "user": "0:0",
+      "command": "python -m app.catalog_exporter",
+      "environment": {
+        "LOG_LEVEL": "INFO",
+        "CATALOG_SOURCE_DB": "/source/fusion.sqlite",
+        "CATALOG_SQLITE_PATH": "/catalog/catalog.sqlite",
+        "CATALOG_EXPORT_INTERVAL_SECONDS": "180"
+      },
+      "volumes": [
+        "${FUSION_CATALOG_SOURCE_DIR:-/opt/fusionbikes/herramientas/data}:/source:ro",
+        "chatbot_catalog_data:/catalog"
+      ],
+      "network_mode": "none",
+      "read_only": true,
+      "tmpfs": [
+        "/tmp:size=16m,noexec,nosuid,nodev"
+      ],
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import sqlite3; p='/catalog/catalog.sqlite'; c=sqlite3.connect(f'file:{p}?mode=ro', uri=True); assert c.execute('SELECT COUNT(*) FROM catalog_products').fetchone()[0] > 0; c.close()"
+        ],
+        "interval": "30s",
+        "timeout": "5s",
+        "retries": 5,
+        "start_period": "20s"
+      }
+    },
+    "outbox": {
+      "image": "fusion-chatbot-attention:20261015",
+      "restart": "unless-stopped",
+      "env_file": ".env",
+      "command": "python -m app.outbox_worker",
+      "depends_on": {
+        "postgres": {
+          "condition": "service_healthy"
+        },
+        "redis": {
+          "condition": "service_healthy"
+        }
+      }
+    }
+  },
+  "volumes": {
+    "ollama_data": null,
+    "chatbot_catalog_data": null
+  }
+}
