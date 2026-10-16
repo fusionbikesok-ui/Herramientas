@@ -11,7 +11,7 @@ function covered(from,to,windows){let cursor=from;for(const w of [...windows].so
 export function stockRows(catalog,sales,{days,cover,now=Date.now()}){
  const all=new Map(catalog.map(p=>[p.id_woo,p])),byId=new Map(),bySku=new Map(),ambiguous=new Set();
  for(const p of catalog){if(!['simple','variation'].includes(p.tipo)||p.no_contable)continue;byId.set(p.id_woo,p);const sku=core.norm(p.sku);if(!sku)continue;if(bySku.has(sku)){ambiguous.add(sku);bySku.delete(sku);}else if(!ambiguous.has(sku))bySku.set(sku,p);}
- const totals=new Map(),quality={unmatched_lines:0,unmatched_units:0,excluded_lines:0,review_lines:0,shared_stock:0,duplicate_skus:0,stale_stock:0};
+ const totals=new Map(),quality={unmatched_lines:0,unmatched_units:0,excluded_lines:0,review_lines:0,shared_stock:0,duplicate_skus:0,stale_stock:0,services:0};
  for(const sale of sales){
   if(!['web','ml'].includes(sale.channel)||!['valid','partial'].includes(sale.saleState)||!finite(sale.quantity)){quality.excluded_lines++;if(sale.saleState==='review'||sale.channel==='ml_pending')quality.review_lines++;continue;}
   let p=byId.get(sale.catalog_id);
@@ -22,13 +22,16 @@ export function stockRows(catalog,sales,{days,cover,now=Date.now()}){
  const rows=[];
  for(const p of byId.values()){
   const parent=all.get(p.id_padre),t=totals.get(p.id_woo)||{web:0,ml:0,last_sale:null,orders:new Set()},sold=Math.max(0,t.web+t.ml),rate=sold/days;
-  let issue=!finite(p.stock)?'unknown':parent&&finite(parent.stock)&&parent.stock>0?'shared':ambiguous.has(core.norm(p.sku))?'duplicate':'';
-  const stock=finite(p.stock)?p.stock:null,coverage=!issue&&rate>0?Math.max(0,stock)/rate:null;
-  const alert=issue?'review':stock<0?'negative':sold<=0?'no_sales':stock<=0?'missing':coverage<cover?'critical':'healthy';
-  const attrs=list(p.atributos_json).filter(a=>a?.name&&a?.option).map(a=>`${a.name}: ${a.option}`).join(' · ');
   const categories=list(p.categorias_json).map(c=>typeof c==='string'?c:c?.name).filter(Boolean);
+  // SERVICES is a store category, not a name heuristic. Its administrative quantities
+  // (including legacy null -> 0) are not physical inventory for replenishment.
+  const service=categories.some(c=>['services','servicios'].includes(core.norm(c)));
+  let issue=service?'service':!finite(p.stock)?'unknown':parent&&finite(parent.stock)&&parent.stock>0?'shared':ambiguous.has(core.norm(p.sku))?'duplicate':'';
+  const stock=!service&&finite(p.stock)?p.stock:null,coverage=!issue&&rate>0?Math.max(0,stock)/rate:null;
+  const alert=service?'service':issue?'review':stock<0?'negative':sold<=0?'no_sales':stock<=0?'missing':coverage<cover?'critical':'healthy';
+  const attrs=list(p.atributos_json).filter(a=>a?.name&&a?.option).map(a=>`${a.name}: ${a.option}`).join(' · ');
   const stamp=Date.parse(p.actualizado_en),stale=!Number.isFinite(stamp)||now-stamp>24*3600000;
-  if(issue==='shared')quality.shared_stock++;if(issue==='duplicate')quality.duplicate_skus++;if(stale)quality.stale_stock++;
+  if(service)quality.services++;if(issue==='shared')quality.shared_stock++;if(issue==='duplicate')quality.duplicate_skus++;if(stale&&!service)quality.stale_stock++;
   rows.push({id:p.id_woo,parent_id:p.id_padre||null,name:p.nombre,model:parent?.nombre||p.nombre,brand:core.brand(p.marca||parent?.marca),sku:p.sku||'',variant:p.tipo==='variation'?attrs:'',categories,
    image:catalogImage(p.img)||catalogImage(parent?.img),url:'https://fusionbikes.com.ar/?p='+(p.id_padre||p.id_woo),stock,issue,alert,units:sold,web_units:t.web,ml_units:t.ml,daily:rate,coverage_days:coverage,last_sale:t.last_sale,orders:t.orders.size,stock_at:p.actualizado_en||null,stock_stale:stale});
  }
