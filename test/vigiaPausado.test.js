@@ -463,6 +463,37 @@ describe('vigiaPausado', () => {
       expect(incidente().estado).toBe('resuelto');
     });
 
+    it('lote que excede el tope con una fila ya pausada: al revisar las demás el incidente cierra', async () => {
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA99|','MLA99','','x','paused','',0,datetime('now'))`).run();
+      const lote = [...Array.from({ length: UMBRAL_PAUSA_MASIVA + 1 }, (_, i) => cambio(i + 1)), cambio(99)];
+      const r = await procesarCambios(db, CFG, lote);
+      expect(r.pausadas).toBe(0);
+      expect(incidente().estado).toBe('activo');
+      const ya = db.prepare("SELECT revisado_en, nota FROM ml_publicacion_cambios WHERE item_id='MLA99'").get();
+      expect(ya.nota).toContain('ya estaba pausada');
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose' WHERE item_id <> 'MLA99'").run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('sin stock reabierto por reabrirAvisosSinStock cuenta como pendiente: no cierra hasta revisarlo', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA2|','MLA2','','x','paused','out_of_stock',0,datetime('now'))`).run();
+      await procesarCambios(db, CFG, [cambio(2)]);
+      revisarTodo();
+      // Lo que hace routes/sync.js reabrirAvisosSinStock cuando vuelve el stock.
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en=NULL, revisado_por=NULL, bloquea_reactivador=0, pausa_error=COALESCE(pausa_error,'') || ' | reabierto: volvió el stock' WHERE item_id='MLA2'").run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+      revisarTodo();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
     it('(c) una corrida que pausa abre o actualiza el incidente como siempre', async () => {
       await procesarCambios(db, CFG, [cambio(1)]);
       db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
