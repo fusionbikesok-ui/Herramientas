@@ -55,3 +55,7 @@ delivery-qa/
 
 # Descarga puntual (task-get-andreani-assets.py), idéntica a andreani/data/; ningún código la lee
 andreani-assets/
+
+# Evidencia de QA de entregas puntuales
+*-qa-*/
+delivery-qa/
