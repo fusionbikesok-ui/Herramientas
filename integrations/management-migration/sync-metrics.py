@@ -16,9 +16,9 @@ def fact(order,refund,zone):
  by_id={x['id']:x for x in (refund or {}).get('items',[])};items=[]
  for row in order['items']:
   ref=by_id.get(row['id'],{});qty=max(0,float(row['quantity'])-abs(float(ref.get('quantity',0))));amount=float(row['total'])-abs(float(ref.get('amount',0)))
-  if not all(__import__('math').isfinite(x) for x in [qty,amount]):raise RuntimeError('non_finite_amount')
-  items.append({'id':row['id'],'product_id':row.get('product_id') or 0,'variation_id':row.get('variation_id') or 0,'name':row['name'],'quantity':qty,'amount':amount})
- return {'id':order['id'],'status':order['status'],'date':date,'currency':order['currency'],'country':address.get('country') or 'Sin país','state':address.get('state') or 'Sin provincia','city':(address.get('city') or '').strip() or 'Sin ciudad','items':items,'unassigned':bool((refund or {}).get('unassigned')),'ml_mirror':order['is_ml_mirror']}
+  if not all(__import__('math').isfinite(x) for x in [qty,amount,float(row.get('total_tax') or 0),amount+float(row.get('total_tax') or 0)]):raise RuntimeError('non_finite_amount')
+  items.append({'id':row['id'],'product_id':row.get('product_id') or 0,'variation_id':row.get('variation_id') or 0,'name':row['name'],'sku':row.get('sku') or '', 'quantity':qty,'amount':amount,'gross_amount':(amount+float(row.get('total_tax') or 0)) if not (ref and float(row.get('total_tax') or 0)) else None})
+ return {'id':order['id'],'status':order['status'],'date':date,'currency':order['currency'],'country':address.get('country') or 'Sin país','state':address.get('state') or 'Sin provincia','city':(address.get('city') or '').strip() or 'Sin ciudad','items':items,'unassigned':bool((refund or {}).get('unassigned')),'ml_mirror':order['is_ml_mirror'],'ml_order_id':order.get('ml_order_id') or '', 'has_refund':bool(order.get('refunds'))}
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*a,**kw):raise RuntimeError('redirect_blocked')
 def run():
@@ -68,6 +68,13 @@ def run():
    for item in json.loads(raw)['items']:
     product_ids.update(int(item[k]) for k in ['product_id','variation_id'] if item.get(k))
   if len(product_ids)>100000:raise RuntimeError('product_limit')
+  report_path=CACHE/'ml-report.json'
+  if report_path.exists():
+   report=json.loads(report_path.read_text(encoding='utf-8'))
+   extra=report.get('catalog_product_ids',[])
+   if not isinstance(extra,list) or len(extra)>100000 or any(type(v) is not int or v<1 for v in extra):raise RuntimeError('ml_product_identity_invalid')
+   product_ids.update(extra)
+   if len(product_ids)>100000:raise RuntimeError('product_limit')
   target=CACHE/'metrics.sqlite';staging=CACHE/'metrics-building.sqlite'
   if staging.exists():staging.unlink()
   db=sqlite3.connect(staging);staging.chmod(0o600)
@@ -122,4 +129,9 @@ CREATE INDEX IF NOT EXISTS facts_filter ON facts(date,status,id);''')
   label=str(error) if isinstance(error,RuntimeError) and re.fullmatch(r'[a-z_0-9]+',str(error)) else 'sync_failed'
   status('error',error=label,previous_copy_available=(CACHE/'metrics.sqlite').exists());print(json.dumps({'state':'error','error':label}));raise SystemExit(1)
  finally:lock.close()
-if __name__=='__main__':run()
+if __name__=='__main__':
+ run()
+ # Preserve original ML sales locally after each successful Woo metrics refresh.
+ import subprocess
+ archive=ROOT/'sync-ml-cache.py'
+ if archive.exists():subprocess.run([sys.executable,str(archive)],check=False,timeout=90)
