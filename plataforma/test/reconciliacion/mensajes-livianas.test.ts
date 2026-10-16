@@ -170,11 +170,12 @@ describe('ml.messages: vuelta liviana + control diario', () => {
     expect(paginas.at(-1)!.cursorAfter.avisos_perdidos).toBe(1);   // sólo «nuevo1»
   });
 
-  it('un aviso cuyo GET /messages/{id} da 404 no corta la vuelta ni agrega un pack', async () => {
+  it('un aviso cuyo GET /messages/{id} da 404 no corta la lectura redundante del siguiente', async () => {
     const { a, llamadas } = montar({ senales: ['msgX', 'msgY'], mensaje404: ['msgX'], packDeMensaje: { msgY: 'P0042' } });
-    const paginas = await correr(a, contexto({ last_light_at: reciente.last_light_at, last_unread_at: reciente.last_unread_at, last_full_at: new Date(AHORA.getTime() - H).toISOString() }));
-    expect(paginas.flatMap((p) => p.resources.map((r) => r.id))).toEqual(['msgY']);
-    expect(llamadas.filter((l) => l.startsWith('/messages/packs/')).map((l) => l.split('/')[3])).toEqual(['P0042']);
+    const ctx = contexto({ last_light_at: reciente.last_light_at, last_unread_at: reciente.last_unread_at, last_full_at: new Date(AHORA.getTime() - H).toISOString() });
+    const paginas = await correr(a, ctx);
+    expect(paginas.flatMap(p => p.resources.map(r => r.id))).toEqual(['msgY']);
+    expect(llamadas).toEqual(['/messages/msgX?tag=post_sale', '/messages/msgY?tag=post_sale', '/messages/packs/P0042/sellers/777?tag=post_sale&mark_as_read=false']);
   });
 
   it('un corte a mitad de la liviana con avisos pendientes reanuda sin releer lo ya hecho', async () => {

@@ -21,6 +21,8 @@ const MAX_RELECTURAS_SEGMENTO = 3;
 // El código de ml.messages lee y avanza de a UN pack (pendientes[0] + slice(1), despuesDe = último leído): con un lote
 // mayor se saltearían packs en silencio. Por eso se verifica al crear el adaptador.
 const LOTE_PACKS: number = 1;
+/** Contrato compartido con el relector y el gateway; nunca construir una ruta con un aviso inválido. */
+export const ID_MENSAJE_ML = /^[A-Za-z0-9_-]{1,128}$/;
 const LIMITE_BUSQUEDA = 50;
 
 function versionHash(proyeccion: unknown): string {
@@ -363,11 +365,11 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
             if (RECURSO_PACK.test(recurso)) candidatos.push(recurso);
           }
         }
-        // Avisos por webhook que todavía no se convirtieron en mensaje (los `succeeded` ya están leídos). Del más viejo al
+        // Sólo señales activas: las terminales requieren replay explícito y conservan su auditoría. Del más viejo al
         // más nuevo, acotados a la ventana congelada de la corrida (`<= windowTo`), por clave (t, id) y con tope+1.
         const avisos = await dep.db.query<{ resource_id: string; t: string }>(
           `SELECT resource_id COLLATE "C" AS resource_id, to_char(MIN(received_at) AT TIME ZONE 'UTC', ${TEXTO_US}) AS t FROM integrations.reconciliation_signals
-            WHERE channel_account_id=$1 AND topic='ml.messages' AND status <> 'succeeded'
+            WHERE channel_account_id=$1 AND topic='ml.messages' AND status IN ('pending','claimed','retryable')
               AND received_at <= $4 AND (received_at, resource_id COLLATE "C") > ($2::timestamptz, $3::text)
             GROUP BY 1 ORDER BY MIN(received_at), 1 LIMIT $5`,
           [ctx.corrida.channelAccountId, punto.avisos.t, punto.avisos.id, ctx.windowTo, MAX_AVISOS_WEBHOOK + 1],
@@ -393,7 +395,11 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
           luz[clave] = { t: ultimo.t, id: idDe(ultimo) };
           return filas.slice(0, tope);
         };
-        for (const f of recortar(avisos.rows, MAX_AVISOS_WEBHOOK, 'avisos', (x) => x.resource_id)) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);
+        // Recortar ANTES de omitir inválidos: el cursor avanza también sobre esos avisos, sin saltar
+        // candidatos válidos que quedaron fuera del tope. El relector conserva su exclusión/auditoría.
+        for (const f of recortar(avisos.rows, MAX_AVISOS_WEBHOOK, 'avisos', (x) => x.resource_id)) {
+          if (ID_MENSAJE_ML.test(f.resource_id)) candidatos.push(`${PREFIJO_MENSAJE}${f.resource_id}`);
+        }
         for (const f of recortar(cambiados.rows, MAX_PACKS_CAMBIADOS, 'pedidos', (x) => x.target_id)) candidatos.push(rutaPack(f.target_id, dep.sellerId));
         const pendientes = [...new Set(candidatos)];
         const vistos = [...new Set(pendientes.filter((p) => p.startsWith('/packs/')).map(packDeRecurso))];
@@ -408,7 +414,9 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
 
       const luz = luzDe(posicionInicial.luz, ctx.windowTo.toISOString());
       const recortados = posicionInicial.recortados === true;
-      const pendientesPrevios = Array.isArray(posicionInicial.pendientes) ? posicionInicial.pendientes.filter((p): p is string => typeof p === 'string') : [];
+      // Un checkpoint creado antes de esta validación también puede contener avisos inválidos.
+      const pendientesPrevios = Array.isArray(posicionInicial.pendientes) ? posicionInicial.pendientes.filter((p): p is string =>
+        typeof p === 'string' && (!p.startsWith(PREFIJO_MENSAJE) || ID_MENSAJE_ML.test(p.slice(PREFIJO_MENSAJE.length)))) : [];
       const vistos = new Set(Array.isArray(posicionInicial.vistos) ? posicionInicial.vistos.filter((p): p is string => typeof p === 'string') : []);
       let despuesDe = textoPosicion(posicionInicial, 'despuesDe') ?? '';
       let resto: string[] = []; let lote: string | null = null; let fin = false;
@@ -437,6 +445,8 @@ export function adaptadorMensajesMl(dep: DependenciasMl): AdaptadorBarrido {
         if (lote.startsWith(PREFIJO_MENSAJE)) {
           // Aviso por webhook: el mensaje dice a qué pack pertenece; ese pack se lee después si no estaba ya.
           const r = await dep.transporte.get(`/messages/${encodeURIComponent(lote.slice(PREFIJO_MENSAJE.length))}?tag=post_sale`, { headers: { 'x-format-new': 'true' } });
+          // Esta lectura es redundante. Un 404 no modifica la señal ni genera una baja:
+          // su relector conserva los reintentos acotados y la DLQ, sin bloquear el barrido completo.
           if (r.status !== 404) {
             const recurso = mensajeMl(r.body);
             resources.push(recurso);
