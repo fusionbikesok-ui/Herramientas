@@ -1,0 +1,17 @@
+[Unit]
+Description=Fusion local sales metrics snapshot
+After=network-online.target fusion-management-directory-sync.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/fusion-management-migration/sync-metrics.py
+User=root
+Group=fusion-management-read
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/fusion-management-migration/directory-cache
+TimeoutStartSec=3600
+MemoryMax=256M
+CPUQuota=30%

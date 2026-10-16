@@ -1,0 +1,8 @@
+[Unit]
+Description=Retry pending Fusion ARCA archive synchronization
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=60
+AccuracySec=10
+[Install]
+WantedBy=timers.target

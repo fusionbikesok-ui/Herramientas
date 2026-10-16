@@ -1,0 +1,21 @@
+[Unit]
+Description=Private Woo fiscal bridge for Fusion ARCA
+After=docker.service network-online.target
+Requires=docker.service
+[Service]
+DynamicUser=yes
+SupplementaryGroups=fusion-management-read
+EnvironmentFile=/etc/fusion-arca-private/source.env
+ExecStart=/usr/bin/python3 /opt/fusion-arca-egress/arca-source.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+MemoryMax=128M
+TasksMax=40
+UMask=0077
+[Install]
+WantedBy=multi-user.target

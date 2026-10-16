@@ -1,0 +1,21 @@
+[Unit]
+Description=Fusion Bikes - resumen de reposicion por WhatsApp
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/fusion-management-migration/alerts
+ExecStart=/usr/bin/python3 /opt/fusion-management-migration/alerts/run_alerts.py
+TimeoutStartSec=240
+UMask=0077
+Nice=10
+CPUQuota=25%
+MemoryMax=384M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/fusion-management-migration/alerts /var/lib/fusion-management-validation
+ProtectHome=true
+
