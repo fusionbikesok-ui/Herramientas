@@ -67,6 +67,45 @@ describe('lib/vigiaDrift', () => {
     expect(activos(db)).toHaveLength(0);
   });
 
+  it('fetch fallido (rc=2, motivo) y rc no numérico abren deriva_sin_medicion', () => {
+    for (const est of [estadoBase({ rc: 2, motivo: 'fetch_fallido' }), estadoBase({ rc: 'x' })]) {
+      escribirEstado(est);
+      const r = revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA });
+      expect(r.medido).toBe(false);
+    }
+    const inc = activos(db);
+    expect(inc).toHaveLength(1);
+    expect(inc[0].tipo_error).toBe('deriva_sin_medicion');
+    escribirEstado(estadoBase({ rc: 2, motivo: 'fetch_fallido' }));
+    expect(revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA }).motivo).toBe('fetch_fallido');
+  });
+
+  it('las rutas con pinta de secreto no llegan al mensaje', () => {
+    escribirEstado(estadoBase({ rc: 1, total: 2, muestra: ['[herramientas] SOLO_EN_VPS .env.prod', '[herramientas] MODIFICADO config/api_key.json', '[herramientas] MODIFICADO server.js'] }));
+    revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA });
+    const m = activos(db)[0].mensaje_humano;
+    expect(m).not.toMatch(/\.env|api_key/);
+    expect(m).toContain('[ruta omitida]');
+    expect(m).toContain('server.js');
+  });
+
+  it('ultimo_corrida en el futuro es fecha_futura; hasta 15 min de desfase se tolera', () => {
+    escribirEstado(estadoBase({ ultimo_corrida: '2026-10-16T14:00:00Z' }));
+    expect(revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA }).motivo).toBe('fecha_futura');
+    escribirEstado(estadoBase({ ultimo_corrida: '2026-10-16T12:10:00Z' }));
+    expect(revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA }).medido).toBe(true);
+  });
+
+  it('con más de 10 diferencias el mensaje dice "y N más"', () => {
+    const muestra = Array.from({ length: 30 }, (_, i) => `[herramientas] MODIFICADO f${i}.js`);
+    escribirEstado(estadoBase({ rc: 1, total: 42, muestra }));
+    revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA });
+    const m = activos(db).find(i => i.tipo_error === 'deriva').mensaje_humano;
+    expect(m).toContain('42 archivos');
+    expect(m).toContain('(y 32 más)');
+    expect(m).not.toContain('f10.js');
+  });
+
   it('nunca lanza aunque la base falle', () => {
     escribirEstado(estadoBase({ rc: 1, total: 1 }));
     db.close();
