@@ -40,3 +40,6 @@ docs/superpowers/audits/capturas-*/
 
 # Data estática del generador Andreani (plantilla, sucursales públicas, teléfonos): la usa el código, no es una base.
 !integrations/management-migration/andreani/data/
+
+# Salida de corridas de test locales
+test-results/

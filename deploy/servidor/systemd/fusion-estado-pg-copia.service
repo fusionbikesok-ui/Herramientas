@@ -1,0 +1,5 @@
+[Unit]
+Description=FusionBikes: copia el estado de archivado WAL de E0 a /opt/fusionbikes/estado-pg (lectura de la plataforma)
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'cp /opt/fusionbikes/backups/estado-pg-archivo.json /opt/fusionbikes/estado-pg/.tmp && chmod 644 /opt/fusionbikes/estado-pg/.tmp && mv /opt/fusionbikes/estado-pg/.tmp /opt/fusionbikes/estado-pg/estado-pg-archivo.json'

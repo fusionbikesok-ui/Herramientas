@@ -1,0 +1,3 @@
+services:
+  worker:
+    image: fusion-plataforma:sombra-mensajes-20261016-r4

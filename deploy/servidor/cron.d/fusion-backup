@@ -1,0 +1,9 @@
+# Backup diario de herramientas-app (base SQLite + uploads) a las 06:00 UTC (03:00 ART).
+# flock evita solapamiento si una corrida se demora.
+0 6 * * * root /usr/bin/flock -n /tmp/fusion-backup.lock /opt/fusionbikes/backups/backup.sh >/dev/null 2>&1
+
+# E0 nivel 1 — PostgreSQL + pgBackRest (docs/superpowers/deliveries/E0-infraestructura-dr.md).
+# Backup verificado (full domingo, diferencial el resto) con manifiesto y registro firmado; 05:30 UTC.
+30 5 * * * root /usr/bin/flock -n /tmp/fusion-backup-pg.lock /bin/bash /opt/fusionbikes/herramientas/scripts/postgres/backup-diario.sh >/dev/null 2>&1
+# Medición del archivado de WAL (segmentos pendientes y antigüedad) para el vigía; cada 5 min.
+*/5 * * * * root /usr/bin/flock -n /tmp/fusion-estado-pg.lock /bin/bash /opt/fusionbikes/herramientas/scripts/postgres/estado-archivo.sh >/dev/null 2>&1

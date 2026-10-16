@@ -1,0 +1,7 @@
+[Unit]
+Description=Copia periódica del estado de WAL para la plataforma
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+[Install]
+WantedBy=timers.target
