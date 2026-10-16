@@ -367,3 +367,11 @@ Tres métricas por separado (spec "Recuperación y medición"). Migración 131 (
 Informe en `/herramientas/gestion-vps/ventas/stock/`, API `ventas/api?mode=stock&days=90&cover=15`, restringido a administradores. Período inicial 90 días (30/60/90/180), cobertura 15 días ajustable 1–90. Comparte la caché comercial de `metrics.mjs`; conserva originales ML y elimina sus espejos Woo, excluye pendientes/canceladas/devueltas/sin conciliar y usa unidades netas. `catalog_id` identifica la variante; fallback sólo SKU único compatible, nunca similitud del nombre. Stock exclusivamente del catálogo local de Herramientas (caché 30 segundos), sin nuevas consultas a Woo/ML.
 
 Promedio = unidades netas / días calendario; cobertura = stock / promedio, por variante. Stock compartido en padre, cantidad desconocida o SKU ambiguo no producen cobertura. `catalogo_cache` convierte cantidades Woo nulas a cero y no conserva manage_stock: cero se presenta como «Sin stock informado», no como agotado confirmado. Historial parcial, líneas sin vínculo y stock de más de 24 h quedan visibles. No estima demanda perdida, reservas ni compras en camino. No modifica inventario, pedidos, precios, checkout, emisión fiscal ni sincronizadores.
+
+## Precio en ML de publicaciones con variaciones (16/10, PR #52)
+
+La cuenta no tiene Mercado Envíos 1. Por eso todas las variaciones de una publicación deben compartir el precio: si no, ML rechaza con "Found different prices in variations | User has not mode me1".
+
+- **Pantallas.** Precios ML (aplicar en lote y por fila) y Sync ML ("Aplicar y reactivar") agrupan por `item_id`. Si cualquier clave del grupo tiene `|`, hacen un solo `POST /api/precios/actualizar-precio-item` con el precio máximo del grupo. Ese endpoint hace un único PUT con todas las variaciones al mismo precio.
+- **Fallo.** Si la escritura falla, todo el grupo queda fallado y no se reactiva.
+- **Deuda.** El backend `POST /api/precios/actualizar-precio` con `variationId` sigue haciendo un PUT por variación (lo exige `test/precios.test.js`). Ningún cliente debe usarlo para variaciones.

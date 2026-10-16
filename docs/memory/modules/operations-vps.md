@@ -991,3 +991,50 @@ La revisión agregó protección de variantes Woo con baja propia o estado delet
 Validación: 1.083 pruebas de plataforma, 4.642 de raíz y 104 de migración aprobadas; tipos, 73 regresiones focalizadas y 27 fichas documentales correctos. Las omisiones declaradas por las suites se conservaron. Evidencia pública: `docs/superpowers/evidence/e1/2026-10-16-integracion-prs.md` en master.
 
 Esta integración no despliega. Comprobado al terminar: mismos contenedores, imágenes, fechas de inicio y reinicios de worker/API/scheduler/PostgreSQL, mismo hash del override y mismo HEAD productivo `1cf751f4`; Herramientas conserva PID 180268 y salud operativa correcta. El worker r4 continúa en ejecución; las correcciones nuevas de revisión aún necesitan publicación controlada. No hacer un pull indiscriminado en producción: hay trabajo ajeno y componentes todavía fuera del alcance de Sombra. Se preservan captura futura y cupos E2/E3 en cero; E1 sigue pendiente de estabilidad sostenida y siete días verdes.
+
+## Despliegues de Herramientas del 16/10
+
+Producción quedó en master `7dfaf39c` y el checkout está limpio respecto de master.
+
+| Entrega | PR | Master | Migración | Tag de rollback (apunta al estado previo) |
+|---|---|---|---|---|
+| Etiquetas en Preparación | #43 | `b822b5c3` | 133 | `rollback/prod-pre-etiquetas-2026-10-16` |
+| Permisos integrados | #44 | `1cf751f4` | 134 | `rollback/prod-pre-permisos44-2026-10-16` |
+| Versionado del VPS | #46–#48 | `f6bed3f9` | — | `rollback/prod-pre-versionado-2026-10-16` |
+| Vigía de deriva | #49 (+ #50 docs) | `7993ab11` | — | `rollback/prod-pre-vigia49-2026-10-16` |
+| Mensajería de Astra y `fusion-backup` | #51 | `4a58c96c` | — | `rollback/prod-pre-mensajeria51-precios52-2026-10-16` |
+| Precio único por variación | #52 | `7dfaf39c` | — | el mismo tag de la fila anterior |
+
+Notas operativas:
+
+- **Backups predeploy.** Viven en `/opt/fusionbikes/backups/fusion-<ts>-predeploy-<tema>.sqlite` y se generan con `better-sqlite3` `db.backup()` más `integrity_check`.
+- **Si el checkout tiene cambios ajenos sin commitear,** el sync se hace así:
+  1. Respaldar lo sucio en `prod-sucio-<ts>.tar/.patch`.
+  2. `update-ref`, después `reset -q`, y `checkout --` solo de las rutas entrantes.
+  3. Verificar con sha256 que lo no tocado sigue igual.
+
+  Un archivo sucio que entra se pisa solo si su contenido es idéntico al de master.
+- **La sesión orquestadora, aislada en un worktree, no puede correr git sobre `/opt/fusionbikes/herramientas`.** El sync de git y el `pm2 restart` los ejecuta la sesión de despliegue.
+
+## Versionado de todo el VPS (16/10)
+
+- **Regla de José:** todo el VPS va versionado en el repo `fusionbikesok-ui/Herramientas`.
+  - Herramientas está en la raíz y la plataforma en `plataforma/`.
+  - Los demás servicios van en `integrations/<servicio>/`: management-migration, mensajeria/bot (el chatbot de `/opt/fusion-chatbot`) y chat-migration-qa.
+  - La configuración del servidor (systemd, cron, nginx, compose) va en `deploy/`.
+- **Astra (Codex del VPS)** recibió la regla en `/root/.codex/AGENTS.md`. Nada de editar en vivo `/opt/fusion-*`, prod ni `/etc`; las imágenes Docker se construyen desde un commit con su SHA.
+- **Inventario:** `deploy/INVENTARIO.md`.
+- **`scripts/ops/drift-vps.sh`** compara el VPS contra `origin/master`, bloque por bloque: herramientas, management, chatbot, chat-qa, archivos de `deploy/` e imágenes.
+- **Vigía de deriva:**
+  - **Cron:** `/etc/cron.d/fusion-drift`, copia de `deploy/servidor/cron.d/fusion-drift`. Corre a las 07:15 UTC con `flock` y ejecuta `scripts/ops/drift-vps-cron.sh`.
+  - **Estado y log:** el estado queda en `/opt/fusionbikes/backups/estado-drift.json` y el log en `/var/log/fusion/drift-vps.log`.
+  - **Códigos de salida:** rc=0 sano, rc=1 deriva, rc=2 sin medición (`fetch_fallido`, entre otros).
+  - **Datos sensibles:** las líneas cuya ruta parece un secreto se omiten completas del estado y del mensaje, pero no del log local.
+  - **Vigía horario:** `lib/vigiaDrift.js`, en el minuto 32. Abre o resuelve el incidente `deriva_git`; uno sin medición o con fecha futura da `deriva_sin_medicion`.
+- **Deriva residual al 16/10, 16:14 UTC** (85 diferencias, incidente 69 abierto):
+  - herramientas: `.agents/skills` (5, solo en el repo);
+  - management: `pdf-gateway.test.mjs` modificado (aceptado) y 64 copias viejas solo en el repo, a limpiar;
+  - chatbot: `bot/.gitignore` modificado, `fusion-learning-vps.zip` solo en el VPS y 9 tests solo en el repo;
+  - chat-qa: 2 solo en el repo;
+  - el compose de pos-test difiere a propósito.
+- **Tests de management:** 2 fallan en master (`POS VPS prepare returns signed store checkout` y `ranking.test.cjs`). No es una regresión: vienen de las copias versionadas en el #46.
