@@ -40,6 +40,7 @@ SALTAR = {'.git', 'node_modules', '__pycache__', '.pytest_cache'}
 # (ruta en el VPS, ruta en el repo). Los symlinks de nginx se resuelven.
 ARCHIVOS = [
     ('/etc/cron.d/fusion-backup', 'deploy/servidor/cron.d/fusion-backup'),
+    ('/etc/cron.d/fusion-drift', 'deploy/servidor/cron.d/fusion-drift'),
     ('/opt/fusionbikes/backups/backup.sh', 'deploy/servidor/backups/backup.sh'),
     ('/opt/fusionbikes/backups/backup-db.mjs', 'deploy/servidor/backups/backup-db.mjs'),
     ('/opt/fusionbikes/backups/RESTAURAR.md', 'deploy/servidor/backups/RESTAURAR.md'),

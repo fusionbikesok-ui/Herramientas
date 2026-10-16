@@ -50,7 +50,8 @@ for l in lineas:
     if not m:
         continue
     bloque, tipo, ruta = m.groups()
-    archivos.append(f'[{bloque}] {tipo} {"[ruta omitida]" if SECRETO.search(ruta) else ruta}')
+    # Si cualquier parte de la línea delata un secreto (rutas con espacios incluidas) se omite la línea entera.
+    archivos.append('[ruta omitida]' if SECRETO.search(l) else f'[{bloque}] {tipo} {ruta}')
     if bloque == 'imagenes':
         imagenes += 1
         continue

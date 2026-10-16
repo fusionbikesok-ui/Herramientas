@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { execFileSync } from 'child_process';
 import { openDb } from '../db/index.js';
 import { revisarDrift } from '../lib/vigiaDrift.js';
 
@@ -89,6 +92,14 @@ describe('lib/vigiaDrift', () => {
     expect(m).toContain('server.js');
   });
 
+  it('una ruta con espacios que delata un secreto se omite entera', () => {
+    escribirEstado(estadoBase({ rc: 1, total: 2, muestra: ['[herramientas] SOLO_EN_VPS secret docs/ventas.json', '[herramientas] MODIFICADO server.js'] }));
+    revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA });
+    const m = activos(db)[0].mensaje_humano;
+    expect(m).not.toMatch(/secret|ventas/);
+    expect(m).toContain('server.js');
+  });
+
   it('ultimo_corrida en el futuro es fecha_futura; hasta 15 min de desfase se tolera', () => {
     escribirEstado(estadoBase({ ultimo_corrida: '2026-10-16T14:00:00Z' }));
     expect(revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA }).motivo).toBe('fecha_futura');
@@ -111,5 +122,33 @@ describe('lib/vigiaDrift', () => {
     db.close();
     expect(() => revisarDrift(db, { estadoPath: ESTADO, ahora: AHORA })).not.toThrow();
     db = openDb(TEST_DB);
+  });
+});
+
+describe('scripts/ops/drift-vps-cron.sh (integración)', () => {
+  let dir;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drift-cron-')); fs.mkdirSync(path.join(dir, 'repo')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  function correr(driftScript) {
+    execFileSync('git', ['init', '-q', path.join(dir, 'repo')]);
+    const stub = path.join(dir, 'drift.sh');
+    fs.writeFileSync(stub, driftScript, { mode: 0o755 });
+    execFileSync(path.resolve('scripts/ops/drift-vps-cron.sh'), [], {
+      env: { ...process.env, REPO: path.join(dir, 'repo'), DRIFT_SCRIPT: stub, ESTADO: path.join(dir, 'estado.json'), LOG_DIR: path.join(dir, 'log') },
+    });
+    return JSON.parse(fs.readFileSync(path.join(dir, 'estado.json'), 'utf8'));
+  }
+
+  it('contra un repo sin remoto: rc=2 y fetch_fallido aunque el drift dé 0', () => {
+    const e = correr('#!/bin/bash\necho "Sin deriva."\nexit 0\n');
+    expect(e).toMatchObject({ rc: 2, motivo: 'fetch_fallido' });
+    expect(fs.existsSync(path.join(dir, 'log', 'drift-vps.log'))).toBe(true);
+  });
+
+  it('omite la línea entera de una ruta con espacios que parece secreto', () => {
+    const e = correr('#!/bin/bash\necho "  [herramientas] SOLO_EN_VPS secret docs/ventas.json"\necho "  [herramientas] MODIFICADO server.js"\nexit 1\n');
+    expect(e.muestra).toEqual(['[ruta omitida]', '[herramientas] MODIFICADO server.js']);
+    expect(e.total).toBe(2);
   });
 });

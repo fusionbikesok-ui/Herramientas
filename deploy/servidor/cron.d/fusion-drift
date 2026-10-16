@@ -1,0 +1,4 @@
+# Control de deriva VPS ↔ git, diario a las 07:15 UTC (04:15 ART). Solo lectura sobre el código:
+# deja /opt/fusionbikes/backups/estado-drift.json, que lee lib/vigiaDrift.js (incidente 'deriva_git').
+# flock evita solapamiento si una corrida se demora. Log en /var/log/fusion/drift-vps.log (7 días).
+15 7 * * * root /usr/bin/flock -n /tmp/fusion-drift.lock /bin/bash /opt/fusionbikes/herramientas/scripts/ops/drift-vps-cron.sh >/dev/null 2>&1
