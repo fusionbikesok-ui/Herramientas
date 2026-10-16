@@ -175,6 +175,118 @@ describe('E2-PRY-10 proyector del catálogo', () => {
         .toEqual([{ variacion_normalizada: '921' }]);
     });
 
+    it('al restaurar el padre se reabren las variaciones que archivó su baja', async () => {
+      await alta(1010, { type: 'variable' });
+      await alta(1011, { type: 'variation', parent_id: 1010 });
+      await observar('1011', '2026-10-01T00:00:00Z', 'open');
+      await q(`UPDATE catalog.external_representations SET estado_remoto='publish' WHERE variacion_normalizada='1011'`);
+      await observar('1010', 'deleted:123');
+      await baja('1010');
+      await proyector().unaVuelta();
+      expect(await q(`SELECT count(*)::int n FROM catalog.external_representations WHERE archivado_en IS NOT NULL`)).toEqual([{ n: 2 }]);
+      await observar('1010', '2026-10-03T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '1010', { id: 1010, type: 'variable' }, { version: '2026-10-03T00:00:00Z' });
+      await proyector().unaVuelta();
+      expect(await q(`SELECT variacion_normalizada,archivado_en,motivo_archivo,estado_remoto FROM catalog.external_representations ORDER BY variacion_normalizada`))
+        .toEqual([{ variacion_normalizada: '', archivado_en: null, motivo_archivo: null, estado_remoto: null },
+          { variacion_normalizada: '1011', archivado_en: null, motivo_archivo: null, estado_remoto: 'publish' }]);
+    });
+
+    /** Padre con una hija proyectada, dado de baja; devuelve lo necesario para restaurarlo. */
+    async function padreDadoDeBaja(id: number, opciones: { obsHija?: boolean } = {}) {
+      await alta(id, { type: 'variable' });
+      await alta(id + 1, { type: 'variation', parent_id: id });
+      if (opciones.obsHija !== false) await observar(String(id + 1), '2026-10-01T00:00:00Z', 'open');
+      await observar(String(id), 'deleted:123');
+      await baja(String(id));
+      await proyector().unaVuelta();
+    }
+    const restaurarPadre = async (id: number, version = '2026-10-03T00:00:00Z') => {
+      await observar(String(id), version, 'open');
+      await encolar(woo, 'woo.products', String(id), { id, type: 'variable' }, { version });
+      await proyector().unaVuelta();
+    };
+    const hijaArchivada = async (id: number) => (await q<{ a: boolean }>(
+      `SELECT archivado_en IS NOT NULL AS a FROM catalog.external_representations WHERE variacion_normalizada=$1`, [String(id)]))[0]!.a;
+
+    it('no reabre una variación sin observación E1', async () => {
+      await padreDadoDeBaja(1030, { obsHija: false });
+      await restaurarPadre(1030);
+      expect(await hijaArchivada(1031)).toBe(true);
+    });
+
+    it('un mensaje atrasado del padre no reabre las variaciones', async () => {
+      await padreDadoDeBaja(1040);
+      await observar('1040', '2026-10-05T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '1040', { id: 1040, type: 'variable' }, { version: '2026-10-03T00:00:00Z' });
+      await proyector().unaVuelta();
+      expect(await hijaArchivada(1041)).toBe(true);
+    });
+
+    it('la observación de otra cuenta no reabre una variación', async () => {
+      await padreDadoDeBaja(1050, { obsHija: false });
+      const otra = (await q<{ id: string }>(`INSERT INTO core.channel_accounts(company_id,channel,external_account)
+        VALUES ($1,'woocommerce',$2) RETURNING id`, [empresa, randomUUID()]))[0]!.id;
+      await observar('1051', '2026-10-01T00:00:00Z', 'open', otra);
+      await restaurarPadre(1050);
+      expect(await hijaArchivada(1051)).toBe(true);
+    });
+
+    it('una variación archivada por la papelera conserva su motivo y no se reabre', async () => {
+      await alta(1060, { type: 'variable' });
+      await encolar(woo, 'woo.products', '1061', { id: 1061, type: 'variation', parent_id: 1060, status: 'trash' }, { version: '2026-10-01T00:00:00Z' });
+      await proyector().unaVuelta();
+      await observar('1061', '2026-10-01T00:00:00Z', 'open');
+      await observar('1060', 'deleted:123');
+      await baja('1060');
+      await proyector().unaVuelta();
+      await restaurarPadre(1060);
+      expect(await q(`SELECT archivado_en IS NOT NULL AS a,motivo_archivo FROM catalog.external_representations WHERE variacion_normalizada='1061'`))
+        .toEqual([{ a: true, motivo_archivo: 'en la papelera de Woo' }]);
+    });
+
+    it('no reabre una hija que pasó a papelera después de la baja del padre y agotó sus intentos', async () => {
+      await padreDadoDeBaja(1070);
+      await observar('1071', '2026-10-02T00:00:00Z', 'closed');
+      const mensaje = await encolar(woo, 'woo.products', '1071',
+        { id: 1071, type: 'variation', parent_id: 1070, status: 'trash' }, { version: '2026-10-02T00:00:00Z' });
+      await admin.query('UPDATE integrations.inbox_messages SET max_attempts=1 WHERE id=$1', [mensaje]);
+      await proyector().unaVuelta();
+      expect(await estadoMensaje(mensaje)).toBe('dead_lettered');
+      await restaurarPadre(1070);
+      expect(await hijaArchivada(1071)).toBe(true);
+      expect(await q(`SELECT archivado_en IS NULL AS abierta FROM catalog.external_representations
+        WHERE recurso='1070' AND variacion_normalizada=''`)).toEqual([{ abierta: true }]);
+    });
+
+    it('una hija con estado deleted heredado espera su propia proyección antes de reabrirse', async () => {
+      await padreDadoDeBaja(1080);
+      await admin.query(`UPDATE catalog.external_representations SET estado_remoto='deleted' WHERE variacion_normalizada='1081'`);
+      await restaurarPadre(1080);
+      expect(await hijaArchivada(1081)).toBe(true);
+      await observar('1081', '2026-10-04T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '1081',
+        { id: 1081, type: 'variation', parent_id: 1080, status: 'publish' }, { version: '2026-10-04T00:00:00Z' });
+      await proyector().unaVuelta();
+      expect(await q(`SELECT archivado_en IS NULL AS abierta,estado_remoto FROM catalog.external_representations
+        WHERE variacion_normalizada='1081'`)).toEqual([{ abierta: true, estado_remoto: 'publish' }]);
+    });
+
+    it('al restaurar el padre no reabre una variación cuya propia observación sigue eliminada', async () => {
+      await alta(1020, { type: 'variable' });
+      await alta(1021, { type: 'variation', parent_id: 1020 });
+      await observar('1021', 'deleted:123');
+      await baja('1021');
+      await observar('1020', 'deleted:123');
+      await baja('1020');
+      await proyector().unaVuelta();
+      await observar('1020', '2026-10-03T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '1020', { id: 1020, type: 'variable' }, { version: '2026-10-03T00:00:00Z' });
+      await proyector().unaVuelta();
+      expect(await q(`SELECT variacion_normalizada FROM catalog.external_representations WHERE archivado_en IS NOT NULL`))
+        .toEqual([{ variacion_normalizada: '1021' }]);
+    });
+
     it('tolera una baja sin representación y no crea productos artificiales', async () => {
       await observar('930', 'deleted:123');
       const id = await baja('930');
