@@ -121,31 +121,31 @@ describe('integration jobs: lease, retry y DLQ', () => {
     db.close();
   });
 
-  it('procesa dispatch.woo y actualiza todos los pedidos del payload', async () => {
+  it('dispatch.woo es obsoleto: un job viejo termina sin ningún PUT a Woo (web o ML) y deja constancia', async () => {
     const db = openDb(':memory:');
     wooFetch.mockResolvedValue({ status: 200, data: {} });
-    db.prepare(`INSERT INTO integration_events
-      (event_id,event_type,channel,source,received_at,correlation_id,dedupe_key,metadata_json)
-      VALUES ('dispatch-e','dispatch.confirmed','web','fusionbikes',?,'dispatch-e','dispatch-e',?)`)
-      .run(new Date().toISOString(), JSON.stringify({ orders: [{ wc_order_id: 1, status: 'completed' }, { wc_order_id: 2, status: 'completed' }] }));
-    db.prepare("INSERT INTO integration_jobs (event_id,job_type,available_at) VALUES ('dispatch-e','dispatch.woo','2020-01-01T00:00:00Z')").run();
+    for (const [id, canal] of [['dispatch-e', 'web'], ['dispatch-m', 'ml']]) {
+      db.prepare(`INSERT INTO integration_events
+        (event_id,event_type,channel,source,received_at,correlation_id,dedupe_key,metadata_json)
+        VALUES (?,'dispatch.confirmed',?,'fusionbikes',?,?,?,?)`)
+        .run(id, canal, new Date().toISOString(), id, id, JSON.stringify({ canal, orders: [{ wc_order_id: 1, status: 'completed' }, { wc_order_id: 2, status: 'completed' }] }));
+      db.prepare("INSERT INTO integration_jobs (event_id,job_type,available_at) VALUES (?,'dispatch.woo','2020-01-01T00:00:00Z')").run(id);
+    }
     const result = await procesarIntegrationJobs(db, { wooCfg: { url: 'http://woo', ck: 'ck', cs: 'cs' } });
-    expect(result.processed).toBe(1); expect(wooFetch).toHaveBeenCalledTimes(2);
-    expect(db.prepare("SELECT status FROM integration_jobs WHERE event_id='dispatch-e'").get().status).toBe('completed');
+    expect(result.processed).toBe(2); expect(wooFetch).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT COUNT(*) n FROM integration_jobs WHERE job_type='dispatch.woo' AND status='completed'").get().n).toBe(2);
+    expect(db.prepare("SELECT COUNT(*) n FROM integration_event_history WHERE stage='dispatch_woo_obsoleto'").get().n).toBe(2);
     db.close();
   });
 
-  it('reintenta dispatch.woo y termina en dead-letter al agotar intentos', async () => {
+  it('dispatch.woo obsoleto termina igual sin configuración de Woo (no se reintenta ni va a dead-letter)', async () => {
     const db = openDb(':memory:');
     db.prepare(`INSERT INTO integration_events
       (event_id,event_type,channel,source,received_at,correlation_id,dedupe_key,metadata_json)
       VALUES ('dispatch-f','dispatch.confirmed','web','fusionbikes',?,'dispatch-f','dispatch-f','{}')`).run(new Date().toISOString());
     db.prepare("INSERT INTO integration_jobs (event_id,job_type,available_at,max_attempts) VALUES ('dispatch-f','dispatch.woo','2020-01-01T00:00:00Z',2)").run();
     await procesarIntegrationJobs(db, { wooCfg: null });
-    expect(db.prepare("SELECT status, attempts FROM integration_jobs WHERE event_id='dispatch-f'").get()).toMatchObject({ status: 'failed', attempts: 1 });
-    db.prepare("UPDATE integration_jobs SET available_at='2020-01-01T00:00:00Z'").run();
-    await procesarIntegrationJobs(db, { wooCfg: null });
-    expect(db.prepare("SELECT status, attempts FROM integration_jobs WHERE event_id='dispatch-f'").get()).toMatchObject({ status: 'dead_lettered', attempts: 2 });
+    expect(db.prepare("SELECT status FROM integration_jobs WHERE event_id='dispatch-f'").get().status).toBe('completed');
     db.close();
   });
 
