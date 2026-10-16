@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "enabled": false,
+  "timezone": "America/Argentina/Buenos_Aires",
+  "hour": 9,
+  "number_id": "PHONE_NUMBER_ID_DE_META",
+  "sender": "549XXXXXXXXXX",
+  "template_name": "fusion_resumen_reposicion_v1",
+  "template_language": "es_AR",
+  "template_id": "ID_DE_PLANTILLA_DE_META",
+  "recipients": [
+    {"name": "Nombre", "phone": "549XXXXXXXXXX"}
+  ]
+}
