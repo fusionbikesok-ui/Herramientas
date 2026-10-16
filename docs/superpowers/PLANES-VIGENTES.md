@@ -19,7 +19,7 @@ La Fase E del legado y E1 de PostgreSQL tienen criterios de aceptación separado
 |---|---|---|---|
 | E-0 | Base de recibos/trabajos durables | Desplegada 12/10 | PR #20, migración 126 |
 | E-1a | Pedidos por evento | Desplegada 12/10 + hotfix 14/10 | master `3c5167f3`, `4cf08fbf` |
-| E-1b | Pedidos Woo por evento y alta de webhooks | Implementación incorporada; firmas 17–19 reparadas y webhooks activos el 15/10 18:11 UTC. Pendiente comprobar entrega natural | `bee4c796`, migración 129; [evidencia de recuperación](evidence/e1/2026-10-15-recuperacion-sombra.md) |
+| E-1b | Pedidos Woo por evento y alta de webhooks | Implementación incorporada; firmas 17–19 reparadas y webhooks activos el 15/10 18:11 UTC. Entrega natural comprobada el 16/10: 101 webhooks Woo completados; los 3 pedidos web nuevos tienen su `order.woo` hecho entre 0 y 2 min después, sin errores ni incidentes. `pedidos_cache.fecha` está en hora de Argentina | `bee4c796`, migración 129; [evidencia de recuperación](evidence/e1/2026-10-15-recuperacion-sombra.md) |
 | E-1c | Bajas Woo confirmadas + `product.restored` | Desplegada 15/10 01:08 UTC | PR #29, migración 130 |
 | E-2 | `item.project` durable (ML items/stock) | Desplegada 15/10 01:23 UTC | PR #30 |
 | E-3 | Control medido (missed_feeds, monitor Woo, barridos) | Desplegada 15/10 11:26 UTC | PR #32, migración 131 |
