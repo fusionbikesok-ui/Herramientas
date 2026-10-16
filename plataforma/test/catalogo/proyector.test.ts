@@ -245,6 +245,33 @@ describe('E2-PRY-10 proyector del catálogo', () => {
         .toEqual([{ a: true, motivo_archivo: 'en la papelera de Woo' }]);
     });
 
+    it('no reabre una hija que pasó a papelera después de la baja del padre y agotó sus intentos', async () => {
+      await padreDadoDeBaja(1070);
+      await observar('1071', '2026-10-02T00:00:00Z', 'closed');
+      const mensaje = await encolar(woo, 'woo.products', '1071',
+        { id: 1071, type: 'variation', parent_id: 1070, status: 'trash' }, { version: '2026-10-02T00:00:00Z' });
+      await admin.query('UPDATE integrations.inbox_messages SET max_attempts=1 WHERE id=$1', [mensaje]);
+      await proyector().unaVuelta();
+      expect(await estadoMensaje(mensaje)).toBe('dead_lettered');
+      await restaurarPadre(1070);
+      expect(await hijaArchivada(1071)).toBe(true);
+      expect(await q(`SELECT archivado_en IS NULL AS abierta FROM catalog.external_representations
+        WHERE recurso='1070' AND variacion_normalizada=''`)).toEqual([{ abierta: true }]);
+    });
+
+    it('una hija con estado deleted heredado espera su propia proyección antes de reabrirse', async () => {
+      await padreDadoDeBaja(1080);
+      await admin.query(`UPDATE catalog.external_representations SET estado_remoto='deleted' WHERE variacion_normalizada='1081'`);
+      await restaurarPadre(1080);
+      expect(await hijaArchivada(1081)).toBe(true);
+      await observar('1081', '2026-10-04T00:00:00Z', 'open');
+      await encolar(woo, 'woo.products', '1081',
+        { id: 1081, type: 'variation', parent_id: 1080, status: 'publish' }, { version: '2026-10-04T00:00:00Z' });
+      await proyector().unaVuelta();
+      expect(await q(`SELECT archivado_en IS NULL AS abierta,estado_remoto FROM catalog.external_representations
+        WHERE variacion_normalizada='1081'`)).toEqual([{ abierta: true, estado_remoto: 'publish' }]);
+    });
+
     it('al restaurar el padre no reabre una variación cuya propia observación sigue eliminada', async () => {
       await alta(1020, { type: 'variable' });
       await alta(1021, { type: 'variation', parent_id: 1020 });
