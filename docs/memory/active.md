@@ -1,6 +1,6 @@
 # Estado activo
 
-Actualizado: 2026-10-12.
+Actualizado: 2026-10-16.
 
 ## Fuente de verdad
 
@@ -19,6 +19,7 @@ Actualizado: 2026-10-12.
 - 2026-10-06: desplegado «Calcular precio y reactivar» en Pausadas con stock (`feat/pausadas-precio`, `3fefbe4a`, ff desde `0a785389`, backup `data/backup-pre-pausadas-precio-2026-10-06.sqlite`). El botón aparece al cargar solo si la reactivación automática persistió la frenada por neto; si no, tras un «Reintentar».
 - 2026-10-06: `master` en GitHub = código de prod (PR #1, `1891af6e`) + flujo git del equipo + fix del `IdempotencyKey` duplicado en `openapi/mobile-v1.yaml` (rompía el CI). El checkout de prod sigue en `conteo-confiable` hasta que Astra commitee su WIP.
 - Auto-vincular (muestra en sombra 2026-10-06): universo 1541 (760 seguras); las 121 activas ya sincronizan por `sku_matcher_decisiones` con el mismo SKU, así que registrarlas en Identidad no cambia stock: queda para Fase C/D. Una publicación nueva sin vincular hoy la protege Guardia (`sin_cobertura`, bloquea sync); al apagar Guardia (Fase C) esa protección pasa a Identidad: auto-vincular si es seguro, si no stock 0 + caso (decisión de José).
+- 2026-10-16: prod = master `7dfaf39c` (etiquetas #43, permisos #44, versionado del VPS #46–#48, vigía de deriva #49, Mensajería de Astra #51, precio único por variación #52). Detalle, tags de rollback y deriva residual en `modules/operations-vps.md`.
 
 ## Base y cambios preservados
 
