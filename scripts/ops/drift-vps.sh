@@ -10,6 +10,8 @@
 # .gitignore del repo) y los IDs de imagen de los contenedores contra deploy/INVENTARIO.md.
 # Sale con 0 si no hay deriva, 1 si la hay (y lista los archivos), 2 si no pudo comparar.
 # Ejecutar desde un checkout cuyos .gitignore sean los de $REF (normalmente master).
+# Bloque herramientas: el «solo en repo» de integrations/*, deploy/* y scripts/ops desaparece cuando el checkout de prod
+# se actualiza a un master que ya los incluye. Los «solo en VPS» que queden son trabajo sin versionar (ver INVENTARIO.md).
 set -u
 REPO="${REPO:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 REF="${REF:-origin/master}"
@@ -42,6 +44,10 @@ ARCHIVOS = [
     ('/opt/fusionbikes/backups/backup-db.mjs', 'deploy/servidor/backups/backup-db.mjs'),
     ('/opt/fusionbikes/backups/RESTAURAR.md', 'deploy/servidor/backups/RESTAURAR.md'),
     ('/etc/systemd/system/pm2-root.service', 'deploy/servidor/systemd/pm2-root.service'),
+    ('/etc/systemd/system/fusion-firewall-3001.service', 'deploy/servidor/systemd/fusion-firewall-3001.service'),
+    ('/usr/local/sbin/fusion-firewall-3001.sh', 'deploy/servidor/sbin/fusion-firewall-3001.sh'),
+    ('/etc/systemd/system/fusion-estado-pg-copia.service', 'deploy/servidor/systemd/fusion-estado-pg-copia.service'),
+    ('/etc/systemd/system/fusion-estado-pg-copia.timer', 'deploy/servidor/systemd/fusion-estado-pg-copia.timer'),
     ('/opt/fusionbikes/plataforma-prod/sombra-worker.override.yml', 'deploy/servidor/plataforma-prod/sombra-worker.override.yml'),
     ('/opt/fusionbikes-pos-test/docker-compose.yml', 'integrations/pos-test/docker-compose.yml'),
 ]

@@ -1,0 +1,12 @@
+[Unit]
+Description=FusionBikes: cierra el puerto 3001 del legado salvo loopback y Docker (E1 T3)
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/fusion-firewall-3001.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
