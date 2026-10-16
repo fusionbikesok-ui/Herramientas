@@ -5,7 +5,7 @@ import {createInvoiceSource} from '../lib/mensajeriaInvoiceSource.js';
 import {createProductSource,productMessage} from '../lib/mensajeriaProductSource.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const ACTIONS = new Set(['take','transfer','release','close','reopen','pause','resume','note','send','forward']);
+const ACTIONS = new Set(['open','take','transfer','release','close','reopen','pause','resume','note','send','forward']);
 const eq = (a,b) => {if(typeof a!=='string'||typeof b!=='string')return false;const left=Buffer.from(a),right=Buffer.from(b);return left.length===right.length&&crypto.timingSafeEqual(left,right);};
 export function inboxActor(user,override=null) {
   if (!user?.id) return null;
@@ -174,7 +174,8 @@ export function mensajeriaRouter(db,{env=process.env,fetchImpl=fetch,now=()=>Dat
   });
   router.get('/list',safe(async(req,res)=>res.json(await proxy(req,'list',{
     filter:['all','mine','unassigned','closed','unread'].includes(req.query.filter)?req.query.filter:'all',
-    channel:['all','web','whatsapp'].includes(req.query.channel)?req.query.channel:'all',
+    channel:['all','web','whatsapp','lead'].includes(req.query.channel)?req.query.channel:'all',
+    source:['all','gift','cart','contact'].includes(req.query.source)?req.query.source:'all',
     search:String(req.query.search||'').slice(0,150),number:req.query.channel==='web'?'':String(req.query.number||'').slice(0,100),
     offset:Math.max(0,Math.min(Number(req.query.offset)||0,100000)),limit:Math.max(1,Math.min(Number(req.query.limit)||30,100))
   }))));

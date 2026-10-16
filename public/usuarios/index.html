@@ -46,11 +46,18 @@
   .badge.tool{color:var(--muted);margin:2px 3px 2px 0}
   .badge.tool.w{color:var(--green);border-color:rgba(52,211,153,.4)}
   .row-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-  input[type=text],input[type=password]{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9rem;font-family:inherit;outline:none}
+  input[type=text],input[type=password],input[type=email]{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.9rem;font-family:inherit;outline:none}
   input:focus{border-color:var(--accent)}
   label.fld{display:block;font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .perm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:6px}
+  .perm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-top:6px}
+  .perm-group{grid-column:1/-1;font-size:.85rem;color:var(--text);margin:16px 0 3px}
+  .perm .description{display:block;color:var(--muted);font-size:.75rem;line-height:1.45;margin-top:5px;font-weight:400}
+  .perm{align-items:flex-start!important;min-width:0}
+  .perm .chk{flex:none;margin-top:3px}
+  .perm .name{min-width:0}
+  .perm-help{font-size:.8rem;line-height:1.5;color:var(--muted);margin:8px 0 12px}
+  .perm-search{margin:10px 0}
   .perm{display:flex;align-items:center;gap:9px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 11px}
   .perm .name{flex:1;font-size:.85rem}
   .perm select{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;font-size:.78rem;font-family:inherit}
@@ -61,12 +68,13 @@
   .msg.ok{display:block;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);color:var(--green)}
   .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:20px;z-index:10}
   .modal-bg.show{display:flex}
-  .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:22px;max-width:640px;width:100%;max-height:90vh;overflow:auto}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:22px;max-width:800px;width:100%;max-height:90vh;overflow:auto}
   .modal h3{font-size:1.15rem;margin-bottom:14px}
   .modal .fld-wrap{margin-bottom:14px}
-  .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+  .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px;position:sticky;bottom:-22px;background:var(--surface);padding:12px 0;border-top:1px solid var(--border)}
+  .btn,.perm select{min-height:44px}
   .muted{color:var(--muted);font-size:.82rem}
-  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+  @media(max-width:640px){.grid2,.perm-grid{grid-template-columns:1fr}.modal-bg{padding:10px}.modal{padding:16px}.toolbar{flex-wrap:wrap}.perm select{max-width:90px}.modal-actions{position:sticky;bottom:-16px;background:var(--surface);padding:12px 0}}
 </style>
 </head>
 <body>
@@ -82,7 +90,7 @@
       <button class="btn" onclick="abrirCrear()">+ Nuevo usuario</button>
     </div>
   </header>
-  <p class="sub">Definí quién puede entrar y qué herramientas puede usar cada persona.</p>
+  <p class="sub">Administrá desde acá las herramientas y aplicaciones del VPS que puede usar cada persona.</p>
 
   <div class="msg" id="msg"></div>
 
@@ -119,8 +127,11 @@
       </div>
     </div>
     <div id="perm-section">
-      <label class="fld">Herramientas permitidas</label>
+      <label class="fld" for="perm-search">Aplicaciones y permisos</label>
+      <p class="perm-help">Activá las aplicaciones que esta persona puede usar. “Ver / Editar” distingue los niveles disponibles; “Usar” permite las acciones descriptas. Los cambios se aplican sin volver a iniciar sesión. Los accesos a la tienda no cambian sus permisos en WordPress.</p>
+      <input type="text" id="perm-search" class="perm-search" placeholder="Buscar aplicación…" oninput="filtrarPermisos()">
       <div class="perm-grid" id="perm-grid"></div>
+      <p class="muted" id="perm-empty" hidden>No hay aplicaciones que coincidan.</p>
     </div>
     <div class="msg" id="modal-msg"></div>
     <div class="modal-actions">
@@ -222,20 +233,33 @@ async function editarEmail(id) {
   } catch(e){ showMsg(e.message, false); }
 }
 
+function escPerm(value){return String(value == null ? '' : value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function renderPermGrid(permisos){
   permisos = permisos || [];
   var byId = {}; permisos.forEach(function(p){ byId[p.herramienta]=p.nivel; });
-  document.getElementById('perm-grid').innerHTML = HERRAMIENTAS.map(function(h){
+  var grupos = {};
+  HERRAMIENTAS.forEach(function(h){var grupo=h.grupo||'Herramientas y Mensajería';(grupos[grupo]||(grupos[grupo]=[])).push(h);});
+  document.getElementById('perm-search').value='';
+  document.getElementById('perm-grid').innerHTML = Object.keys(grupos).map(function(grupo){return '<h4 class="perm-group" data-perm-heading="'+escPerm(grupo)+'">'+escPerm(grupo)+'</h4>'+grupos[grupo].map(function(h){
     var checked = byId[h.id] ? 'checked' : '';
     var nivel = byId[h.id] || 'read';
     var sel = h.niveles
-      ? '<select data-tool="'+h.id+'" '+(checked?'':'disabled')+'>'
+      ? '<select aria-label="Nivel de '+escPerm(h.label)+'" data-tool="'+escPerm(h.id)+'" '+(checked?'':'disabled')+'>'
          +'<option value="read"'+(nivel==='read'?' selected':'')+'>Ver</option>'
          +'<option value="write"'+(nivel==='write'?' selected':'')+'>Editar</option></select>'
-      : '<span class="muted" style="font-size:.72rem">acceso</span>';
-    return '<label class="perm"><input type="checkbox" class="chk" data-tool="'+h.id+'" '+checked+' onchange="onToolToggle(this)">'
-      +'<span class="name">'+h.label+'</span>'+sel+'</label>';
-  }).join('');
+      : '<span class="muted" style="font-size:.72rem">'+(h.externo?'Enlace':'Usar')+'</span>';
+    return '<label class="perm" data-perm-group="'+escPerm(grupo)+'"><input type="checkbox" class="chk" data-tool="'+escPerm(h.id)+'" '+checked+' onchange="onToolToggle(this)">'
+      +'<span class="name">'+escPerm(h.label)+(h.descripcion?'<span class="description">'+escPerm(h.descripcion)+'</span>':'')+'</span>'+sel+'</label>';
+  }).join('');}).join('');
+  filtrarPermisos();
+}
+
+function filtrarPermisos(){
+  var normalize=function(s){return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();};
+  var q=normalize(document.getElementById('perm-search').value.trim()),grupos={},count=0;
+  document.querySelectorAll('[data-perm-group]').forEach(function(el){var visible=!q||normalize(el.textContent).indexOf(q)!==-1;el.style.display=visible?'':'none';if(visible){grupos[el.dataset.permGroup]=true;count++;}});
+  document.querySelectorAll('[data-perm-heading]').forEach(function(el){el.hidden=!grupos[el.dataset.permHeading];});
+  document.getElementById('perm-empty').hidden=count>0;
 }
 
 function onToolToggle(chk){
@@ -281,6 +305,7 @@ async function abrirEditar(id){
   document.getElementById('modal-title').textContent = 'Editar: '+u.username;
   document.getElementById('f-username').value = u.username;
   document.getElementById('f-username').disabled = true;
+  document.getElementById('f-email-wrap').style.display = 'none';
   document.getElementById('f-password').parentElement.style.display = 'none';
   document.getElementById('f-admin').checked = u.is_admin;
   renderPermGrid(u.permisos);

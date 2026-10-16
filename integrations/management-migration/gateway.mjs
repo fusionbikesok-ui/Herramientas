@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { canUseManagement, hasVpsPermission } from './permissions.mjs';
 import {createAlertSettings,AlertSettingsError} from './stock-alert-settings.mjs';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -9,7 +10,7 @@ import { createMetrics, metricsRoute, MetricsError } from './metrics.mjs';
 import {createAndreani,createAndreaniWorker,csrfToken,csrfValid,AndreaniError} from './andreani.mjs';
 import {andreaniView} from './andreani-view.mjs';
 import {pdfView} from './pdf-view.mjs';
-import {createPdfProxy} from './pdf-proxy.mjs';
+import {createPdfProxy,createPdfHistory} from './pdf-proxy.mjs';
 import {createPos,PosError} from './pos-vps.mjs';
 import {deliveryRoute,createDelivery,DeliveryError,smtpTransport} from './delivery.mjs';
 import {salesWebTarget} from './sales-web.mjs';
@@ -33,6 +34,15 @@ export function allowedTarget(raw, method='GET') {
   if (local.split('?')[0].includes('..')) return null;
   const u = new URL(local, 'http://private.invalid');
   if (u.origin !== 'http://private.invalid' || decodeURIComponent(u.pathname) !== u.pathname || u.pathname.includes('..')) return null;
+  // PHP normaliza puntos/espacios y trunca ciertas claves: no aceptar alias que
+  // Node interpretaría como otro parámetro ni separadores PHP sin codificar.
+  if ([...u.searchParams.keys()].some(k => !/^[a-zA-Z0-9_-]+$/.test(k)) || u.search.includes(';')) return null;
+  // Node y PHP deben interpretar el mismo destino; PHP toma la última clave repetida.
+  const dispatchKeys = ['fm_module','page_id','rest_route','fbpos_quote','print','view','order_id'];
+  if (dispatchKeys.some(k => u.searchParams.getAll(k).length > 1)
+      || [...u.searchParams.keys()].some(k => dispatchKeys.some(d => k.startsWith(d + '[')))) return null;
+  if ((u.pathname.startsWith('/wp-json/') || u.searchParams.has('rest_route'))
+      && ['fm_module','page_id','fbpos_quote','print','fusion_vps_print'].some(k => u.searchParams.has(k))) return null;
   if ([...u.searchParams.keys()].some(k => ['_method', '_jsonp', 'callback', 'action'].includes(k))) return null;
   if(!u.search&&['GET','HEAD'].includes(method)&&['/pos-web/','/facturador-web/'].includes(u.pathname))return {kind:'web-sales',module:u.pathname==='/pos-web/'?'pos':'facturador',local};
   const receipt=u.pathname.match(/^\/facturador\/comprobante\/([a-f0-9]{64})$/);
@@ -40,6 +50,9 @@ export function allowedTarget(raw, method='GET') {
   if(u.pathname==='/facturador/print'&&[...u.searchParams.keys()].join(',')==='id'&&/^[1-9]\d{0,14}$/.test(u.searchParams.get('id'))&&['GET','HEAD'].includes(method))return {kind:'proxy',local:'/index.php?fusion_vps_print='+u.searchParams.get('id')};
   if(u.pathname==='/corregir-etiquetas/'&&!u.search)return {kind:'pdf-page',local};
   if(u.pathname==='/corregir-etiquetas/api'&&!u.search)return {kind:'pdf-api',local};
+  if(u.pathname==='/corregir-etiquetas/history'&&['GET','HEAD'].includes(method)&&[...u.searchParams.keys()].every(k=>['q','from','to','page'].includes(k)&&u.searchParams.getAll(k).length===1))return {kind:'pdf-history',local};
+  const pdfFile=u.pathname.match(/^\/corregir-etiquetas\/files\/([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/);
+  if(pdfFile&&['GET','HEAD'].includes(method)&&(!u.search||u.search==='?download=1'))return {kind:'pdf-file',local,id:pdfFile[1],download:u.search==='?download=1'};
   if(['/assets/pdf-corrector.js','/assets/pdf-corrector.css','/assets/pdf-render.mjs','/assets/pdfjs/pdf.min.mjs','/assets/pdfjs/pdf.worker.min.mjs'].includes(u.pathname)&&!u.search)return {kind:'asset',local};
   if(['/assets/andreani.js','/assets/andreani.css'].includes(u.pathname)&&!u.search)return {kind:'asset',local};
   if(u.pathname==='/andreani/'&&[...u.searchParams.keys()].every(k=>['status','from','to','order_id','page'].includes(k)&&u.searchParams.getAll(k).length===1))return {kind:'andreani',local};
@@ -101,7 +114,23 @@ function session(cookie, authPort) {
 }
 const home = readFileSync(new URL('./home.html', import.meta.url), 'utf8');
 
-export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPort = 3001, catalogRead, directoryRead, metricsRead, alertSettingsHandle, andreaniHandle, pdfHandle, posHandle, deliveryHandle, posEnabled=process.env.FUSION_POS_VPS_ENABLED==='1', salesLocation=process.env.FUSION_SALES_LOCATION||'vps', origin='https://herramientas.fusionbikes.com.ar' }) {
+// La navegación refleja el mismo permiso que el servidor verifica en cada petición.
+export function managementHtml(html, user, salesLocation = 'vps') {
+  let output = String(html).replace(/<a\b[^>]*href="([^"]+)"[^>]*>[\s\S]*?<\/a>/g, (anchor, href) => {
+    if (!href.startsWith(prefix + '/')) return anchor;
+    let target;
+    try { target = allowedTarget(href.replaceAll('&amp;', '&'), 'GET'); } catch { return ''; }
+    return canUseManagement(user, target, 'GET', salesLocation) ? anchor : '';
+  });
+  if (!hasVpsPermission(user, ['gestion-alertas'])) {
+    output = output.replace(/<details id="fs-alerts"[\s\S]*?<\/details>/g, '')
+      .replace(/<script\b[^>]*src="[^"]*\/assets\/stock-alert-settings\.js[^"]*"[^>]*><\/script>/g, '')
+      .replace(/<link\b[^>]*href="[^"]*\/assets\/stock-alert-settings\.css[^"]*"[^>]*>/g, '');
+  }
+  return output;
+}
+
+export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPort = 3001, catalogRead, directoryRead, metricsRead, alertSettingsHandle, andreaniHandle, pdfHandle, pdfHistoryHandle, posHandle, deliveryHandle, posEnabled=process.env.FUSION_POS_VPS_ENABLED==='1', salesLocation=process.env.FUSION_SALES_LOCATION||'vps', origin='https://herramientas.fusionbikes.com.ar' }) {
   if (!secret || secret.length < 64) throw new Error('Missing signing key');
   const alertSettings=alertSettingsHandle||createAlertSettings();
   const catalog = createLocalCatalog({ port: authPort, ...(catalogRead ? { read: catalogRead } : {}) });
@@ -109,6 +138,7 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
   const metrics = metricsRead || createMetrics({authPort,catalogRead});
   const andreani=andreaniHandle||createAndreani({worker:createAndreaniWorker({secret,host:upstreamHost,port:upstreamPort})});
   const pdf=pdfHandle||createPdfProxy(secret);
+  const pdfHistory=pdfHistoryHandle||createPdfHistory(secret);
   const pos=posHandle||createPos({catalog});
   const delivery=deliveryHandle||createDelivery({origin,send:smtpTransport().send,read:(kind,id,user)=>new Promise((resolve,reject)=>{
     const uri=kind==='pdf'?'/index.php?fusion_vps_print='+id:'/index.php?rest_route=/fusion-arca/v1/invoices/'+id;
@@ -159,7 +189,7 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
     try {
       const auth = await session(req.headers.cookie || '', authPort);
       if (auth.status !== 200 || auth.body.ok !== true) return json(res, 401, { error: 'Ingresá en Herramientas para acceder.' });
-      if (auth.body.is_admin !== true || typeof auth.body.user !== 'string') return json(res, 403, { error: 'La validación requiere un administrador de Herramientas.' });
+      if (typeof auth.body.user !== 'string' || !canUseManagement(auth.body, target, req.method, salesLocation)) return json(res, 403, { error: 'Tu usuario no tiene permiso para esta aplicación. Solicitá el acceso desde Usuarios y permisos.' });
       if(target.kind==='stock-alert-settings'){
         let input;
         if(req.method==='POST'){
@@ -208,14 +238,15 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
         const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>262144)return json(res,413,{message:'El comprobante supera el tamaño permitido.'});chunks.push(chunk);}
         arcaBody=Buffer.concat(chunks);try{const data=JSON.parse(arcaBody);if(!data||typeof data!=='object'||Array.isArray(data))throw new Error();}catch{return json(res,400,{message:'Datos inválidos.'});}
       }
+      if(target.kind==='pdf-history'||target.kind==='pdf-file')return await pdfHistory(req,res,target);
       if(target.kind==='pdf-page'){
         res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});
-        return res.end(req.method==='HEAD'?'':pdfView(csrfToken(secret,auth.body.user,req.headers.cookie||'')));
+        return res.end(req.method==='HEAD'?'':managementHtml(pdfView(csrfToken(secret,auth.body.user,req.headers.cookie||'')),auth.body,salesLocation));
       }
       if(target.kind==='pdf-api'){
         if(req.method!=='POST')return json(res,405,{message:'Subí el PDF desde el corrector de etiquetas.'});
         if(req.headers.origin!==origin||!csrfValid(req.headers['x-fusion-csrf'],secret,auth.body.user,req.headers.cookie||''))return json(res,403,{message:'Recargá la página para renovar la sesión.'});
-        return await pdf(req,res);
+        return await pdf(req,res,auth.body.user);
       }
       if(target.kind.startsWith('andreani')){
         try{
@@ -232,13 +263,13 @@ export function createGateway({ secret, upstreamHost, upstreamPort = 80, authPor
           if(target.kind==='andreani-download'){
             const data=await andreani('download',{id:q.get('id')},auth.body.user);res.writeHead(200,{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':'attachment; filename="'+data.filename+'"'});return res.end(req.method==='HEAD'?'':data.file);
           }
-          const data=await andreani('list',Object.fromEntries(q),auth.body.user);res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end(req.method==='HEAD'?'':andreaniView(data,q,csrfToken(secret,auth.body.user,req.headers.cookie||'')));
+          const data=await andreani('list',Object.fromEntries(q),auth.body.user);res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end(req.method==='HEAD'?'':managementHtml(andreaniView(data,q,csrfToken(secret,auth.body.user,req.headers.cookie||'')),auth.body,salesLocation));
         }catch(e){return json(res,e instanceof AndreaniError?e.status:503,{success:false,message:e instanceof AndreaniError?e.message:'No se pudo abrir la preparación de envíos.'});}
       }
-      if (target.kind === 'home') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : home); }
-      if (target.kind === 'directory') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('./directory.html', import.meta.url))); }
-      if (target.kind === 'stock-page') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('./stock-report.html', import.meta.url))); }
-      if (target.kind === 'metrics') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : readFileSync(new URL('./metrics.html', import.meta.url))); }
+      if (target.kind === 'home') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : managementHtml(home,auth.body,salesLocation)); }
+      if (target.kind === 'directory') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : managementHtml(readFileSync(new URL('./directory.html', import.meta.url),'utf8'),auth.body,salesLocation)); }
+      if (target.kind === 'stock-page') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : managementHtml(readFileSync(new URL('./stock-report.html', import.meta.url),'utf8'),auth.body,salesLocation)); }
+      if (target.kind === 'metrics') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(req.method === 'HEAD' ? '' : managementHtml(readFileSync(new URL('./metrics.html', import.meta.url),'utf8'),auth.body,salesLocation)); }
       const asset = assets.get(new URL(target.local, 'http://private.invalid').pathname);
       if (asset) {
         const content = readFileSync(new URL('./assets/' + asset[0], import.meta.url));

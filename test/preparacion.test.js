@@ -225,7 +225,8 @@ describe('control de despacho U0.B', () => {
     expect(db.prepare("SELECT tipo FROM despacho_lote_eventos WHERE lote_id=?").all(loteId).map(r => r.tipo)).toContain('lote_cerrado');
     const salida = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/salida`).set('Idempotency-Key', 'salida-1');
     expect(salida.status).toBe(200); expect(salida.body.lote.salida_confirmada_por).toBeTruthy();
-    expect(db.prepare("SELECT job_type FROM integration_jobs WHERE event_id=?").get(`dispatch-lote-${loteId}`).job_type).toBe('dispatch.woo');
+    // La salida de un lote ya no encola nada hacia Woo (spec etiquetas v13.1).
+    expect(db.prepare("SELECT COUNT(*) n FROM integration_jobs WHERE job_type='dispatch.woo'").get().n).toBe(0);
     expect(db.prepare("SELECT tipo FROM despacho_lote_eventos WHERE lote_id=?").all(loteId).map(r => r.tipo)).toContain('salida_confirmada');
     const salidaRepeat = await request(app).post(`/api/preparacion/despacho/lotes/${loteId}/salida`).set('Idempotency-Key', 'salida-1');
     expect(salidaRepeat.body.repetido).toBe(true);
@@ -1939,7 +1940,7 @@ describe('preparacion flujo', () => {
     expect(db.prepare('SELECT COUNT(*) AS n FROM preparacion_fotos WHERE preparacion_id=?').get(id).n).toBe(1);
   });
 
-  it('purga fotos de preparaciones de más de 30 días aunque sigan activas y conserva las recientes', async () => {
+  it('purga fotos de preparaciones no abiertas de más de 30 días (las abiertas nunca, v6.2) y conserva las recientes', async () => {
     const id = await nuevaPrep();
     const item = db.prepare("SELECT * FROM preparacion_items WHERE preparacion_id=? AND sku='CUB-1'").get(id);
     const buf = await sharp({ create: { width: 10, height: 10, channels: 3, background: 'red' } }).jpeg().toBuffer();
@@ -1948,7 +1949,7 @@ describe('preparacion flujo', () => {
     const reciente = await request(app).post(`/api/preparacion/${id}/foto`).field('item_id', String(item.id)).field('tipo', 'articulo').attach('archivo', buf, 'reciente.jpg');
 
     const hace31dias = new Date(Date.now() - 31 * 24 * 3600 * 1000).toISOString();
-    db.prepare('UPDATE preparaciones SET creado_en=? WHERE id=?').run(hace31dias, id);
+    db.prepare("UPDATE preparaciones SET creado_en=?, estado='despachada_sin_verificar' WHERE id=?").run(hace31dias, id);
 
     const idReciente = crearPreparacion(db, {
       canal: 'web', wcOrderId: 501, numeroPedido: '501', comprador: 'Beto', items: [],

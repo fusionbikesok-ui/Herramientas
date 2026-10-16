@@ -10,6 +10,7 @@ const secret = 'synthetic-pdf-test-key-'.repeat(4);
 const origin = 'https://herramientas.fusionbikes.com.ar';
 const cookie = 'connect.sid=synthetic-test-session';
 const pdfBytes = Buffer.from('%PDF-1.7\nsynthetic HTTP test payload');
+const savedPdfId = '11111111-2222-4333-8444-555555555555';
 const defaultRule = {
   before: {weight: '9000', width: '20', height: '30', length: '40'},
   after: {weight: '15000', width: '25', height: '70', length: '150'},
@@ -65,10 +66,11 @@ test('PDF routes are exact and cannot be repurposed with query parameters', () =
 
 test('Gateway requires current administrator session, exact origin and session-bound CSRF', async t => {
   let called = 0;
-  const {state, root} = await gatewayFixture(t, async (req, res) => {
+  const {state, root} = await gatewayFixture(t, async (req, res, user) => {
     called++;
+    assert.equal(user, 'qa');
     for await (const _ of req) { /* consume the accepted upload */ }
-    res.writeHead(200, {'Content-Type': 'application/pdf'});
+    res.writeHead(200, {'Content-Type': 'application/pdf', 'X-Fusion-Pdf-Id': savedPdfId});
     res.end(pdfBytes);
   });
   const upload = (h = headers) => fetch(root + '/corregir-etiquetas/api', {method: 'POST', headers: h, body: pdfBytes});
@@ -143,17 +145,20 @@ test('Proxy sends only internal authorization and returns validated correction m
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     received = {url: req.url, method: req.method, headers: req.headers, body: Buffer.concat(chunks)};
-    res.writeHead(200, {'X-Fusion-Pdf-Total': '16', 'X-Fusion-Pdf-Pages': '3,8'});
+    res.writeHead(200, {'X-Fusion-Pdf-Total': '16', 'X-Fusion-Pdf-Pages': '3,8', 'X-Fusion-Pdf-Id': savedPdfId,
+      'X-Fusion-Pdf-Name': encodeURIComponent('Envíos Córdoba_corregido.pdf')});
     res.end(pdfBytes);
   });
   const port = await listen(t, worker);
   const {root} = await gatewayFixture(t, createPdfProxy(secret, port));
-  const result = await rawPost(root + '/corregir-etiquetas/api', headers);
+  const result = await rawPost(root + '/corregir-etiquetas/api', {...headers, 'x-fusion-pdf-user': 'forged-client-user'});
   assert.equal(result.status, 200);
   assert.equal(result.headers['content-type'], 'application/pdf');
   assert.equal(result.headers['x-fusion-pdf-total'], '16');
   assert.equal(result.headers['x-fusion-pdf-pages'], '3,8');
+  assert.equal(result.headers['x-fusion-pdf-id'], savedPdfId);
   assert.match(result.headers['content-disposition'], /attachment; filename="etiquetas_corregidas\.pdf"/);
+  assert.equal(result.headers['content-disposition'], `attachment; filename="etiquetas_corregidas.pdf"; filename*=UTF-8''${encodeURIComponent('Envíos Córdoba_corregido.pdf')}`);
   assert.deepEqual(result.body, pdfBytes);
   assert.equal(received.url, '/correct');
   assert.equal(received.method, 'POST');
@@ -161,6 +166,7 @@ test('Proxy sends only internal authorization and returns validated correction m
   assert.equal(received.headers.cookie, undefined);
   assert.equal(received.headers.origin, undefined);
   assert.equal(received.headers['x-fusion-csrf'], undefined);
+  assert.equal(received.headers['x-fusion-pdf-user'], 'qa');
   assert.equal(received.headers.authorization, 'Bearer ' + crypto.createHmac('sha256', secret).update('pdf-corrector-worker-v1').digest('hex'));
 });
 
@@ -172,7 +178,8 @@ test('Proxy propagates rule errors and rejects malformed worker success metadata
       res.writeHead(422, {'Content-Type': 'application/json'});
       res.end(JSON.stringify({message: 'No hay etiquetas con la combinación.'}));
     } else {
-      res.writeHead(200, mode === 'invalid-total' ? {'X-Fusion-Pdf-Total': '301', 'X-Fusion-Pdf-Pages': '1'} : {'X-Fusion-Pdf-Total': '1'});
+      res.writeHead(200, {'X-Fusion-Pdf-Id': savedPdfId,
+        ...(mode === 'invalid-total' ? {'X-Fusion-Pdf-Total': '301', 'X-Fusion-Pdf-Pages': '1'} : {'X-Fusion-Pdf-Total': '1'})});
       res.end(pdfBytes);
     }
   });
@@ -200,7 +207,7 @@ test('Proxy accepts one active job, rejects concurrency, then releases its slot'
       entered();
       await new Promise(resolve => {release = resolve;});
     }
-    res.writeHead(200, {'X-Fusion-Pdf-Total': '1', 'X-Fusion-Pdf-Pages': '1'});
+    res.writeHead(200, {'X-Fusion-Pdf-Total': '1', 'X-Fusion-Pdf-Pages': '1', 'X-Fusion-Pdf-Id': savedPdfId});
     res.end(pdfBytes);
   });
   const port = await listen(t, worker);
@@ -221,7 +228,7 @@ test('Proxy forwards a normalized manual rule and accepts single-field edits and
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     received.push({rule: req.headers['x-fusion-pdf-rule'], body: Buffer.concat(chunks)});
-    res.writeHead(200, {'X-Fusion-Pdf-Total': '1', 'X-Fusion-Pdf-Pages': '1'});
+    res.writeHead(200, {'X-Fusion-Pdf-Total': '1', 'X-Fusion-Pdf-Pages': '1', 'X-Fusion-Pdf-Id': savedPdfId});
     res.end(pdfBytes);
   });
   const port = await listen(t, worker);
@@ -256,7 +263,7 @@ test('Proxy rejects invalid manual rule schemas and field values before contacti
   const worker = http.createServer(async (req, res) => {
     workerCalls++;
     for await (const _ of req) { /* consume if a regression lets this through */ }
-    res.writeHead(200, {'X-Fusion-Pdf-Total': '1', 'X-Fusion-Pdf-Pages': '1'});
+    res.writeHead(200, {'X-Fusion-Pdf-Total': '1', 'X-Fusion-Pdf-Pages': '1', 'X-Fusion-Pdf-Id': savedPdfId});
     res.end(pdfBytes);
   });
   const port = await listen(t, worker);
@@ -297,7 +304,7 @@ test('An invalid rule does not retain the processing lock and valid edits remain
   const worker = http.createServer(async (req, res) => {
     workerCalls++;
     for await (const _ of req) { /* consume */ }
-    res.writeHead(200, {'X-Fusion-Pdf-Total': '1', 'X-Fusion-Pdf-Pages': '1'});
+    res.writeHead(200, {'X-Fusion-Pdf-Total': '1', 'X-Fusion-Pdf-Pages': '1', 'X-Fusion-Pdf-Id': savedPdfId});
     res.end(pdfBytes);
   });
   const port = await listen(t, worker);

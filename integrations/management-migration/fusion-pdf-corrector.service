@@ -1,10 +1,12 @@
 [Unit]
-Description=Fusion PDF label corrector (memory only)
+Description=Fusion PDF label corrector with private history
 After=network.target
 
 [Service]
 Type=simple
 DynamicUser=yes
+StateDirectory=fusion-pdf-corrector
+StateDirectoryMode=0700
 WorkingDirectory=/opt/fusion-pdf-corrector
 EnvironmentFile=/opt/fusion-management-migration/runtime.env
 Environment=PYTHONDONTWRITEBYTECODE=1

@@ -6,12 +6,13 @@ import multer from 'multer';
 import { wooFetch } from './woo.js';
 import { abrirOActualizarIncidente, confirmarCicloSano } from '../lib/incidentes.js';
 import { mlFetch } from '../lib/mlClient.js';
+import { bajarEtiquetasMl, evaluarEnvioMlLocal, MAX_CLAVES_ETIQUETAS } from '../lib/etiquetasMl.js';
 import { skuDesdeMl } from '../lib/mlMapeo.js';
 import { guardarArchivo, rutaAbsoluta, estaDentroDeUploads } from '../utils/storage.js';
 import { procesarColaFotos, reintentarFoto } from '../lib/fotosPreparacionCola.js';
 import {
-  normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete,
-  requisitosConCantidad, fotosFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
+  normalizarEnvio, direccionesDifieren, resolverPerfil, requisitosFoto, requisitosPaquete, TIPO_FOTO_ETIQUETA,
+  requisitosConCantidad, fotosFaltantes, fotosListasFaltantes, esEnvioLocal, detectarVinculoEntrePedidos,
   normalizarTelefonoParaComparacion,
   clasificarElegibilidadMl, pedidosElegiblesOrdenados, envioMlYaSalio,
 } from '../lib/preparacion.js';
@@ -19,6 +20,7 @@ import { tipoLogisticaMl } from '../lib/mlUtil.js';
 import { normalizarPedidoWc, normalizarOrdenMl } from '../lib/modelos/ordenVenta.js';
 import { productoDesdeFilaCatalogo } from '../lib/modelos/producto.js';
 import { inicioHoyBuenosAiresISO } from '../lib/tiempo.js';
+import { asegurarEsquemaEtiquetas, recalcularEtiquetaCargada } from '../lib/etiquetasPreparacion.js';
 
 const TRACKING_META_KEY = '_andreani_tracking';
 import { looksLikeGtin } from '../lib/gtinWoo.js';
@@ -59,20 +61,22 @@ function imagenProductoPendiente(db, item) {
   return null;
 }
 
-function encolarSalidaWoo(db, lote, usuario) {
-  const at = new Date().toISOString();
-  const eventId = `dispatch-lote-${lote.id}`;
-  const orders = db.prepare(`SELECT DISTINCT p.wc_order_id, p.canal, p.tracking FROM despacho_lote_items li
-    JOIN despacho_controles d ON d.id=li.control_id
-    JOIN preparaciones p ON (p.pack_id=d.grupo_clave OR p.clave=d.grupo_clave)
-    WHERE li.lote_id=? AND p.wc_order_id IS NOT NULL`).all(lote.id);
-  const metadata = JSON.stringify({ lote_id: lote.id, canal: lote.canal, orders, actor: usuario });
-  db.prepare(`INSERT OR IGNORE INTO integration_events
-    (event_id,event_type,channel,source,resource_id,payload_version,occurred_at,received_at,correlation_id,dedupe_key,metadata_json,status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending')`).run(eventId, 'dispatch.confirmed', lote.canal, 'fusionbikes', String(lote.id), 'v1', at, at, eventId, eventId, metadata);
-  const event = db.prepare('SELECT event_id FROM integration_events WHERE event_id=?').get(eventId);
-  if (event) db.prepare('INSERT OR IGNORE INTO integration_jobs (event_id,job_type,available_at) VALUES (?,?,?)').run(event.event_id, 'dispatch.woo', at);
-  return eventId;
+// La confirmación de salida de un lote NO escribe en Woo, de ningún canal (spec v13.1): el único escritor del estado Woo de un pedido web es el flujo de
+// dos pasos de Seguimientos, y un pedido WC creado desde ML no se modifica. Lo único que hace la salida es FECHAR el envío de las preparaciones ML de los
+// miembros `confirmado` (todas las del grupo: un pack sale junto). Web toma su fecha del paso 2 (v21). Devuelve las advertencias «falta etiqueta» (v3.1):
+// no bloquean la salida.
+function registrarSalidaLote(db, lote, ts) {
+  const miembros = db.prepare(`SELECT d.grupo_clave FROM despacho_lote_items li JOIN despacho_controles d ON d.id=li.control_id
+    WHERE li.lote_id=? AND li.estado='confirmado'`).all(lote.id);
+  const advertencias = [];
+  if (lote.canal !== 'ml') return advertencias;
+  const fechar = db.prepare(`UPDATE preparaciones SET envio_confirmado_en = COALESCE(envio_confirmado_en, ?) WHERE canal='ml' AND (clave=? OR pack_id=?)`);
+  const sinEtiqueta = db.prepare(`SELECT clave FROM preparaciones WHERE canal='ml' AND (clave=? OR pack_id=?) AND etiqueta_cargada_en IS NULL AND envio_descartado_en IS NULL AND estado = 'completada'`);
+  for (const m of miembros) {
+    fechar.run(ts, m.grupo_clave, m.grupo_clave);
+    for (const f of sinEtiqueta.all(m.grupo_clave, m.grupo_clave)) advertencias.push({ clave: f.clave, motivo: 'falta_etiqueta' });
+  }
+  return advertencias;
 }
 
 // Estados en los que NO se puede seguir trabajando una preparación (escanear, confirmar
@@ -466,6 +470,8 @@ export function ensureTables(db) {
     UNIQUE (pedido_a_clave, pedido_b_clave)
   )`).run();
   db.prepare('CREATE INDEX IF NOT EXISTS idx_preparacion_vinculos_claves ON preparacion_vinculos(pedido_a_clave, pedido_b_clave)').run();
+  // Etiquetas en Preparación (migración 133): columnas de envío/etiqueta, índices y triggers de fecha ML. Después de pack_id y despacho_controles.
+  asegurarEsquemaEtiquetas(db);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -572,7 +578,8 @@ function requisitosBaseParaItem(db, item) {
 // bloquea (no una versión paralela que se pueda desincronizar). La reusan también
 // preparacionEstaVerificada (para decidir 'completada' vs 'despachada_sin_verificar' al
 // cargar el tracking) y el cron reintentarColgadosTracking, con el mismo criterio.
-function calcularFaltantesPreparacion(db, prep) {
+function calcularFaltantesPreparacion(db, prep, { soloListas = false } = {}) {
+  const faltan_ = soloListas ? fotosListasFaltantes : fotosFaltantes;
   const items = db.prepare('SELECT * FROM preparacion_items WHERE preparacion_id=?').all(prep.id);
   const fotos = db.prepare('SELECT * FROM preparacion_fotos WHERE preparacion_id=? AND borrado_en IS NULL').all(prep.id);
 
@@ -592,14 +599,14 @@ function calcularFaltantesPreparacion(db, prep) {
     }
 
     const req_ = requisitosParaItem(db, it);
-    const faltan = fotosFaltantes(req_, fotos.filter(f => f.item_id === it.id));
+    const faltan = faltan_(req_, fotos.filter(f => f.item_id === it.id));
     if (faltan.length) {
       faltantes.push({ item_id: it.id, sku: it.sku, nombre: it.nombre, motivo: 'fotos', faltan });
     }
   }
 
   const fotosGenerales = fotos.filter(f => !f.item_id);
-  const faltaPaquete = fotosFaltantes(requisitosPaquete(), fotosGenerales);
+  const faltaPaquete = faltan_(requisitosPaquete(), fotosGenerales);
 
   return { faltantes, delegadosPendientes, faltaPaquete };
 }
@@ -614,6 +621,17 @@ function calcularFaltantesPreparacion(db, prep) {
 function preparacionEstaVerificada(db, prep) {
   const { faltantes, delegadosPendientes, faltaPaquete } = calcularFaltantesPreparacion(db, prep);
   return faltantes.length === 0 && delegadosPendientes.length === 0 && faltaPaquete.length === 0;
+}
+
+// Guarda de «Completar envío» (spec A.3 + v3.2 + v9.1): { error, code } si el tracking no puede cargarse todavía por falta de la foto con etiqueta, null si pasa.
+// «Cargada» = etiqueta_cargada_en (dato durable, sobrevive a la purga de la foto). Si no está y hay una foto subiéndose, el mensaje es otro (se reintenta en segundos).
+export function guardaFotoEtiquetaSeguimiento(db, wcOrderId) {
+  const prep = db.prepare('SELECT id, estado, etiqueta_cargada_en, woo_paso1_incierto, woo_paso2_pendiente FROM preparaciones WHERE clave=?').get(`web:${wcOrderId}`);
+  if (!prep || prep.estado !== 'completada' || prep.etiqueta_cargada_en) return null;
+  if ([1, 2].includes(Number(prep.woo_paso1_incierto)) || Number(prep.woo_paso2_pendiente) === 1) return null;
+  const procesando = db.prepare("SELECT 1 FROM preparacion_fotos WHERE preparacion_id=? AND tipo=? AND borrado_en IS NULL AND estado_proceso IN ('pendiente','procesando')").get(prep.id, TIPO_FOTO_ETIQUETA);
+  if (procesando) return { error: 'la foto con la etiqueta se está procesando, reintentá en unos segundos', code: 'FOTO_ETIQUETA_PROCESANDO' };
+  return { error: 'falta la foto del paquete con la etiqueta puesta', code: 'FOTO_ETIQUETA_REQUERIDA' };
 }
 
 // Cierra el lado LOCAL de la preparación una vez que el pedido ya salió en Woo (paso 2 de
@@ -631,7 +649,10 @@ function preparacionEstaVerificada(db, prep) {
 // `woo_paso2_pendiente` se limpia siempre (es un flag del lado Woo, no del de
 // verificación) — incluso si la preparación resultó ser 'cerrada_sin_evidencia'.
 export function marcarPreparacionEnviada(db, clave, { usuario = null, detalle = {} } = {}) {
-  db.prepare('UPDATE preparaciones SET woo_paso2_pendiente=0 WHERE clave=?').run(clave);
+  // v22/v23: el paso 2 OK limpia el indicador y, SOLO en web, fecha el envío en la MISMA sentencia (las dos columnas o ninguna). ML se fecha por
+  // despacho (trigger de despacho_controles); las llamadas del barrido/proyección ML no fechan nada.
+  db.prepare(`UPDATE preparaciones SET woo_paso2_pendiente=0,
+    envio_confirmado_en = CASE WHEN canal='web' THEN COALESCE(envio_confirmado_en, ?) ELSE envio_confirmado_en END WHERE clave=?`).run(now(), clave);
   const prep = db.prepare('SELECT id, estado FROM preparaciones WHERE clave=?').get(clave);
   if (!prep || !['en_preparacion', 'pendiente_deposito'].includes(prep.estado)) return null;
 
@@ -792,10 +813,19 @@ function registrarPerfilEvento(db, { alcance, clave, tipo, usuario, detalle }) {
 // Devuelve la cantidad purgada (para logging del cron).
 export function purgarFotosBorradas(db) {
   const limite = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  // Preparaciones cerradas (`completada`/`anulado_en_woo`, las que pueden estar en «Falta etiqueta»/«Falta seguimiento»): la foto se borra recién 30 días
+  // después de la ÚLTIMA resolución (envío confirmado/descartado, o etiqueta cargada si es posterior) y nunca mientras siga pendiente de etiqueta o de envío.
+  // Sin fecha de envío no se purga. Las abiertas (`en_preparacion`, `pendiente_deposito`) nunca se purgan (v6.2). El resto de los estados conserva la regla de siempre (30 días desde la creación de la preparación). Los holds mandan siempre.
   const vencidas = db.prepare(`SELECT f.id, f.url, f.url_liviana FROM preparacion_fotos f
     JOIN preparaciones p ON p.id=f.preparacion_id
-    WHERE (p.creado_en < ? OR (f.borrado_en IS NOT NULL AND f.borrado_en < ?))
-      AND NOT EXISTS (SELECT 1 FROM preparacion_fotos_holds h WHERE h.preparacion_id=f.preparacion_id)`).all(limite, limite);
+    WHERE (
+        (p.estado NOT IN ('completada','anulado_en_woo','en_preparacion','pendiente_deposito') AND p.creado_en < ?)
+        OR (p.estado IN ('completada','anulado_en_woo') AND f.creado_en < ?
+            AND COALESCE(p.envio_confirmado_en, p.envio_descartado_en) IS NOT NULL
+            AND MAX(COALESCE(p.envio_confirmado_en, p.envio_descartado_en), COALESCE(p.etiqueta_cargada_en, '')) < ?
+            AND NOT (p.etiqueta_cargada_en IS NULL AND p.envio_descartado_en IS NULL))
+        OR (f.borrado_en IS NOT NULL AND f.borrado_en < ?))
+      AND NOT EXISTS (SELECT 1 FROM preparacion_fotos_holds h WHERE h.preparacion_id=f.preparacion_id)`).all(limite, limite, limite, limite);
   let purgadas = 0;
   for (const f of vencidas) {
     // Contención (defensa en profundidad): si la ruta resuelta cae fuera de uploads/,
@@ -1202,7 +1232,8 @@ export function guardiaPreparacionAnulada(db) {
         prep = db.prepare('SELECT estado FROM preparaciones WHERE clave=?').get(`web:${req.body.id}`);
       }
     } catch { /* si no se puede leer, cada handler igual valida el estado */ }
-    if (prep?.estado === ESTADO_ANULADO_EN_WOO) {
+    // Única excepción (spec v9.2): descartar con motivo un envío pendiente de un pedido anulado. Solo escribe envio_descartado_*, motivo y actor.
+    if (prep?.estado === ESTADO_ANULADO_EN_WOO && !(req.method === 'POST' && /^\/\d+\/descartar-envio$/.test(req.path))) {
       return res.status(409).json({ ok: false, code: 'PREPARACION_ANULADA_EN_WOO', error: bloqueoPorEstado(prep) });
     }
     return next();
@@ -1323,6 +1354,20 @@ export function preparacionRouter(db, cfg) {
         .catch(e => console.error('[preparacion] error disparando cola de fotos:', e.message))
     : () => {};
 
+  // Chips de etiqueta (spec A.9): «etiqueta ✓» = SOLO foto con etiqueta vigente; «Falta etiqueta» = la marca durable sigue sin cargar.
+  const chipsEtiqueta = (prep) => ({
+    etiqueta_foto: prep?.etiqueta_origen === 'foto',
+    falta_etiqueta: !!prep && !prep.etiqueta_cargada_en,
+  });
+  // Estado de la etiqueta ML para la tarjeta (botón «Etiqueta»): elegibilidad local y última descarga. La validación final (packs, ML) la hace POST /etiquetas-ml.
+  const etiquetaMlDeCard = (prep) => {
+    if (!prep) return { elegible: false, motivo: 'faltan fotos' };
+    const ev = evaluarEnvioMlLocal(db, prep);
+    const motivo = ev.motivo || faltanFotosParaPdf(prep);
+    const ultima = db.prepare('SELECT usuario, descargado_en FROM etiquetas_ml_descargas WHERE clave=? ORDER BY id DESC LIMIT 1').get(prep.clave || `ml:${prep.ml_order_id}`);
+    return { elegible: !motivo, motivo: motivo || null, impresa_en_ml: !!ev.impresaEnMl, descargada_en: ultima?.descargado_en || null, descargada_por: ultima?.usuario || null };
+  };
+
   // ── Pendientes: lee de pedidos_cache (sincronizada por cron cada 5 min) ──
   router.get('/pendientes', (req, res) => {
     try {
@@ -1344,7 +1389,7 @@ export function preparacionRouter(db, cfg) {
       const RESUELTAS = ['completada', 'pendiente_deposito', 'cerrada_sin_evidencia', 'despachada_sin_verificar', 'cancelada_pendiente_devolucion', 'cancelada_sin_retiro_registrado'];
       const data = rows
         .map(row => {
-          const prep = db.prepare('SELECT id, estado, etiqueta_lista FROM preparaciones WHERE clave=?').get(row.clave);
+          const prep = db.prepare('SELECT id, estado, etiqueta_lista, ml_order_id, etiqueta_cargada_en, etiqueta_origen FROM preparaciones WHERE clave=?').get(row.clave);
           return { row, prep };
         })
         .filter(({ prep }) => !prep || !RESUELTAS.includes(prep.estado))
@@ -1372,6 +1417,7 @@ export function preparacionRouter(db, cfg) {
             preparacion_id: prep?.id || null,
             estado_preparacion: prep?.estado || null,
             etiqueta_lista: prep?.etiqueta_lista || 0,
+            ...chipsEtiqueta(prep),
           };
         }
         return {
@@ -1392,6 +1438,8 @@ export function preparacionRouter(db, cfg) {
           items,
           preparacion_id: prep?.id || null,
           estado_preparacion: prep?.estado || null,
+          ...chipsEtiqueta(prep),
+          etiqueta_ml: etiquetaMlDeCard(prep),
         };
       });
       const ultimoLog = db.prepare(
@@ -1624,12 +1672,15 @@ export function preparacionRouter(db, cfg) {
     if (lote.estado !== 'cerrado') return res.status(409).json({ ok: false, error: 'el lote debe estar cerrado antes de confirmar salida', code: 'LOTE_NO_CERRADO' });
     if (lote.salida_idempotencia) return res.status(409).json({ ok: false, error: 'la salida ya fue confirmada con otra idempotencia', code: 'SALIDA_YA_CONFIRMADA' });
     const ts = now();
-    const info = db.prepare(`UPDATE despacho_lotes SET salida_confirmada_por=?, salida_confirmada_en=?, salida_idempotencia=?
-      WHERE id=? AND estado='cerrado' AND salida_idempotencia IS NULL`).run(req.user.username, ts, idem, id);
-    if (!info.changes) return res.status(409).json({ ok: false, error: 'otra operación confirmó la salida', code: 'SALIDA_CONFLICTO' });
-    eventoLote(id, 'salida_confirmada', req.user.username, { idempotencia: idem });
-    const jobEventId = encolarSalidaWoo(db, db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id), req.user.username);
-    res.json({ ok: true, repetido: false, lote: db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id) });
+    const resultado = db.transaction(() => {
+      const info = db.prepare(`UPDATE despacho_lotes SET salida_confirmada_por=?, salida_confirmada_en=?, salida_idempotencia=?
+        WHERE id=? AND estado='cerrado' AND salida_idempotencia IS NULL`).run(req.user.username, ts, idem, id);
+      if (!info.changes) return null;
+      eventoLote(id, 'salida_confirmada', req.user.username, { idempotencia: idem });
+      return registrarSalidaLote(db, lote, ts);
+    })();
+    if (!resultado) return res.status(409).json({ ok: false, error: 'otra operación confirmó la salida', code: 'SALIDA_CONFLICTO' });
+    res.json({ ok: true, repetido: false, lote: db.prepare('SELECT * FROM despacho_lotes WHERE id=?').get(id), advertencias: resultado });
   });
 
   router.post('/despacho/:id/escanear', (req, res) => {
@@ -2006,7 +2057,14 @@ export function preparacionRouter(db, cfg) {
     // Cargar el tracking es una acción de despacho: Administración puede resolverla aunque no
     // haya tomado la preparación. Un operario de preparación sigue necesitando su claim vigente
     // para no usurpar la tarea de otro.
-    if (prepExistente && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
+    // Sobre una preparación `completada` no se exige claim (v4.2): la tarea ya cerró y el tracking se carga horas después, por quien despacha.
+    if (prepExistente && prepExistente.estado !== 'completada' && !req.user?.is_admin && !exigirClaimVigente(db, prepExistente, req.user.username, res)) return;
+
+    // Guarda de la foto con etiqueta (spec A.3): una preparación web ya cerrada sin etiqueta cargada no despacha hasta tener la foto. Va ANTES de
+    // seguimientosEnCurso.add, de la intención y de cualquier PUT, así que el 409 no deja ningún efecto. No aplica si ya hay una intención registrada
+    // (paso 1 incierto o paso 2 pendiente): no se traba una recuperación. Filas mínimas y pedidos sin fila no se exigen, igual que hoy.
+    const guardaEtiqueta = guardaFotoEtiquetaSeguimiento(db, wcOrderId);
+    if (guardaEtiqueta) return res.status(409).json({ ok: false, ...guardaEtiqueta });
 
     // Se marca recién acá (sin await entre el has() de arriba y este add): un rechazo previo por claim o un
     // error síncrono no deja el pedido trabado con EN_CURSO. El finally del try libera la marca.
@@ -2599,6 +2657,162 @@ export function preparacionRouter(db, cfg) {
   });
 
   // ── Estado del sync de pedidos_cache (para el aviso de frescura en el frontend) ──
+  // ── Listas de cierre pendiente (spec v3.4, v6–v11): «Falta etiqueta», «Falta seguimiento» (web) y «No salieron con el lote» ──
+  // Paginadas por cursor (orden, id); nada se oculta por fecha: una fila sale solo al resolverse.
+  const paginarLista = (req, { select, from, where, params, orden }) => {
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit || '50', 10) || 50));
+    const [cOrden, cId] = String(req.query.cursor || '').split('|');
+    const total = db.prepare(`SELECT COUNT(*) n FROM ${from} WHERE ${where}`).get(...params).n;
+    const filtroCursor = cOrden ? `AND (${orden} > ? OR (${orden} = ? AND p.id > ?))` : '';
+    const args = cOrden ? [...params, cOrden, cOrden, Number(cId) || 0] : params;
+    const filas = db.prepare(`SELECT ${select}, ${orden} AS orden FROM ${from} WHERE ${where} ${filtroCursor} ORDER BY ${orden}, p.id LIMIT ?`).all(...args, limit + 1);
+    const hayMas = filas.length > limit;
+    const items = hayMas ? filas.slice(0, limit) : filas;
+    const ultimo = items[items.length - 1];
+    return { items, total, next_cursor: hayMas && ultimo ? `${ultimo.orden}|${ultimo.id}` : null };
+  };
+  const COLS_LISTA = `p.id, p.clave, p.canal, p.numero_pedido, p.comprador, p.estado, p.pack_id, p.completado_en, p.tracking, p.woo_paso2_pendiente,
+    p.etiqueta_cargada_en, p.envio_confirmado_en, p.wc_order_id, p.ml_order_id,
+    (SELECT f.estado_proceso FROM preparacion_fotos f WHERE f.preparacion_id=p.id AND f.tipo='paquete_etiquetado' AND f.borrado_en IS NULL AND f.estado_proceso IN ('pendiente','procesando','error') ORDER BY f.id DESC LIMIT 1) AS foto_etiqueta_pendiente`;
+
+  // Bajar etiquetas de ML (spec parte B): un PDF con las etiquetas de los envíos elegibles; el front lo abre para imprimir. «Bajado» ≠ «impreso».
+  const faltanFotosParaPdf = (prep) => {
+    const todo = calcularFaltantesPreparacion(db, prep);
+    if (todo.faltantes.length || todo.delegadosPendientes.length || todo.faltaPaquete.length) return 'faltan fotos';
+    const listas = calcularFaltantesPreparacion(db, prep, { soloListas: true });
+    return listas.faltantes.length || listas.faltaPaquete.length ? 'foto en proceso o fallida' : null;
+  };
+  router.post('/etiquetas-ml', async (req, res) => {
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const crudas = req.body?.claves;
+    if (!Array.isArray(crudas) || !crudas.length || crudas.length > MAX_CLAVES_ETIQUETAS
+      || !crudas.every((c) => typeof c === 'string' && /^ml:\d{1,20}$/.test(c))) {
+      return res.status(400).json({ ok: false, error: `claves: de 1 a ${MAX_CLAVES_ETIQUETAS} claves ml:<orden>`, code: 'CLAVES_INVALIDAS' });
+    }
+    if (!cfg?.ml) return res.status(503).json({ ok: false, error: 'ML no está configurado' });
+    try {
+      const out = await bajarEtiquetasMl(db, cfg.ml, [...new Set(crudas)], req.user.username, { faltanFotos: faltanFotosParaPdf });
+      return res.status(out.status).json(out.body);
+    } catch (e) {
+      console.error('etiquetas-ml falló:', e.message);
+      return res.status(500).json({ ok: false, error: 'no se pudieron bajar las etiquetas' });
+    }
+  });
+
+  router.get('/falta-etiqueta', (req, res) => {
+    const r = paginarLista(req, {
+      select: COLS_LISTA, from: 'preparaciones p',
+      where: "p.estado IN ('completada','anulado_en_woo') AND p.etiqueta_cargada_en IS NULL AND p.envio_descartado_en IS NULL",
+      params: [], orden: 'COALESCE(p.completado_en, p.creado_en)',
+    });
+    const items = r.items.map((f) => ({
+      ...f,
+      anulado: f.estado === ESTADO_ANULADO_EN_WOO,
+      salio: !!f.envio_confirmado_en,
+      acciones: f.estado === ESTADO_ANULADO_EN_WOO ? ['descartar']
+        : [f.canal === 'web' ? 'completar_envio' : 'subir_foto', ...(f.envio_confirmado_en ? ['salio_sin_foto'] : [])],
+    }));
+    res.json({ ok: true, ...r, items });
+  });
+
+  router.get('/falta-seguimiento', (req, res) => {
+    const r = paginarLista(req, {
+      select: COLS_LISTA, from: 'preparaciones p',
+      where: `p.canal='web' AND p.envio_confirmado_en IS NULL AND p.envio_descartado_en IS NULL AND (
+        p.estado='completada'
+        OR (p.estado='anulado_en_woo' AND (p.woo_paso2_pendiente=1
+          OR EXISTS (SELECT 1 FROM preparacion_eventos e WHERE e.preparacion_id=p.id AND e.tipo='tracking_abandonado'))))`,
+      params: [], orden: 'COALESCE(p.completado_en, p.creado_en)',
+    });
+    const abandonado = db.prepare("SELECT 1 FROM preparacion_eventos WHERE preparacion_id=? AND tipo='tracking_abandonado' LIMIT 1");
+    const items = r.items.map((f) => {
+      const tieneTracking = !!String(f.tracking || '').trim();
+      let estadoEnvio; let acciones;
+      if (f.estado === ESTADO_ANULADO_EN_WOO) { estadoEnvio = 'anulado_con_envio_pendiente'; acciones = ['descartar']; }
+      else if (abandonado.get(f.id)) { estadoEnvio = 'abandonado'; acciones = ['reintentar', 'descartar']; }
+      else if (Number(f.woo_paso2_pendiente) === 1) { estadoEnvio = 'envio_incierto'; acciones = ['reintentar']; }
+      else if (tieneTracking) { estadoEnvio = 'asociado_sin_confirmar'; acciones = ['confirmar_envio']; }
+      else { estadoEnvio = 'sin_seguimiento'; acciones = ['completar_envio']; }
+      return { ...f, estado_envio: estadoEnvio, acciones };
+    });
+    res.json({ ok: true, ...r, items });
+  });
+
+  // Miembros que no salieron con un lote cuya salida ya se confirmó. Sale de la lista cuando alguna preparación de su grupo queda fechada/descartada.
+  router.get('/no-salieron', (req, res) => {
+    const filas = db.prepare(`SELECT li.id AS miembro_id, li.estado AS miembro_estado, l.id AS lote_id, l.canal, l.salida_confirmada_en, d.id AS control_id, d.grupo_clave
+      FROM despacho_lote_items li
+      JOIN despacho_lotes l ON l.id=li.lote_id
+      JOIN despacho_controles d ON d.id=li.control_id
+      WHERE l.salida_confirmada_en IS NOT NULL AND li.estado<>'confirmado'
+        AND NOT EXISTS (SELECT 1 FROM preparaciones p WHERE (p.clave=d.grupo_clave OR p.pack_id=d.grupo_clave)
+          AND (p.envio_confirmado_en IS NOT NULL OR p.envio_descartado_en IS NOT NULL))
+        AND EXISTS (SELECT 1 FROM preparaciones p WHERE p.clave=d.grupo_clave OR p.pack_id=d.grupo_clave)
+      ORDER BY l.salida_confirmada_en, li.id`).all();
+    const preps = db.prepare('SELECT id, clave, canal, numero_pedido, comprador FROM preparaciones WHERE clave=? OR pack_id=?');
+    res.json({ ok: true, total: filas.length, items: filas.map((f) => ({ ...f, preparaciones: preps.all(f.grupo_clave, f.grupo_clave), acciones: ['descartar'] })) });
+  });
+
+  // Resolución con motivo, atómica y fail-closed (v17.2): el cambio y su evento van en la misma transacción; si el evento falla no hay cambio.
+  const resolverConMotivo = (req, res, fn) => {
+    const prep = getPrep(db, req.params.id);
+    if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
+    if (!req.user?.username) return res.status(401).json({ ok: false, error: 'No autenticado', code: 'AUTH_REQUIRED' });
+    const motivo = String(req.body?.motivo || '').trim();
+    if (!motivo) return res.status(400).json({ ok: false, error: 'motivo requerido', code: 'MOTIVO_REQUERIDO' });
+    if (motivo.length > 300) return res.status(400).json({ ok: false, error: 'motivo demasiado largo', code: 'MOTIVO_INVALIDO' });
+    try {
+      const out = db.transaction(() => fn(prep, motivo))();
+      if (out?.error) return res.status(out.status || 409).json({ ok: false, error: out.error, code: out.code });
+      return res.json({ ok: true, ...(out || {}) });
+    } catch (e) {
+      console.error('resolución con motivo falló, sin cambios:', e.message);
+      return res.status(500).json({ ok: false, error: 'no se pudo registrar la resolución; no se hizo ningún cambio' });
+    }
+  };
+
+  // «Salió sin foto de etiqueta» (v15.1): solo si el envío ya está fechado y la etiqueta sigue sin cargar. La marca queda con origen `sin_foto`.
+  router.post('/:id/salio-sin-foto', (req, res) => resolverConMotivo(req, res, (prep, motivo) => {
+    const actual = db.prepare('SELECT estado, envio_confirmado_en, etiqueta_cargada_en FROM preparaciones WHERE id=?').get(prep.id);
+    if (actual.estado !== 'completada') return { error: 'solo una preparación completada puede resolverse así', code: 'ESTADO_INVALIDO' };
+    if (!actual.envio_confirmado_en) return { error: 'el envío todavía no está confirmado', code: 'ENVIO_NO_CONFIRMADO' };
+    if (actual.etiqueta_cargada_en) return { error: 'la etiqueta ya está resuelta', code: 'ETIQUETA_YA_CARGADA' };
+    db.prepare("UPDATE preparaciones SET etiqueta_cargada_en=?, etiqueta_origen='sin_foto' WHERE id=?").run(now(), prep.id);
+    registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'etiqueta_sin_foto', usuario: req.user.username, detalle: { motivo }, failClosed: true });
+    return {};
+  }));
+
+  // «Descartar con motivo» (v8.2/v9.2/v10.1/v19.2): resuelve el envío de TODO el grupo (pack) sin afirmar que se confirmó. Limpia el paso 2 pendiente
+  // para que nada lo reintente. `lote_id` opcional: deja constancia también en el historial del lote.
+  router.post('/:id/descartar-envio', (req, res) => resolverConMotivo(req, res, (prep, motivo) => {
+    if (!['completada', ESTADO_ANULADO_EN_WOO].includes(prep.estado)) return { error: 'solo se descarta el envío de una preparación cerrada', code: 'ESTADO_INVALIDO' };
+    const grupo = prep.pack_id || prep.clave;
+    // `lote_id` pedido: el grupo debe ser miembro NO confirmado de un lote con salida confirmada; si no, nada se escribe (fail-closed).
+    const loteIdPedido = req.body?.lote_id;
+    if (loteIdPedido != null && loteIdPedido !== '') {
+      const ok = Number.isInteger(Number(loteIdPedido)) && db.prepare(`SELECT 1 FROM despacho_lote_items li JOIN despacho_lotes l ON l.id=li.lote_id
+        JOIN despacho_controles d ON d.id=li.control_id
+        WHERE li.lote_id=? AND d.grupo_clave=? AND li.estado<>'confirmado' AND l.salida_confirmada_en IS NOT NULL`).get(Number(loteIdPedido), grupo);
+      if (!ok) return { error: 'el grupo no es miembro sin confirmar de ese lote (o el lote no tiene salida confirmada)', code: 'LOTE_AJENO', status: 409 };
+    }
+    const miembros = db.prepare('SELECT id, estado FROM preparaciones WHERE (clave=? OR pack_id=?) AND envio_confirmado_en IS NULL AND envio_descartado_en IS NULL').all(grupo, grupo);
+    if (!miembros.length) return { error: 'el envío ya está resuelto', code: 'ENVIO_YA_RESUELTO' };
+    const ts = now();
+    for (const m of miembros) {
+      db.prepare('UPDATE preparaciones SET envio_descartado_en=?, envio_descartado_motivo=?, envio_descartado_por=?, woo_paso2_pendiente=0 WHERE id=?').run(ts, motivo, req.user.username, m.id);
+      registrarEvento(db, { preparacionId: m.id, itemId: null, tipo: 'envio_descartado', usuario: req.user.username, detalle: { motivo, estado: m.estado }, failClosed: true });
+    }
+    // Constancia en el historial del lote: el `lote_id` pedido y, además, todo lote con salida confirmada del que este grupo quedó como miembro no confirmado
+    // (así el descarte desde «No salieron con el lote» siempre deja evento, aunque el cliente no mande el id).
+    const lotes = new Set(db.prepare(`SELECT l.id FROM despacho_lote_items li JOIN despacho_lotes l ON l.id=li.lote_id
+      JOIN despacho_controles d ON d.id=li.control_id
+      WHERE d.grupo_clave=? AND l.salida_confirmada_en IS NOT NULL AND li.estado<>'confirmado'`).all(grupo).map((r) => r.id));
+    const loteId = Number(req.body?.lote_id);
+    if (Number.isInteger(loteId) && loteId > 0 && db.prepare('SELECT 1 FROM despacho_lotes WHERE id=?').get(loteId)) lotes.add(loteId);
+    for (const id of lotes) eventoLote(id, 'miembro_descartado', req.user.username, { grupo_clave: grupo, motivo });
+    return { descartadas: miembros.length };
+  }));
+
   router.get('/pedidos-cache/estado', (req, res) => {
     const ultimoLog = db.prepare(
       "SELECT creado_en, estado, error FROM sync_log WHERE direccion='pedidos_cache' ORDER BY id DESC LIMIT 1"
@@ -3063,7 +3277,7 @@ export function preparacionRouter(db, cfg) {
   // MulterError se propaga a next() y, al no haber error-handler global que
   // devuelva JSON, Express contesta una página HTML 500 que el frontend no
   // puede parsear (síntoma: "No se pudo subir la foto: error").
-  router.post('/:id/foto', (req, res, next) => {
+  const subidaMultipart = (req, res, next) => {
     upload.single('archivo')(req, res, (err) => {
       if (err) {
         if (err.code === 'LIMIT_FILE_SIZE') {
@@ -3073,12 +3287,21 @@ export function preparacionRouter(db, cfg) {
       }
       next();
     });
-  }, (req, res) => {
+  };
+  // Un solo pipeline para las dos rutas. `modoEtiqueta` (POST /:id/foto-etiqueta): el tipo queda fijo en `paquete_etiquetado`, sin ítem, y la
+  // preparación ya cerrada (`completada`) se acepta SIN claim — la tarea ya no está tomada por nadie (spec v4.2); abierta, exige claim como siempre.
+  const manejarSubidaFoto = (modoEtiqueta) => (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
-    const bloqueo = bloqueoPorEstado(prep);
-    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
+    const cerradaOk = modoEtiqueta && prep.estado === 'completada';
+    if (!cerradaOk) {
+      if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+      const bloqueo = bloqueoPorEstado(prep);
+      if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
+    }
+    if (!modoEtiqueta && String(req.body?.tipo || '') === TIPO_FOTO_ETIQUETA) {
+      return res.status(400).json({ ok: false, error: 'la foto con la etiqueta puesta se sube desde «Falta etiqueta» o «Completar envío»', code: 'USAR_FOTO_ETIQUETA' });
+    }
     if (!req.file) return res.status(400).json({ ok: false, error: 'archivo requerido' });
 
     // Detección de HEIC/HEIF: los iPhone al compartir mandan el .heic con mimetype
@@ -3092,7 +3315,9 @@ export function preparacionRouter(db, cfg) {
       return res.status(400).json({ ok: false, error: 'solo imágenes' });
     }
 
-    const { item_id = null, tipo = 'extra', upload_id: uploadId = null } = req.body || {};
+    const { item_id: itemIdBody = null, tipo: tipoBody = 'extra', upload_id: uploadId = null } = req.body || {};
+    const item_id = modoEtiqueta ? null : itemIdBody;
+    const tipo = modoEtiqueta ? TIPO_FOTO_ETIQUETA : tipoBody;
     const itemId = item_id ? parseInt(item_id) : null;
     if (item_id && (!Number.isInteger(itemId) || !db.prepare('SELECT 1 FROM preparacion_items WHERE id=? AND preparacion_id=?').get(itemId, prep.id))) {
       return res.status(400).json({ ok: false, error: 'ítem no pertenece a esta preparación', code: 'ITEM_PREPARACION_INVALIDO' });
@@ -3158,6 +3383,9 @@ export function preparacionRouter(db, cfg) {
           detalle: { sku: itemRef?.sku ?? null, nombre: itemRef?.nombre ?? null, tipo_foto: tipo, nombre_archivo: saved.filename, foto_id: id, upload_id: uploadKey, fingerprint },
           failClosed: true,
         });
+        if (modoEtiqueta) {
+          registrarEvento(db, { preparacionId: prep.id, itemId: null, tipo: 'foto_etiqueta_agregada', usuario: req.user?.username, detalle: { foto_id: id, estado_preparacion: prep.estado }, failClosed: true });
+        }
         return id;
       })();
     } catch (e) {
@@ -3180,6 +3408,17 @@ export function preparacionRouter(db, cfg) {
     // criterio fail-open que los crons del resto del repo). Si esto falla, el cron de
     // barrido de server.js (cada 1 min) toma la foto igual — nunca queda huérfana.
     dispararColaFotos();
+  };
+  router.post('/:id/foto', subidaMultipart, manejarSubidaFoto(false));
+  // Foto del paquete con la etiqueta puesta (antes o DESPUÉS del cierre; web y ML). Idempotente: otra foto reemplaza a la vigente recién cuando
+  // llega a `listo` (lo resuelve la cola, lib/fotosPreparacionCola.js). Auditoría: `foto_etiqueta_agregada`.
+  router.post('/:id/foto-etiqueta', subidaMultipart, manejarSubidaFoto(true));
+
+  // Estado de procesamiento de una foto (la UI de «Completar envío» espera a `listo` antes de mandar el tracking).
+  router.get('/fotos/:fotoId/estado', (req, res) => {
+    const foto = db.prepare('SELECT id, preparacion_id, tipo, estado_proceso, borrado_en, ultimo_error FROM preparacion_fotos WHERE id=?').get(Number(req.params.fotoId));
+    if (!foto) return res.status(404).json({ ok: false, error: 'foto no encontrada' });
+    res.json({ ok: true, foto: { id: foto.id, preparacion_id: foto.preparacion_id, tipo: foto.tipo, estado_proceso: foto.estado_proceso, borrada: !!foto.borrado_en, error: foto.estado_proceso === 'error' ? (foto.ultimo_error || 'error') : null } });
   });
 
   // Reintento manual de una foto que agotó sus reintentos automáticos (estado_proceso='error').
@@ -3188,11 +3427,15 @@ export function preparacionRouter(db, cfg) {
   router.post('/:id/foto/:fotoId/reintentar', (req, res) => {
     const prep = getPrep(db, req.params.id);
     if (!prep) return res.status(404).json({ ok: false, error: 'no encontrada' });
-    if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
-    const bloqueo = bloqueoPorEstado(prep);
-    if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
     const fotoId = parseInt(req.params.fotoId);
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=?').get(fotoId, prep.id);
+    // Preparación cerrada: solo se reintenta una foto con etiqueta y no se exige claim (misma regla que POST /:id/foto-etiqueta).
+    const cerradaOk = prep.estado === 'completada' && foto?.tipo === TIPO_FOTO_ETIQUETA;
+    if (!cerradaOk) {
+      if (!exigirClaimVigente(db, prep, req.user?.username, res)) return;
+      const bloqueo = bloqueoPorEstado(prep);
+      if (bloqueo) return res.status(400).json({ ok: false, error: bloqueo });
+    }
     if (!foto) return res.status(404).json({ ok: false, error: 'foto no encontrada' });
     const reseteada = reintentarFoto(db, fotoId);
     if (!reseteada) {
@@ -3213,7 +3456,10 @@ export function preparacionRouter(db, cfg) {
     const foto = db.prepare('SELECT * FROM preparacion_fotos WHERE id=? AND preparacion_id=? AND borrado_en IS NULL').get(fotoId, prep.id);
     if (!foto) return res.json({ ok: true, borradas: 0 });
 
-    db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(now(), fotoId);
+    db.transaction(() => {
+      db.prepare('UPDATE preparacion_fotos SET borrado_en=? WHERE id=?').run(now(), fotoId);
+      if (foto.tipo === TIPO_FOTO_ETIQUETA) recalcularEtiquetaCargada(db, prep.id);
+    })();
 
     const itemRef = foto.item_id ? db.prepare('SELECT sku, nombre FROM preparacion_items WHERE id=?').get(foto.item_id) : null;
     // subida_por: no hay columna dedicada en preparacion_fotos para quién la subió
@@ -3316,7 +3562,7 @@ export function preparacionRouter(db, cfg) {
     if (!completada) {
       return res.status(409).json({ ok: false, error: 'la preparación cambió de estado mientras se completaba, volvé a intentarlo' });
     }
-    res.json({ ok: true, estado: 'completada' });
+    res.json({ ok: true, estado: 'completada', falta_etiqueta: !db.prepare('SELECT etiqueta_cargada_en FROM preparaciones WHERE id=?').get(prep.id)?.etiqueta_cargada_en });
   });
 
   // ── Reabrir una preparación cerrada sin evidencia ──
