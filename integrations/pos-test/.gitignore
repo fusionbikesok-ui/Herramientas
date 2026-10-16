@@ -1,0 +1,10 @@
+.env
+*.env
+!.env.example
+*.tar.gz
+*.zip
+.playwright-mcp/
+__pycache__/
+# WordPress de prueba: core, uploads, DB y plugins de terceros no se versionan
+wp-content/plugins/woocommerce-mercadopago/
+wp-content/uploads/

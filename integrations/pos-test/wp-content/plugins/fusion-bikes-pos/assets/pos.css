@@ -1,0 +1,1820 @@
+/* ========================================
+   FUSION BIKES POS — Sistema de Diseño
+   Basado en design-config.md
+   ======================================== */
+
+:root {
+  /* Colores — Neutros (escala fría) */
+  --color-bg: #f3f6f8;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-border: #e4e9ee;
+  --color-border-strong: #d7dee5;
+  --color-text: #101828;
+  --color-text-muted: #667085;
+  --color-text-placeholder: #98a2b3;
+
+  /* Colores — Acento de marca (cian, separado por uso) */
+  --color-accent: #009ada;
+  --color-accent-solid: #0079aa;
+  --color-accent-text: #006e99;
+  --color-accent-soft-bg: #f4fbfe;
+  --color-accent-soft-border: #b9e6f7;
+
+  /* Colores — Semánticos */
+  --color-success: #067647;
+  --color-success-bg: #d4edda;
+  --color-warning: #b54708;
+  --color-warning-bg: #fff3cd;
+  --color-danger: #b42318;
+  --color-danger-bg: #fde8e6;
+  --color-info: #0079aa;
+  --color-info-bg: #f4fbfe;
+
+  /* Tipografía — Escala (Montserrat + fallback system) */
+  --text-h1: 24px;
+  --text-h2: 18px;
+  --text-h3: 15px;
+  --text-body: 14px;
+  --text-small: 13px;
+  --text-caption: 12px;
+  --text-price: 20px;
+  --line-height-heading: 1.3;
+  --line-height-subheading: 1.35;
+  --line-height-body: 1.5;
+  --line-height-compact: 1.2;
+
+  /* Font weights */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Espaciado — Escala base 4px */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Bordes y radios */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 999px;
+  --border-width: 1px;
+
+  /* Sombras */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 4px 8px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.12);
+  --shadow-focus-ring: 0 0 0 3px rgba(0, 154, 218, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+}
+
+.fbpos-app {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  background: var(--color-bg);
+  font-family: Montserrat, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color: var(--color-text);
+  overflow: hidden;
+}
+
+/* ========================================
+   HEADER
+   ======================================== */
+
+.fbpos-top {
+  height: 74px;
+  background: var(--color-surface);
+  border-bottom: var(--border-width) solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-6);
+}
+
+.fbpos-top h1 {
+  margin: 0;
+  font-size: var(--text-h1);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-heading);
+}
+
+.fbpos-top p {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+  font-weight: var(--font-weight-regular);
+}
+
+.fbpos-top-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  font-size: var(--text-body);
+}
+
+/* ========================================
+   WIZARD / STEPS
+   ======================================== */
+
+.fbpos-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: var(--color-surface);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.fbpos-steps button {
+  border: 0;
+  background: var(--color-surface);
+  padding: var(--space-3);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-placeholder);
+  transition: none;
+  cursor: pointer;
+  font-size: var(--text-small);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fbpos-steps button:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.fbpos-steps button:active {
+  background: var(--color-surface);
+}
+
+.fbpos-steps button.active {
+  color: var(--color-accent-text);
+  box-shadow: inset 0 -3px var(--color-accent);
+  font-weight: var(--font-weight-bold);
+}
+
+.fbpos-steps button.active:focus {
+  outline: 2px solid transparent;
+  box-shadow: inset 0 -3px var(--color-accent), var(--shadow-focus-ring);
+}
+
+.fbpos-steps button.completed {
+  color: var(--color-success);
+  font-weight: var(--font-weight-bold);
+}
+
+.fbpos-steps button.completed::before {
+  content: '✓';
+  display: inline-block;
+  margin-right: var(--space-1);
+}
+
+/* ========================================
+   MAIN CONTENT
+   ======================================== */
+
+.fbpos-main {
+  min-height: 0;
+}
+
+.fbpos-screen {
+  display: none;
+  height: 100%;
+  min-height: 0;
+}
+
+.fbpos-screen.active {
+  display: block;
+}
+
+/* ========================================
+   BUTTONS
+   ======================================== */
+
+.fbpos-btn {
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-md);
+  padding: var(--space-5) var(--space-4);
+  font-weight: var(--font-weight-bold);
+  text-decoration: none;
+  cursor: pointer;
+  text-align: center;
+  letter-spacing: 0.01em;
+  font-size: var(--text-body);
+  line-height: var(--line-height-compact);
+  min-height: 44px;
+  min-width: 44px;
+  transition: none;
+  transform: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Botón primario */
+.fbpos-btn.primary {
+  background: var(--color-accent-solid);
+  border-color: var(--color-accent-solid);
+  color: #fff;
+}
+
+.fbpos-btn.primary:hover {
+  background: color-mix(in srgb, var(--color-accent-solid) 92%, #000);
+}
+
+.fbpos-btn.primary:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+  background: var(--color-accent-solid);
+}
+
+.fbpos-btn.primary:active {
+  background: color-mix(in srgb, var(--color-accent-solid) 82%, #000);
+}
+
+/* Botón secundario */
+.fbpos-btn.secondary {
+  background: var(--color-accent-soft-bg);
+  border-color: var(--color-accent-soft-border);
+  color: var(--color-accent-text);
+}
+
+.fbpos-btn.secondary:hover {
+  background: color-mix(in srgb, var(--color-accent-soft-bg) 92%, #000);
+}
+
+.fbpos-btn.secondary:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+  border-color: var(--color-accent);
+}
+
+.fbpos-btn.secondary:active {
+  background: color-mix(in srgb, var(--color-accent-soft-bg) 82%, #000);
+}
+
+/* Botón ghost */
+.fbpos-btn.ghost {
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.fbpos-btn.ghost:hover {
+  background: var(--color-surface-muted);
+}
+
+.fbpos-btn.ghost:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.fbpos-btn.ghost:active {
+  background: var(--color-border);
+}
+
+/* Botón dark */
+.fbpos-btn.dark {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: #fff;
+}
+
+.fbpos-btn.dark:hover {
+  background: color-mix(in srgb, var(--color-text) 92%, #fff);
+}
+
+.fbpos-btn.dark:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.fbpos-btn.dark:active {
+  background: color-mix(in srgb, var(--color-text) 82%, #fff);
+}
+
+/* Botón peligro (NUEVO) */
+.fbpos-btn.danger {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: #fff;
+}
+
+.fbpos-btn.danger:hover {
+  background: color-mix(in srgb, var(--color-danger) 92%, #000);
+}
+
+.fbpos-btn.danger:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.fbpos-btn.danger:active {
+  background: color-mix(in srgb, var(--color-danger) 82%, #000);
+}
+
+/* Botón WhatsApp */
+.fbpos-btn.whatsapp {
+  background: #1fa855;
+  border-color: #1fa855;
+  color: #fff;
+}
+
+.fbpos-btn.whatsapp:hover {
+  background: color-mix(in srgb, #1fa855 92%, #000);
+}
+
+.fbpos-btn.whatsapp:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+/* Botón disabled */
+.fbpos-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Tamaño grande */
+.fbpos-btn.big {
+  font-size: 18px;
+  padding: 17px;
+}
+
+/* Tamaño pequeño */
+.fbpos-btn.small {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-caption);
+  min-height: 44px;
+}
+
+/* Link (pseudo-botón) */
+.fbpos-link {
+  border: 0;
+  background: none;
+  color: var(--color-accent-text);
+  font-weight: var(--font-weight-bold);
+  cursor: pointer;
+  padding: var(--space-2);
+  transition: none;
+  font-size: var(--text-body);
+  display: inline;
+  min-height: auto;
+  min-width: auto;
+}
+
+.fbpos-link:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.fbpos-link:active {
+  text-decoration: underline;
+}
+
+/* ========================================
+   SALE SCREEN
+   ======================================== */
+
+.fbpos-sale-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(380px, 0.85fr);
+  height: calc(100% - 82px);
+}
+
+.fbpos-catalog {
+  padding: var(--space-5);
+  overflow: auto;
+}
+
+.fbpos-search {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-bg);
+  padding-bottom: var(--space-3);
+}
+
+.fbpos-search input {
+  width: 100%;
+  padding: var(--space-4);
+  border: 2px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  font-size: 17px;
+  background: var(--color-surface);
+  font-family: inherit;
+}
+
+.fbpos-search input:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+  border-color: var(--color-accent);
+}
+
+.fbpos-search span {
+  position: absolute;
+  right: var(--space-4);
+  top: var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+}
+
+.fbpos-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+
+/* Producto (card) */
+.product-card {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: var(--space-3);
+  align-items: center;
+  text-align: left;
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  cursor: pointer;
+  transition: none;
+  min-height: 44px;
+  box-shadow: var(--shadow-sm);
+}
+
+.product-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.product-card:focus-visible {
+  border-color: var(--color-accent);
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.product-card img {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+
+.product-card div {
+  min-width: 0;
+}
+
+.product-card strong {
+  display: block;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--text-body);
+}
+
+.product-card small {
+  display: block;
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+  font-size: var(--text-small);
+}
+
+.product-card b {
+  grid-column: 2;
+  color: var(--color-accent-text);
+  font-size: var(--text-price);
+  font-weight: var(--font-weight-bold);
+}
+
+/* ========================================
+   CART CARD
+   ======================================== */
+
+.fbpos-cart-card {
+  background: var(--color-surface);
+  border-left: var(--border-width) solid var(--color-border);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 0;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-5);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.card-head h2 {
+  margin: 0;
+  font-size: var(--text-h2);
+  font-weight: var(--font-weight-semibold);
+}
+
+.card-head span {
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+}
+
+.fbpos-cart {
+  overflow: auto;
+  padding: 0 var(--space-5);
+}
+
+.cart-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto auto 26px;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--color-border);
+  min-height: 44px;
+}
+
+.cart-row img {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+}
+
+.cart-row small {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+}
+
+/* Cantidad y controles */
+.qty {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.qty button,
+.remove {
+  border: var(--border-width) solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  transition: none;
+  cursor: pointer;
+  min-height: 44px;
+  min-width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qty button:hover {
+  background: var(--color-surface-muted);
+}
+
+.qty button:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.remove {
+  border: 0;
+  color: var(--color-danger);
+  font-size: 19px;
+  background: transparent;
+}
+
+.remove:hover {
+  opacity: 0.8;
+}
+
+.remove:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+/* ========================================
+   CUSTOMER SECTION
+   ======================================== */
+
+.fbpos-client-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: var(--border-width) solid var(--color-border);
+  background: var(--color-surface-muted);
+}
+
+.fbpos-client-summary > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fbpos-client-summary small {
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  text-transform: uppercase;
+  font-weight: var(--font-weight-bold);
+}
+
+.fbpos-client-summary strong {
+  font-size: var(--text-h3);
+  font-weight: var(--font-weight-semibold);
+}
+
+.fbpos-client-summary span {
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fbpos-client {
+  border-top: var(--border-width) solid var(--color-border);
+  display: block;
+  padding: var(--space-3) var(--space-5);
+}
+
+.fbpos-client textarea {
+  width: 100%;
+  min-height: 54px;
+  font-family: inherit;
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  resize: vertical;
+}
+
+.fbpos-client textarea:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+  border-color: var(--color-accent);
+}
+
+/* ========================================
+   FORMS — INPUTS Y SELECTS
+   ======================================== */
+
+.fbpos-client input,
+.fbpos-client textarea,
+.fbpos-payment-card select,
+.fbpos-search input,
+.mixed-row input,
+.mixed-row select,
+.customer-search-row input,
+.customer-fields input,
+.customer-fields select,
+.quote-success input {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  font: inherit;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-body);
+  transition: none;
+  min-height: 44px;
+}
+
+.fbpos-client input::placeholder,
+.fbpos-client textarea::placeholder,
+.fbpos-search input::placeholder,
+.mixed-row input::placeholder,
+.customer-search-row input::placeholder,
+.customer-fields input::placeholder {
+  color: var(--color-text-placeholder);
+}
+
+.fbpos-client input:focus,
+.fbpos-client textarea:focus,
+.fbpos-payment-card select:focus,
+.fbpos-search input:focus,
+.mixed-row input:focus,
+.mixed-row select:focus,
+.customer-search-row input:focus,
+.customer-fields input:focus,
+.customer-fields select:focus,
+.quote-success input:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+  border-color: var(--color-accent);
+}
+
+/* ========================================
+   FOOTER / BOTTOM BAR
+   ======================================== */
+
+.fbpos-bottom {
+  height: 82px;
+  background: var(--color-surface);
+  border-top: 2px solid var(--color-text);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-6);
+  box-shadow: var(--shadow-lg);
+}
+
+.fbpos-bottom small {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+}
+
+.fbpos-bottom strong {
+  font-size: var(--text-price);
+  font-weight: var(--font-weight-bold);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ========================================
+   EMPTY STATE
+   ======================================== */
+
+.empty {
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--color-text-muted);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-size: var(--text-body);
+}
+
+/* ========================================
+   PRICING SCREEN
+   ======================================== */
+
+.fbpos-pricing-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  height: 100%;
+  overflow: auto;
+}
+
+.screen-title span,
+.fbpos-selection-card > span {
+  color: var(--color-accent-text);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  font-size: var(--text-caption);
+}
+
+.screen-title h2 {
+  margin: var(--space-1) 0 var(--space-5);
+  font-size: 28px;
+  font-weight: var(--font-weight-bold);
+}
+
+.fbpos-price-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+/* Tarjeta de precio */
+.price-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-5);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  text-align: left;
+  cursor: pointer;
+  min-height: 88px;
+  transition: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.price-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.price-card:focus-visible {
+  border-color: var(--color-accent);
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.price-card.selected,
+.price-card.selected:hover,
+.price-card.selected:focus-visible {
+  border: 2px solid var(--color-accent);
+  background: var(--color-accent-soft-bg);
+}
+
+.price-card.selected:before {
+  content: '✓';
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-solid);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.price-card span {
+  font-weight: var(--font-weight-bold);
+  display: block;
+  font-size: var(--text-body);
+}
+
+.price-card small {
+  color: var(--color-text-muted);
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-small);
+}
+
+.price-card strong {
+  font-size: var(--text-price);
+  white-space: nowrap;
+  font-weight: var(--font-weight-bold);
+}
+
+/* ========================================
+   SELECTION CARD
+   ======================================== */
+
+.fbpos-selection-card,
+.fbpos-summary-card,
+.fbpos-payment-card {
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.fbpos-selection-card {
+  position: sticky;
+  top: 0;
+  height: max-content;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.fbpos-selection-card h3 {
+  margin: var(--space-1) 0;
+  font-size: var(--text-h3);
+  font-weight: var(--font-weight-semibold);
+}
+
+.fbpos-selection-card > strong {
+  font-size: 32px;
+  font-weight: var(--font-weight-bold);
+}
+
+/* ========================================
+   CHECKOUT SCREEN
+   ======================================== */
+
+.fbpos-checkout-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+  gap: var(--space-5);
+  padding: var(--space-5);
+  height: 100%;
+  overflow: auto;
+}
+
+.fbpos-summary-card h2,
+.fbpos-payment-card h2 {
+  margin-top: 0;
+  font-size: var(--text-h2);
+  font-weight: var(--font-weight-semibold);
+}
+
+.checkout-item,
+.summary-line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-3) 0;
+  border-bottom: var(--border-width) solid var(--color-border);
+  font-size: var(--text-body);
+}
+
+.summary-line.total {
+  font-size: 23px;
+  font-weight: var(--font-weight-bold);
+}
+
+.fbpos-payment-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.fbpos-payment-card label {
+  font-size: var(--text-caption);
+  font-weight: var(--font-weight-bold);
+}
+
+.fbpos-payment-card label select {
+  margin-top: var(--space-1);
+}
+
+/* ========================================
+   PAGO MIXTO / MIXED PAYMENT
+   ======================================== */
+
+.mixed-row {
+  display: grid;
+  grid-template-columns: 1fr 140px 34px;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+
+.remove-pay {
+  border: 0;
+  background: transparent;
+  color: var(--color-danger);
+  font-size: 20px;
+  cursor: pointer;
+  transition: none;
+  min-height: 44px;
+  min-width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.remove-pay:hover {
+  opacity: 0.8;
+}
+
+.remove-pay:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.mixed-row-extra {
+  grid-column: 1 / -1;
+  display: none;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.mixed-row-extra.visible {
+  display: grid;
+}
+
+.mixed-installments {
+  grid-column: 1;
+}
+
+.mixed-charge-info {
+  grid-column: 1 / -1;
+  font-size: var(--text-small);
+  color: var(--color-text-muted);
+  padding: var(--space-1) 0;
+}
+
+.mixed-charge-info small {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+
+.mixed-final-amount {
+  font-weight: var(--font-weight-bold);
+  color: var(--color-accent-text);
+  margin-top: var(--space-1);
+}
+
+.mixed-row-status {
+  grid-column: 1 / -1;
+  font-size: var(--text-small);
+  padding: var(--space-2) 0;
+}
+
+.mixed-status-waiting,
+.mixed-status-ok,
+.mixed-status-error {
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-1);
+  border-left: 3px solid;
+}
+
+.mixed-status-waiting {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  border-left-color: var(--color-info);
+}
+
+.mixed-status-ok {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-left-color: var(--color-success);
+}
+
+.mixed-status-error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  border-left-color: var(--color-danger);
+}
+
+.mixed-error-actions {
+  margin-top: var(--space-1);
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.mixed-charge-btn,
+.mixed-retry-btn,
+.mixed-change-btn,
+.mixed-cash-btn,
+.mixed-reopen-btn,
+.mixed-verify-btn {
+  grid-column: 1 / -1;
+}
+
+.mixed-row.completed .mixed-charge-btn,
+.mixed-row.processing .mixed-charge-btn,
+.mixed-row.failed .mixed-charge-btn {
+  display: none;
+}
+
+/* ========================================
+   GATEWAY HELP
+   ======================================== */
+
+.fbpos-gateway-help {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fbpos-gateway-help strong {
+  font-size: var(--text-small);
+  color: var(--color-text);
+  font-weight: var(--font-weight-bold);
+}
+
+.fbpos-gateway-help span {
+  font-size: var(--text-caption);
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.fbpos-gateway-help.mp {
+  border-color: var(--color-accent-soft-border);
+  background: var(--color-accent-soft-bg);
+}
+
+.fbpos-gateway-help.mp strong {
+  color: var(--color-accent-text);
+}
+
+/* ========================================
+   PAYMENT NATIVE COPY
+   ======================================== */
+
+.native-payment-copy {
+  max-width: 560px;
+  margin: 0 auto var(--space-5);
+  color: var(--color-text-muted);
+  line-height: var(--line-height-body);
+  font-size: var(--text-body);
+}
+
+/* ========================================
+   CARDS BANNER
+   ======================================== */
+
+.fbpos-cards-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+}
+
+.fbpos-cards-banner strong {
+  display: block;
+  font-size: var(--text-h3);
+  font-weight: var(--font-weight-semibold);
+}
+
+.fbpos-cards-banner span {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+  margin-top: var(--space-1);
+  max-width: 470px;
+}
+
+.fbpos-cards-banner img {
+  width: min(470px, 48%);
+  max-height: 58px;
+  object-fit: contain;
+}
+
+.fbpos-cards-compact {
+  background: var(--color-surface-muted);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+}
+
+.fbpos-cards-compact span {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-caption);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-2);
+}
+
+.fbpos-cards-compact img {
+  display: block;
+  width: 100%;
+  max-height: 42px;
+  object-fit: contain;
+}
+
+/* ========================================
+   DONE SCREEN
+   ======================================== */
+
+.fbpos-done-card {
+  max-width: 760px;
+  margin: var(--space-10) auto;
+  background: var(--color-surface);
+  border-radius: var(--radius-xl);
+  padding: var(--space-10);
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+}
+
+.success-icon {
+  width: 70px;
+  height: 70px;
+  border-radius: var(--radius-full);
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  display: grid;
+  place-items: center;
+  font-size: 38px;
+  font-weight: var(--font-weight-bold);
+  margin: 0 auto var(--space-3);
+}
+
+.done-total {
+  display: block;
+  font-size: 36px;
+  margin: var(--space-5);
+  font-weight: var(--font-weight-bold);
+}
+
+.done-actions,
+.quote-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+}
+
+/* ========================================
+   MODALS
+   ======================================== */
+
+.fbpos-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.67);
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+}
+
+.fbpos-modal[hidden] {
+  display: none;
+}
+
+.fbpos-modal-card {
+  width: min(620px, 100%);
+  background: var(--color-surface);
+  border-radius: var(--radius-xl);
+  padding: var(--space-6);
+  position: relative;
+  box-shadow: var(--shadow-lg);
+}
+
+.fbpos-modal-card .close {
+  position: absolute;
+  right: var(--space-3);
+  top: var(--space-2);
+  border: 0;
+  background: none;
+  font-size: 30px;
+  cursor: pointer;
+  min-height: 44px;
+  min-width: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fbpos-modal-card .close:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.quote-success {
+  text-align: center;
+}
+
+.quote-success input {
+  width: 100%;
+  margin-top: var(--space-4);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* ========================================
+   CUSTOMER MODAL
+   ======================================== */
+
+.fbpos-customer-modal-card {
+  width: min(720px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.customer-modal-head span {
+  color: var(--color-accent-text);
+  font-size: var(--text-caption);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+}
+
+.customer-modal-head h2 {
+  margin: var(--space-1) var(--space-6) var(--space-5) 0;
+  font-size: var(--text-h2);
+  font-weight: var(--font-weight-semibold);
+}
+
+.customer-choice {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.customer-choice-card {
+  min-height: 100px;
+  text-align: left;
+  padding: var(--space-5);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: none;
+}
+
+.customer-choice-card strong,
+.customer-choice-card small {
+  display: block;
+}
+
+.customer-choice-card strong {
+  font-size: 16px;
+  margin-bottom: var(--space-1);
+  font-weight: var(--font-weight-semibold);
+}
+
+.customer-choice-card small {
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+}
+
+.customer-choice-card:hover {
+  background: var(--color-surface-muted);
+  box-shadow: var(--shadow-md);
+}
+
+.customer-choice-card:focus-visible {
+  border-color: var(--color-accent);
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+#fbpos-customer-form {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.customer-search-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-2);
+}
+
+.customer-fields {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.customer-fields[hidden] {
+  display: none;
+}
+
+.customer-fields label {
+  font-size: var(--text-caption);
+  font-weight: var(--font-weight-bold);
+}
+
+.customer-fields label input,
+.customer-fields label select {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.customer-fields .wide {
+  grid-column: 1 / -1;
+}
+
+.customer-result {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+  padding: var(--space-3);
+  margin-top: var(--space-1);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: none;
+  min-height: 44px;
+}
+
+.customer-result strong,
+.customer-result small {
+  display: block;
+}
+
+.customer-result strong {
+  font-weight: var(--font-weight-semibold);
+}
+
+.customer-result small {
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+}
+
+.customer-result:hover {
+  background: var(--color-surface-muted);
+}
+
+.customer-result:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.customer-notice {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-muted);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--text-small);
+}
+
+.customer-notice.ok {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.customer-notice.error {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.save-customer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  font-size: var(--text-small);
+}
+
+.customer-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+  gap: var(--space-2);
+}
+
+/* ========================================
+   VALIDATION & ERROR MESSAGES
+   ======================================== */
+
+.validation-messages {
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.validation-error {
+  background: var(--color-danger-bg);
+  border: var(--border-width) solid var(--color-danger);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  color: var(--color-danger);
+  font-size: var(--text-small);
+}
+
+.fbpos-error {
+  background: var(--color-danger-bg);
+  border: var(--border-width) solid var(--color-danger);
+  color: var(--color-danger);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-body);
+}
+
+/* ========================================
+   FORM SECTIONS
+   ======================================== */
+
+.customer-form-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.form-section h3 {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* ========================================
+   GENERAL DISABLES
+   ======================================== */
+
+button, a, input, select, textarea {
+  transition: none;
+  animation: none;
+}
+
+.fbpos-btn,
+.product-card,
+.price-card,
+.qty button,
+.remove,
+.remove-pay,
+.fbpos-link {
+  transition: none;
+  transform: none;
+}
+
+.fbpos-btn:hover,
+.product-card:hover,
+.customer-choice-card:hover,
+.qty button:hover,
+.remove:hover,
+.remove-pay:hover,
+.fbpos-link:hover {
+  transform: none;
+}
+
+/* ========================================
+   DENIED
+   ======================================== */
+
+.fbpos-denied {
+  padding: var(--space-6);
+}
+
+.fbpos-standalone #wpadminbar {
+  display: none;
+}
+
+/* ========================================
+   QUOTE HISTORY
+   ======================================== */
+
+.fbpos-quote-history-layout {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.fbpos-quote-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.fbpos-quote-table thead {
+  background-color: var(--color-surface-muted);
+  font-weight: var(--font-weight-semibold);
+}
+
+.fbpos-quote-table th {
+  padding: var(--space-4);
+  text-align: left;
+  border-bottom: var(--border-width) solid var(--color-border);
+  font-size: var(--text-h3);
+  color: var(--color-text);
+}
+
+.fbpos-quote-table td {
+  padding: var(--space-4);
+  border-bottom: var(--border-width) solid var(--color-border);
+  font-size: var(--text-body);
+  color: var(--color-text);
+}
+
+.fbpos-quote-table tbody tr {
+  min-height: 44px;
+}
+
+.fbpos-quote-table tbody tr:hover {
+  background-color: var(--color-surface-muted);
+}
+
+.quote-history-empty {
+  text-align: center;
+  padding: var(--space-10) var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--text-body);
+}
+
+/* ========================================
+   BADGES DE ESTADO
+   ======================================== */
+
+.status-badge {
+  display: inline-block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-caption);
+  font-weight: var(--font-weight-bold);
+}
+
+.status-badge.pending {
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.status-badge.converted {
+  background-color: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-badge.expired {
+  background-color: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.fbpos-quote-table .fbpos-btn {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-small);
+  white-space: nowrap;
+}
+
+/* ========================================
+   QUOTE CHECKOUT SUMMARY
+   ======================================== */
+
+.quote-checkout-summary {
+  background-color: var(--color-surface-muted);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.quote-checkout-summary h3 {
+  margin: 0 0 var(--space-1) 0;
+  font-size: var(--text-h3);
+  font-weight: var(--font-weight-semibold);
+}
+
+.quote-checkout-summary p {
+  margin: var(--space-1) 0;
+  font-size: var(--text-body);
+}
+
+/* ========================================
+   QUOTE HISTORY BUTTON
+   ======================================== */
+
+#fbpos-to-quotes {
+  background-color: var(--color-text-muted);
+  color: white;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--text-small);
+  transition: none;
+  min-height: 44px;
+  min-width: 44px;
+}
+
+#fbpos-to-quotes:hover {
+  background-color: var(--color-text);
+}
+
+#fbpos-to-quotes.active {
+  background-color: var(--color-accent-solid);
+}
+
+#fbpos-to-quotes:focus {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+/* ========================================
+   RESPONSIVE
+   ======================================== */
+
+@media (max-width: 1000px) {
+  .fbpos-app {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .fbpos-sale-grid,
+  .fbpos-pricing-layout,
+  .fbpos-checkout-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .fbpos-cart-card {
+    border-left: 0;
+  }
+
+  .fbpos-bottom {
+    position: sticky;
+    bottom: 0;
+  }
+
+  .fbpos-price-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .fbpos-selection-card {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .fbpos-cards-banner {
+    display: block;
+  }
+
+  .fbpos-cards-banner img {
+    width: 100%;
+    max-height: 52px;
+    margin-top: var(--space-3);
+  }
+}
+
+@media (max-width: 650px) {
+  .fbpos-quote-history-layout {
+    padding: var(--space-4);
+  }
+
+  .fbpos-quote-table {
+    font-size: 0.85rem;
+  }
+
+  .fbpos-quote-table th,
+  .fbpos-quote-table td {
+    padding: 0.75rem 0.5rem;
+  }
+
+  .fbpos-quote-table .fbpos-btn {
+    padding: var(--space-1) var(--space-2);
+    font-size: 0.75rem;
+  }
+
+  .fbpos-top {
+    padding: 0 var(--space-3);
+  }
+
+  .fbpos-steps button {
+    font-size: 11px;
+  }
+
+  .fbpos-sale-grid {
+    display: block;
+  }
+
+  .fbpos-client {
+    grid-template-columns: 1fr;
+  }
+
+  .fbpos-client textarea {
+    grid-column: auto;
+  }
+
+  .fbpos-bottom {
+    height: auto;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+
+  .fbpos-bottom .actions {
+    flex-direction: column;
+  }
+
+  .done-actions,
+  .quote-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .customer-choice {
+    grid-template-columns: 1fr;
+  }
+
+  .customer-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .customer-fields .wide {
+    grid-column: auto;
+  }
+
+  .fbpos-client-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .fbpos-client-summary .fbpos-btn {
+    width: 100%;
+  }
+}

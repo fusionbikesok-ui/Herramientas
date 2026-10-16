@@ -1,0 +1,61 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: fbpos-test-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${FBPOS_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: ${FBPOS_DB_PASSWORD}
+    volumes:
+      - fbpos_test_db:/var/lib/mysql
+    networks:
+      - fbpos_test_net
+
+  wordpress:
+    image: wordpress:php8.2-apache
+    container_name: fbpos-test-wp
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: ${FBPOS_DB_PASSWORD}
+      WORDPRESS_DEBUG: 1
+    ports:
+      - "127.0.0.1:8099:80"
+    volumes:
+      - fbpos_test_wp:/var/www/html
+      - ./wp-content/plugins/fusion-bikes-pos:/var/www/html/wp-content/plugins/fusion-bikes-pos
+    networks:
+      - fbpos_test_net
+
+  wpcli:
+    image: wordpress:cli-php8.2
+    container_name: fbpos-test-wpcli
+    depends_on:
+      - db
+      - wordpress
+    user: "33:33"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: ${FBPOS_DB_PASSWORD}
+    volumes:
+      - fbpos_test_wp:/var/www/html
+      - ./wp-content/plugins/fusion-bikes-pos:/var/www/html/wp-content/plugins/fusion-bikes-pos
+    networks:
+      - fbpos_test_net
+    entrypoint: ["tail", "-f", "/dev/null"]
+
+networks:
+  fbpos_test_net:
+    driver: bridge
+
+volumes:
+  fbpos_test_db:
+  fbpos_test_wp:
