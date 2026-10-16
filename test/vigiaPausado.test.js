@@ -376,4 +376,133 @@ describe('vigiaPausado', () => {
       expect(r.pausadas).toBe(1);
     });
   });
+
+  describe('cierre del incidente vigia_formato', () => {
+    const incidente = () => db.prepare("SELECT estado FROM incidentes_operativos WHERE integracion='mercadolibre' AND proceso='vigia_formato' AND tipo_error='datos'").get();
+
+    it('(a) incidente activo + todas las pausas revisadas + corrida sin cambios → se resuelve', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      expect(incidente().estado).toBe('activo');
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('(a2) lo mismo con una corrida que trae cambios que no abren incidente (ya pausada)', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA2|','MLA2','','x','paused','out_of_stock',0,datetime('now'))`).run();
+      await procesarCambios(db, CFG, [cambio(2)]);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('(b) con una pausa sin revisar el incidente sigue activo', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+      await procesarCambios(db, CFG, [cambio(1, { valor_nuevo: '6' })]);
+      expect(incidente().estado).toBe('activo');
+    });
+
+    const revisarTodo = () => db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
+
+    it('el tope (excede) seguido de una corrida vacía sigue activo: esas filas quedan pausada=0 sin revisar', async () => {
+      const muchos = Array.from({ length: UMBRAL_PAUSA_MASIVA + 1 }, (_, i) => cambio(i + 1));
+      await procesarCambios(db, CFG, muchos);
+      expect(incidente().estado).toBe('activo');
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('un PUT de ML con 500 seguido de una corrida vacía sigue activo', async () => {
+      mlFetch.mockResolvedValue({ status: 500, data: {} });
+      const r = await procesarCambios(db, CFG, [cambio(1)]);
+      expect(r.errores).toBe(1);
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('una fila en vuelo (insertada, sin resultado de pausa) mantiene el incidente activo', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      revisarTodo();
+      db.prepare(`INSERT INTO ml_publicacion_cambios (clave, item_id, sku, campo, valor_anterior, valor_nuevo, pausada, detectado_en)
+        VALUES ('MLA9|','MLA9','FB-9','UNITS_PER_PACK','1','6',0,datetime('now'))`).run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('corridas solapadas: mientras la corrida A espera a ML, una corrida B vacía no cierra el incidente', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      revisarTodo();
+      let estadoDuranteB = null;
+      mlFetch.mockImplementation(async () => {
+        await procesarCambios(db, CFG, []); // corrida B mientras la fila de A está en vuelo
+        estadoDuranteB = incidente().estado;
+        return { status: 200, data: {} };
+      });
+      await procesarCambios(db, CFG, [cambio(2)]);
+      expect(estadoDuranteB).toBe('activo');
+      expect(incidente().estado).toBe('activo');
+    });
+
+    it('una corrida de solo ruido con todo revisado resuelve', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      revisarTodo();
+      const r = await procesarCambios(db, CFG, [cambioCat(7, { valor_anterior: 'X', valor_nuevo: null })]);
+      expect(r).toMatchObject({ pausadas: 0, ignorados_por_ruido: 1 });
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('migraciones, avisos de catálogo y ya pausadas sin revisar NO traban el cierre (caso de las 94 filas de prod)', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      revisarTodo();
+      await procesarCambios(db, CFG, [cambioCat(5)]); // vacío → producto: aviso de catálogo, queda sin revisar
+      expect(db.prepare('SELECT COUNT(*) n FROM ml_publicacion_cambios WHERE revisado_en IS NULL').get().n).toBe(1);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('lote que excede el tope con una fila ya pausada: al revisar las demás el incidente cierra', async () => {
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA99|','MLA99','','x','paused','',0,datetime('now'))`).run();
+      const lote = [...Array.from({ length: UMBRAL_PAUSA_MASIVA + 1 }, (_, i) => cambio(i + 1)), cambio(99)];
+      const r = await procesarCambios(db, CFG, lote);
+      expect(r.pausadas).toBe(0);
+      // El tope omitió las 6 que había que pausar; la ya pausada no se cuenta como omitida sino como ya_pausadas.
+      expect(r).toMatchObject({ omitidos_por_umbral: UMBRAL_PAUSA_MASIVA + 1, ya_pausadas: 1 });
+      expect(incidente().estado).toBe('activo');
+      const ya = db.prepare("SELECT revisado_en, nota FROM ml_publicacion_cambios WHERE item_id='MLA99'").get();
+      expect(ya.nota).toContain('ya estaba pausada');
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose' WHERE item_id <> 'MLA99'").run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('sin stock reabierto por reabrirAvisosSinStock cuenta como pendiente: no cierra hasta revisarlo', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      db.prepare(`INSERT INTO ml_publicaciones_cache
+        (clave, item_id, variation_id, titulo, status, sub_status, es_variante, actualizado_en)
+        VALUES ('MLA2|','MLA2','','x','paused','out_of_stock',0,datetime('now'))`).run();
+      await procesarCambios(db, CFG, [cambio(2)]);
+      revisarTodo();
+      // Lo que hace routes/sync.js reabrirAvisosSinStock cuando vuelve el stock.
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en=NULL, revisado_por=NULL, bloquea_reactivador=0, pausa_error=COALESCE(pausa_error,'') || ' | reabierto: volvió el stock' WHERE item_id='MLA2'").run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('activo');
+      revisarTodo();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('resuelto');
+    });
+
+    it('(c) una corrida que pausa abre o actualiza el incidente como siempre', async () => {
+      await procesarCambios(db, CFG, [cambio(1)]);
+      db.prepare("UPDATE ml_publicacion_cambios SET revisado_en = datetime('now'), revisado_por = 'jose'").run();
+      await procesarCambios(db, CFG, []);
+      expect(incidente().estado).toBe('resuelto');
+      await procesarCambios(db, CFG, [cambio(3)]);
+      expect(db.prepare("SELECT COUNT(*) n FROM incidentes_operativos WHERE proceso='vigia_formato' AND estado='activo'").get().n).toBe(1);
+    });
+  });
 });
