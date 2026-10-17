@@ -18,6 +18,7 @@ import { registrarCorrida } from '../lib/barridoCorridas.js';
 import { estadoFueraDeCache, recordarEstadoFueraDeCache } from '../lib/mlEstadoItemFueraCache.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
 import { buscarEnCache } from '../lib/wooStock.js';
+import { tratarCancelacionMl, cerrarDevolucionEnWoo } from '../lib/devolucionPostEntrega.js';
 import { wooFetch, refrescarProductoPuntual } from './woo.js';
 import { skusConBajaWoo, levantarBajasReaparecidas } from '../lib/wooBajas.js';
 import { FILTRO_MARKETPLACE } from '../lib/identidadProductos.js';
@@ -1432,7 +1433,8 @@ export async function procesarCancelacionesMl(db, cfg) {
       if (!registro || registro.cancelado_en || registro.wc_order_id === 0) continue;
 
       try {
-        const r = await cancelarPedidoWooDeOrden(db, wooCfg, orderId);
+        // Post-entrega (envío despachado/entregado): no se cancela el pedido, queda como devolución a recibir en el depósito.
+        const r = await tratarCancelacionMl(db, { ml: mlCfg, woo: wooCfg }, orden, depsDevolucion());
         if (r.skus?.length) encolarBolsasDeSkus(db, r.skus);
       } catch (e) {
         logSync(db, { direccion: 'ml_wc', clave: orderId, estado: 'error', error: `cancelar WC: ${e.message}` });
@@ -1874,6 +1876,11 @@ export function encolarBolsasDeSkus(db, skus, { demoraMs = 0 } = {}) {
   return [...recursos];
 }
 
+/** Dependencias reales de lib/devolucionPostEntrega.js (en los tests se simulan). */
+function depsDevolucion() {
+  return { mlFetch, wooFetch, cancelar: cancelarPedidoWooDeOrden };
+}
+
 /** SKUs vinculados a las publicaciones de una orden ML (clave `item|variación`); las que no se resuelven se omiten. */
 function skusDeOrdenMl(db, orden) {
   const skus = new Set();
@@ -1974,7 +1981,7 @@ export async function procesarOrdenMl(db, cfg, mlOrderId) {
   if (orden.status === 'cancelled') {
     // Si ya se había descontado sin pedido: aviso para reponer a mano (no se repone solo). Toma los candados del descuento.
     if (await avisarCancelacionDescontada(db, orden) === 'ocupado') return { estado: 'reencolar', diferido: true, motivo: 'descuento_en_curso' };
-    const c = await cancelarPedidoWooDeOrden(db, cfg.woo, mlOrderId);
+    const c = await tratarCancelacionMl(db, cfg, orden, depsDevolucion());
     if (c.estado === 'reserva_en_curso') return { estado: 'reencolar', diferido: true, motivo: 'reserva_en_curso' };
     await syncPedidoMlPuntual(db, cfg.ml, mlOrderId); // saca la orden de la cola de Preparación
     encolarBolsasDeSkus(db, c.skus);
@@ -2551,13 +2558,21 @@ function resolverReintento(db, t, { diferido = false, motivo, demoraMs = null })
   else if (q.persistente) incidenteTrabajoFallaPersistente(db, t, motivo, q.fallos);
 }
 
+/** `devolucion.cierre`: cancela el pedido Woo / descuenta lo dañado cuando el depósito terminó de clasificar; refresca las bolsas. */
+async function procesarCierreDevolucion(db, cfg, mlOrderId) {
+  if (!cfg.woo) return { estado: 'reencolar', motivo: 'woo_sin_configurar' };
+  const r = await cerrarDevolucionEnWoo(db, cfg, mlOrderId, depsDevolucion());
+  if (r.estado === 'hecho' && r.skus?.length) encolarBolsasDeSkus(db, r.skus);
+  return r;
+}
+
 /** Worker de los trabajos por recurso. Lo llaman el cron (cada minuto) y, como acelerador no durable, el handler del aviso. */
 export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
   if (_trabajosRecursoEnCurso) return { omitido: true };
   _trabajosRecursoEnCurso = true;
   let procesados = 0;
   try {
-    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'shipment.project', 'item.project', 'stock.bolsa']) {
+    for (const tipo of ['order.ml', 'order.woo', 'catalog.woo_product_sync', 'shipment.project', 'devolucion.cierre', 'item.project', 'stock.bolsa']) {
       if (tipo === 'item.project') {
         // E-2: lote de hasta 20 ítems = UNA llamada /items/bulk (no una por aviso). Va antes de stock.bolsa para que, en la
         // misma pasada, las bolsas que encola se concilien.
@@ -2580,6 +2595,7 @@ export async function procesarTrabajosRecurso(db, cfg, { limit = 10 } = {}) {
             : tipo === 'order.woo' ? await procesarOrdenWoo(db, cfg, t.recurso)
               : tipo === 'catalog.woo_product_sync' ? await procesarProductoWoo(db, cfg, t.recurso)
                 : tipo === 'shipment.project' ? await procesarEnvioMl(db, cfg, t.recurso)
+                : tipo === 'devolucion.cierre' ? await procesarCierreDevolucion(db, cfg, t.recurso)
                 : await procesarStockBolsa(db, cfg, t.recurso.replace(/^sku:/, ''));
           if (r.estado === 'reencolar') resolverReintento(db, t, r);
           else {

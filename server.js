@@ -888,6 +888,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           alertaMissedFeedsDiaria(app._db);
           evaluarBarridosDiario(app._db);
         } catch (e) { console.error('[control-medido] alerta diaria error:', e.message); }
+        try {
+          const { avisarDevolucionesSinLlegar } = await import('./lib/devolucionPostEntrega.js');
+          avisarDevolucionesSinLlegar(app._db);
+        } catch (e) { console.error('[devoluciones] aviso sin llegar error:', e.message); }
       });
 
       cron.schedule('3-59/10 * * * *', () => {          // ML

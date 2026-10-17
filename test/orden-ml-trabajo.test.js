@@ -96,6 +96,7 @@ function instalarMocks() {
       return { status: 200, data: { results: entra ? [ml.orden] : [] } };
     }
     if (/^\/orders\/[^/?]+$/.test(p)) return ml.ordenHttp === 200 ? { status: 200, data: ml.orden } : { status: ml.ordenHttp, data: null };
+    if (p.startsWith('/shipments/')) return { status: 200, data: { status: 'ready_to_ship' } }; // cancelación antes del despacho
     if (p.startsWith('/users/')) return ml.usuarioHttp === 200 ? { status: 200, data: ml.usuario } : { status: ml.usuarioHttp, data: null };
     if (p.startsWith('/items/bulk')) return { status: 200, data: [{ code: 200, body: { id: 'MLA100', status: 'active', available_quantity: ml.qty } }] };
     return { status: 404, data: {} };
@@ -209,7 +210,7 @@ describe('order.ml: corte por fecha (aviso tardío de una orden vieja)', () => {
 
   it('una orden vieja ya sellada que llega cancelada se cancela como hoy', async () => {
     await procesarOrdenMl(db, CFG, 'ORD-1'); // fresca: crea el pedido 7001 y la sella
-    ml.orden = conFecha(10 * DIA, 'cancelled');
+    ml.orden = { ...conFecha(10 * DIA, 'cancelled'), shipping: { id: 9 } }; // una orden cancelada sin shipping.id es inconcluso (no se repone a ciegas)
     const r = await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(r.estado).toBe('hecho');
     expect(woo.puts).toEqual([{ id: '7001', body: { status: 'cancelled' } }]);
@@ -873,7 +874,7 @@ describe('order.ml: otros estados', () => {
 
   it('una orden cancelada cancela el pedido Woo UNA vez (idempotente) y encola la bolsa', async () => {
     await procesarOrdenMl(db, CFG, 'ORD-1');
-    ml.orden = ordenMl('ORD-1', 'cancelled');
+    ml.orden = { ...ordenMl('ORD-1', 'cancelled'), shipping: { id: 9 } };
     const r1 = await procesarOrdenMl(db, CFG, 'ORD-1');
     expect(r1.estado).toBe('hecho');
     expect(woo.puts).toEqual([{ id: '7001', body: { status: 'cancelled' } }]);
