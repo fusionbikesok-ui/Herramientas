@@ -17,7 +17,7 @@ import { encolarProductoWoo, encolarTrabajo, reclamarTrabajos, cerrarTrabajo, re
 import { registrarCorrida } from '../lib/barridoCorridas.js';
 import { estadoFueraDeCache, recordarEstadoFueraDeCache } from '../lib/mlEstadoItemFueraCache.js';
 import { skuDesdeMl, publicacionesDesdeWc, descartarVariacionMuerta, autoVincularPorSellerSku } from '../lib/mlMapeo.js';
-import { buscarEnCache, getStockLiveWc, setStockWc } from '../lib/wooStock.js';
+import { buscarEnCache } from '../lib/wooStock.js';
 import { tratarCancelacionMl, cerrarDevolucionEnWoo } from '../lib/devolucionPostEntrega.js';
 import { wooFetch, refrescarProductoPuntual } from './woo.js';
 import { skusConBajaWoo, levantarBajasReaparecidas } from '../lib/wooBajas.js';
@@ -1878,7 +1878,7 @@ export function encolarBolsasDeSkus(db, skus, { demoraMs = 0 } = {}) {
 
 /** Dependencias reales de lib/devolucionPostEntrega.js (en los tests se simulan). */
 function depsDevolucion() {
-  return { mlFetch, wooFetch, cancelar: cancelarPedidoWooDeOrden, getStock: getStockLiveWc, setStock: setStockWc };
+  return { mlFetch, wooFetch, cancelar: cancelarPedidoWooDeOrden };
 }
 
 /** SKUs vinculados a las publicaciones de una orden ML (clave `item|variación`); las que no se resuelven se omiten. */

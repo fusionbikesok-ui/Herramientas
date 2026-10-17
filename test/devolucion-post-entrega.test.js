@@ -10,12 +10,12 @@ const WC = 70010;
 const CFG = { ml: { fake: true }, woo: { fake: true } };
 
 describe('cancelación ML de una venta ya despachada (devolución post-entrega)', () => {
-  let caeTrasPut, sinEnvio, db, llamadas, envio, pedidoWoo, fallaNota, fallaCancelar, stockWoo, fallaStock;
+  let historial, sinEnvio, db, llamadas, envio, pedidoWoo, fallaNota, fallaCancelar;
 
   const deps = () => ({
     mlFetch: async (_db, _cfg, _m, path) => {
       llamadas.push(['ml', path]);
-      if (path.startsWith('/shipments/')) return envio instanceof Error ? { status: 500, data: null } : { status: 200, data: envio === undefined ? {} : { status: envio } };
+      if (path.startsWith('/shipments/')) return envio instanceof Error ? { status: 500, data: null } : { status: 200, data: envio === undefined ? {} : { status: envio, ...(historial === undefined ? {} : { status_history: historial }) } };
       return { status: 200, data: { id: ML, shipping: sinEnvio ? {} : { id: 555 } } };
     },
     wooFetch: async (_cfg, path, method, body) => {
@@ -26,20 +26,8 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
     cancelar: async (_db, _woo, id) => {
       llamadas.push(['cancelar', id]);
       if (fallaCancelar) throw new Error('woo caído');
-      if (!registro().cancelado_en) stockWoo['FB-65235'] += 1; // Woo repone al cancelar (solo la primera vez)
       db.prepare('UPDATE ordenes_ml_wc_pedidos SET cancelado_en = ? WHERE ml_order_id = ?').run('2026-10-17T00:00:00Z', id);
       return { estado: 'cancelado', skus: ['FB-65235'] };
-    },
-    // Las firmas reales son getStockLiveWc(cfg, db, sku) y setStockWc(cfg, db, sku, n): el mock las valida.
-    getStock: async (cfg, d, sku) => {
-      if (cfg?.fake !== true || typeof d?.prepare !== 'function' || typeof sku !== 'string') throw new Error('firma inválida de getStock');
-      return stockWoo[sku] ?? null;
-    },
-    setStock: async (cfg, d, sku, n) => {
-      if (cfg?.fake !== true || typeof d?.prepare !== 'function' || typeof sku !== 'string' || !Number.isInteger(n)) throw new Error('firma inválida de setStock');
-      if (fallaStock) throw new Error('put stock');
-      stockWoo[sku] = n; llamadas.push(['setStock', sku, n]);
-      if (caeTrasPut) { caeTrasPut = false; throw new Error('proceso caído tras el PUT'); }
     },
   });
   const orden = (extra = {}) => ({ id: ML, status: 'cancelled', shipping: { id: 555 }, ...extra });
@@ -48,7 +36,7 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
 
   beforeEach(() => {
     db = openDb(FILE);
-    caeTrasPut = false; sinEnvio = false; llamadas = []; envio = 'delivered'; fallaNota = false; fallaCancelar = false; fallaStock = false; stockWoo = { 'FB-65235': 0, 'FB-2': 4 };
+    historial = undefined; sinEnvio = false; llamadas = []; envio = 'delivered'; fallaNota = false; fallaCancelar = false;
     pedidoWoo = { status: 'processing', line_items: [{ sku: 'FB-65235', quantity: 1 }] };
     db.prepare('INSERT INTO ordenes_ml_wc_pedidos (ml_order_id, wc_order_id, creado_en) VALUES (?, ?, ?)').run(ML, WC, '2026-09-20T00:00:00Z');
   });
@@ -90,12 +78,33 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
       expect(devoluciones()).toHaveLength(0);
     });
   }
-  for (const st of ['pending', 'handling', 'ready_to_ship', 'to_be_agreed', 'cancelled']) {
+  for (const st of ['pending', 'handling', 'ready_to_ship', 'to_be_agreed']) {
     it(`envío ${st} (antes del despacho, lista explícita): cancela como hoy`, async () => {
       envio = st;
       expect((await tratarCancelacionMl(db, CFG, orden(), deps())).estado).toBe('cancelado');
     });
   }
+  describe('envío cancelled: manda el historial', () => {
+    for (const h of [{ date_shipped: '2026-09-20T10:00:00Z' }, { date_delivered: '2026-09-22T10:00:00Z' }]) {
+      it(`con ${Object.keys(h)[0]} → post-entrega (no cancela el pedido)`, async () => {
+        envio = 'cancelled'; historial = h;
+        expect((await tratarCancelacionMl(db, CFG, orden(), deps())).estado).toBe('devolucion_post_entrega');
+        expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
+        expect(devoluciones()).toHaveLength(1);
+      });
+    }
+    it('sin ninguna fecha de despacho/entrega → antes del despacho (cancela como hoy)', async () => {
+      envio = 'cancelled'; historial = { date_shipped: null, date_delivered: null, date_cancelled: '2026-09-21T10:00:00Z' };
+      expect((await tratarCancelacionMl(db, CFG, orden(), deps())).estado).toBe('cancelado');
+    });
+    it('sin status_history → fail-closed', async () => {
+      envio = 'cancelled'; historial = undefined;
+      await expect(tratarCancelacionMl(db, CFG, orden(), deps())).rejects.toThrow(/status_history/);
+      expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
+      expect(devoluciones()).toHaveLength(0);
+    });
+  });
+
   it('orden sin shipping.id (venta sin envío): se trata como hoy', async () => {
     sinEnvio = true;
     expect((await tratarCancelacionMl(db, CFG, { id: ML, status: 'cancelled' }, deps())).estado).toBe('cancelado');
@@ -209,17 +218,43 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
       const r = await cerrarDevolucionEnWoo(db, CFG, ML, deps());
       expect(r).toMatchObject({ estado: 'hecho', skus: ['FB-65235'] });
       expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(true);
-      expect(llamadas.some((l) => l[0] === 'setStock')).toBe(false);
-      expect(db.prepare('SELECT estado, woo_cierre_estado FROM stock_incidents WHERE id=?').get(id)).toMatchObject({ estado: 'resuelto', woo_cierre_estado: 'hecho' });
+            expect(db.prepare('SELECT estado, woo_cierre_estado FROM stock_incidents WHERE id=?').get(id)).toMatchObject({ estado: 'resuelto', woo_cierre_estado: 'hecho' });
     });
 
-    it('Dañada: cancela el pedido y descuenta la misma cantidad para que no sea vendible', async () => {
+    it('Dañada: NO cancela el pedido ni toca stock; solo nota privada y cierra la devolución', async () => {
       const id = await recibirYClasificar(danada);
       const r = await cerrarDevolucionEnWoo(db, CFG, ML, deps());
-      expect(r.estado).toBe('hecho');
-      expect(llamadas.findIndex((l) => l[0] === 'cancelar')).toBeLessThan(llamadas.findIndex((l) => l[0] === 'setStock'));
-      expect(stockWoo['FB-65235']).toBe(0);
-      expect(db.prepare('SELECT descuento_woo_en, woo_cierre_estado FROM stock_incidents WHERE id=?').get(id).woo_cierre_estado).toBe('hecho');
+      expect(r).toMatchObject({ estado: 'hecho', skus: [] });
+      expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
+      expect(llamadas.some((l) => l[1]?.includes('/products') || l[2] === 'put')).toBe(false);
+      const nota = llamadas.filter((l) => l[1] === `/orders/${WC}/notes`).pop();
+      expect(nota[3]).toMatchObject({ customer_note: false });
+      expect(nota[3].note).toMatch(/DAÑADA.*no reingresa al stock/);
+      expect(db.prepare('SELECT estado, woo_cierre_estado FROM stock_incidents WHERE id=?').get(id)).toMatchObject({ estado: 'resuelto', woo_cierre_estado: 'hecho' });
+      expect(registro().cancelado_en).toBeNull();
+    });
+
+    it('Dañada con la nota fallando: reencola sin cerrar; al reintentar cierra', async () => {
+      const id = await recibirYClasificar(danada);
+      fallaNota = true;
+      expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('reencolar');
+      expect(db.prepare('SELECT estado, woo_cierre_estado FROM stock_incidents WHERE id=?').get(id)).toMatchObject({ estado: 'abierto', woo_cierre_estado: 'error' });
+      fallaNota = false;
+      expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('hecho');
+    });
+
+    it('Clasificación mixta (disponible + dañada): NO cancela, deja nota e incidente de revisión manual', async () => {
+      pedidoWoo = { status: 'processing', line_items: [{ sku: 'FB-65235', quantity: 1 }, { sku: 'FB-2', quantity: 1 }] };
+      await tratarCancelacionMl(db, CFG, orden(), deps());
+      const [a, b] = devoluciones();
+      for (const x of [a, b]) recibirDevolucion(db, x.id, { operation_id: 'r' + x.id, expected_version: 1, recibido_por: 'ana' });
+      expect(clasificarDevolucion(db, a.id, { operation_id: 'ca', expected_version: 2, clasificacion: 'disponible', clasificado_por: 'ana' }).ok).toBe(true);
+      expect(marcarDanoDevolucion(db, b.id, { operation_id: 'cb', expected_version: 2, motivo: 'rota', marcado_por: 'ana' }).ok).toBe(true);
+      const r = await cerrarDevolucionEnWoo(db, CFG, ML, deps());
+      expect(r).toMatchObject({ estado: 'hecho', skus: [] });
+      expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
+      expect(llamadas.filter((l) => l[1] === `/orders/${WC}/notes`).pop()[3].note).toMatch(/MIXTA/);
+      expect(db.prepare("SELECT severidad FROM incidentes_operativos WHERE proceso='devoluciones_post_entrega' AND tipo_error LIKE 'clasificacion_mixta_%' AND estado='activo'").all()).toHaveLength(1);
     });
 
     it('falla de Woo al cancelar: reencola, deja el error visible y NO da nada por hecho', async () => {
@@ -232,28 +267,6 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
       expect(f.woo_cierre_error).toMatch(/woo caído/);
       fallaCancelar = false;
       expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('hecho');
-    });
-
-    it('Dañada: caída entre el PUT de stock y la marca → el reintento deja el stock final = stock_antes (sin doble descuento)', async () => {
-      await recibirYClasificar(danada);
-      caeTrasPut = true; // el PUT se aplica y el proceso cae antes de la marca
-      expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('reencolar');
-      expect(db.prepare("SELECT stock_antes, descuento_woo_en FROM stock_incidents WHERE origen='devolucion_cliente'").get()).toMatchObject({ stock_antes: 0, descuento_woo_en: null });
-      expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('hecho');
-      expect(stockWoo['FB-65235']).toBe(0); // = stock_antes, no -1
-      expect(llamadas.filter((l) => l[0] === 'setStock').every((l) => l[2] === 0)).toBe(true);
-    });
-
-    it('Dañada con falla al descontar: reintento no cancela dos veces ni descuenta dos veces', async () => {
-      await recibirYClasificar(danada);
-      fallaStock = true;
-      expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('reencolar');
-      fallaStock = false;
-      expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('hecho');
-      expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('hecho');
-      expect(stockWoo['FB-65235']).toBe(0);
-      expect(llamadas.filter((l) => l[0] === 'setStock')).toHaveLength(1);
-      expect(stockWoo['FB-65235']).toBe(0);
     });
 
     it('orden de varias líneas: no cierra hasta que todos los SKUs estén recibidos y clasificados', async () => {
@@ -278,7 +291,7 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
       const inc = db.prepare("SELECT * FROM incidentes_operativos WHERE proceso = 'devoluciones_post_entrega'").all();
       expect(inc).toHaveLength(1);
       expect(inc[0].mensaje_humano).toMatch(/MercadoLibre|ML/);
-      expect(llamadas.some((l) => l[0] === 'setStock' || l[0] === 'cancelar')).toBe(false);
+      expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
     });
     it('antes de 15 días o ya recibida: no avisa', async () => {
       await tratarCancelacionMl(db, CFG, orden(), deps());
