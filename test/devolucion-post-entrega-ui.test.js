@@ -58,6 +58,10 @@ describe('Excepciones: devoluciones de clientes', () => {
     await t.sandbox.__nol(7);
     expect(t.posts).toHaveLength(1); // sin motivo no se envía
   });
+  it('con scopes [all] pero sin is_admin NO se ofrece «No llegó» (el endpoint exige is_admin)', async () => {
+    const t = await montar([dev()], { ok: true, is_admin: false, scopes: ['all'] });
+    expect(t.els.clientes.innerHTML).not.toContain('No llegó');
+  });
   it('una devolución ya recibida no ofrece «No llegó»', async () => {
     const t = await montar([dev({ recibido_en: 'x' })], { ok: true, is_admin: true });
     expect(t.els.clientes.innerHTML).not.toContain('No llegó');

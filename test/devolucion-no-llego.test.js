@@ -94,6 +94,8 @@ describe('devolución de cliente que nunca llegó («No llegó», solo admin)', 
     expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
     expect(llamadas.filter((l) => l[1] === `/orders/${WC}/notes`).pop()[3].note).toMatch(/MIXTA/);
     expect(db.prepare("SELECT 1 FROM incidentes_operativos WHERE tipo_error LIKE 'clasificacion_mixta_%' AND estado='activo'").get()).toBeTruthy();
+    expect(registro().devolucion_cerrada_en).toBeTruthy(); // el cierre mixto también deja la orden marcada
+    expect(registro().cancelado_en).toBeNull();
   });
 
   it('no aplica a una unidad ya recibida (se clasifica) ni repetido por operation_id', async () => {
@@ -103,6 +105,19 @@ describe('devolución de cliente que nunca llegó («No llegó», solo admin)', 
     const recibida = await request(app(admin)).post(`/api/stock-exceptions/devoluciones/${f.id}/no-llego`).send(body(db.prepare('SELECT * FROM stock_incidents WHERE id=?').get(f.id)));
     expect(recibida.status).toBe(400);
     expect(filas()[0].estado).toBe('abierto');
+  });
+
+  it('aviso de 15 días: si el incidente no se pudo abrir NO se marca el aviso y la próxima pasada lo reintenta', async () => {
+    await crear([{ sku: 'FB-1', quantity: 1 }]);
+    const [f] = filas();
+    db.prepare("UPDATE stock_incidents SET creado_en = ? WHERE id = ?").run(new Date(Date.now() - 20 * 86400000).toISOString(), f.id);
+    const { avisarDevolucionesSinLlegar } = await import('../lib/devolucionPostEntrega.js');
+    db.exec('ALTER TABLE incidentes_operativos_historial RENAME TO x_hist_roto');
+    expect(avisarDevolucionesSinLlegar(db).avisadas).toBe(0);
+    expect(filas()[0].aviso_sin_llegar_en).toBeNull();
+    db.exec('ALTER TABLE x_hist_roto RENAME TO incidentes_operativos_historial');
+    expect(avisarDevolucionesSinLlegar(db).avisadas).toBe(1);
+    expect(filas()[0].aviso_sin_llegar_en).toBeTruthy();
   });
 
   it('cierra el aviso de «no llegó en 15 días» y es idempotente por operation_id', async () => {
