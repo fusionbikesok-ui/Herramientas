@@ -994,7 +994,7 @@ Esta integración no despliega. Comprobado al terminar: mismos contenedores, im�
 
 ## Despliegues de Herramientas del 16/10
 
-Producción quedó en master `7dfaf39c` y el checkout está limpio respecto de master.
+Producción quedó en master `1de07c37` y el checkout está limpio respecto de master.
 
 | Entrega | PR | Master | Migración | Tag de rollback (apunta al estado previo) |
 |---|---|---|---|---|
@@ -1004,6 +1004,7 @@ Producción quedó en master `7dfaf39c` y el checkout está limpio respecto de m
 | Vigía de deriva | #49 (+ #50 docs) | `7993ab11` | — | `rollback/prod-pre-vigia49-2026-10-16` |
 | Mensajería de Astra y `fusion-backup` | #51 | `4a58c96c` | — | `rollback/prod-pre-mensajeria51-precios52-2026-10-16` |
 | Precio único por variación | #52 | `7dfaf39c` | — | el mismo tag de la fila anterior |
+| Vigía de formato cierra su incidente | #54 | `1de07c37` | — | `rollback/prod-pre-vigia-formato-2026-10-16` |
 
 Notas operativas:
 
