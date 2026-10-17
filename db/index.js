@@ -1455,6 +1455,15 @@ export function openDb(dbPath) {
     })();
   }
 
+  // migrations/135 — devolución post-entrega (columnas en stock_incidents y ordenes_ml_wc_pedidos, ambas ya creadas más arriba).
+  const devolucionPostEntrega135 = db.prepare("SELECT 1 FROM _schema_migrations WHERE key='devolucion_post_entrega_135'").get();
+  if (!devolucionPostEntrega135) {
+    db.transaction(() => {
+      db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', '135_devolucion_post_entrega.sql'), 'utf8'));
+      db.prepare("INSERT INTO _schema_migrations (key) VALUES ('devolucion_post_entrega_135')").run();
+    })();
+  }
+
   // Fase 0 (higiene) — Tarea 1: productos "no contables" (servicios, cargos, gift cards)
   // que ensucian el universo de inventario físico. Nunca se borran ni se excluyen del
   // catálogo en general: solo se sacan del alcance de una sesión de conteo.
