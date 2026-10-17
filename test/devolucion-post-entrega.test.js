@@ -7,14 +7,16 @@ import { recibirDevolucion, clasificarDevolucion, marcarDanoDevolucion, resolver
 const FILE = './test/tmp-devolucion-post-entrega.sqlite';
 const ML = '2000018588847374';
 const WC = 70010;
+// Forma real de GET /shipments/{id} (sin x-format-new) de un envío cancelado antes del despacho (verificada contra ML).
+const HIST_CANCELADO = { date_handling: '2026-10-13T10:00:00Z', date_ready_to_ship: null, date_shipped: null, date_delivered: null, date_returned: null, date_not_delivered: null, date_cancelled: '2026-10-14T10:00:00Z' };
 const CFG = { ml: { fake: true }, woo: { fake: true } };
 
 describe('cancelación ML de una venta ya despachada (devolución post-entrega)', () => {
   let historial, sinEnvio, db, llamadas, envio, pedidoWoo, fallaNota, fallaCancelar;
 
   const deps = () => ({
-    mlFetch: async (_db, _cfg, _m, path) => {
-      llamadas.push(['ml', path]);
+    mlFetch: async (_db, _cfg, _m, path, _body, opts) => {
+      llamadas.push(['ml', path, opts]);
       if (path.startsWith('/shipments/')) return envio instanceof Error ? { status: 500, data: null } : { status: 200, data: envio === undefined ? {} : { status: envio, ...(historial === undefined ? {} : { status_history: historial }) } };
       return { status: 200, data: { id: ML, shipping: sinEnvio ? {} : { id: 555 } } };
     },
@@ -85,7 +87,7 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
     });
   }
   describe('envío cancelled: manda el historial', () => {
-    for (const h of [{ date_shipped: '2026-09-20T10:00:00Z' }, { date_delivered: '2026-09-22T10:00:00Z' }]) {
+    for (const h of [{ ...HIST_CANCELADO, date_shipped: '2026-09-20T10:00:00Z' }, { ...HIST_CANCELADO, date_delivered: '2026-09-22T10:00:00Z' }, { ...HIST_CANCELADO, date_returned: '2026-09-30T10:00:00Z' }]) {
       it(`con ${Object.keys(h)[0]} → post-entrega (no cancela el pedido)`, async () => {
         envio = 'cancelled'; historial = h;
         expect((await tratarCancelacionMl(db, CFG, orden(), deps())).estado).toBe('devolucion_post_entrega');
@@ -94,7 +96,7 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
       });
     }
     it('sin ninguna fecha de despacho/entrega → antes del despacho (cancela como hoy)', async () => {
-      envio = 'cancelled'; historial = { date_shipped: null, date_delivered: null, date_cancelled: '2026-09-21T10:00:00Z' };
+      envio = 'cancelled'; historial = HIST_CANCELADO;
       expect((await tratarCancelacionMl(db, CFG, orden(), deps())).estado).toBe('cancelado');
     });
     it('sin status_history → fail-closed', async () => {
@@ -103,6 +105,14 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
       expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
       expect(devoluciones()).toHaveLength(0);
     });
+  });
+
+  it('GET /shipments se hace SIN el header x-format-new (con él ML no trae status_history)', async () => {
+    envio = 'cancelled'; historial = HIST_CANCELADO;
+    await tratarCancelacionMl(db, CFG, orden(), deps());
+    const ll = llamadas.find((l) => l[0] === 'ml' && l[1].startsWith('/shipments/'));
+    expect(ll).toBeTruthy();
+    expect(ll[2]?.headers?.['x-format-new']).toBeUndefined();
   });
 
   it('orden sin shipping.id (venta sin envío): se trata como hoy', async () => {
