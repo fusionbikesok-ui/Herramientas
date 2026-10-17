@@ -7,6 +7,7 @@ ALTER TABLE stock_incidents ADD COLUMN wc_order_id INTEGER;
 ALTER TABLE stock_incidents ADD COLUMN woo_cierre_estado TEXT CHECK (woo_cierre_estado IS NULL OR woo_cierre_estado IN ('pendiente','hecho','error'));
 ALTER TABLE stock_incidents ADD COLUMN woo_cierre_error TEXT;
 ALTER TABLE stock_incidents ADD COLUMN descuento_woo_en TEXT;
+ALTER TABLE stock_incidents ADD COLUMN stock_antes INTEGER; -- stock vivo en Woo antes de cancelar (dañada: el cierre escribe este valor absoluto, idempotente)
 ALTER TABLE stock_incidents ADD COLUMN aviso_sin_llegar_en TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_incidents_devolucion_ml
   ON stock_incidents(ml_order_id, sku) WHERE origen = 'devolucion_cliente';
