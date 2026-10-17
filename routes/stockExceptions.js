@@ -20,7 +20,7 @@ function requireElevatedExceptionAction(req, res, next) {
   if (req.user?.is_admin || ['supervisor', 'supervisor_deposito'].includes(role)) return next();
   return res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Requiere supervisor o Admin' });
 }
-function codeStatus(code) { return ({ NOT_FOUND: 404, VERSION_CONFLICT: 409, TASK_NOT_OWNED: 409, INVALID_INPUT: 422, DEVOLUCION_SIN_CLASIFICAR: 409 })[code] || 400; }
+function codeStatus(code) { return ({ NOT_FOUND: 404, VERSION_CONFLICT: 409, TASK_NOT_OWNED: 409, INVALID_INPUT: 422, DEVOLUCION_DE_CLIENTE: 409 })[code] || 400; }
 function reply(res, result, key) { return result.ok ? res.status(result.repetido ? 200 : 201).json(result) : res.status(codeStatus(result.code)).json(result); }
 
 export function stockExceptionsRouter(db) {

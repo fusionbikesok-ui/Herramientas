@@ -115,9 +115,51 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
     expect(ll[2]?.headers?.['x-format-new']).toBeUndefined();
   });
 
-  it('orden sin shipping.id (venta sin envío): se trata como hoy', async () => {
-    sinEnvio = true;
-    expect((await tratarCancelacionMl(db, CFG, { id: ML, status: 'cancelled' }, deps())).estado).toBe('cancelado');
+  for (const [nombre, shipping] of [['null', null], ['{}', {}], ['sin id', { mode: 'custom' }]]) {
+    it(`orden con shipping ${nombre} y relectura sin shipping.id: inconcluso (lanza, no cancela, no repone a ciegas)`, async () => {
+      sinEnvio = true;
+      await expect(tratarCancelacionMl(db, CFG, { id: ML, status: 'cancelled', shipping }, deps())).rejects.toThrow(/shipping\.id/);
+      expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
+      expect(llamadas.some((l) => l[0] === 'ml' && l[1] === `/orders/${ML}`)).toBe(true); // se releyó antes de rendirse
+      expect(devoluciones()).toHaveLength(0);
+    });
+  }
+  it('orden del listado con shipping {} pero la relectura trae el envío: decide por el envío', async () => {
+    envio = 'delivered';
+    const r = await tratarCancelacionMl(db, CFG, { id: ML, status: 'cancelled', shipping: {} }, deps());
+    expect(r.estado).toBe('devolucion_post_entrega');
+  });
+
+  it('carrera exacta: el camino post-entrega espera el GET del pedido Woo y el de antes del despacho NO cancela mientras tanto', async () => {
+    let soltar; const compuerta = new Promise((r) => { soltar = r; });
+    const dA = deps(); // camino A: ve el envío despachado y se queda esperando el pedido Woo
+    const wooA = dA.wooFetch;
+    dA.mlFetch = async (...a) => (a[3].startsWith('/shipments/') ? { status: 200, data: { status: 'shipped' } } : { status: 200, data: { id: ML, shipping: { id: 555 } } });
+    dA.wooFetch = async (cfg, path, ...r) => { if (path === `/orders/${WC}`) await compuerta; return wooA(cfg, path, ...r); };
+    const dB = deps(); // camino B: vio el envío antes del despacho
+    dB.mlFetch = async (...a) => (a[3].startsWith('/shipments/') ? { status: 200, data: { status: 'ready_to_ship' } } : { status: 200, data: { id: ML, shipping: { id: 555 } } });
+    const pA = tratarCancelacionMl(db, CFG, orden(), dA);
+    await new Promise((r) => setTimeout(r, 20));
+    const pB = tratarCancelacionMl(db, CFG, orden(), dB);
+    await new Promise((r) => setTimeout(r, 20));
+    soltar();
+    const [a, b] = await Promise.all([pA, pB]);
+    expect(a.estado).toBe('devolucion_post_entrega');
+    expect(b.estado).toBe('devolucion_post_entrega');
+    expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
+    expect(devoluciones()).toHaveLength(1);
+  });
+
+  it('la marca en_curso de la nota vence: un claim viejo (proceso caído) se recupera; uno reciente no', async () => {
+    await tratarCancelacionMl(db, CFG, orden(), deps());
+    const notas = () => llamadas.filter((l) => l[1] === `/orders/${WC}/notes`).length;
+    db.prepare("UPDATE ordenes_ml_wc_pedidos SET devolucion_nota_en = ? WHERE ml_order_id = ?").run(`en_curso:${new Date(Date.now() - 60000).toISOString()}`, ML);
+    await tratarCancelacionMl(db, CFG, orden(), deps());
+    expect(notas()).toBe(1); // reciente: otro proceso la está posteando
+    db.prepare("UPDATE ordenes_ml_wc_pedidos SET devolucion_nota_en = ? WHERE ml_order_id = ?").run(`en_curso:${new Date(Date.now() - 3600000).toISOString()}`, ML);
+    await tratarCancelacionMl(db, CFG, orden(), deps());
+    expect(notas()).toBe(2);
+    expect(registro().devolucion_nota_en).not.toMatch(/^en_curso/);
   });
 
   it('línea sin SKU o cantidad inválida: NO registra devolución parcial, no cancela, abre incidente y marca la orden', async () => {
@@ -151,15 +193,21 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
     await tratarCancelacionMl(db, CFG, orden(), deps());
     const d = devoluciones()[0];
     expect(resolverIncidente(db, d.id, { operation_id: 'x1', expected_version: d.expected_version, resolucion: 'ok', resuelto_por: 'ana' }))
-      .toMatchObject({ ok: false, code: 'DEVOLUCION_SIN_CLASIFICAR' });
+      .toMatchObject({ ok: false, code: 'DEVOLUCION_DE_CLIENTE' });
     expect(descartarIncidente(db, d.id, { operation_id: 'x2', expected_version: d.expected_version, motivo: 'no', descartado_por: 'ana' }))
-      .toMatchObject({ ok: false, code: 'DEVOLUCION_SIN_CLASIFICAR' });
+      .toMatchObject({ ok: false, code: 'DEVOLUCION_DE_CLIENTE' });
     recibirDevolucion(db, d.id, { operation_id: 'r1', expected_version: d.expected_version, recibido_por: 'ana' });
     for (const clasificacion of ['condicionado', 'no_disponible']) {
       expect(clasificarDevolucion(db, d.id, { operation_id: 'c-' + clasificacion, expected_version: 2, clasificacion, clasificado_por: 'ana' }))
         .toMatchObject({ ok: false, code: 'CLASIFICACION_NO_PERMITIDA' });
     }
     expect(devoluciones()[0].estado).toBe('abierto');
+    // ya clasificada tampoco se cierra a mano: el cierre de la orden quedaría con un conjunto incompleto
+    const v = db.prepare('SELECT expected_version v FROM stock_incidents WHERE id=?').get(d.id).v;
+    expect(clasificarDevolucion(db, d.id, { operation_id: 'cd', expected_version: v, clasificacion: 'disponible', clasificado_por: 'ana' }).ok).toBe(true);
+    const v2 = db.prepare('SELECT expected_version v FROM stock_incidents WHERE id=?').get(d.id).v;
+    expect(resolverIncidente(db, d.id, { operation_id: 'x3', expected_version: v2, resolucion: 'ok', resuelto_por: 'ana' })).toMatchObject({ ok: false, code: 'DEVOLUCION_DE_CLIENTE' });
+    expect(descartarIncidente(db, d.id, { operation_id: 'x4', expected_version: v2, motivo: 'no', descartado_por: 'ana' })).toMatchObject({ ok: false, code: 'DEVOLUCION_DE_CLIENTE' });
   });
 
   it('idempotente: los dos caminos (barrido y puntual) no duplican devolución ni nota', async () => {
@@ -251,6 +299,20 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
       expect(db.prepare('SELECT estado, woo_cierre_estado FROM stock_incidents WHERE id=?').get(id)).toMatchObject({ estado: 'abierto', woo_cierre_estado: 'error' });
       fallaNota = false;
       expect((await cerrarDevolucionEnWoo(db, CFG, ML, deps())).estado).toBe('hecho');
+    });
+
+    it('Mixta con el incidente fallando (fail-open de incidentes): no cierra las filas, reencola', async () => {
+      pedidoWoo = { status: 'processing', line_items: [{ sku: 'FB-65235', quantity: 1 }, { sku: 'FB-2', quantity: 1 }] };
+      await tratarCancelacionMl(db, CFG, orden(), deps());
+      const [a, b] = devoluciones();
+      for (const x of [a, b]) recibirDevolucion(db, x.id, { operation_id: 'r' + x.id, expected_version: 1, recibido_por: 'ana' });
+      clasificarDevolucion(db, a.id, { operation_id: 'ca', expected_version: 2, clasificacion: 'disponible', clasificado_por: 'ana' });
+      marcarDanoDevolucion(db, b.id, { operation_id: 'cb', expected_version: 2, motivo: 'rota', marcado_por: 'ana' });
+      db.exec('ALTER TABLE incidentes_operativos_historial RENAME TO x_hist_roto');
+      const r = await cerrarDevolucionEnWoo(db, CFG, ML, deps());
+      expect(r.estado).toBe('reencolar');
+      expect(devoluciones().every((x) => x.estado === 'abierto')).toBe(true);
+      expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
     });
 
     it('Clasificación mixta (disponible + dañada): NO cancela, deja nota e incidente de revisión manual', async () => {
