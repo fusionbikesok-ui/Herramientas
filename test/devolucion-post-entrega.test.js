@@ -311,6 +311,7 @@ describe('cancelación ML de una venta ya despachada (devolución post-entrega)'
       db.exec('ALTER TABLE incidentes_operativos_historial RENAME TO x_hist_roto');
       const r = await cerrarDevolucionEnWoo(db, CFG, ML, deps());
       expect(r.estado).toBe('reencolar');
+      expect(llamadas.some((l) => l[1] === `/orders/${WC}/notes` && /MIXTA/.test(l[3]?.note))).toBe(false); // la nota va DESPUÉS del incidente: sin incidente no se postea (no se duplica en cada reintento)
       expect(devoluciones().every((x) => x.estado === 'abierto')).toBe(true);
       expect(llamadas.some((l) => l[0] === 'cancelar')).toBe(false);
     });
