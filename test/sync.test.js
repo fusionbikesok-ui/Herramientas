@@ -888,6 +888,27 @@ describe('vista de detalle', () => {
     expect(res.body.data.some(r => r.clave === null && r.error === 'nuevo')).toBe(true);
   });
 
+  it('atencion/errores: un error de proceso (sin clave) se descarta por dirección y reaparece si vuelve a fallar', async () => {
+    const t1 = '2026-10-17T13:45:00.000Z';
+    db.prepare("INSERT INTO sync_log (direccion,clave,estado,error,intentos,creado_en,actualizado_en) VALUES ('pedidos_cache',NULL,'error','ML: ML orders 429',1,?,?)").run(t1, t1);
+    let res = await request(app).get('/api/sync/atencion/errores');
+    const fila = res.body.data.find(r => r.clave === null);
+    expect(fila.direccion).toBe('pedidos_cache');
+
+    expect((await request(app).post('/api/sync/descartar-error').send({ claves: [] })).status).toBe(400);
+    expect((await request(app).post('/api/sync/descartar-error').send({ procesos: ['x; DROP'] })).status).toBe(400);
+    const desc = await request(app).post('/api/sync/descartar-error').send({ procesos: ['pedidos_cache'] });
+    expect(desc.body).toMatchObject({ ok: true, descartados: 1 });
+    res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.body.data.some(r => r.clave === null)).toBe(false);
+    expect((await request(app).get('/api/sync/dashboard')).body.atencion.errores ?? 0).toBe(0);
+
+    const t2 = new Date(Date.now() + 60000).toISOString();
+    db.prepare("INSERT INTO sync_log (direccion,clave,estado,error,intentos,creado_en,actualizado_en) VALUES ('pedidos_cache',NULL,'error','otra',1,?,?)").run(t2, t2);
+    res = await request(app).get('/api/sync/atencion/errores');
+    expect(res.body.data.some(r => r.clave === null && r.error === 'otra')).toBe(true);
+  });
+
   it('atencion: categoría inválida → 400', async () => {
     const res = await request(app).get('/api/sync/atencion/cualquiera');
     expect(res.status).toBe(400);
