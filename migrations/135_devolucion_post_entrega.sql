@@ -7,8 +7,10 @@ ALTER TABLE stock_incidents ADD COLUMN wc_order_id INTEGER;
 ALTER TABLE stock_incidents ADD COLUMN woo_cierre_estado TEXT CHECK (woo_cierre_estado IS NULL OR woo_cierre_estado IN ('pendiente','hecho','error'));
 ALTER TABLE stock_incidents ADD COLUMN woo_cierre_error TEXT;
 ALTER TABLE stock_incidents ADD COLUMN aviso_sin_llegar_en TEXT;
+ALTER TABLE stock_incidents ADD COLUMN no_llego_en TEXT; -- cerrada por un admin como «no llegó» (sin reponer ni cancelar)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_incidents_devolucion_ml
   ON stock_incidents(ml_order_id, sku) WHERE origen = 'devolucion_cliente';
 -- Marca de la orden: el barrido de cancelaciones no vuelve a cancelar el pedido Woo; la nota privada se agrega una sola vez.
 ALTER TABLE ordenes_ml_wc_pedidos ADD COLUMN devolucion_pendiente TEXT;
 ALTER TABLE ordenes_ml_wc_pedidos ADD COLUMN devolucion_nota_en TEXT;
+ALTER TABLE ordenes_ml_wc_pedidos ADD COLUMN devolucion_cerrada_en TEXT; -- todas las devoluciones de la orden cerradas como «no llegó»: nadie la reprocesa

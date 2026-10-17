@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const script = [...fs.readFileSync('./public/excepciones/index.html', 'utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).sort((a, b) => b.length - a.length)[0];
 const json = (body) => ({ ok: true, status: 200, json: async () => body });
 
-async function montar(incidentes) {
+async function montar(incidentes, me = { ok: true, is_admin: false }) {
   const els = {};
   const el = (id) => (els[id] ||= { innerHTML: '', textContent: '', addEventListener() {} });
   const posts = [];
@@ -15,6 +15,7 @@ async function montar(incidentes) {
     alert() {}, prompt: () => 'cuadro rajado',
     fetch: async (url, opt) => {
       if (opt?.method === 'POST') { posts.push({ url, body: JSON.parse(opt.body) }); return json({ ok: true }); }
+      if (url === '/api/auth/me') return json(me);
       return json({ ok: true, data: url.includes('incidentes') ? incidentes : [] });
     },
     document: { getElementById: el, querySelector: el, addEventListener() {} },
@@ -22,7 +23,7 @@ async function montar(incidentes) {
   sandbox.window = sandbox;
   for (const id of ['status', 'refresh', 'incidentes', 'proveedor', 'clientes']) sandbox[id] = el(id); // ids globales, como en el navegador
   vm.createContext(sandbox);
-  vm.runInContext(script + '\n;this.__load=load;this.__cla=clasificarCliente;', sandbox);
+  vm.runInContext(script + '\n;this.__load=load;this.__cla=clasificarCliente;this.__nol=noLlegoCliente;', sandbox);
   await sandbox.__load();
   return { els, posts, sandbox };
 }
@@ -45,6 +46,21 @@ describe('Excepciones: devoluciones de clientes', () => {
     await t.sandbox.__cla(7, false);
     expect(t.posts[0]).toMatchObject({ url: '/api/stock-exceptions/devoluciones/7/clasificar', body: { clasificacion: 'disponible', expected_version: 2 } });
     expect(t.posts[1]).toMatchObject({ url: '/api/stock-exceptions/devoluciones/7/dano', body: { motivo: 'cuadro rajado' } });
+  });
+  it('«No llegó» solo se ofrece a un admin y pide motivo; llama a su endpoint', async () => {
+    const comun = await montar([dev()]);
+    expect(comun.els.clientes.innerHTML).not.toContain('No llegó');
+    const t = await montar([dev()], { ok: true, is_admin: true });
+    expect(t.els.clientes.innerHTML).toContain('No llegó');
+    await t.sandbox.__nol(7);
+    expect(t.posts[0]).toMatchObject({ url: '/api/stock-exceptions/devoluciones/7/no-llego', body: { motivo: 'cuadro rajado', expected_version: 1 } });
+    t.sandbox.prompt = () => '   ';
+    await t.sandbox.__nol(7);
+    expect(t.posts).toHaveLength(1); // sin motivo no se envía
+  });
+  it('una devolución ya recibida no ofrece «No llegó»', async () => {
+    const t = await montar([dev({ recibido_en: 'x' })], { ok: true, is_admin: true });
+    expect(t.els.clientes.innerHTML).not.toContain('No llegó');
   });
   it('muestra el estado del cierre en Woo, incluido el error que se reintenta', async () => {
     const t = await montar([dev({ recibido_en: 'x', clasificacion: 'disponible', woo_cierre_estado: 'error', woo_cierre_error: 'woo caído' })]);
