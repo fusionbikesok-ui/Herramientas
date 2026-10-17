@@ -99,7 +99,8 @@ var DIAG={
   pausada_otro:{lbl:'Pausada',cls:'muted',txt:'Pausada en ML por otro motivo.'},
   estructura_cambiada:{lbl:'Variación inexistente',cls:'warn',txt:'La variación mapeada ya no existe en ML. Desvinculá para re-linkearla desde el Matcher.'},
   reintentable:{lbl:'Reintentable',cls:'warn',txt:'La publicación está activa y debería sincronizar. Reintentá el envío de stock.'},
-  no_activa:{lbl:'No activa',cls:'muted',txt:'Cerrada o inaccesible en ML.'}
+  no_activa:{lbl:'No activa',cls:'muted',txt:'Cerrada o inaccesible en ML.'},
+  proceso:{lbl:'Falla de un proceso',cls:'warn',txt:'No es una publicación: falló una corrida del proceso. Se reintenta solo; descartalo si ya lo viste.'}
 };
 
 var CAT=qs('cat');
@@ -143,6 +144,7 @@ async function cargar(){
 function itemIdOf(row){return row.item_id||String(row.clave||'').split('|')[0];}
 
 function pubCell(row){
+  if(!row.clave) return '<div class="pub-cell"><div class="pub-thumb"></div><div class="pub-txt"><div class="pub-tit">Proceso: '+esc(row.direccion||'desconocido')+'</div><div class="pub-meta">'+esc(row.error||'')+'</div></div></div>';
   var tit=row.titulo||itemIdOf(row)||row.clave;
   var meta=esc(itemIdOf(row)||row.clave)+(row.variations_texto?(' · '+esc(row.variations_texto)):'');
   var thumb=row.thumbnail
@@ -428,6 +430,7 @@ function wireSkuBox(tr){
 
 // ── Modo diagnóstico (vista de errores): celda de diagnóstico + acción por fila ──
 function diagCell(row){
+  if(!row.clave&&!row.diagnostico) row.diagnostico='proceso';
   if(!row.diagnostico){
     return '<div class="err-txt">'+esc(row.error||'—')+'</div><div class="diag-txt">No se pudo diagnosticar (ML no respondió). Podés reintentar o descartar.</div>';
   }
@@ -439,7 +442,8 @@ function diagCell(row){
 
 function accionCell(row){
   var clave=esc(row.clave), itemId=esc(itemIdOf(row)), btn;
-  if(row.accion==='reactivar')        btn='<button class="btn mini" onclick="reactivarUno(this,\''+clave+'\',\''+itemId+'\')">Reactivar</button>';
+  if(!row.clave) btn='<button class="btn mini sec" onclick="descartar(this,null,\''+esc(row.direccion||'')+'\')">Descartar</button>';
+  else if(row.accion==='reactivar')        btn='<button class="btn mini" onclick="reactivarUno(this,\''+clave+'\',\''+itemId+'\')">Reactivar</button>';
   else if(row.accion==='desvincular') btn='<button class="btn mini sec" onclick="desvincularClave(this,\''+clave+'\')">Desvincular</button>';
   else if(row.accion==='descartar')   btn='<button class="btn mini sec" onclick="descartar(this,\''+clave+'\')">Descartar</button>';
   else if(row.accion==='reintentar')  btn='<button class="btn mini" onclick="reintentar(this,\''+clave+'\')">Reintentar</button>';
@@ -474,10 +478,11 @@ async function desvincularClave(btn,clave){
   }catch(e){st.className='st bad';st.textContent='✗ '+e.message;btn.disabled=false;}
 }
 
-async function descartar(btn,clave){
+async function descartar(btn,clave,proceso){
   var st=stDe(btn);btn.disabled=true;st.className='st';st.textContent='Descartando…';
   try{
-    var r=await fetch('/api/sync/descartar-error',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({claves:[clave]})});
+    var body=clave?{claves:[clave]}:{procesos:[proceso]};
+    var r=await fetch('/api/sync/descartar-error',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     var d=await r.json();
     if(!d.ok)throw new Error(d.error||'error');
     st.className='st ok';st.textContent='✓ Descartada';btn.closest('tr').classList.add('row-done');

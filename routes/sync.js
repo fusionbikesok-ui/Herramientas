@@ -4319,6 +4319,8 @@ async function diagnosticarErrores(db, mlCfg, rows) {
   } catch (_) { /* no crítico */ }
 
   for (const r of rows) {
+    // Sin clave = falla de un proceso (p. ej. pedidos_cache con 429 de ML), no de una publicación.
+    if (!r.clave) { r.diagnostico = 'proceso'; r.accion = 'descartar'; continue; }
     const claveParteada = partirClaveMl(r.clave);
     const itemId = r.item_id || claveParteada.itemId;
     const varId = r.variation_id || claveParteada.variationId;
@@ -4610,6 +4612,7 @@ export function syncRouter(db, cfg) {
       `SELECT COUNT(*) n FROM sync_log s
        WHERE s.estado IN ('error','agotado')
          AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave)
+         AND NOT (s.clave IS NULL AND EXISTS (SELECT 1 FROM errores_descartados dp WHERE dp.clave = 'proceso:' || s.direccion AND dp.creado_en >= s.creado_en))
          AND NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en)
          AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))`
     ).get().n;
@@ -5014,7 +5017,7 @@ export function syncRouter(db, cfg) {
     },
     errores: {
       estados: "'error','agotado'",
-      exclude: "NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en) AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave) AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))",
+      exclude: "NOT EXISTS (SELECT 1 FROM ml_stock_estado m WHERE m.clave = s.clave AND m.actualizado_en >= s.creado_en) AND NOT EXISTS (SELECT 1 FROM errores_descartados d WHERE d.clave IS s.clave) AND NOT (s.clave IS NULL AND EXISTS (SELECT 1 FROM errores_descartados dp WHERE dp.clave = 'proceso:' || s.direccion AND dp.creado_en >= s.creado_en)) AND NOT EXISTS (SELECT 1 FROM sync_log newer WHERE newer.direccion IS s.direccion AND newer.clave IS s.clave AND (newer.creado_en > s.creado_en OR (newer.creado_en = s.creado_en AND newer.id > s.id)))",
     },
   };
 
@@ -5037,7 +5040,7 @@ export function syncRouter(db, cfg) {
     `).get().n;
     // GROUP BY clave con MAX(creado_en): SQLite toma sku/error de la fila más reciente.
     const rows = db.prepare(`
-      SELECT s.clave, s.sku, s.error, s.estado, s.creado_en,
+      SELECT s.direccion, s.clave, s.sku, s.error, s.estado, s.creado_en,
              p.item_id, p.variation_id, p.titulo, p.variations_texto, p.status AS ml_status, p.thumbnail
       FROM sync_log s
       LEFT JOIN ml_publicaciones_cache p ON p.clave = s.clave
@@ -5071,8 +5074,10 @@ export function syncRouter(db, cfg) {
   // clave exacta): dejan de contar en cualquier categoría de atención (errores, sin_mapeo,
   // remapeo_requerido) y desaparecen de la vista. Reaparecen si vuelven a errar más adelante.
   router.post('/descartar-error', (req, res) => {
-    const { claves, motivo } = req.body || {};
-    const arr = Array.isArray(claves) ? claves.filter(c => typeof c === 'string' && c) : [];
+    const { claves, procesos, motivo } = req.body || {};
+    // Errores de proceso (sin clave): se descartan por dirección hasta su fecha; uno nuevo vuelve a aparecer.
+    const procs = Array.isArray(procesos) ? procesos.filter(p => typeof p === 'string' && /^[a-z0-9_]{1,40}$/.test(p)) : [];
+    const arr = [...(Array.isArray(claves) ? claves.filter(c => typeof c === 'string' && c) : []), ...procs.map(p => `proceso:${p}`)];
     if (!arr.length) return res.status(400).json({ ok: false, error: 'claves requerido' });
     const ins = db.prepare(`INSERT INTO errores_descartados (clave, motivo, creado_en) VALUES (?, ?, ?)
       ON CONFLICT(clave) DO UPDATE SET motivo=excluded.motivo, creado_en=excluded.creado_en`);
